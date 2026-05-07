@@ -271,7 +271,7 @@ describe("agent bridge MVP", () => {
       expect(result.reply_markup).toBeDefined();
     });
 
-    it("handles /start", async () => {
+  it("handles /start", async () => {
       const result = await handleCommand("gemini", "/start", deps);
       expect(result.text).toContain("gemini bridge ready");
       expect(result.text).toContain("/models");

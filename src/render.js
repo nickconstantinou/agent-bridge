@@ -6,12 +6,49 @@ export function splitTelegramText(text, limit = 3500) {
   let remaining = value;
 
   while (remaining.length > limit) {
-    let splitAt = remaining.lastIndexOf("\n\n", limit);
-    if (splitAt < Math.floor(limit * 0.5)) splitAt = remaining.lastIndexOf("\n", limit);
-    if (splitAt < Math.floor(limit * 0.5)) splitAt = remaining.lastIndexOf(" ", limit);
-    if (splitAt <= 0) splitAt = limit;
+    // Try to split at a natural boundary
+    let splitAt = -1;
 
-    chunks.push(remaining.slice(0, splitAt).trim());
+    // 1. Try double newline (paragraph)
+    splitAt = remaining.lastIndexOf("\n\n", limit);
+
+    // 2. Try single newline
+    if (splitAt < Math.floor(limit * 0.7)) {
+      splitAt = remaining.lastIndexOf("\n", limit);
+    }
+
+    // 3. Try space
+    if (splitAt < Math.floor(limit * 0.7)) {
+      splitAt = remaining.lastIndexOf(" ", limit);
+    }
+
+    // 4. Force split if no good boundary found
+    if (splitAt <= 0) {
+      splitAt = limit;
+    }
+
+    let chunk = remaining.slice(0, splitAt).trim();
+    
+    // Handle code blocks: if we have an odd number of triple backticks, 
+    // we are likely splitting inside a code block.
+    const backticks = (chunk.match(/```/g) || []).length;
+    if (backticks % 2 !== 0) {
+      // Find the last triple backtick before the split
+      const lastBacktick = chunk.lastIndexOf("```");
+      if (lastBacktick > Math.floor(limit * 0.5)) {
+        // Split right before the code block if it's not too far back
+        splitAt = lastBacktick;
+        chunk = remaining.slice(0, splitAt).trim();
+      } else {
+        // Otherwise, close the code block in this chunk and reopen in the next
+        chunk += "\n```";
+        remaining = "```\n" + remaining.slice(splitAt).trimStart();
+        chunks.push(chunk);
+        continue;
+      }
+    }
+
+    chunks.push(chunk);
     remaining = remaining.slice(splitAt).trimStart();
   }
 

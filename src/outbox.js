@@ -3,17 +3,16 @@ export function createMemoryOutbox() {
   return {
     async send(chatId, message, sendFn) {
       const previous = queues.get(chatId) || Promise.resolve();
-      let resolveNext;
-      const next = new Promise((resolve) => {
-        resolveNext = resolve;
-      });
-      queues.set(chatId, previous.then(() => next));
-      await previous;
+      const current = previous
+        .then(() => sendFn(message))
+        .finally(() => {
+          if (queues.get(chatId) === current) queues.delete(chatId);
+        });
+      queues.set(chatId, current);
       try {
-        return await sendFn(message);
-      } finally {
-        resolveNext();
-        if (queues.get(chatId) === next) queues.delete(chatId);
+        return await current;
+      } catch (error) {
+        throw error;
       }
     },
   };
@@ -25,25 +24,17 @@ export function createTelegramOutbox({ minIntervalMs = 1100 } = {}) {
 
   async function waitForTurn(chatId) {
     const previous = queues.get(chatId) || Promise.resolve();
-    let resolveNext;
-    const next = new Promise((resolve) => {
-      resolveNext = resolve;
-    });
-    queues.set(chatId, previous.then(() => next));
-    await previous;
-
-    const elapsed = Date.now() - (lastSentAt.get(chatId) || 0);
-    if (elapsed < minIntervalMs) {
-      await new Promise((resolve) => setTimeout(resolve, minIntervalMs - elapsed));
-    }
-
-    try {
-      return;
-    } finally {
+    const current = previous.finally(async () => {
+      const elapsed = Date.now() - (lastSentAt.get(chatId) || 0);
+      if (elapsed < minIntervalMs) {
+        await new Promise((resolve) => setTimeout(resolve, minIntervalMs - elapsed));
+      }
       lastSentAt.set(chatId, Date.now());
-      resolveNext();
-      if (queues.get(chatId) === next) queues.delete(chatId);
-    }
+    }).finally(() => {
+      if (queues.get(chatId) === current) queues.delete(chatId);
+    });
+    queues.set(chatId, current);
+    await current;
   }
 
   return {
@@ -52,10 +43,12 @@ export function createTelegramOutbox({ minIntervalMs = 1100 } = {}) {
       try {
         return await sendFn(message);
       } catch (error) {
+        const retryAfter = Number(error?.retryAfter ?? error?.data?.parameters?.retry_after ?? error?.data?.retry_after);
         const text = String(error?.message || error);
         const retryMatch = text.match(/retry_after[:= ]+(\d+)/i);
-        if (retryMatch) {
-          await new Promise((resolve) => setTimeout(resolve, Number(retryMatch[1]) * 1000));
+        const waitSeconds = Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : retryMatch ? Number(retryMatch[1]) : null;
+        if (waitSeconds) {
+          await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000));
           return sendFn(message);
         }
         throw error;

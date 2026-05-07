@@ -93,23 +93,34 @@ function parseCodexResult(stdout) {
     text += (text ? "\n" : "") + trimmed;
   };
 
-  for (const line of stdout.split("\n").map((value) => value.trim()).filter(Boolean)) {
+  const lines = stdout.split("\n").map((v) => v.trim()).filter(Boolean);
+  
+  for (const line of lines) {
     try {
       const event = JSON.parse(line);
-      sessionId ??= event.thread_id ?? event.threadId ?? null;
-      const parts = event.message?.content;
-      if (Array.isArray(parts)) {
-        for (const part of parts) {
-          if (part?.type === "output_text" && typeof part.text === "string") {
+      
+      // Extract session ID
+      sessionId = sessionId || event.thread_id || event.threadId || event.sessionId || null;
+      
+      // Extract content from various possible event structures
+      if (event.message?.content && Array.isArray(event.message.content)) {
+        for (const part of event.message.content) {
+          if ((part.type === "output_text" || part.type === "text") && part.text) {
             appendText(part.text);
           }
         }
+      } else if (event.text) {
+        appendText(event.text);
+      } else if (event.message?.text) {
+        appendText(event.message.text);
+      } else if (event.item?.text) {
+        appendText(event.item.text);
       }
-      appendText(event.text);
-      appendText(event.message?.text);
-      appendText(event.item?.text);
     } catch {
-      appendText(line);
+      // If line is not JSON, but contains text, we might want to keep it if it's the only thing
+      if (lines.length === 1 || !text) {
+        appendText(line);
+      }
     }
   }
 
@@ -117,34 +128,31 @@ function parseCodexResult(stdout) {
 }
 
 function parseGeminiResult(stdout) {
-  const cleaned = stdout.replace(/^Error:\s*/i, "").trim();
-  const candidates = [];
+  const cleaned = stdout.trim();
+  if (!cleaned) throw new Error("Gemini returned empty output");
 
-  const firstBrace = cleaned.indexOf("{");
-  const lastBrace = cleaned.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    candidates.push(cleaned.slice(firstBrace, lastBrace + 1));
-  }
-
-  for (const line of cleaned.split("\n").map((value) => value.trim()).filter(Boolean)) {
-    candidates.push(line);
-  }
-
-  let parsed = null;
-  for (const candidate of candidates) {
+  // Try to find any JSON-like structure in the output
+  const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
     try {
-      parsed = JSON.parse(candidate);
-      break;
+      const parsed = JSON.parse(jsonMatch[0]);
+      return {
+        text: String(parsed.response ?? parsed.text ?? parsed.message ?? "").trim() || "(no output)",
+        sessionId: parsed.session_id ?? parsed.sessionId ?? null,
+      };
     } catch {
-      continue;
+      // Ignore and fallback
     }
   }
 
-  if (!parsed) throw new Error(stdout.trim() || "Gemini returned no parseable output");
-  return {
-    text: String(parsed.response ?? parsed.text ?? parsed.message ?? "").trim() || "(no output)",
-    sessionId: parsed.session_id ?? parsed.sessionId ?? null,
-  };
+  // Fallback: if no JSON found or parsing failed, check if it's just plain text
+  // but usually we expect JSON from Gemini with --output-format json
+  const lines = cleaned.split("\n").filter(l => !l.startsWith("Error:"));
+  if (lines.length > 0) {
+    return { text: lines.join("\n").trim(), sessionId: null };
+  }
+
+  throw new Error(`Gemini returned no parseable output: ${cleaned.slice(0, 100)}`);
 }
 
 export function runCli(command, args, cwd, options = {}) {

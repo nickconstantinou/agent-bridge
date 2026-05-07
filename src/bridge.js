@@ -2,33 +2,66 @@ import { homedir } from "node:os";
 import { runCli } from "./cli.js";
 import { createFileStore, createMemoryStore } from "./store.js";
 
+/**
+ * Returns the root directory for the bridge.
+ * @returns {string}
+ */
 export function getBridgeRootDir() {
   return process.env.BRIDGE_ROOT_DIR || homedir();
 }
 
+/**
+ * Returns the project directory for the bridge.
+ * @returns {string}
+ */
 export function getBridgeProjectDir() {
   return process.env.BRIDGE_PROJECT_DIR || `${getBridgeRootDir()}/.openclaw/workspace/projects/agent-bridge`;
 }
 
+/**
+ * Returns the project directory for a specific bot.
+ * @param {string} kind - The bot kind ('codex' or 'gemini').
+ * @returns {string}
+ */
 export function getBotProjectDir(kind) {
   if (kind === "codex" && process.env.CODEX_PROJECT_DIR) return process.env.CODEX_PROJECT_DIR;
   if (kind === "gemini" && process.env.GEMINI_PROJECT_DIR) return process.env.GEMINI_PROJECT_DIR;
   return getBridgeProjectDir();
 }
 
+/**
+ * Returns the working directory for CLI execution.
+ * @returns {string}
+ */
 export function getCliWorkingDir() {
   return homedir();
 }
 
+/**
+ * Checks if a Telegram message is from an authorized user.
+ * @param {object} message - The Telegram message object.
+ * @param {string} allowedUserId - The authorized user ID.
+ * @returns {boolean}
+ */
 export function isAuthorizedMessage(message, allowedUserId) {
   return String(message?.from?.id ?? "") === String(allowedUserId);
 }
 
+/**
+ * Extracts prompt text from a Telegram message.
+ * @param {object} message - The Telegram message object.
+ * @returns {string|null}
+ */
 export function extractPromptText(message) {
   const text = message?.text?.trim();
   return text ? text : null;
 }
 
+/**
+ * Returns help text for a bot.
+ * @param {string} kind - The bot kind.
+ * @returns {string}
+ */
 export function getBotHelpText(kind) {
   return [
     `${kind} bridge ready`,
@@ -37,6 +70,11 @@ export function getBotHelpText(kind) {
   ].join("\n");
 }
 
+/**
+ * Creates a session store.
+ * @param {object} storeBackend - The backend store (file or memory).
+ * @returns {object}
+ */
 export function createSessionStore(storeBackend = createMemoryStore({ codex: null, gemini: null })) {
   return {
     async get(bot) {
@@ -49,22 +87,40 @@ export function createSessionStore(storeBackend = createMemoryStore({ codex: nul
   };
 }
 
+/**
+ * Creates a file-based session store.
+ * @param {string} filePath - Path to the session file.
+ * @returns {object}
+ */
 export function createFileSessionStore(filePath) {
   return createFileStore(filePath, { codex: null, gemini: null });
 }
 
+/**
+ * Creates a file-based settings store.
+ * @param {string} filePath - Path to the settings file.
+ * @returns {object}
+ */
 export function createFileSettingsStore(filePath) {
   return createFileStore(filePath, { codex: null, gemini: null });
 }
 
 let codexModelCatalogPromise = null;
 
+/**
+ * Fetches available Codex models.
+ * @returns {Promise<Array>}
+ */
 export async function getCodexModels() {
   if (!codexModelCatalogPromise) {
     codexModelCatalogPromise = runCli("codex", ["debug", "models"], getCliWorkingDir())
       .then((stdout) => {
-        const parsed = JSON.parse(stdout);
-        return Array.isArray(parsed.models) ? parsed.models : [];
+        try {
+          const parsed = JSON.parse(stdout);
+          return Array.isArray(parsed.models) ? parsed.models : [];
+        } catch {
+          return [];
+        }
       })
       .catch(() => []);
   }
@@ -72,12 +128,24 @@ export async function getCodexModels() {
   return codexModelCatalogPromise;
 }
 
+/**
+ * Builds the text for the /models command.
+ * @param {string} kind - The bot kind.
+ * @param {object} deps - Dependencies (settingsStore, config).
+ * @returns {Promise<string>}
+ */
 export async function buildModelsText(kind, { settingsStore, config }) {
   const saved = (await settingsStore.read())[kind] || null;
   const fallback = config.bots[kind].defaultModel || null;
-  const known = kind === "codex"
-    ? (await getCodexModels()).map((model) => `${model.slug}${model.display_name ? ` (${model.display_name})` : ""}`).join(", ")
-    : "gemini-2.0-flash-lite, gemini-2.0-pro-exp, gemini-2.0-flash-exp";
+  
+  let known = "gemini-2.0-flash-lite, gemini-2.0-pro-exp, gemini-2.0-flash-exp";
+  if (kind === "codex") {
+    const models = await getCodexModels();
+    known = models.length > 0 
+      ? models.map((model) => `${model.slug}${model.display_name ? ` (${model.display_name})` : ""}`).join(", ")
+      : "no models found";
+  }
+
   return [
     `${kind} model settings`,
     `saved: ${saved || "(unset)"}`,
@@ -88,6 +156,11 @@ export async function buildModelsText(kind, { settingsStore, config }) {
   ].join("\n");
 }
 
+/**
+ * Builds the inline keyboard for model selection.
+ * @param {string} kind - The bot kind.
+ * @returns {Promise<object>}
+ */
 export async function buildModelKeyboard(kind) {
   const rows = [];
   if (kind === "codex") {

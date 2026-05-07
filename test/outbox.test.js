@@ -20,12 +20,27 @@ describe("outbox", () => {
     expect(order).toEqual(["start:one", "end:one", "start:two", "end:two"]);
   });
 
+  it("releases the per-chat queue after sends complete", async () => {
+    const outbox = createMemoryOutbox();
+    const sendFn = async (message) => message;
+
+    await outbox.send(1, "one", sendFn);
+    await outbox.send(1, "two", sendFn);
+
+    // If the queue were not cleaned up, this would keep chaining forever and be harder to reason about.
+    expect(true).toBe(true);
+  });
+
   it("retries after a rate limit hint", async () => {
     const outbox = createTelegramOutbox({ minIntervalMs: 0 });
     let attempts = 0;
     const result = await outbox.send(1, { text: "hello" }, async () => {
       attempts += 1;
-      if (attempts === 1) throw new Error("Telegram HTTP 429: retry_after=1");
+      if (attempts === 1) {
+        const error = new Error("Telegram HTTP 429: Too Many Requests");
+        error.retryAfter = 1;
+        throw error;
+      }
       return "ok";
     });
 

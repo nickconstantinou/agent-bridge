@@ -1,0 +1,11 @@
+node_modules/
+.env
+.data/
+coverage/
+
+.env
+.env.codex
+.env.gemini
+.data/
+.data-codex/
+.data-gemini/

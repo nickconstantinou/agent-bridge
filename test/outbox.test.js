@@ -47,4 +47,30 @@ describe("outbox", () => {
     expect(result).toBe("ok");
     expect(attempts).toBe(2);
   });
+
+  it("keeps per-chat sends serialized while retrying", async () => {
+    const outbox = createTelegramOutbox({ minIntervalMs: 0 });
+    const events = [];
+    let firstAttempts = 0;
+
+    await Promise.all([
+      outbox.send(1, { text: "first" }, async () => {
+        events.push(`first:${firstAttempts}`);
+        firstAttempts += 1;
+        if (firstAttempts === 1) {
+          const error = new Error("Telegram HTTP 429: retry_after=1");
+          error.retryAfter = 1;
+          throw error;
+        }
+        events.push("first:done");
+        return "first";
+      }),
+      outbox.send(1, { text: "second" }, async () => {
+        events.push("second");
+        return "second";
+      }),
+    ]);
+
+    expect(events).toEqual(["first:0", "first:1", "first:done", "second"]);
+  });
 });

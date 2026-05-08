@@ -28,4 +28,20 @@ describe("file store", () => {
 
     await rm(dir, { recursive: true, force: true });
   });
+
+  it("serializes concurrent writes without losing updates", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "agent-bridge-store-"));
+    const file = join(dir, "state.json");
+    const storeA = createFileStore(file, { codex: 0, gemini: 0 });
+    const storeB = createFileStore(file, { codex: 0, gemini: 0 });
+
+    await Promise.all([
+      storeA.write({ codex: 7 }),
+      storeB.write({ gemini: 11 }),
+    ]);
+
+    await expect(storeA.read()).resolves.toEqual({ codex: 7, gemini: 11 });
+
+    await rm(dir, { recursive: true, force: true });
+  });
 });

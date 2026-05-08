@@ -154,6 +154,11 @@ function parseGeminiResult(stdout) {
 
 export function runCli(command, args, cwd, options = {}) {
   const timeoutMs = options.timeoutMs ?? 120000;
+  const killGraceMs = options.killGraceMs ?? 5000;
+  const markCliError = (error) => {
+    error.isCliError = true;
+    return error;
+  };
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], cwd });
     let stdout = "";
@@ -165,8 +170,8 @@ export function runCli(command, args, cwd, options = {}) {
       child.kill("SIGTERM");
       setTimeout(() => {
         if (!finished) child.kill("SIGKILL");
-      }, 1000).unref?.();
-      reject(new Error(`CLI timed out after ${timeoutMs}ms`));
+      }, killGraceMs).unref?.();
+      reject(markCliError(new Error(`CLI timed out after ${timeoutMs}ms`)));
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {
@@ -177,13 +182,13 @@ export function runCli(command, args, cwd, options = {}) {
       stderr += chunk;
     });
 
-    child.on("error", reject);
+    child.on("error", (error) => reject(markCliError(error)));
     child.on("close", (code) => {
       finished = true;
       clearTimeout(timer);
       if (code === 0) return resolve(stdout);
       if (stdout.trim()) return resolve(stdout);
-      reject(new Error(stderr.trim() || `CLI exited with code ${code}`));
+      reject(markCliError(new Error(stderr.trim() || `CLI exited with code ${code}`)));
     });
   });
 }

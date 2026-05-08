@@ -161,7 +161,7 @@ class BridgeBot {
       return result;
     } catch (error) {
       const message = String(error?.message || error);
-      if (this.kind === "gemini" && sessionId && /Invalid session identifier/i.test(message)) {
+      if (this.kind === "gemini" && sessionId && error?.isCliError && /Invalid session identifier/i.test(message)) {
         await sessionStore.set(this.kind, null);
         return this.executePrompt(prompt, null);
       }
@@ -175,7 +175,7 @@ class BridgeBot {
           fallbackInvocation.command,
           fallbackInvocation.args,
           getCliWorkingDir(),
-          { timeoutMs: config.geminiFallbackTimeoutMs }
+          { timeoutMs: config.geminiFallbackTimeoutMs, killGraceMs: 5000 }
         );
         const fallbackResult = parseCliResult({ bot: this.kind, stdout: fallbackStdout });
         if (fallbackResult.sessionId) await sessionStore.set(this.kind, fallbackResult.sessionId);

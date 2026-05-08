@@ -54,4 +54,8 @@ export class TelegramClient {
   async editMessageText(body) {
     return this.call("editMessageText", body);
   }
+
+  async sendChatAction(body) {
+    return this.call("sendChatAction", body);
+  }
 }

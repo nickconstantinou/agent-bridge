@@ -28,4 +28,24 @@ describe("TelegramClient", () => {
 
     await expect(client.sendMessage({ chat_id: 1, text: "hi" })).rejects.toThrow(/chat not found/);
   });
+
+  it("supports chat actions for typing indicators", async () => {
+    const calls = [];
+    const fakeFetch = async (url, options) => {
+      calls.push({ url, options: JSON.parse(options.body) });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, result: true }),
+      };
+    };
+
+    const client = new TelegramClient("token", fakeFetch);
+
+    await client.sendChatAction({ chat_id: 1, action: "typing" });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toContain("/sendChatAction");
+    expect(calls[0].options).toEqual({ chat_id: 1, action: "typing" });
+  });
 });

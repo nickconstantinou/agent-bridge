@@ -1,3 +1,4 @@
+import { accessSync, constants } from "node:fs";
 import { spawn } from "node:child_process";
 import { getBotProjectDir, getCliWorkingDir } from "./bridge.js";
 
@@ -75,6 +76,31 @@ export function validateBridgeConfig(config) {
     if (!bot?.command) errors.push(`${kind.toUpperCase()}_COMMAND is required`);
   }
   if (enabledBotCount === 0) errors.push("At least one Telegram bot token is required");
+
+  if (config?.serviceKind) {
+    const activeKind = config.serviceKind;
+    for (const kind of Object.keys(config?.bots || {})) {
+      if (kind !== activeKind && config.bots?.[kind]?.token) {
+        errors.push(`BRIDGE_ENV_FILE for ${activeKind} must not load ${kind.toUpperCase()}_TOKEN`);
+      }
+    }
+    const activeBot = config.bots?.[activeKind];
+    if (!activeBot?.token) {
+      errors.push(`BRIDGE_ENV_FILE for ${activeKind} must load ${activeKind.toUpperCase()}_TOKEN`);
+    }
+    if (activeKind === "gemini" && activeBot?.command) {
+      if (!activeBot.command.startsWith("/")) {
+        errors.push("GEMINI_COMMAND must be an absolute path in the Gemini service");
+      } else {
+        try {
+          accessSync(activeBot.command, constants.X_OK);
+        } catch {
+          errors.push(`GEMINI_COMMAND is not executable or does not exist: ${activeBot.command}`);
+        }
+      }
+    }
+  }
+
   return { ok: errors.length === 0, errors };
 }
 

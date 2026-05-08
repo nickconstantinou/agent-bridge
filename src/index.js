@@ -16,19 +16,28 @@ import {
   validateBridgeConfig,
   runCli,
 } from "./bridge.js";
-import { splitTelegramText, escapeTelegramMarkdownV2 } from "./render.js";
 import { createTelegramOutbox } from "./outbox.js";
 import { createBridgeState, createFileBridgeState } from "./state.js";
 import { processTelegramUpdate } from "./updateLifecycle.js";
 import { TelegramClient } from "./telegram.js";
+import { sendTelegramMessage } from "./messageDelivery.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env",
   override: false,
 });
 
+function getServiceKindFromEnvFile(path) {
+  if (!path) return null;
+  if (path.includes(".env.codex")) return "codex";
+  if (path.includes(".env.gemini")) return "gemini";
+  return null;
+}
+
 const config = {
   allowedUserId: process.env.TELEGRAM_ALLOWED_USER_ID,
+  serviceEnvFile: process.env.BRIDGE_ENV_FILE || null,
+  serviceKind: getServiceKindFromEnvFile(process.env.BRIDGE_ENV_FILE || ""),
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 1000),
   executionMode: process.env.BRIDGE_EXECUTION_MODE || "safe",
   cliTimeoutMs: Number(process.env.CLI_TIMEOUT_MS || 300000),
@@ -116,7 +125,7 @@ class BridgeBot {
     const prompt = extractPromptText(message);
     if (!prompt) return;
 
-    const commandResponse = await handleCommand(this.kind, prompt, {
+  const commandResponse = await handleCommand(this.kind, prompt, {
       settingsStore,
       sessionStore,
       config,
@@ -130,7 +139,7 @@ class BridgeBot {
     const sessionId = await sessionStore.get(this.kind);
 
     try {
-      const result = await this.executePrompt(prompt, sessionId);
+      const result = await this.executePrompt(prompt, sessionId, chatId);
       await this.sendText(chatId, { text: result.text });
     } catch (error) {
       console.error(`[${this.kind}] prompt execution failed`, error);
@@ -140,7 +149,7 @@ class BridgeBot {
     }
   }
 
-  async executePrompt(prompt, sessionId) {
+  async executePrompt(prompt, sessionId, chatId) {
     const defaults = await settingsStore.read();
     const model = defaults[this.kind] || this.config.defaultModel;
     const invocation = buildCliInvocation({
@@ -152,7 +161,10 @@ class BridgeBot {
       executionMode: config.executionMode,
     });
 
+    const typingTracker = createTypingTracker(this.client, outbox, chatId, this.kind);
+
     try {
+      await typingTracker.start();
       const stdout = await runCli(invocation.command, invocation.args, getCliWorkingDir(), {
         timeoutMs: config.cliTimeoutMs,
       });
@@ -185,6 +197,8 @@ class BridgeBot {
         };
       }
       throw error;
+    } finally {
+      await typingTracker.stop();
     }
   }
 
@@ -233,41 +247,39 @@ class BridgeBot {
   }
 
   async sendText(chatId, body) {
-    const chunks = splitTelegramText(String(body.text || ""));
-    const { text: _ignored, ...rest } = body;
-
-    for (let i = 0; i < chunks.length; i += 1) {
-      const chunkBody = {
-        chat_id: chatId,
-        ...rest,
-        text: chunks[i],
-        parse_mode: "MarkdownV2",
-      };
-
-      if (i > 0) delete chunkBody.reply_markup;
-
-      try {
-        // 1. Try raw markdown
-        await outbox.send(chatId, chunkBody, (message) => this.client.sendMessage(message));
-      } catch (error) {
-        try {
-          // 2. Try escaped markdown
-          console.warn(`[${this.kind}] Raw MarkdownV2 failed, trying escaped`, error.message);
-          const escapedBody = { ...chunkBody, text: escapeTelegramMarkdownV2(chunks[i]) };
-          await outbox.send(chatId, escapedBody, (message) => this.client.sendMessage(message));
-        } catch (escapeError) {
-          // 3. Fallback to plain text
-          console.warn(
-            `[${this.kind}] Escaped MarkdownV2 failed, falling back to plain text`,
-            escapeError.message
-          );
-          const plainBody = { ...chunkBody, text: chunks[i] };
-          delete plainBody.parse_mode;
-          await outbox.send(chatId, plainBody, (message) => this.client.sendMessage(message));
-        }
-      }
-    }
+    await sendTelegramMessage({ client: this.client, outbox, kind: this.kind, chatId, body });
   }
+}
+
+function createTypingTracker(client, outbox, chatId, kind) {
+  let timer = null;
+  let active = false;
+
+  const sendTyping = async () => {
+    if (!active) return;
+    try {
+      await outbox.send(chatId, { chat_id: chatId, action: "typing" }, (message) => client.sendChatAction(message));
+    } catch (error) {
+      console.warn(`[${kind}] typing indicator failed`, error.message);
+    }
+  };
+
+  return {
+    async start() {
+      if (active) return;
+      active = true;
+      await sendTyping();
+      timer = setInterval(() => {
+        void sendTyping();
+      }, 4500);
+      timer.unref?.();
+    },
+    async stop() {
+      active = false;
+      if (timer) clearInterval(timer);
+      timer = null;
+    },
+  };
 }
 
 async function healBridgeState() {

@@ -252,6 +252,37 @@ describe("agent bridge MVP", () => {
     expect(result.errors).toContain("At least one Telegram bot token is required");
   });
 
+  it("rejects a gemini service that loads both bot tokens or a relative command path", () => {
+    const result = validateBridgeConfig({
+      allowedUserId: "42",
+      pollIntervalMs: 1000,
+      serviceKind: "gemini",
+      bots: {
+        codex: { token: "codex-token", command: "codex" },
+        gemini: { token: "gemini-token", command: "gemini" },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toContain("BRIDGE_ENV_FILE for gemini must not load CODEX_TOKEN");
+    expect(result.errors).toContain("GEMINI_COMMAND must be an absolute path in the Gemini service");
+  });
+
+  it("rejects a missing absolute gemini binary before startup", () => {
+    const result = validateBridgeConfig({
+      allowedUserId: "42",
+      pollIntervalMs: 1000,
+      serviceKind: "gemini",
+      bots: {
+        codex: { token: null, command: "codex" },
+        gemini: { token: "gemini-token", command: "/definitely/not/present" },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.some((error) => error.includes("GEMINI_COMMAND is not executable or does not exist"))).toBe(true);
+  });
+
   it("validates execution mode", () => {
     expect(buildExecutionOptions(undefined)).toEqual({ executionMode: "safe" });
     expect(buildExecutionOptions("safe")).toEqual({ executionMode: "safe" });

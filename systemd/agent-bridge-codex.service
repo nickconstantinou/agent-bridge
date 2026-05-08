@@ -8,6 +8,7 @@ Type=simple
 User=openclaw
 Environment=BRIDGE_ROOT_DIR=/home/openclaw
 Environment=BRIDGE_PROJECT_DIR=/home/openclaw/.openclaw/workspace/projects/agent-bridge
+Environment=BRIDGE_ENV_FILE=/home/openclaw/.openclaw/workspace/projects/agent-bridge/.env.codex
 EnvironmentFile=/home/openclaw/.openclaw/workspace/projects/agent-bridge/.env.codex
 WorkingDirectory=/home/openclaw/.openclaw/workspace/projects/agent-bridge
 ExecStart=/usr/bin/env node src/index.js

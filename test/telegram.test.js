@@ -16,4 +16,16 @@ describe("TelegramClient", () => {
       retryAfter: 2,
     });
   });
+
+  it("keeps the Telegram description text on non-429 errors", async () => {
+    const fakeFetch = async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({ ok: false, description: "Bad Request: chat not found" }),
+    });
+
+    const client = new TelegramClient("token", fakeFetch);
+
+    await expect(client.sendMessage({ chat_id: 1, text: "hi" })).rejects.toThrow(/chat not found/);
+  });
 });

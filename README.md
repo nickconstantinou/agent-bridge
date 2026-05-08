@@ -52,6 +52,7 @@ Recommended on a Linux server.
    User=<your-user>
    Environment=BRIDGE_ROOT_DIR=<your-home-dir>
    Environment=BRIDGE_PROJECT_DIR=<absolute-path-to-this-repo>
+   Environment=BRIDGE_ENV_FILE=<absolute-path-to-service-env-file>
    Environment=CODEX_PROJECT_DIR=<absolute-path-to-codex-repo>
    Environment=TELEGRAM_BOT_TOKEN_CODEX=<codex-bot-token>
    Environment=TELEGRAM_ALLOWED_USER_ID=<your-telegram-user-id>
@@ -97,6 +98,7 @@ Create `/etc/systemd/system/agent-bridge-gemini.service` with the same pattern, 
 - `Description=Telegram bridge for Gemini`
 - `Environment=GEMINI_PROJECT_DIR=<absolute-path-to-gemini-repo>`
 - `Environment=TELEGRAM_BOT_TOKEN_GEMINI=<gemini-bot-token>`
+- `Environment=BRIDGE_ENV_FILE=<absolute-path-to-service-env-file>`
 
 and use `agent-bridge-gemini` in the enable/status/log commands.
 

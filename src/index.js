@@ -1,4 +1,4 @@
-import "dotenv/config";
+import dotenv from "dotenv";
 import {
   buildGeminiFallbackInvocation,
   buildModelKeyboard,
@@ -21,6 +21,11 @@ import { createTelegramOutbox } from "./outbox.js";
 import { createBridgeState, createFileBridgeState } from "./state.js";
 import { processTelegramUpdate } from "./updateLifecycle.js";
 import { TelegramClient } from "./telegram.js";
+
+dotenv.config({
+  path: process.env.BRIDGE_ENV_FILE || ".env",
+  override: false,
+});
 
 const config = {
   allowedUserId: process.env.TELEGRAM_ALLOWED_USER_ID,

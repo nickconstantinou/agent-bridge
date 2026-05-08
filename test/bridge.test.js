@@ -197,6 +197,20 @@ describe("agent bridge MVP", () => {
     ).toEqual({ text: "hello back", sessionId: "thread-123" });
   });
 
+  it("keeps mixed codex output instead of truncating plain text lines", () => {
+    expect(
+      parseCliResult({
+        bot: "codex",
+        stdout: [
+          JSON.stringify({ type: "thread.started", thread_id: "thread-123" }),
+          JSON.stringify({ type: "agent.message", message: { content: [{ type: "output_text", text: "line one" }] } }),
+          "line two",
+          "line three",
+        ].join("\n"),
+      }),
+    ).toEqual({ text: "line one\nline two\nline three", sessionId: "thread-123" });
+  });
+
   it("parses gemini json output", () => {
     expect(
       parseCliResult({

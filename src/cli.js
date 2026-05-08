@@ -117,10 +117,7 @@ function parseCodexResult(stdout) {
         appendText(event.item.text);
       }
     } catch {
-      // If line is not JSON, but contains text, we might want to keep it if it's the only thing
-      if (lines.length === 1 || !text) {
-        appendText(line);
-      }
+      appendText(line);
     }
   }
 

@@ -15,12 +15,15 @@ import {
   buildCliInvocation,
   validateBridgeConfig,
   runCli,
+  createCliStreamingParser,
 } from "./bridge.js";
 import { createTelegramOutbox } from "./outbox.js";
 import { createBridgeState, createFileBridgeState } from "./state.js";
 import { processTelegramUpdate } from "./updateLifecycle.js";
 import { TelegramClient } from "./telegram.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
+import { createTelegramMessageProgress } from "./messageProgress.js";
+import { providerAdapters } from "./providerAdapters.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env",
@@ -71,6 +74,7 @@ const bridgeState = createBridgeState(
 const outbox = createTelegramOutbox({
   minIntervalMs: Number(process.env.OUTBOUND_MIN_INTERVAL_MS || 1100),
 });
+const progressEditsMinIntervalMs = Number(process.env.OUTBOUND_EDIT_MIN_INTERVAL_MS || 1100);
 
 class BridgeBot {
   constructor(kind, botConfig) {
@@ -152,7 +156,8 @@ class BridgeBot {
   async executePrompt(prompt, sessionId, chatId) {
     const defaults = await settingsStore.read();
     const model = defaults[this.kind] || this.config.defaultModel;
-    const invocation = buildCliInvocation({
+    const provider = providerAdapters[this.kind];
+    const invocation = provider.buildInvocation({
       bot: this.kind,
       command: this.config.command,
       model,
@@ -162,13 +167,32 @@ class BridgeBot {
     });
 
     const typingTracker = createTypingTracker(this.client, outbox, chatId, this.kind);
+    const progress = createTelegramMessageProgress({ minEditIntervalMs: progressEditsMinIntervalMs });
+    const supportsStreaming = provider.supportsStreaming;
+    let progressMessageId = null;
+    const streamParser = supportsStreaming
+      ? provider.createStreamingParser(async (text, sessionId) => {
+            if (sessionId) await sessionStore.set(this.kind, sessionId);
+            if (!progressMessageId) {
+              const sent = await this.client.sendMessage({ chat_id: chatId, text });
+              progressMessageId = sent?.message_id ?? null;
+              return;
+            }
+            await progress.update(
+              { chat_id: chatId, message_id: progressMessageId, text },
+              (body) => this.client.editMessageText(body)
+            );
+          })
+      : null;
 
     try {
       await typingTracker.start();
       const stdout = await runCli(invocation.command, invocation.args, getCliWorkingDir(), {
         timeoutMs: config.cliTimeoutMs,
+        onStdoutChunk: supportsStreaming ? (chunk) => streamParser.push(chunk) : null,
       });
-      const result = parseCliResult({ bot: this.kind, stdout });
+      streamParser?.flush();
+      const result = provider.parseResult(stdout);
       if (result.sessionId) await sessionStore.set(this.kind, result.sessionId);
       return result;
     } catch (error) {
@@ -198,6 +222,7 @@ class BridgeBot {
       }
       throw error;
     } finally {
+      await progress.flush();
       await typingTracker.stop();
     }
   }

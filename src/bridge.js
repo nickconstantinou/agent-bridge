@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { runCli } from "./cli.js";
+import { runCli, createCliStreamingParser } from "./cli.js";
 import { createFileStore, createMemoryStore } from "./store.js";
 
 /**
@@ -184,6 +184,6 @@ export async function buildModelKeyboard(kind) {
 }
 
 // Re-exporting from newer modules to maintain backward compatibility for tests
-export { runCli, buildCliInvocation, buildExecutionOptions, buildGeminiFallbackInvocation, parseCliResult, validateBridgeConfig } from "./cli.js";
+export { runCli, buildCliInvocation, buildExecutionOptions, buildGeminiFallbackInvocation, parseCliResult, validateBridgeConfig, createCliStreamingParser } from "./cli.js";
 export { handleCommand } from "./commands.js";
 export { createMemoryStore as createMemorySessionStore, createMemoryStore as createMemorySettingsStore } from "./store.js";

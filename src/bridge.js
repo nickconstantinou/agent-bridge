@@ -15,7 +15,7 @@ export function getBridgeRootDir() {
  * @returns {string}
  */
 export function getBridgeProjectDir() {
-  return process.env.BRIDGE_PROJECT_DIR || `${getBridgeRootDir()}/.openclaw/workspace/projects/agent-bridge`;
+  return process.env.BRIDGE_PROJECT_DIR || process.cwd();
 }
 
 /**

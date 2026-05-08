@@ -123,11 +123,12 @@ sudo systemctl start agent-bridge-codex
 From the repo root:
 
 ```bash
-./scripts/install-deployment.sh
+./scripts/install.sh
 ```
 
 This will:
-- verify `node`, `npm`, `codex`, and `gemini`
+- prompt for the required env vars if they are not already set
+- write `/etc/default/agent-bridge-codex` and `/etc/default/agent-bridge-gemini`
 - install dependencies
 - install both systemd units
 - reload systemd
@@ -136,7 +137,13 @@ This will:
 If you already handled CLI installation, use:
 
 ```bash
-./scripts/install-deployment.sh --skip-cli-install
+./scripts/install.sh --skip-cli-install
+```
+
+You can also run it directly from GitHub:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/nickconstantinou/agent-bridge/main/scripts/install.sh | bash
 ```
 
 If `node` is not found under systemd, replace `ExecStart=/usr/bin/env node src/index.js` with the full node path from:
@@ -154,6 +161,8 @@ which node
 - If `BRIDGE_PROJECT_DIR` is omitted, it defaults under `BRIDGE_ROOT_DIR`.
 - Unauthorized Telegram users are ignored silently.
 - Model overrides are stored in `.data/settings.json`.
+- Trusted mode maps to Codex `--dangerously-bypass-approvals-and-sandbox` and Gemini `--approval-mode yolo`.
+- There is no separate policy file for trusted mode, the CLI flags are the permission boundary.
 
 ## Example .env
 
@@ -161,8 +170,8 @@ which node
 TELEGRAM_BOT_TOKEN_CODEX=123456:replace-me
 TELEGRAM_BOT_TOKEN_GEMINI=123456:replace-me
 TELEGRAM_ALLOWED_USER_ID=123456789
-BRIDGE_ROOT_DIR=/home/your-user
-BRIDGE_PROJECT_DIR=/home/your-user/.openclaw/workspace/projects/agent-bridge
+BRIDGE_ROOT_DIR=/path/to/your/home
+BRIDGE_PROJECT_DIR=/path/to/your/agent-bridge-repo
 CODEX_PROJECT_DIR=/home/your-user/path/to/codex-repo
 GEMINI_PROJECT_DIR=/home/your-user/path/to/gemini-repo
 CODEX_COMMAND=codex

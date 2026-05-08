@@ -6,12 +6,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=openclaw
-Environment=BRIDGE_ROOT_DIR=/home/openclaw
-Environment=BRIDGE_PROJECT_DIR=/home/openclaw/.openclaw/workspace/projects/agent-bridge
-Environment=BRIDGE_ENV_FILE=/home/openclaw/.openclaw/workspace/projects/agent-bridge/.env.gemini
-EnvironmentFile=/home/openclaw/.openclaw/workspace/projects/agent-bridge/.env.gemini
-WorkingDirectory=/home/openclaw/.openclaw/workspace/projects/agent-bridge
-ExecStart=/usr/bin/env node src/index.js
+EnvironmentFile=/etc/default/agent-bridge-gemini
+ExecStart=/usr/bin/env bash -lc 'cd "${BRIDGE_PROJECT_DIR:?}" && exec node src/index.js'
 Restart=always
 RestartSec=5
 Environment=NODE_ENV=production

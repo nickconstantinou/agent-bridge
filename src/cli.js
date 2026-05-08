@@ -1,7 +1,6 @@
 import { accessSync, constants } from "node:fs";
 import { spawn } from "node:child_process";
 import { getBotProjectDir, getCliWorkingDir } from "./bridge.js";
-import { createStreamingLineParser } from "./streaming.js";
 
 export function buildExecutionOptions(value = "safe") {
   const executionMode = value || "safe";
@@ -109,49 +108,6 @@ export function parseCliResult({ bot, stdout }) {
   return bot === "codex" ? parseCodexResult(stdout) : parseGeminiResult(stdout);
 }
 
-export function createCliStreamingParser({ bot, onUpdate }) {
-  if (bot === "codex") {
-    return createStreamingLineParser({
-      onRecord(line) {
-        try {
-          const event = JSON.parse(line);
-          const text = extractTextFromEvent(event);
-          if (text) onUpdate(text, event.thread_id || event.threadId || event.sessionId || null);
-        } catch {
-          onUpdate(line, null);
-        }
-      },
-    });
-  }
-
-  if (bot === "gemini") {
-    return createStreamingLineParser({
-      onRecord(line) {
-        try {
-          const parsed = JSON.parse(line);
-          const text = String(parsed.response ?? parsed.text ?? parsed.message ?? "").trim();
-          if (text) onUpdate(text, parsed.session_id ?? parsed.sessionId ?? null);
-        } catch {
-          onUpdate(line, null);
-        }
-      },
-    });
-  }
-
-  throw new Error(`Unsupported bot: ${bot}`);
-}
-
-function extractTextFromEvent(event) {
-  if (event.message?.content && Array.isArray(event.message.content)) {
-    return event.message.content
-      .filter((part) => (part.type === "output_text" || part.type === "text") && part.text)
-      .map((part) => part.text)
-      .join("\n")
-      .trim();
-  }
-  return String(event.text ?? event.message?.text ?? event.item?.text ?? "").trim();
-}
-
 function parseCodexResult(stdout) {
   let sessionId = null;
   let text = "";
@@ -225,8 +181,6 @@ function parseGeminiResult(stdout) {
 export function runCli(command, args, cwd, options = {}) {
   const timeoutMs = options.timeoutMs ?? 120000;
   const killGraceMs = options.killGraceMs ?? 5000;
-  const onStdoutChunk = options.onStdoutChunk || null;
-  const onStderrChunk = options.onStderrChunk || null;
   const markCliError = (error) => {
     error.isCliError = true;
     return error;
@@ -248,12 +202,10 @@ export function runCli(command, args, cwd, options = {}) {
 
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
-      onStdoutChunk?.(String(chunk));
     });
 
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
-      onStderrChunk?.(String(chunk));
     });
 
     child.on("error", (error) => reject(markCliError(error)));

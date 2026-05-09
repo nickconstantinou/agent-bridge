@@ -186,10 +186,10 @@ class BridgeBot {
     };
 
     try {
-      // Run with async CLI runner
+      // Run with async CLI runner (no idle timeout - onProgress provides liveness)
       const cliResult = await runCliAsync(invocation.command, invocation.args, getCliWorkingDir(), {
         timeoutMs: config.cliTimeoutMs,
-        idleTimeoutMs: config.cliIdleTimeoutMs,
+        idleTimeoutMs: null, // Disable idle timeout - onProgress callback proves liveness
         onProgress,
         onCancel: () => {}, // TODO: wire to cancel command
       });
@@ -210,7 +210,7 @@ class BridgeBot {
           fallbackInvocation.command,
           fallbackInvocation.args,
           getCliWorkingDir(),
-          { timeoutMs: config.geminiFallbackTimeoutMs, idleTimeoutMs: config.cliIdleTimeoutMs }
+          { timeoutMs: config.geminiFallbackTimeoutMs, idleTimeoutMs: null }
         );
         const fallbackResult = parseCliResult({ bot: this.kind, stdout: fallbackStdout });
         if (fallbackResult?.sessionId) await sessionStore.set(this.kind, fallbackResult.sessionId);

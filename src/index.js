@@ -41,6 +41,7 @@ const config = {
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 1000),
   executionMode: process.env.BRIDGE_EXECUTION_MODE || "safe",
   cliTimeoutMs: Number(process.env.CLI_TIMEOUT_MS || 300000),
+  cliIdleTimeoutMs: Number(process.env.CLI_IDLE_TIMEOUT_MS || 60000),
   geminiFallbackTimeoutMs: Number(process.env.GEMINI_FALLBACK_TIMEOUT_MS || 120000),
   sessionStorePath: process.env.SESSION_STORE_PATH || `${getBridgeProjectDir()}/.data/sessions.json`,
   settingsStorePath: process.env.SETTINGS_STORE_PATH || `${getBridgeProjectDir()}/.data/settings.json`,
@@ -167,6 +168,7 @@ class BridgeBot {
       await typingTracker.start();
       const stdout = await runCli(invocation.command, invocation.args, getCliWorkingDir(), {
         timeoutMs: config.cliTimeoutMs,
+        idleTimeoutMs: config.cliIdleTimeoutMs,
       });
       const result = parseCliResult({ bot: this.kind, stdout });
       if (result.sessionId) await sessionStore.set(this.kind, result.sessionId);
@@ -187,7 +189,7 @@ class BridgeBot {
           fallbackInvocation.command,
           fallbackInvocation.args,
           getCliWorkingDir(),
-          { timeoutMs: config.geminiFallbackTimeoutMs, killGraceMs: 5000 }
+          { timeoutMs: config.geminiFallbackTimeoutMs, idleTimeoutMs: config.cliIdleTimeoutMs, killGraceMs: 5000 }
         );
         const fallbackResult = parseCliResult({ bot: this.kind, stdout: fallbackStdout });
         if (fallbackResult.sessionId) await sessionStore.set(this.kind, fallbackResult.sessionId);

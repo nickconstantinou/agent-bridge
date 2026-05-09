@@ -180,6 +180,7 @@ function parseGeminiResult(stdout) {
 
 export function runCli(command, args, cwd, options = {}) {
   const timeoutMs = options.timeoutMs ?? 120000;
+  const idleTimeoutMs = options.idleTimeoutMs ?? null;
   const killGraceMs = options.killGraceMs ?? 5000;
   const markCliError = (error) => {
     error.isCliError = true;
@@ -190,6 +191,26 @@ export function runCli(command, args, cwd, options = {}) {
     let stdout = "";
     let stderr = "";
     let finished = false;
+    let idleTimer = null;
+
+    const clearIdleTimer = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = null;
+    };
+
+    const scheduleIdleTimeout = () => {
+      if (!idleTimeoutMs || finished) return;
+      clearIdleTimer();
+      idleTimer = setTimeout(() => {
+        if (finished) return;
+        child.kill("SIGTERM");
+        setTimeout(() => {
+          if (!finished) child.kill("SIGKILL");
+        }, killGraceMs).unref?.();
+        reject(markCliError(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`)));
+      }, idleTimeoutMs);
+      idleTimer.unref?.();
+    };
 
     const timer = setTimeout(() => {
       if (finished) return;
@@ -199,19 +220,27 @@ export function runCli(command, args, cwd, options = {}) {
       }, killGraceMs).unref?.();
       reject(markCliError(new Error(`CLI timed out after ${timeoutMs}ms`)));
     }, timeoutMs);
+    timer.unref?.();
+    scheduleIdleTimeout();
 
     child.stdout.on("data", (chunk) => {
       stdout += chunk;
+      scheduleIdleTimeout();
     });
 
     child.stderr.on("data", (chunk) => {
       stderr += chunk;
+      scheduleIdleTimeout();
     });
 
-    child.on("error", (error) => reject(markCliError(error)));
+    child.on("error", (error) => {
+      clearIdleTimer();
+      reject(markCliError(error));
+    });
     child.on("close", (code) => {
       finished = true;
       clearTimeout(timer);
+      clearIdleTimer();
       if (code === 0) return resolve(stdout);
       if (stdout.trim()) return resolve(stdout);
       reject(markCliError(new Error(stderr.trim() || `CLI exited with code ${code}`)));

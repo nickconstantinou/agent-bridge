@@ -163,6 +163,7 @@ which node
 - Model overrides are stored in `.data/settings.json`.
 - Trusted mode maps to Codex `--dangerously-bypass-approvals-and-sandbox` and Gemini `--approval-mode yolo`.
 - There is no separate policy file for trusted mode, the CLI flags are the permission boundary.
+- `CLI_TIMEOUT_MS` is the hard cap, `CLI_IDLE_TIMEOUT_MS` resets whenever the CLI emits output.
 
 ## Example .env
 
@@ -178,6 +179,7 @@ CODEX_COMMAND=codex
 GEMINI_COMMAND=gemini
 POLL_INTERVAL_MS=1000
 CLI_TIMEOUT_MS=300000
+CLI_IDLE_TIMEOUT_MS=60000
 GEMINI_FALLBACK_TIMEOUT_MS=120000
 SESSION_STORE_PATH=.data/sessions.json
 SETTINGS_STORE_PATH=.data/settings.json

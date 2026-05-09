@@ -201,8 +201,6 @@ class BridgeBot {
       // Parse result
       result = parseCliResult({ bot: this.kind, stdout: cliResult.text });
       if (result?.sessionId) await sessionStore.set(this.kind, result.sessionId);
-      // Send via sendTelegramMessage (has fallback chain: native entities → escaped → plain)
-      await sendTelegramMessage({ client: this.client, outbox, kind: this.kind, chatId, body: { text: result.text } });
       return result;
     } catch (error) {
       // Fallback to read-only mode on timeout

@@ -153,12 +153,12 @@ class BridgeBot {
       console.error(`[${this.kind}] prompt execution failed`, error);
       const messageText = String(error?.message || error);
       const text = messageText.slice(0, 4000);
-      await this.sendText(chatId, { text: `Error: ${text}` });
+      await this.sendText(chatId, { text: `Error: ${text}`, parse_mode: "MarkdownV2" });
     }
   }
 
   /**
-   * Async prompt execution - sends immediate ack, streams progress, replaces placeholder.
+   * Async prompt execution - sends immediate ack, streams progress, replaces placeholder, typing indicator.
    */
   async executePromptAsync(prompt, sessionId, chatId) {
     const defaults = await settingsStore.read();
@@ -174,6 +174,10 @@ class BridgeBot {
     });
 
     const isCliTimeout = (error) => /CLI (idle timeout|timed out)/i.test(String(error?.message || error));
+
+    // Start typing indicator
+    const typingTracker = createTypingTracker(this.client, outbox, chatId, this.kind);
+    await typingTracker.start();
 
     let progressBuffer = "";
     let result = null;
@@ -197,6 +201,8 @@ class BridgeBot {
       // Parse result
       result = parseCliResult({ bot: this.kind, stdout: cliResult.text });
       if (result?.sessionId) await sessionStore.set(this.kind, result.sessionId);
+      // Send with MarkdownV2 if it contains code/markdown
+      await this.sendText(chatId, { text: result.text, parse_mode: "MarkdownV2" });
       return result;
     } catch (error) {
       // Fallback to read-only mode on timeout
@@ -220,6 +226,8 @@ class BridgeBot {
         };
       }
       throw error;
+    } finally {
+      await typingTracker.stop();
     }
   }
 

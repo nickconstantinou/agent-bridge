@@ -1,18 +1,25 @@
-import { splitTelegramText, escapeTelegramMarkdownV2 } from "./render.js";
+import { splitTelegramText, escapeTelegramMarkdownV2, escapeTelegramHtml } from "./render.js";
 
 export async function sendTelegramMessage({ client, outbox, kind, chatId, body }) {
   const chunks = splitTelegramText(String(body.text || ""));
   const { text: _ignored, ...rest } = body;
+  const isHtml = kind === "gemini";
 
   for (let i = 0; i < chunks.length; i += 1) {
+    const chunkText = isHtml ? escapeTelegramHtml(chunks[i]) : chunks[i];
     const chunkBody = {
       chat_id: chatId,
       ...rest,
-      text: chunks[i],
-      parse_mode: "MarkdownV2",
+      text: chunkText,
+      parse_mode: isHtml ? "HTML" : "MarkdownV2",
     };
 
     if (i > 0) delete chunkBody.reply_markup;
+
+    if (isHtml) {
+      await outbox.send(chatId, chunkBody, (message) => client.sendMessage(message));
+      continue;
+    }
 
     try {
       await outbox.send(chatId, chunkBody, (message) => client.sendMessage(message));

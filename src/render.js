@@ -63,3 +63,11 @@ export function renderTelegramPlainText(text) {
 export function escapeTelegramMarkdownV2(text) {
   return String(text || "").replace(/([_\*[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
 }
+
+export function escapeTelegramHtml(text) {
+  return String(text || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}

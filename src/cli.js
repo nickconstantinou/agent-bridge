@@ -10,7 +10,7 @@ export function buildExecutionOptions(value = "safe") {
   return { executionMode };
 }
 
-export function buildCliInvocation({ bot, prompt, sessionId, command, model, executionMode = "safe" }) {
+export function buildCliInvocation({ bot, prompt, sessionId, command, model, executionMode = "safe", outputFormat = null }) {
   const { executionMode: mode } = buildExecutionOptions(executionMode);
   const projectDir = getBotProjectDir(bot);
 
@@ -31,9 +31,23 @@ export function buildCliInvocation({ bot, prompt, sessionId, command, model, exe
     const modelArg = model ? ["--model", model] : [];
     const resumeArg = sessionId ? ["--resume", sessionId] : [];
     const approvalMode = mode === "trusted" ? "yolo" : "plan";
+    const useAcp = process.env.GEMINI_ACP === "1" && !outputFormat;
+    const resolvedOutputFormat =
+      outputFormat || (process.env.GEMINI_STREAM_JSON === "1" ? "stream-json" : "json");
     return {
       command,
-      args: ["--skip-trust", "--approval-mode", approvalMode, "--include-directories", projectDir, ...modelArg, ...resumeArg, "--output-format", "json", "-p", prompt],
+      args: [
+        "--skip-trust",
+        "--approval-mode",
+        approvalMode,
+        "--include-directories",
+        projectDir,
+        ...modelArg,
+        ...resumeArg,
+        ...(useAcp ? ["--acp"] : ["--output-format", resolvedOutputFormat]),
+        "-p",
+        prompt,
+      ],
     };
   }
 
@@ -154,6 +168,13 @@ function parseGeminiResult(stdout) {
   const cleaned = stdout.trim();
   if (!cleaned) throw new Error("Gemini returned empty output");
 
+  if (process.env.GEMINI_ACP === "1") {
+    return parseGeminiAcpResult(cleaned);
+  }
+
+  const streamResult = parseGeminiStreamJson(cleaned);
+  if (streamResult) return streamResult;
+
   // Try to find any JSON-like structure in the output
   const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
   if (jsonMatch) {
@@ -178,6 +199,70 @@ function parseGeminiResult(stdout) {
   throw new Error(`Gemini returned no parseable output: ${cleaned.slice(0, 100)}`);
 }
 
+function parseGeminiAcpResult(stdout) {
+  const lines = stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) {
+    throw new Error("Gemini ACP returned empty output");
+  }
+
+  const lastLine = lines[lines.length - 1];
+  try {
+    const parsed = JSON.parse(lastLine);
+    const text = String(parsed.response ?? parsed.text ?? parsed.message ?? "").trim();
+    if (!text) throw new Error("Gemini ACP returned no assistant text");
+    return { text, sessionId: parsed.session_id ?? parsed.sessionId ?? null };
+  } catch {
+    if (lastLine.startsWith("{") || lastLine.startsWith("[")) {
+      throw new Error("Gemini ACP output was not parseable");
+    }
+    return { text: lastLine, sessionId: null };
+  }
+}
+
+function parseGeminiStreamJson(stdout) {
+  const lines = stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 2) return null;
+
+  let sessionId = null;
+  let text = "";
+  let sawJson = false;
+
+  const appendText = (value) => {
+    if (typeof value !== "string") return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    text += (text ? "\n" : "") + trimmed;
+  };
+
+  for (const line of lines) {
+    try {
+      const event = JSON.parse(line);
+      sawJson = true;
+      sessionId = sessionId || event.session_id || event.sessionId || event.thread_id || event.threadId || null;
+
+      if (event.message?.content && Array.isArray(event.message.content)) {
+        for (const part of event.message.content) {
+          if ((part.type === "output_text" || part.type === "text") && part.text) {
+            appendText(part.text);
+          }
+        }
+        continue;
+      }
+
+      appendText(event.response ?? event.text ?? event.message?.text ?? event.item?.text ?? "");
+    } catch {
+      return null;
+    }
+  }
+
+  if (!sawJson || (!text.trim() && !sessionId)) return null;
+  return { text: text.trim() || "(no output)", sessionId };
+}
+
 export function runCli(command, args, cwd, options = {}) {
   const timeoutMs = options.timeoutMs ?? 120000;
   const idleTimeoutMs = options.idleTimeoutMs ?? null;
@@ -186,40 +271,66 @@ export function runCli(command, args, cwd, options = {}) {
     error.isCliError = true;
     return error;
   };
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], cwd });
-    let stdout = "";
-    let stderr = "";
-    let finished = false;
-    let idleTimer = null;
+	return new Promise((resolve, reject) => {
+		const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], cwd, detached: true });
+		let stdout = "";
+		let stderr = "";
+		let finished = false;
+		let settled = false;
+		let idleTimer = null;
+		let killTimer = null;
+
+		const killChildTree = () => {
+			if (!child.pid) return;
+			try {
+				process.kill(-child.pid, "SIGTERM");
+			} catch {
+				try { child.kill("SIGTERM"); } catch {}
+			}
+			killTimer = setTimeout(() => {
+				if (finished) return;
+				try {
+					process.kill(-child.pid, "SIGKILL");
+				} catch {
+					try { child.kill("SIGKILL"); } catch {}
+				}
+			}, killGraceMs);
+			killTimer.unref?.();
+		};
+
+		const settleReject = (error) => {
+			if (settled) return;
+			settled = true;
+			reject(markCliError(error));
+		};
+
+		const settleResolve = (value) => {
+			if (settled) return;
+			settled = true;
+			resolve(value);
+		};
 
     const clearIdleTimer = () => {
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = null;
     };
 
-    const scheduleIdleTimeout = () => {
-      if (!idleTimeoutMs || finished) return;
-      clearIdleTimer();
-      idleTimer = setTimeout(() => {
-        if (finished) return;
-        child.kill("SIGTERM");
-        setTimeout(() => {
-          if (!finished) child.kill("SIGKILL");
-        }, killGraceMs).unref?.();
-        reject(markCliError(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`)));
-      }, idleTimeoutMs);
-      idleTimer.unref?.();
-    };
+		const scheduleIdleTimeout = () => {
+			if (!idleTimeoutMs || finished) return;
+			clearIdleTimer();
+			idleTimer = setTimeout(() => {
+				if (finished) return;
+				killChildTree();
+				settleReject(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`));
+			}, idleTimeoutMs);
+			idleTimer.unref?.();
+		};
 
-    const timer = setTimeout(() => {
-      if (finished) return;
-      child.kill("SIGTERM");
-      setTimeout(() => {
-        if (!finished) child.kill("SIGKILL");
-      }, killGraceMs).unref?.();
-      reject(markCliError(new Error(`CLI timed out after ${timeoutMs}ms`)));
-    }, timeoutMs);
+		const timer = setTimeout(() => {
+			if (finished) return;
+			killChildTree();
+			settleReject(new Error(`CLI timed out after ${timeoutMs}ms`));
+		}, timeoutMs);
     timer.unref?.();
     scheduleIdleTimeout();
 
@@ -233,17 +344,18 @@ export function runCli(command, args, cwd, options = {}) {
       scheduleIdleTimeout();
     });
 
-    child.on("error", (error) => {
-      clearIdleTimer();
-      reject(markCliError(error));
-    });
-    child.on("close", (code) => {
-      finished = true;
-      clearTimeout(timer);
-      clearIdleTimer();
-      if (code === 0) return resolve(stdout);
-      if (stdout.trim()) return resolve(stdout);
-      reject(markCliError(new Error(stderr.trim() || `CLI exited with code ${code}`)));
-    });
-  });
+		child.on("error", (error) => {
+			clearIdleTimer();
+			settleReject(error);
+		});
+		child.on("close", (code) => {
+			finished = true;
+			clearTimeout(timer);
+			if (killTimer) clearTimeout(killTimer);
+			clearIdleTimer();
+			if (code === 0) return settleResolve(stdout);
+			if (stdout.trim()) return settleResolve(stdout);
+			settleReject(new Error(stderr.trim() || `CLI exited with code ${code}`));
+		});
+	});
 }

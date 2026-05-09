@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   buildExecutionOptions,
   createSessionStore,
@@ -6,8 +9,6 @@ import {
   extractPromptText,
   buildCliInvocation,
   buildGeminiFallbackInvocation,
-  runCodexPrompt,
-  runGeminiPrompt,
   parseCliResult,
   createMemorySessionStore,
   createMemorySettingsStore,
@@ -15,6 +16,7 @@ import {
   getBridgeProjectDir,
   getBotProjectDir,
   validateBridgeConfig,
+  runCli,
 } from "../src/bridge.js";
 
 describe("agent bridge MVP", () => {
@@ -113,6 +115,57 @@ describe("agent bridge MVP", () => {
     });
   });
 
+  it("creates fresh gemini stream-json invocation when enabled", () => {
+    process.env.GEMINI_STREAM_JSON = "1";
+    expect(
+      buildCliInvocation({
+        bot: "gemini",
+        prompt: "hello",
+        sessionId: null,
+        command: "gemini",
+      }),
+    ).toEqual({
+      command: "gemini",
+      args: [
+        "--skip-trust",
+        "--approval-mode",
+        "plan",
+        "--include-directories",
+        getBridgeProjectDir(),
+        "--output-format",
+        "stream-json",
+        "-p",
+        "hello",
+      ],
+    });
+    delete process.env.GEMINI_STREAM_JSON;
+  });
+
+  it("creates fresh gemini acp invocation when enabled", () => {
+    process.env.GEMINI_ACP = "1";
+    expect(
+      buildCliInvocation({
+        bot: "gemini",
+        prompt: "hello",
+        sessionId: null,
+        command: "gemini",
+      }),
+    ).toEqual({
+      command: "gemini",
+      args: [
+        "--skip-trust",
+        "--approval-mode",
+        "plan",
+        "--include-directories",
+        getBridgeProjectDir(),
+        "--acp",
+        "-p",
+        "hello",
+      ],
+    });
+    delete process.env.GEMINI_ACP;
+  });
+
   it("creates trusted gemini invocation only when explicitly requested", () => {
     expect(
       buildCliInvocation({
@@ -185,6 +238,30 @@ describe("agent bridge MVP", () => {
     });
   });
 
+  it("kills the CLI process group on idle timeout", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "agent-bridge-cli-"));
+    const pidFile = join(dir, "sleep.pid");
+
+    await expect(
+      runCli(
+        "bash",
+        ["-lc", `sleep 10 & echo $! > ${pidFile}; wait`],
+        dir,
+        { timeoutMs: 5000, idleTimeoutMs: 100, killGraceMs: 100 },
+      ),
+    ).rejects.toThrow(/CLI idle timeout/);
+
+    const childPid = Number(readFileSync(pidFile, "utf8").trim());
+    let stillRunning = true;
+    try {
+      process.kill(childPid, 0);
+    } catch {
+      stillRunning = false;
+    }
+    rmSync(dir, { recursive: true, force: true });
+    expect(stillRunning).toBe(false);
+  });
+
   it("parses codex jsonl output", () => {
     expect(
       parseCliResult({
@@ -218,6 +295,32 @@ describe("agent bridge MVP", () => {
         stdout: JSON.stringify({ response: "hi from gemini", session_id: "session-123" }),
       }),
     ).toEqual({ text: "hi from gemini", sessionId: "session-123" });
+  });
+
+  it("parses gemini stream-json output", () => {
+    expect(
+      parseCliResult({
+        bot: "gemini",
+        stdout: [
+          JSON.stringify({ event: "start", session_id: "session-123" }),
+          JSON.stringify({ response: "hello from stream" }),
+        ].join("\n"),
+      }),
+    ).toEqual({ text: "hello from stream", sessionId: "session-123" });
+  });
+
+  it("parses gemini acp output by keeping the final assistant text", () => {
+    process.env.GEMINI_ACP = "1";
+    expect(
+      parseCliResult({
+        bot: "gemini",
+        stdout: [
+          JSON.stringify({ role: "assistant", text: "intermediate" }),
+          JSON.stringify({ role: "assistant", text: "final answer" }),
+        ].join("\n"),
+      }),
+    ).toEqual({ text: "final answer", sessionId: null });
+    delete process.env.GEMINI_ACP;
   });
 
   it("stores one session per bot", async () => {

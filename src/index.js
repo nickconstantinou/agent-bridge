@@ -153,7 +153,7 @@ class BridgeBot {
       console.error(`[${this.kind}] prompt execution failed`, error);
       const messageText = String(error?.message || error);
       const text = messageText.slice(0, 4000);
-      await this.sendText(chatId, { text: `Error: ${text}`, parse_mode: "MarkdownV2" });
+      await sendTelegramMessage({ client: this.client, outbox, kind: this.kind, chatId, body: { text: `Error: ${text}` });
     }
   }
 
@@ -201,8 +201,8 @@ class BridgeBot {
       // Parse result
       result = parseCliResult({ bot: this.kind, stdout: cliResult.text });
       if (result?.sessionId) await sessionStore.set(this.kind, result.sessionId);
-      // Send with MarkdownV2 if it contains code/markdown
-      await this.sendText(chatId, { text: result.text, parse_mode: "MarkdownV2" });
+      // Send via sendTelegramMessage (has fallback chain: native entities → escaped → plain)
+      await sendTelegramMessage({ client: this.client, outbox, kind: this.kind, chatId, body: { text: result.text } });
       return result;
     } catch (error) {
       // Fallback to read-only mode on timeout

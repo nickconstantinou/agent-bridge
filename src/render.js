@@ -75,9 +75,9 @@ export function escapeTelegramHtml(text) {
 export function toTelegramEntitiesText(text) {
   let value = String(text || "");
   // Convert markdown headings to bold: ### Title → **Title**
-  value = value.replace(/^###\\s+(.+)$/gm, "**$1**")
-    .replace(/^##\\s+(.+)$/gm, "**$1**")
-    .replace(/^#\\s+(.+)$/gm, "**$1**");
+  value = value.replace(/^###\s+(.+)$/gm, "**$1**")
+    .replace(/^##\s+(.+)$/gm, "**$1**")
+    .replace(/^#\s+(.+)$/gm, "**$1**");
 
   const entities = [];
   const output = [];

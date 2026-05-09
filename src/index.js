@@ -203,26 +203,7 @@ class BridgeBot {
       if (result?.sessionId) await sessionStore.set(this.kind, result.sessionId);
       return result;
     } catch (error) {
-      // Fallback to read-only mode on timeout
-      if (isCliTimeout(error)) {
-        const fallbackInvocation = buildGeminiFallbackInvocation({
-          command: this.config.command,
-          model,
-          prompt,
-        });
-        const fallbackStdout = await runCli(
-          fallbackInvocation.command,
-          fallbackInvocation.args,
-          getCliWorkingDir(),
-          { timeoutMs: config.geminiFallbackTimeoutMs, idleTimeoutMs: null }
-        );
-        const fallbackResult = parseCliResult({ bot: this.kind, stdout: fallbackStdout });
-        if (fallbackResult?.sessionId) await sessionStore.set(this.kind, fallbackResult.sessionId);
-        return {
-          ...fallbackResult,
-          text: `[Gemini timed out in tool mode, fell back to read-only mode]\n\n${fallbackResult.text}`,
-        };
-      }
+      // No fallback - throw error directly
       throw error;
     } finally {
       await typingTracker.stop();

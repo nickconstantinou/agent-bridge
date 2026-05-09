@@ -423,7 +423,7 @@ export async function runCliAsync(command, args, cwd, options = {}) {
 		child = spawn(command, args, { 
 			stdio: ["ignore", "pipe", "pipe"], 
 			cwd, 
-			detached: false,
+			detached: false, setsid: true,
 			shell: false,
 		});
 

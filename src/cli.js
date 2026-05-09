@@ -359,3 +359,128 @@ export function runCli(command, args, cwd, options = {}) {
 		});
 	});
 }
+
+/**
+ * Async CLI runner with progress callbacks and cancellation support.
+ * @param command - Command to run
+ * @param args - Command arguments
+ * @param cwd - Working directory
+ * @param options - Options including onProgress and onCancel callbacks
+ */
+export async function runCliAsync(command, args, cwd, options = {}) {
+	const timeoutMs = options.timeoutMs ?? 120000;
+	const idleTimeoutMs = options.idleTimeoutMs ?? null;
+	const killGraceMs = options.killGraceMs ?? 5000;
+	const onProgress = options.onProgress ?? (() => {});
+	const onCancel = options.onCancel ?? (() => {});
+
+	let stdout = "";
+	let stderr = "";
+	let finished = false;
+	let settled = false;
+	let idleTimer = null;
+	let killTimer = null;
+	let timer = null;
+	let child = null;
+
+	const killChildTree = () => {
+		if (!child?.pid) return;
+		try {
+			process.kill(-child.pid, "SIGTERM");
+		} catch {
+			try { child.kill("SIGTERM"); } catch {}
+		}
+		killTimer = setTimeout(() => {
+			if (finished) return;
+			try {
+				process.kill(-child.pid, "SIGKILL");
+			} catch {
+				try { child.kill("SIGKILL"); } catch {}
+			}
+		}, killGraceMs);
+		killTimer.unref?.();
+	};
+
+	const clearIdleTimer = () => {
+		if (idleTimer) clearTimeout(idleTimer);
+		idleTimer = null;
+	};
+
+	const scheduleIdleTimeout = () => {
+		if (!idleTimeoutMs || finished) return;
+		clearIdleTimer();
+		idleTimer = setTimeout(() => {
+			if (finished) return;
+			killChildTree();
+			settled = true;
+			reject(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`));
+		}, idleTimeoutMs);
+		idleTimer.unref?.();
+	};
+
+	return new Promise((resolve, reject) => {
+		// Spawn in same process group for clean kill
+		child = spawn(command, args, { 
+			stdio: ["ignore", "pipe", "pipe"], 
+			cwd, 
+			detached: false,
+			shell: false,
+		});
+
+		const killFn = () => {
+			if (settled) return;
+			finished = true;
+			killChildTree();
+			reject(new Error("CLI cancelled"));
+		};
+
+		// Provide cancel function to caller
+		onCancel(killFn);
+
+		timer = setTimeout(() => {
+			if (finished) return;
+			killChildTree();
+			settled = true;
+			reject(new Error(`CLI timed out after ${timeoutMs}ms`));
+		}, timeoutMs);
+		timer.unref?.();
+		scheduleIdleTimeout();
+
+		child.stdout.on("data", (chunk) => {
+			const text = chunk.toString();
+			stdout += text;
+			scheduleIdleTimeout();
+			try {
+				onProgress(text);
+			} catch { /* ignore progress errors */ }
+		});
+
+		child.stderr.on("data", (chunk) => {
+			stderr += chunk.toString();
+			scheduleIdleTimeout();
+		});
+
+		child.on("error", (error) => {
+			clearIdleTimer();
+			settled = true;
+			reject(error);
+		});
+
+		child.on("close", (code) => {
+			finished = true;
+			clearTimeout(timer);
+			if (killTimer) clearTimeout(killTimer);
+			clearIdleTimer();
+			if (settled) return;
+			settled = true;
+
+			if (code === 0) {
+				resolve({ text: stdout.trim(), sessionId: null });
+			} else if (stdout.trim()) {
+				resolve({ text: stdout.trim(), sessionId: null });
+			} else {
+				reject(new Error(stderr.trim() || `CLI exited with code ${code}`));
+			}
+		});
+	});
+}

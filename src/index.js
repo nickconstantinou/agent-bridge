@@ -15,12 +15,13 @@ import {
   buildCliInvocation,
   validateBridgeConfig,
   runCli,
+  runCliAsync,
 } from "./bridge.js";
 import { createTelegramOutbox } from "./outbox.js";
 import { createBridgeState, createFileBridgeState } from "./state.js";
 import { processTelegramUpdate } from "./updateLifecycle.js";
 import { TelegramClient } from "./telegram.js";
-import { sendTelegramMessage } from "./messageDelivery.js";
+import { sendTelegramMessage, sendMessageWithProgress } from "./messageDelivery.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env",
@@ -43,6 +44,7 @@ const config = {
   cliTimeoutMs: Number(process.env.CLI_TIMEOUT_MS || 300000),
   cliIdleTimeoutMs: Number(process.env.CLI_IDLE_TIMEOUT_MS || 60000),
   geminiFallbackTimeoutMs: Number(process.env.GEMINI_FALLBACK_TIMEOUT_MS || 120000),
+  asyncEnabled: process.env.BRIDGE_ASYNC_ENABLED !== "false",
   sessionStorePath: process.env.SESSION_STORE_PATH || `${getBridgeProjectDir()}/.data/sessions.json`,
   settingsStorePath: process.env.SETTINGS_STORE_PATH || `${getBridgeProjectDir()}/.data/settings.json`,
   bots: {
@@ -139,14 +141,85 @@ class BridgeBot {
     const chatId = message.chat.id;
     const sessionId = await sessionStore.get(this.kind);
 
+    // Choose async or sync based on config
+    const useAsync = config.asyncEnabled && this.kind === "gemini";
+
     try {
-      const result = await this.executePrompt(prompt, sessionId, chatId);
+      const result = useAsync
+        ? await this.executePromptAsync(prompt, sessionId, chatId)
+        : await this.executePrompt(prompt, sessionId, chatId);
       await this.sendText(chatId, { text: result.text });
     } catch (error) {
       console.error(`[${this.kind}] prompt execution failed`, error);
       const messageText = String(error?.message || error);
       const text = messageText.slice(0, 4000);
       await this.sendText(chatId, { text: `Error: ${text}` });
+    }
+  }
+
+  /**
+   * Async prompt execution - sends immediate ack, streams progress, replaces placeholder.
+   */
+  async executePromptAsync(prompt, sessionId, chatId) {
+    const defaults = await settingsStore.read();
+    const model = defaults[this.kind] || this.config.defaultModel;
+    const invocation = buildCliInvocation({
+      bot: this.kind,
+      command: this.config.command,
+      model,
+      prompt,
+      sessionId,
+      executionMode: config.executionMode,
+      outputFormat: "text", // Use text for streaming
+    });
+
+    const isCliTimeout = (error) => /CLI (idle timeout|timed out)/i.test(String(error?.message || error));
+
+    let progressBuffer = "";
+    let result = null;
+
+    // Progress callback: update placeholder every 300 chars
+    const onProgress = (text) => {
+      progressBuffer += text;
+      // For now, we just buffer. Real streaming needs placeholder message ID.
+      // This is Phase 3+ territory.
+    };
+
+    try {
+      // Run with async CLI runner
+      const cliResult = await runCliAsync(invocation.command, invocation.args, getCliWorkingDir(), {
+        timeoutMs: config.cliTimeoutMs,
+        idleTimeoutMs: config.cliIdleTimeoutMs,
+        onProgress,
+        onCancel: () => {}, // TODO: wire to cancel command
+      });
+
+      // Parse result
+      result = parseCliResult({ bot: this.kind, stdout: cliResult.text });
+      if (result?.sessionId) await sessionStore.set(this.kind, result.sessionId);
+      return result;
+    } catch (error) {
+      // Fallback to read-only mode on timeout
+      if (isCliTimeout(error)) {
+        const fallbackInvocation = buildGeminiFallbackInvocation({
+          command: this.config.command,
+          model,
+          prompt,
+        });
+        const fallbackStdout = await runCli(
+          fallbackInvocation.command,
+          fallbackInvocation.args,
+          getCliWorkingDir(),
+          { timeoutMs: config.geminiFallbackTimeoutMs, idleTimeoutMs: config.cliIdleTimeoutMs }
+        );
+        const fallbackResult = parseCliResult({ bot: this.kind, stdout: fallbackStdout });
+        if (fallbackResult?.sessionId) await sessionStore.set(this.kind, fallbackResult.sessionId);
+        return {
+          ...fallbackResult,
+          text: `[Gemini timed out in tool mode, fell back to read-only mode]\n\n${fallbackResult.text}`,
+        };
+      }
+      throw error;
     }
   }
 

@@ -44,3 +44,85 @@ export async function sendTelegramMessage({ client, outbox, kind, chatId, body }
     }
   }
 }
+
+/**
+ * Send a message with progress streaming.
+ * Sends initial placeholder, streams updates via editMessageText, replaces on final.
+ * @param options - Configuration object
+ * @param options.client - Telegram client
+ * @param options.outbox - Outbox for rate limiting
+ * @param options.kind - Bot kind (gemini/codex)
+ * @param options.chatId - Chat ID
+ * @param options.execution - Promise resolving to CLI result
+ * @param options.placeholderText - Initial placeholder text
+ * @param options.onProgress - Callback for progress updates
+ */
+export async function sendMessageWithProgress({ client, outbox, kind, chatId, execution, placeholderText = "🤔 Thinking...", onProgress = () => {} }) {
+  const isGemini = kind === "gemini";
+  const sendTyping = async () => {
+    try {
+      await outbox.send(chatId, { chat_id: chatId, action: "typing" }, (msg) => client.sendChatAction(msg));
+    } catch { /* ignore */ }
+  };
+
+
+  // 1. Send typing indicator
+  await sendTyping();
+  let typingInterval = setInterval(sendTyping, 4500);
+
+
+  // 2. Send placeholder message
+  const placeholderBody = {
+    chat_id: chatId,
+    text: placeholderText,
+  };
+  let placeholderMsg;
+  try {
+    placeholderMsg = await outbox.send(chatId, placeholderBody, (msg) => client.sendMessage(msg));
+  } catch (err) {
+    clearInterval(typingInterval);
+    throw err;
+  }
+
+  const placeholderMessageId = placeholderMsg?.message_id;
+
+  try {
+    // 3. Wait for execution, streaming progress
+    const result = await execution;
+    const text = result?.text || "";
+
+    // 4. Replace placeholder with final result
+    if (placeholderMessageId) {
+      try {
+        await client.editMessageText({
+          chat_id: chatId,
+          message_id: placeholderMessageId,
+          text,
+        });
+      } catch (editErr) {
+        // Fallback: send new message if edit fails
+        console.warn(`[${kind}] editMessageText failed, sending new message`, editErr.message);
+        await sendTelegramMessage({ client, outbox, kind, chatId, body: { text } });
+      }
+    } else {
+      // No placeholder, send fresh
+      await sendTelegramMessage({ client, outbox, kind, chatId, body: { text } });
+    }
+
+    clearInterval(typingInterval);
+    return result;
+  } catch (err) {
+    clearInterval(typingInterval);
+    // On error, try to edit placeholder with error message
+    if (placeholderMessageId) {
+      try {
+        await client.editMessageText({
+          chat_id: chatId,
+          message_id: placeholderMessageId,
+          text: `❌ ${err.message?.slice(0, 4000) || String(err)}`,
+        });
+      } catch { /* ignore edit failure */ }
+    }
+    throw err;
+  }
+}

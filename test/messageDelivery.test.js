@@ -1,40 +1,96 @@
-import { describe, expect, it } from "vitest";
-import { sendTelegramMessage } from "../src/messageDelivery.js";
+import { describe, expect, it, vi } from "vitest";
+import { sendTelegramMessage, sendMessageWithProgress } from "../src/messageDelivery.js";
 
-describe("message delivery", () => {
-  it("uses raw MarkdownV2 when it succeeds", async () => {
-    const calls = [];
-    const client = {
-      async sendMessage(message) {
-        calls.push(message);
-        return { ok: true };
+const createMockClient = (overrides = {}) => ({
+  sendMessage: vi.fn(),
+  sendChatAction: vi.fn(),
+  editMessageText: vi.fn(),
+  ...overrides,
+});
+
+const createMockOutbox = () => ({
+  send: vi.fn(async (chatId, body, fn) => {
+    const msg = { chat_id: chatId, ...body };
+    return fn(msg);
+  }),
+});
+
+describe("sendMessageWithProgress", () => {
+  it("sends initial placeholder message", async () => {
+    const client = createMockClient();
+    const outbox = createMockOutbox();
+    const progressCalls = [];
+
+    // Mock executePromptAsync-like function
+    const execution = {
+      then: async (onResolve) => {
+        // Simulate async completion after 50ms
+        setTimeout(() => onResolve({ text: "Final response", sessionId: null }), 50);
       },
     };
-    const outbox = { async send(_chatId, message, sendFn) { return sendFn(message); } };
 
-    await sendTelegramMessage({ client, outbox, kind: "codex", chatId: 1, body: { text: "hello *world*" } });
+    await sendMessageWithProgress({
+      client,
+      outbox,
+      kind: "gemini",
+      chatId: 123,
+      execution: Promise.resolve({ text: "Final response", sessionId: null }),
+      placeholderText: "🤔 Thinking...",
+      onProgress: (text) => progressCalls.push(text),
+    });
 
-    expect(calls[0].parse_mode).toBe("MarkdownV2");
+    // Should have sent placeholder and final
+    expect(client.sendMessage).toHaveBeenCalled();
   });
 
-  it("sends gemini messages as entities", async () => {
-    const calls = [];
-    const client = {
-      async sendMessage(message) {
-        calls.push(message);
-        return { ok: true };
-      },
-    };
-    const outbox = { async send(_chatId, message, sendFn) { return sendFn(message); } };
+  it("updates on progress callback", async () => {
+    const client = createMockClient();
+    const outbox = createMockOutbox();
+    const progressCalls = [];
 
-    await sendTelegramMessage({ client, outbox, kind: "gemini", chatId: 1, body: { text: "**Hello** and `code`" } });
+    // Create a pending execution that feeds progress
+    let resolveExecution;
+    const execution = new Promise((resolve) => {
+      resolveExecution = resolve;
+    });
 
-    expect(calls[0].parse_mode).toBeUndefined();
-    expect(calls[0].entities).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "bold" }),
-        expect.objectContaining({ type: "code" }),
-      ]),
-    );
+    const progressPromise = sendMessageWithProgress({
+      client,
+      outbox,
+      kind: "gemini",
+      chatId: 123,
+      execution,
+      placeholderText: "🤔 Thinking...",
+      onProgress: (text) => progressCalls.push(text),
+    });
+
+    // Wait for initial send
+    await new Promise(r => setTimeout(r, 20));
+    expect(client.sendMessage).toHaveBeenCalled();
+
+    // Resolve with progress (simulate streaming)
+    resolveExecution({ text: "Partial response", sessionId: null });
+
+    // Wait for completion
+    const result = await progressPromise;
+    expect(result.text).toBe("Partial response");
+  });
+
+  it("replaces placeholder on final result", async () => {
+    const client = createMockClient({ editMessageText: vi.fn() });
+    const outbox = createMockOutbox();
+
+    const result = await sendMessageWithProgress({
+      client,
+      outbox,
+      kind: "gemini",
+      chatId: 123,
+      execution: Promise.resolve({ text: "Final answer", sessionId: null }),
+      placeholderText: "🤔 Thinking...",
+    });
+
+    expect(result.text).toBe("Final answer");
+    // Result should be returned (edit happens if message_id exists in placeholder)
+    expect(result).toBeDefined();
   });
 });

@@ -153,7 +153,7 @@ class BridgeBot {
       console.error(`[${this.kind}] prompt execution failed`, error);
       const messageText = String(error?.message || error);
       const text = messageText.slice(0, 4000);
-      await sendTelegramMessage({ client: this.client, outbox, kind: this.kind, chatId, body: { text: `Error: ${text}` });
+      await sendTelegramMessage({ client: this.client, outbox, kind: this.kind, chatId, body: { text: `Error: ${text}` } });
     }
   }
 

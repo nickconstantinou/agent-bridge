@@ -71,3 +71,53 @@ export function escapeTelegramHtml(text) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
 }
+
+export function toTelegramEntitiesText(text) {
+  const value = String(text || "");
+  const entities = [];
+  const output = [];
+
+  let i = 0;
+  while (i < value.length) {
+    if (value.startsWith("**", i)) {
+      const end = value.indexOf("**", i + 2);
+      if (end > i + 2) {
+        const start = output.join("").length;
+        const inner = value.slice(i + 2, end);
+        output.push(inner);
+        entities.push({ type: "bold", offset: start, length: inner.length });
+        i = end + 2;
+        continue;
+      }
+    }
+
+    if (value[i] === "`") {
+      if (value.startsWith("```", i)) {
+        const end = value.indexOf("```", i + 3);
+        if (end > i + 3) {
+          const start = output.join("").length;
+          const inner = value.slice(i + 3, end).replace(/^\n/, "");
+          output.push(inner);
+          entities.push({ type: "pre", offset: start, length: inner.length });
+          i = end + 3;
+          continue;
+        }
+      } else {
+        const end = value.indexOf("`", i + 1);
+        if (end > i + 1) {
+          const start = output.join("").length;
+          const inner = value.slice(i + 1, end);
+          output.push(inner);
+          entities.push({ type: "code", offset: start, length: inner.length });
+          i = end + 1;
+          continue;
+        }
+      }
+    }
+
+    output.push(value[i]);
+    i += 1;
+  }
+
+  return { text: output.join(""), entities };
+}

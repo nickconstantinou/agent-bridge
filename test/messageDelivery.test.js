@@ -17,7 +17,7 @@ describe("message delivery", () => {
     expect(calls[0].parse_mode).toBe("MarkdownV2");
   });
 
-  it("sends gemini messages as HTML", async () => {
+  it("sends gemini messages as entities", async () => {
     const calls = [];
     const client = {
       async sendMessage(message) {
@@ -27,9 +27,14 @@ describe("message delivery", () => {
     };
     const outbox = { async send(_chatId, message, sendFn) { return sendFn(message); } };
 
-    await sendTelegramMessage({ client, outbox, kind: "gemini", chatId: 1, body: { text: '<b>Hello</b> & "world"' } });
+    await sendTelegramMessage({ client, outbox, kind: "gemini", chatId: 1, body: { text: "**Hello** and `code`" } });
 
-    expect(calls[0].parse_mode).toBe("HTML");
-    expect(calls[0].text).toBe("&lt;b&gt;Hello&lt;/b&gt; &amp; &quot;world&quot;");
+    expect(calls[0].parse_mode).toBeUndefined();
+    expect(calls[0].entities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "bold" }),
+        expect.objectContaining({ type: "code" }),
+      ]),
+    );
   });
 });

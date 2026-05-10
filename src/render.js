@@ -61,7 +61,35 @@ export function renderTelegramPlainText(text) {
 }
 
 export function escapeTelegramMarkdownV2(text) {
-  return String(text || "").replace(/([_\*[\]()~`>#+\-=|{}.!\\])/g, "\\$1");
+  const value = String(text || "");
+
+  // Split into chunks: code blocks vs non-code
+  const parts = value.split(/(```[\s\S]*?```|`[^`\n]+`)/g);
+
+  return parts
+    .map((part) => {
+      if (part.startsWith("```") || part.startsWith("`")) {
+        return part.replace(/([\\`])/g, "\\$1");
+      }
+
+      // 1. Identify and protect valid simple markdown pairs (*bold*, _italic_, ~strikethrough~, ||spoiler||)
+      // We use a non-greedy match. Note: this doesn't handle complex nesting but covers 95% of agent output.
+      const protectedPairs = [];
+      let temp = part.replace(/(\*[^\*\n]+\*|_[^_\n]+_|~[^~\n]+~|\|\|[^|\n]+\|\||\[[^\]\n]+\]\([^\)\n]+\))/g, (match) => {
+        protectedPairs.push(match);
+        return `\x01${protectedPairs.length - 1}\x02`;
+      });
+
+      // 2. Escape all reserved characters in the remaining text
+      // Reserved: _ * [ ] ( ) ~ ` > # + - = | { } . !
+      temp = temp.replace(/([_\\*\[\]()~`>#+\-=|{}.!])/g, "\\$1");
+
+      // 3. Restore protected pairs
+      return temp.replace(/\x01(\d+)\x02/g, (_, index) => {
+        return protectedPairs[Number.parseInt(index, 10)];
+      });
+    })
+    .join("");
 }
 
 export function escapeTelegramHtml(text) {

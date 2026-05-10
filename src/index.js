@@ -19,7 +19,7 @@ import {
 import { createTelegramOutbox } from "./outbox.js";
 import { createBridgeState, createFileBridgeState } from "./state.js";
 import { processTelegramUpdate } from "./updateLifecycle.js";
-import { TelegramClient } from "./telegram.js";
+import { TelegramClient, MediaGroupBuffer } from "./telegram.js";
 import { sendTelegramMessage, sendMessageWithProgress } from "./messageDelivery.js";
 
 dotenv.config({
@@ -79,9 +79,23 @@ class BridgeBot {
     this.kind = kind;
     this.config = botConfig;
     this.client = new TelegramClient(botConfig.token);
+    this.mediaBuffer = new MediaGroupBuffer({
+      timeoutMs: 1500,
+      onFlush: (groupId, messages) => {
+        void this.handleMessages(messages);
+      },
+    });
   }
 
   async run() {
+    const lockPath = `${getBridgeProjectDir()}/.data/telegram-${this.kind}.lock`;
+    try {
+      await this.client.acquireLease(lockPath);
+    } catch (error) {
+      console.error(`[${this.kind}] ${error.message}`);
+      return;
+    }
+
     let offset = (await bridgeState.getProcessedUpdateId(this.kind)) + 1;
     console.log(`[${this.kind}] bot online (offset: ${offset})`);
 
@@ -124,42 +138,66 @@ class BridgeBot {
     if (!message) return;
     if (!isAuthorizedMessage(message, config.allowedUserId)) return;
 
-    const prompt = extractPromptText(message);
+    this.mediaBuffer.push(message);
+  }
+
+  async handleMessages(messages) {
+    const primaryMessage = messages.find((m) => m.text || m.caption) || messages[0];
+
+    const threadId = primaryMessage.message_thread_id;
+    const prompt = extractPromptText(primaryMessage);
     if (!prompt) return;
 
-  const commandResponse = await handleCommand(this.kind, prompt, {
+    const commandResponse = await handleCommand(this.kind, prompt, {
       settingsStore,
       sessionStore,
       config,
     });
     if (commandResponse) {
-      await this.sendText(message.chat.id, commandResponse);
+      await this.sendText(primaryMessage.chat.id, { text: commandResponse, message_thread_id: threadId });
       return;
     }
 
-    const chatId = message.chat.id;
+    const chatId = primaryMessage.chat.id;
     const sessionId = await sessionStore.get(this.kind);
 
     // Choose async or sync based on config (sync is default)
     const useAsync = config.asyncEnabled === true;
 
     try {
-      const result = useAsync
-        ? await this.executePromptAsync(prompt, sessionId, chatId)
-        : await this.executePrompt(prompt, sessionId, chatId);
-      await this.sendText(chatId, { text: result.text });
+      if (useAsync) {
+        await sendMessageWithProgress({
+          client: this.client,
+          outbox,
+          kind: this.kind,
+          chatId,
+          body: { message_thread_id: threadId },
+          execution: (onProgress) =>
+            this.executePromptAsync(prompt, sessionId, chatId, { message_thread_id: threadId }, onProgress),
+        });
+      } else {
+        const result = await this.executePrompt(prompt, sessionId, chatId, { message_thread_id: threadId });
+        await this.sendText(chatId, { text: result.text, message_thread_id: threadId });
+      }
     } catch (error) {
       console.error(`[${this.kind}] prompt execution failed`, error);
       const messageText = String(error?.message || error);
       const text = messageText.slice(0, 4000);
-      await sendTelegramMessage({ client: this.client, outbox, kind: this.kind, chatId, body: { text: `Error: ${text}` } });
+      await sendTelegramMessage({
+        client: this.client,
+        outbox,
+        kind: this.kind,
+        chatId,
+        body: { text: `Error: ${text}`, message_thread_id: threadId },
+      });
     }
   }
 
   /**
    * Async prompt execution - sends immediate ack, streams progress, replaces placeholder, typing indicator.
    */
-  async executePromptAsync(prompt, sessionId, chatId) {
+  async executePromptAsync(prompt, sessionId, chatId, body = {}, onProgress = () => {}) {
+    const { message_thread_id: threadId } = body;
     const defaults = await settingsStore.read();
     const model = defaults[this.kind] || this.config.defaultModel;
     const invocation = buildCliInvocation({
@@ -175,18 +213,8 @@ class BridgeBot {
     const isCliTimeout = (error) => /CLI (idle timeout|timed out)/i.test(String(error?.message || error));
 
     // Start typing indicator
-    const typingTracker = createTypingTracker(this.client, outbox, chatId, this.kind);
+    const typingTracker = createTypingTracker(this.client, outbox, chatId, this.kind, { message_thread_id: threadId });
     await typingTracker.start();
-
-    let progressBuffer = "";
-    let result = null;
-
-    // Progress callback: update placeholder every 300 chars
-    const onProgress = (text) => {
-      progressBuffer += text;
-      // For now, we just buffer. Real streaming needs placeholder message ID.
-      // This is Phase 3+ territory.
-    };
 
     try {
       // Run with async CLI runner (no idle timeout - onProgress provides liveness)
@@ -198,7 +226,7 @@ class BridgeBot {
       });
 
       // Parse result
-      result = parseCliResult({ bot: this.kind, stdout: cliResult.text });
+      const result = parseCliResult({ bot: this.kind, stdout: cliResult.text });
       if (result?.sessionId) await sessionStore.set(this.kind, result.sessionId);
       return result;
     } catch (error) {
@@ -209,7 +237,8 @@ class BridgeBot {
     }
   }
 
-  async executePrompt(prompt, sessionId, chatId) {
+  async executePrompt(prompt, sessionId, chatId, body = {}) {
+    const { message_thread_id: threadId } = body;
     const defaults = await settingsStore.read();
     const model = defaults[this.kind] || this.config.defaultModel;
     const streamGemini = this.kind === "gemini" && process.env.GEMINI_STREAM_JSON === "1";
@@ -222,7 +251,7 @@ class BridgeBot {
       executionMode: config.executionMode,
     });
 
-    const typingTracker = createTypingTracker(this.client, outbox, chatId, this.kind);
+    const typingTracker = createTypingTracker(this.client, outbox, chatId, this.kind, { message_thread_id: threadId });
 
     const isCliTimeout = (error) => /CLI (idle timeout|timed out)/i.test(String(error?.message || error));
 
@@ -298,14 +327,15 @@ class BridgeBot {
   }
 }
 
-function createTypingTracker(client, outbox, chatId, kind) {
+function createTypingTracker(client, outbox, chatId, kind, body = {}) {
   let timer = null;
   let active = false;
+  const { message_thread_id: threadId } = body;
 
   const sendTyping = async () => {
     if (!active) return;
     try {
-      await outbox.send(chatId, { chat_id: chatId, action: "typing" }, (message) => client.sendChatAction(message));
+      await outbox.send(chatId, { chat_id: chatId, message_thread_id: threadId, action: "typing" }, (message) => client.sendChatAction(message));
     } catch (error) {
       console.warn(`[${kind}] typing indicator failed`, error.message);
     }
@@ -368,5 +398,14 @@ await healBridgeState();
 const bots = Object.entries(config.bots)
   .filter(([, bot]) => bot.token)
   .map(([kind, botConfig]) => new BridgeBot(kind, botConfig));
+
+const shutdown = async (signal) => {
+  console.log(`[bridge] ${signal} received, releasing leases...`);
+  await Promise.all(bots.map((bot) => bot.client.releaseLease()));
+  process.exit(0);
+};
+
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
 await Promise.all(bots.map((bot) => bot.run()));

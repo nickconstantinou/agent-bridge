@@ -56,12 +56,15 @@ export async function sendTelegramMessage({ client, outbox, kind, chatId, body }
  * @param options.execution - Promise resolving to CLI result
  * @param options.placeholderText - Initial placeholder text
  * @param options.onProgress - Callback for progress updates
+ * @param options.body - Optional additional fields (like message_thread_id)
  */
-export async function sendMessageWithProgress({ client, outbox, kind, chatId, execution, placeholderText = "🤔 Thinking...", onProgress = () => {} }) {
+export async function sendMessageWithProgress({ client, outbox, kind, chatId, execution, placeholderText = "🤔 Thinking...", onProgress = () => {}, body = {} }) {
   const isGemini = kind === "gemini";
+  const { text: _ignored, ...rest } = body;
+
   const sendTyping = async () => {
     try {
-      await outbox.send(chatId, { chat_id: chatId, action: "typing" }, (msg) => client.sendChatAction(msg));
+      await outbox.send(chatId, { chat_id: chatId, ...rest, action: "typing" }, (msg) => client.sendChatAction(msg));
     } catch { /* ignore */ }
   };
 
@@ -74,6 +77,7 @@ export async function sendMessageWithProgress({ client, outbox, kind, chatId, ex
   // 2. Send placeholder message
   const placeholderBody = {
     chat_id: chatId,
+    ...rest,
     text: placeholderText,
   };
   let placeholderMsg;
@@ -84,12 +88,55 @@ export async function sendMessageWithProgress({ client, outbox, kind, chatId, ex
     throw err;
   }
 
-  const placeholderMessageId = placeholderMsg?.message_id;
+  const placeholderMessageId = placeholderMsg?.result?.message_id;
+
+  let lastUpdateMs = Date.now();
+  let currentText = "";
+  const UPDATE_INTERVAL_MS = 2000;
+
+  const flushProgress = async (text, isFinal = false) => {
+    currentText = text;
+    const now = Date.now();
+    if (!isFinal && now - lastUpdateMs < UPDATE_INTERVAL_MS) return;
+    if (!placeholderMessageId) return;
+
+    lastUpdateMs = now;
+    try {
+      await client.editMessageText({
+        chat_id: chatId,
+        message_id: placeholderMessageId,
+        ...rest,
+        text: currentText || "...",
+      });
+    } catch (err) {
+      console.warn(`[${kind}] progress edit failed`, err.message);
+    }
+  };
+
+  // Wrap onProgress to flush to Telegram
+  const originalOnProgress = onProgress;
+  const wrappedOnProgress = (chunk) => {
+    const newText = (currentText || "") + chunk;
+    void flushProgress(newText, false);
+    originalOnProgress?.(chunk);
+  };
 
   try {
     // 3. Wait for execution, streaming progress
-    const result = await execution;
-    const text = result?.text || "";
+    // Note: The caller must pass a promise that accepts onProgress or use a custom mechanism.
+    // In our case, the caller in index.js handles the CLI progress.
+    // We need to re-expose our wrappedOnProgress.
+    
+    // IF the execution is a function that takes onProgress, call it.
+    // Otherwise, assume the caller will call our onProgress.
+    let result;
+    if (typeof execution === "function") {
+      result = await execution(wrappedOnProgress);
+    } else {
+      result = await execution;
+    }
+    
+    const finalText = result?.text || currentText || "";
 
     // 4. Replace placeholder with final result
     if (placeholderMessageId) {
@@ -97,20 +144,21 @@ export async function sendMessageWithProgress({ client, outbox, kind, chatId, ex
         await client.editMessageText({
           chat_id: chatId,
           message_id: placeholderMessageId,
-          text,
+          ...rest,
+          text: finalText,
         });
       } catch (editErr) {
         // Fallback: send new message if edit fails
-        console.warn(`[${kind}] editMessageText failed, sending new message`, editErr.message);
-        await sendTelegramMessage({ client, outbox, kind, chatId, body: { text } });
+        console.warn(`[${kind}] final edit failed, sending new message`, editErr.message);
+        await sendTelegramMessage({ client, outbox, kind, chatId, body: { ...body, text: finalText } });
       }
     } else {
       // No placeholder, send fresh
-      await sendTelegramMessage({ client, outbox, kind, chatId, body: { text } });
+      await sendTelegramMessage({ client, outbox, kind, chatId, body: { ...body, text: finalText } });
     }
 
     clearInterval(typingInterval);
-    return result;
+    return { ...result, onProgress: wrappedOnProgress };
   } catch (err) {
     clearInterval(typingInterval);
     // On error, try to edit placeholder with error message
@@ -119,6 +167,7 @@ export async function sendMessageWithProgress({ client, outbox, kind, chatId, ex
         await client.editMessageText({
           chat_id: chatId,
           message_id: placeholderMessageId,
+          ...rest,
           text: `❌ ${err.message?.slice(0, 4000) || String(err)}`,
         });
       } catch { /* ignore edit failure */ }

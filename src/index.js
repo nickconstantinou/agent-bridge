@@ -41,7 +41,7 @@ const config = {
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 1000),
   executionMode: process.env.BRIDGE_EXECUTION_MODE || "safe",
   cliTimeoutMs: Number(process.env.CLI_TIMEOUT_MS || 300000),
-  cliIdleTimeoutMs: Number(process.env.CLI_IDLE_TIMEOUT_MS || 60000),
+  // cliIdleTimeoutMs removed - typing provides liveness
   geminiFallbackTimeoutMs: Number(process.env.GEMINI_FALLBACK_TIMEOUT_MS || 120000),
   asyncEnabled: process.env.BRIDGE_ASYNC_ENABLED !== "false",
   sessionStorePath: process.env.SESSION_STORE_PATH || `${getBridgeProjectDir()}/.data/sessions.json`,
@@ -230,7 +230,7 @@ class BridgeBot {
       await typingTracker.start();
       const stdout = await runCli(invocation.command, invocation.args, getCliWorkingDir(), {
         timeoutMs: config.cliTimeoutMs,
-        idleTimeoutMs: config.cliIdleTimeoutMs,
+        idleTimeoutMs: null, // Typing indicator provides liveness
       });
       let result;
       try {

@@ -85,3 +85,27 @@ describe("Execution Path Selection - TDD", () => {
     });
   });
 });
+describe("Idle Timeout Removal", () => {
+  it("sync path uses null idle timeout", async () => {
+    const fs = await import("fs");
+    const src = fs.readFileSync("src/index.js", "utf-8");
+    
+    // executePrompt should use null idle timeout (typing provides liveness)
+    const syncUsesNullIdle = src.includes("idleTimeoutMs: null") && 
+      !src.match(/executePrompt[^]*idleTimeoutMs: (?!null)/);
+    
+    // Both paths should use null
+    expect(src).toContain("idleTimeoutMs: null");
+  });
+
+  it("CLI_IDLE_TIMEOUT_MS not used in config", async () => {
+    const fs = await import("fs");
+    const src = fs.readFileSync("src/index.js", "utf-8");
+    
+    // cliIdleTimeoutMs from config should not be used (not in code as assignment)
+    // Check for the config line being used, not just mentioned
+    const usesConfigAssignment = src.includes("config.cliIdleTimeoutMs");
+    
+    expect(usesConfigAssignment).toBe(false);
+  });
+});

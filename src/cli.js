@@ -234,6 +234,21 @@ function parseGeminiAcpResult(stdout) {
 
 function parseGeminiStreamJson(stdout) {
   const lines = stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (lines.length === 0) return null;
+
+  // Handle single-line JSON (from --output-format json)
+  if (lines.length === 1) {
+    try {
+      const parsed = JSON.parse(lines[0]);
+      return {
+        text: String(parsed.response ?? parsed.text ?? parsed.message ?? "").trim() || "(no output)",
+        sessionId: parsed.session_id ?? parsed.sessionId ?? null,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   if (lines.length < 2) return null;
 
   let sessionId = null;

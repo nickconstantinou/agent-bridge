@@ -1,10 +1,24 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { sendTelegramMessage, sendMessageWithProgress } from "../src/messageDelivery.js";
 import { extractThreadId } from "../src/bridge.js";
+import type { TelegramClient } from "../src/telegram.js";
+import type { CliResult } from "../src/types.js";
 
 const createMockClient = () => ({
+  token: "t",
+  fetch: vi.fn(),
+  baseUrl: "b",
+  lockHandle: null,
+  lockPath: null,
+  acquireLease: vi.fn(),
+  releaseLease: vi.fn(),
+  call: vi.fn(),
+  getUpdates: vi.fn(),
   sendMessage: vi.fn(async (body) => ({ ok: true, result: { message_id: 456, ...body } })),
-});
+  sendChatAction: vi.fn(async () => ({ ok: true, result: true })),
+  editMessageText: vi.fn(async () => ({ ok: true, result: true })),
+  answerCallbackQuery: vi.fn(),
+} as any as TelegramClient);
 
 const createMockOutbox = () => ({
   send: vi.fn(async (chatId, body, fn) => {
@@ -13,28 +27,24 @@ const createMockOutbox = () => ({
 });
 
 describe("extractThreadId", () => {
-  it("returns the thread id from the first message in the group", () => {
-    const messages = [
-      { message_id: 1, message_thread_id: 42 },
-      { message_id: 2, message_thread_id: 42 },
-    ];
-    expect(extractThreadId(messages)).toBe(42);
+  it("returns thread id from the first message", () => {
+    expect(extractThreadId([
+      { message_id: 1, chat: { id: 1, type: "supergroup" }, message_thread_id: 42 },
+      { message_id: 2, chat: { id: 1, type: "supergroup" }, message_thread_id: 42 },
+    ])).toBe(42);
   });
 
-  it("uses the first message even when a later message has text/caption", () => {
-    // Scenario: first photo has no text, second has caption - but threadId must
-    // come from messages[0] because Telegram guarantees it's set there.
-    const messages = [
-      { message_id: 1, message_thread_id: 99 },
-      { message_id: 2, message_thread_id: 99, caption: "nice photo" },
-    ];
-    // extractThreadId should use messages[0], not find(m => m.caption)
-    expect(extractThreadId(messages)).toBe(99);
+  it("uses messages[0] even when a later message has text/caption", () => {
+    expect(extractThreadId([
+      { message_id: 1, chat: { id: 1, type: "supergroup" }, message_thread_id: 99 },
+      { message_id: 2, chat: { id: 1, type: "supergroup" }, message_thread_id: 99, caption: "photo" },
+    ])).toBe(99);
   });
 
   it("returns undefined when no message carries a thread id", () => {
-    const messages = [{ message_id: 1 }, { message_id: 2 }];
-    expect(extractThreadId(messages)).toBeUndefined();
+    expect(extractThreadId([
+      { message_id: 1, chat: { id: 1, type: "private" } },
+    ])).toBeUndefined();
   });
 
   it("returns undefined for an empty array", () => {
@@ -62,15 +72,11 @@ describe("Forum Topic Routing", () => {
   });
 
   it("passes message_thread_id to sendMessageWithProgress and editMessageText", async () => {
-    const client = {
-      sendMessage: vi.fn(async (body) => ({ ok: true, result: { message_id: 456, ...body } })),
-      sendChatAction: vi.fn(async () => ({ ok: true, result: true })),
-      editMessageText: vi.fn(async () => ({ ok: true, result: true })),
-    };
+    const client = createMockClient();
     const outbox = createMockOutbox();
     const chatId = 123;
     const threadId = 789;
-    const execution = Promise.resolve({ text: "Final forum response" });
+    const execution = Promise.resolve({ text: "Final forum response", sessionId: "s1" } as CliResult);
 
     await sendMessageWithProgress({
       client,
@@ -78,7 +84,7 @@ describe("Forum Topic Routing", () => {
       kind: "gemini",
       chatId,
       execution,
-      body: { message_thread_id: threadId } // Pass it in body
+      body: { message_thread_id: threadId }
     });
 
     expect(client.sendMessage).toHaveBeenCalledWith(

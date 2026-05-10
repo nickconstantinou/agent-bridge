@@ -22,27 +22,27 @@ import { createBridgeState, createFileBridgeState } from "./state.js";
 import { processTelegramUpdate } from "./updateLifecycle.js";
 import { TelegramClient, MediaGroupBuffer } from "./telegram.js";
 import { sendTelegramMessage, sendMessageWithProgress } from "./messageDelivery.js";
+import type { BridgeConfig, BotConfig, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult } from "./types.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env",
   override: false,
 });
 
-function getServiceKindFromEnvFile(path) {
+function getServiceKindFromEnvFile(path: string): "codex" | "gemini" | null {
   if (!path) return null;
   if (path.includes(".env.codex")) return "codex";
   if (path.includes(".env.gemini")) return "gemini";
   return null;
 }
 
-const config = {
-  allowedUserId: process.env.TELEGRAM_ALLOWED_USER_ID,
+const config: BridgeConfig = {
+  allowedUserId: process.env.TELEGRAM_ALLOWED_USER_ID || "",
   serviceEnvFile: process.env.BRIDGE_ENV_FILE || null,
   serviceKind: getServiceKindFromEnvFile(process.env.BRIDGE_ENV_FILE || ""),
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 1000),
-  executionMode: process.env.BRIDGE_EXECUTION_MODE || "safe",
+  executionMode: (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") || "safe",
   cliTimeoutMs: Number(process.env.CLI_TIMEOUT_MS || 300000),
-  // cliIdleTimeoutMs removed - typing provides liveness
   geminiFallbackTimeoutMs: Number(process.env.GEMINI_FALLBACK_TIMEOUT_MS || 120000),
   asyncEnabled: process.env.BRIDGE_ASYNC_ENABLED !== "false",
   sessionStorePath: process.env.SESSION_STORE_PATH || `${getBridgeProjectDir()}/.data/sessions.json`,
@@ -76,10 +76,15 @@ const outbox = createTelegramOutbox({
 });
 
 class BridgeBot {
-  constructor(kind, botConfig) {
+  kind: "codex" | "gemini";
+  config: BotConfig;
+  client: TelegramClient;
+  mediaBuffer: MediaGroupBuffer;
+
+  constructor(kind: "codex" | "gemini", botConfig: BotConfig) {
     this.kind = kind;
     this.config = botConfig;
-    this.client = new TelegramClient(botConfig.token);
+    this.client = new TelegramClient(botConfig.token!);
     this.mediaBuffer = new MediaGroupBuffer({
       timeoutMs: 1500,
       onFlush: (groupId, messages) => {
@@ -90,11 +95,11 @@ class BridgeBot {
     });
   }
 
-  async run() {
+  async run(): Promise<void> {
     const lockPath = `${getBridgeProjectDir()}/.data/telegram-${this.kind}.lock`;
     try {
       await this.client.acquireLease(lockPath);
-    } catch (error) {
+    } catch (error: any) {
       console.error(`[${this.kind}] ${error.message}`);
       return;
     }
@@ -110,10 +115,10 @@ class BridgeBot {
           allowed_updates: ["message", "callback_query"],
         });
 
-        for (const update of updates.result ?? []) {
+        for (const update of (updates.result as any) ?? []) {
           offset = update.update_id + 1;
           try {
-            await processTelegramUpdate(this.kind, update, bridgeState, (currentUpdate) =>
+            await processTelegramUpdate(this.kind, update, bridgeState, (currentUpdate: TelegramUpdate) =>
               this.handleUpdate(currentUpdate)
             );
           } catch (error) {
@@ -121,7 +126,7 @@ class BridgeBot {
           }
         }
 
-        if (!updates.result?.length) {
+        if (!(updates.result as any)?.length) {
           await sleep(config.pollIntervalMs);
         }
       } catch (error) {
@@ -131,7 +136,7 @@ class BridgeBot {
     }
   }
 
-  async handleUpdate(update) {
+  async handleUpdate(update: TelegramUpdate): Promise<void> {
     if (update.callback_query) {
       await this.handleCallback(update.callback_query);
       return;
@@ -144,7 +149,7 @@ class BridgeBot {
     this.mediaBuffer.push(message);
   }
 
-  async handleMessages(messages) {
+  async handleMessages(messages: TelegramMessage[]): Promise<void> {
     const primaryMessage = messages.find((m) => m.text || m.caption) || messages[0];
 
     const threadId = extractThreadId(messages);
@@ -175,7 +180,7 @@ class BridgeBot {
           kind: this.kind,
           chatId,
           body: { message_thread_id: threadId },
-          execution: (onProgress) =>
+          execution: (onProgress: (text: string) => void) =>
             this.executePromptAsync(prompt, sessionId, chatId, { message_thread_id: threadId }, onProgress),
         });
       } else {
@@ -184,7 +189,7 @@ class BridgeBot {
       }
     } catch (error) {
       console.error(`[${this.kind}] prompt execution failed`, error);
-      const messageText = String(error?.message || error);
+      const messageText = String((error as any)?.message || error);
       const text = messageText.slice(0, 4000);
       await sendTelegramMessage({
         client: this.client,
@@ -199,10 +204,10 @@ class BridgeBot {
   /**
    * Async prompt execution - sends immediate ack, streams progress, replaces placeholder, typing indicator.
    */
-  async executePromptAsync(prompt, sessionId, chatId, body = {}, onProgress = () => {}) {
+  async executePromptAsync(prompt: string, sessionId: string | null, chatId: number, body: any = {}, onProgress = (text: string) => {}): Promise<CliResult> {
     const { message_thread_id: threadId } = body;
     const defaults = await settingsStore.read();
-    const model = defaults[this.kind] || this.config.defaultModel;
+    const model = (defaults as any)[this.kind] || this.config.defaultModel;
     const invocation = buildCliInvocation({
       bot: this.kind,
       command: this.config.command,
@@ -212,8 +217,6 @@ class BridgeBot {
       executionMode: config.executionMode,
       outputFormat: "json", // Use json for better parsing and session ID extraction
     });
-
-    const isCliTimeout = (error) => /CLI (idle timeout|timed out)/i.test(String(error?.message || error));
 
     // Start typing indicator
     const typingTracker = createTypingTracker(this.client, outbox, chatId, this.kind, { message_thread_id: threadId });
@@ -240,11 +243,10 @@ class BridgeBot {
     }
   }
 
-  async executePrompt(prompt, sessionId, chatId, body = {}) {
+  async executePrompt(prompt: string, sessionId: string | null, chatId: number, body: any = {}): Promise<CliResult> {
     const { message_thread_id: threadId } = body;
     const defaults = await settingsStore.read();
-    const model = defaults[this.kind] || this.config.defaultModel;
-    const streamGemini = this.kind === "gemini" && process.env.GEMINI_STREAM_JSON === "1";
+    const model = (defaults as any)[this.kind] || this.config.defaultModel;
     const invocation = buildCliInvocation({
       bot: this.kind,
       command: this.config.command,
@@ -255,8 +257,6 @@ class BridgeBot {
     });
 
     const typingTracker = createTypingTracker(this.client, outbox, chatId, this.kind, { message_thread_id: threadId });
-
-    const isCliTimeout = (error) => /CLI (idle timeout|timed out)/i.test(String(error?.message || error));
 
     try {
       await typingTracker.start();
@@ -281,9 +281,9 @@ class BridgeBot {
     }
   }
 
-  async handleCallback(callbackQuery) {
+  async handleCallback(callbackQuery: TelegramCallbackQuery): Promise<void> {
     const fromId = callbackQuery?.from?.id;
-    if (!isAuthorizedMessage({ from: { id: fromId } }, config.allowedUserId)) return;
+    if (!isAuthorizedMessage({ from: { id: fromId } } as any, config.allowedUserId)) return;
 
     const data = String(callbackQuery?.data || "");
     const [action, targetKind, ...rest] = data.split(":");
@@ -292,7 +292,7 @@ class BridgeBot {
     const value = rest.join(":").trim();
     const messageId = callbackQuery.message?.message_id;
     const chatId = callbackQuery.message?.chat?.id;
-    if (!chatId) return;
+    if (!chatId || !messageId) return;
 
     if (value === "reset") {
       await settingsStore.write({ [this.kind]: null });
@@ -309,9 +309,6 @@ class BridgeBot {
       return;
     }
 
-    // Note: Codex model validation is skipped here for brevity, handled in commands.js
-    // but kept consistent with existing logic if needed.
-
     await settingsStore.write({ [this.kind]: value });
     await this.client.answerCallbackQuery({
       callback_query_id: callbackQuery.id,
@@ -325,21 +322,21 @@ class BridgeBot {
     });
   }
 
-  async sendText(chatId, body) {
+  async sendText(chatId: number, body: any): Promise<void> {
     await sendTelegramMessage({ client: this.client, outbox, kind: this.kind, chatId, body });
   }
 }
 
-function createTypingTracker(client, outbox, chatId, kind, body = {}) {
-  let timer = null;
+function createTypingTracker(client: TelegramClient, outbox: any, chatId: number, kind: string, body: any = {}) {
+  let timer: NodeJS.Timeout | null = null;
   let active = false;
   const { message_thread_id: threadId } = body;
 
   const sendTyping = async () => {
     if (!active) return;
     try {
-      await outbox.send(chatId, { chat_id: chatId, message_thread_id: threadId, action: "typing" }, (message) => client.sendChatAction(message));
-    } catch (error) {
+      await outbox.send(chatId, { chat_id: chatId, message_thread_id: threadId, action: "typing" }, (message: any) => client.sendChatAction(message));
+    } catch (error: any) {
       console.warn(`[${kind}] typing indicator failed`, error.message);
     }
   };
@@ -352,7 +349,6 @@ function createTypingTracker(client, outbox, chatId, kind, body = {}) {
       timer = setInterval(() => {
         void sendTyping();
       }, 4500);
-      timer.unref?.();
     },
     async stop() {
       active = false;
@@ -367,18 +363,18 @@ async function healBridgeState() {
   const healed = {
     ...state,
     processedUpdates: {
-      codex: sanitizeCursor(state.processedUpdates?.codex),
-      gemini: sanitizeCursor(state.processedUpdates?.gemini),
+      codex: sanitizeCursor((state as any).processedUpdates?.codex),
+      gemini: sanitizeCursor((state as any).processedUpdates?.gemini),
     },
   };
 
   if (
-    healed.processedUpdates.codex !== state.processedUpdates?.codex ||
-    healed.processedUpdates.gemini !== state.processedUpdates?.gemini
+    healed.processedUpdates.codex !== (state as any).processedUpdates?.codex ||
+    healed.processedUpdates.gemini !== (state as any).processedUpdates?.gemini
   ) {
     console.warn(
       "[bridge] healing invalid processedUpdates state",
-      state.processedUpdates,
+      (state as any).processedUpdates,
       "->",
       healed.processedUpdates
     );
@@ -387,22 +383,22 @@ async function healBridgeState() {
   }
 }
 
-function sanitizeCursor(value) {
+function sanitizeCursor(value: any): number {
   return Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
-function sleep(ms) {
+function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 console.log("[bridge] starting bots...");
 await healBridgeState();
 
-const bots = Object.entries(config.bots)
+const bots = (Object.entries(config.bots) as [("codex" | "gemini"), BotConfig][])
   .filter(([, bot]) => bot.token)
   .map(([kind, botConfig]) => new BridgeBot(kind, botConfig));
 
-const shutdown = async (signal) => {
+const shutdown = async (signal: string) => {
   console.log(`[bridge] ${signal} received, releasing leases...`);
   await Promise.all(bots.map((bot) => bot.client.releaseLease()));
   process.exit(0);

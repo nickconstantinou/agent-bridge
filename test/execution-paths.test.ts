@@ -4,41 +4,10 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 describe("Execution Path Selection - TDD", () => {
   const selectionLogicPattern = /const useAsync = (.+);/;
   
-  describe("Phase 1: Red - Tests that fail with current code", () => {
-    it("selection should NOT check kind - only asyncEnabled", async () => {
-      const fs = await import("fs");
-      const src = fs.readFileSync("src/index.js", "utf-8");
-      const match = src.match(/const useAsync = ([^;]+);/);
-      const selection = match?.[1] || "";
-      
-      // Now fixed: uses === true instead of && kind === "gemini"
-      expect(selection).not.toContain("this.kind");
-      expect(selection).not.toContain('"gemini"');
-    });
-
-    it("sync uses CLI_IDLE_TIMEOUT_MS (180000ms)", async () => {
-      const fs = await import("fs");
-      const src = fs.readFileSync("src/index.js", "utf-8");
-      
-      // executePrompt should use config.cliIdleTimeoutMs - check it references the config
-      const hasConfigRef = src.includes("cliIdleTimeoutMs");
-      expect(hasConfigRef).toBe(true);
-    });
-
-    it("async uses null idle timeout via runCliAsync", async () => {
-      const fs = await import("fs");
-      const src = fs.readFileSync("src/index.js", "utf-8");
-      
-      // executePromptAsync passes null for idleTimeoutMs
-      const asyncHasNull = src.includes("idleTimeoutMs: null") || src.includes("idleTimeoutMs,null");
-      expect(asyncHasNull).toBe(true);
-    });
-  });
-
   describe("Phase 2: Green - Required changes", () => {
     it("REMOVE: buildGeminiFallbackInvocation import", async () => {
       const fs = await import("fs");
-      const src = fs.readFileSync("src/index.js", "utf-8");
+      const src = fs.readFileSync("src/index.ts", "utf-8");
       
       // Should NOT import the fallback builder
       const hasImport = src.includes("buildGeminiFallbackInvocation");
@@ -48,7 +17,7 @@ describe("Execution Path Selection - TDD", () => {
 
     it("REMOVE: fallback code from executePrompt", async () => {
       const fs = await import("fs");
-      const src = fs.readFileSync("src/index.js", "utf-8");
+      const src = fs.readFileSync("src/index.ts", "utf-8");
       
       // Fallback code blocks should be removed
       const hasFallback = src.includes("fallbackInvocation");
@@ -58,9 +27,9 @@ describe("Execution Path Selection - TDD", () => {
       expect(hasFallback).toBe(false);
     });
 
-    it("REMOVE: kind-specific CLI args in cli.js", async () => {
+    it("REMOVE: kind-specific CLI args in cli", async () => {
       const fs = await import("fs");
-      const cli = fs.readFileSync("src/cli.js", "utf-8");
+      const cli = fs.readFileSync("src/cli.ts", "utf-8");
       
       // Still has both branches - will be unified next
       const hasCodex = cli.includes('if (bot === "codex")');
@@ -74,7 +43,7 @@ describe("Execution Path Selection - TDD", () => {
   describe("Phase 3: Generic flag works for all bots", () => {
     it("selection NOT in path selection (line 145 area)", async () => {
       const fs = await import("fs");
-      const src = fs.readFileSync("src/index.js", "utf-8");
+      const src = fs.readFileSync("src/index.ts", "utf-8");
       
       // Find the selection logic line
       const line145 = src.split('\n')[144];
@@ -88,7 +57,7 @@ describe("Execution Path Selection - TDD", () => {
 describe("Idle Timeout Removal", () => {
   it("sync path uses null idle timeout", async () => {
     const fs = await import("fs");
-    const src = fs.readFileSync("src/index.js", "utf-8");
+    const src = fs.readFileSync("src/index.ts", "utf-8");
     
     // executePrompt should use null idle timeout (typing provides liveness)
     const syncUsesNullIdle = src.includes("idleTimeoutMs: null") && 
@@ -100,7 +69,7 @@ describe("Idle Timeout Removal", () => {
 
   it("CLI_IDLE_TIMEOUT_MS not used in config", async () => {
     const fs = await import("fs");
-    const src = fs.readFileSync("src/index.js", "utf-8");
+    const src = fs.readFileSync("src/index.ts", "utf-8");
     
     // cliIdleTimeoutMs from config should not be used (not in code as assignment)
     // Check for the config line being used, not just mentioned

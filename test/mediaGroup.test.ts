@@ -1,17 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
 import { MediaGroupBuffer } from "../src/telegram.js";
+import type { TelegramMessage } from "../src/types.js";
+
+const mockMsg = (id: number, groupId?: string) => ({
+    message_id: id,
+    media_group_id: groupId,
+    chat: { id: 123, type: "private" },
+} as TelegramMessage);
 
 describe("MediaGroupBuffer", () => {
   it("aggregates messages with the same media_group_id", async () => {
     const onFlush = vi.fn();
     const buffer = new MediaGroupBuffer({ timeoutMs: 100, onFlush });
 
-    buffer.push({ message_id: 1, media_group_id: "group1", text: "photo 1" });
-    buffer.push({ message_id: 2, media_group_id: "group1", text: "photo 2" });
+    buffer.push(mockMsg(1, "group1"));
+    buffer.push(mockMsg(2, "group1"));
     
     // Wait for group1 to start its timer, then push group2 much later
     await new Promise(r => setTimeout(r, 50));
-    buffer.push({ message_id: 3, media_group_id: "group2", text: "photo 3" });
+    buffer.push(mockMsg(3, "group2"));
 
     // Wait for group1 to flush (100ms total from start, we are at 50ms, so 70ms more)
     await new Promise(r => setTimeout(r, 70));
@@ -31,22 +38,22 @@ describe("MediaGroupBuffer", () => {
   });
 
   it("does not include new messages in a flush whose timer has already fired", async () => {
-    const flushArgs = [];
-    let resolveFlush;
+    const flushArgs: { groupId: string | null; ids: number[] }[] = [];
+    let resolveFlush!: () => void;
 
     const buffer = new MediaGroupBuffer({
       timeoutMs: 50,
       onFlush: async (groupId, messages) => {
         flushArgs.push({ groupId, ids: messages.map((m) => m.message_id) });
-        if (flushArgs.length === 1) await new Promise((r) => { resolveFlush = r; });
+        if (flushArgs.length === 1) await new Promise<void>((r) => { resolveFlush = r; });
       },
     });
 
-    buffer.push({ message_id: 1, media_group_id: "g" });
-    await new Promise((r) => setTimeout(r, 70)); // timer fires, async flush starts
+    buffer.push(mockMsg(1, "g"));
+    await new Promise((r) => setTimeout(r, 70)); // first timer fires, async flush starts
 
     // New message arrives while first flush is awaiting
-    buffer.push({ message_id: 2, media_group_id: "g" });
+    buffer.push(mockMsg(2, "g"));
 
     resolveFlush(); // release first flush
     await new Promise((r) => setTimeout(r, 100)); // wait for second flush
@@ -64,19 +71,19 @@ describe("MediaGroupBuffer", () => {
       },
     });
 
-    buffer.push({ message_id: 1, media_group_id: "g" });
-    // If onFlush rejection is unhandled, vitest will detect and fail this test.
+    buffer.push(mockMsg(1, "g"));
+    // If the rejection is unhandled, vitest will catch it and fail this test.
     await new Promise((r) => setTimeout(r, 150));
-    // Reaching here means the rejection was handled internally.
+    // Reaching here means the error was handled internally.
   });
 
   it("resets timeout on subsequent messages in the same group", async () => {
     const onFlush = vi.fn();
     const buffer = new MediaGroupBuffer({ timeoutMs: 100, onFlush });
 
-    buffer.push({ message_id: 1, media_group_id: "group1" });
+    buffer.push(mockMsg(1, "group1"));
     await new Promise(r => setTimeout(r, 50));
-    buffer.push({ message_id: 2, media_group_id: "group1" });
+    buffer.push(mockMsg(2, "group1"));
     await new Promise(r => setTimeout(r, 70));
     
     expect(onFlush).not.toHaveBeenCalled();

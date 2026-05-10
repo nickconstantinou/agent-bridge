@@ -3,11 +3,11 @@ import { TelegramClient } from "../src/telegram.js";
 
 describe("TelegramClient", () => {
   it("preserves retry_after metadata on 429 errors", async () => {
-    const fakeFetch = async () => ({
+    const fakeFetch = (async () => ({
       ok: false,
       status: 429,
       json: async () => ({ ok: false, description: "Too Many Requests", parameters: { retry_after: 0.1 } }),
-    });
+    })) as any;
 
     const client = new TelegramClient("token", fakeFetch);
 
@@ -19,7 +19,7 @@ describe("TelegramClient", () => {
 
   it("automatically retries on 429 errors if retry_after is provided", async () => {
     let callCount = 0;
-    const fakeFetch = async () => {
+    const fakeFetch = (async () => {
       callCount++;
       if (callCount === 1) {
         return {
@@ -33,7 +33,7 @@ describe("TelegramClient", () => {
         status: 200,
         json: async () => ({ ok: true, result: { message_id: 123 } }),
       };
-    };
+    }) as any;
 
     const client = new TelegramClient("token", fakeFetch);
     const start = Date.now();
@@ -46,11 +46,11 @@ describe("TelegramClient", () => {
   });
 
   it("keeps the Telegram description text on non-429 errors", async () => {
-    const fakeFetch = async () => ({
+    const fakeFetch = (async () => ({
       ok: false,
       status: 400,
       json: async () => ({ ok: false, description: "Bad Request: chat not found" }),
-    });
+    })) as any;
 
     const client = new TelegramClient("token", fakeFetch);
 
@@ -58,15 +58,15 @@ describe("TelegramClient", () => {
   });
 
   it("supports chat actions for typing indicators", async () => {
-    const calls = [];
-    const fakeFetch = async (url, options) => {
+    const calls: any[] = [];
+    const fakeFetch = (async (url: string, options: any) => {
       calls.push({ url, options: JSON.parse(options.body) });
       return {
         ok: true,
         status: 200,
         json: async () => ({ ok: true, result: true }),
       };
-    };
+    }) as any;
 
     const client = new TelegramClient("token", fakeFetch);
 

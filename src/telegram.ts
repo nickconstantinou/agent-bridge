@@ -1,8 +1,25 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { TelegramMessage } from "./types.js";
+
+export interface TelegramResponse<T> {
+  ok: boolean;
+  result: T;
+  description?: string;
+  parameters?: {
+    retry_after?: number;
+  };
+  retry_after?: number;
+}
 
 export class TelegramClient {
-  constructor(token, fetchImpl = fetch) {
+  token: string;
+  fetch: typeof fetch;
+  baseUrl: string;
+  lockHandle: fs.FileHandle | null;
+  lockPath: string | null;
+
+  constructor(token: string, fetchImpl = fetch) {
     this.token = token;
     this.fetch = fetchImpl;
     this.baseUrl = `https://api.telegram.org/bot${token}`;
@@ -10,7 +27,7 @@ export class TelegramClient {
     this.lockPath = null;
   }
 
-  async acquireLease(lockPath) {
+  async acquireLease(lockPath: string): Promise<boolean> {
     // Ensure the parent directory exists (fix: .data/ may not exist on fresh installs).
     await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
@@ -19,15 +36,15 @@ export class TelegramClient {
       this.lockPath = lockPath;
       await this.lockHandle.writeFile(String(process.pid));
       return true;
-    } catch (error) {
+    } catch (error: any) {
       if (error.code !== "EEXIST") throw error;
 
       // Lock file exists — check whether it belongs to a dead process (stale).
-      let pid;
+      let pid: number;
       try {
         const content = await fs.readFile(lockPath, "utf-8");
         pid = Number.parseInt(content.trim(), 10);
-      } catch (readError) {
+      } catch (readError: any) {
         // File vanished between EEXIST and readFile — another process cleaned it up; retry.
         if (readError.code === "ENOENT") return this.acquireLease(lockPath);
         throw readError;
@@ -38,26 +55,25 @@ export class TelegramClient {
       }
 
       try {
-        process.kill(pid, 0); // Throws ESRCH if process is gone, EPERM if alive but not ours
+        process.kill(pid, 0); // Throws ESRCH if gone, EPERM if alive but not ours
         throw new Error(`Polling already locked by an active process (PID: ${pid}, lock file: ${lockPath})`);
-      } catch (killError) {
+      } catch (killError: any) {
         if (killError.code !== "ESRCH") throw killError;
       }
 
-      // Process is dead — remove stale lock.  Another process might race us here
-      // (TOCTTOU); if so we get ENOENT, which we treat as "lock is gone, retry".
+      // Process is dead — remove stale lock. Another process might race us here
+      // (TOCTTOU); ENOENT means they already removed it, which is fine — retry.
       console.warn(`[telegram] removing stale lock for dead PID ${pid}`);
       try {
         await fs.unlink(lockPath);
-      } catch (unlinkError) {
+      } catch (unlinkError: any) {
         if (unlinkError.code !== "ENOENT") throw unlinkError;
-        // Concurrent process already removed the stale lock — safe to retry.
       }
       return this.acquireLease(lockPath);
     }
   }
 
-  async releaseLease() {
+  async releaseLease(): Promise<void> {
     if (this.lockHandle) {
       await this.lockHandle.close();
       this.lockHandle = null;
@@ -65,14 +81,14 @@ export class TelegramClient {
     if (this.lockPath) {
       try {
         await fs.unlink(this.lockPath);
-      } catch {
-        // ignore
+      } catch (error: any) {
+        if (error.code !== "ENOENT") throw error;
       }
       this.lockPath = null;
     }
   }
 
-  async call(method, body = {}, retryCount = 0) {
+  async call<T>(method: string, body: any = {}, retryCount = 0): Promise<TelegramResponse<T>> {
     const payload = { ...body };
     if (payload.reply_markup && typeof payload.reply_markup === "object") {
       payload.reply_markup = JSON.stringify(payload.reply_markup);
@@ -84,7 +100,7 @@ export class TelegramClient {
       body: JSON.stringify(payload),
     });
 
-    let data = null;
+    let data: any = null;
     try {
       data = await response.json();
     } catch {
@@ -93,7 +109,7 @@ export class TelegramClient {
 
     if (!response.ok) {
       const detail = data?.description ? `: ${data.description}` : "";
-      const error = new Error(`Telegram HTTP ${response.status}${detail}`);
+      const error = new Error(`Telegram HTTP ${response.status}${detail}`) as any;
       error.status = response.status;
       error.data = data;
       error.retryAfter = data?.parameters?.retry_after ?? data?.retry_after ?? null;
@@ -113,35 +129,47 @@ export class TelegramClient {
     return data;
   }
 
-  async getUpdates(options) {
+  async getUpdates(options: any): Promise<TelegramResponse<any[]>> {
     return this.call("getUpdates", options);
   }
 
-  async sendMessage(body) {
+  async sendMessage(body: any): Promise<TelegramResponse<TelegramMessage>> {
     return this.call("sendMessage", body);
   }
 
-  async answerCallbackQuery(body) {
+  async answerCallbackQuery(body: any): Promise<TelegramResponse<boolean>> {
     return this.call("answerCallbackQuery", body);
   }
 
-  async editMessageText(body) {
+  async editMessageText(body: any): Promise<TelegramResponse<TelegramMessage>> {
     return this.call("editMessageText", body);
   }
 
-  async sendChatAction(body) {
+  async sendChatAction(body: any): Promise<TelegramResponse<boolean>> {
     return this.call("sendChatAction", body);
   }
 }
 
+type FlushFn = (groupId: string | null, messages: TelegramMessage[]) => void | Promise<void>;
+
+interface BufferEntry {
+  timer: NodeJS.Timeout | undefined;
+  messages: TelegramMessage[];
+  flushing: boolean;
+}
+
 export class MediaGroupBuffer {
-  constructor({ timeoutMs = 1500, onFlush }) {
+  timeoutMs: number;
+  onFlush: FlushFn;
+  groups: Map<string, BufferEntry>;
+
+  constructor({ timeoutMs = 1500, onFlush }: { timeoutMs?: number; onFlush: FlushFn }) {
     this.timeoutMs = timeoutMs;
     this.onFlush = onFlush;
     this.groups = new Map();
   }
 
-  push(message) {
+  push(message: TelegramMessage): void {
     const groupId = message.media_group_id;
     if (!groupId) {
       Promise.resolve(this.onFlush(null, [message])).catch((err) => {
@@ -155,14 +183,14 @@ export class MediaGroupBuffer {
     if (entry && !entry.flushing) {
       clearTimeout(entry.timer);
     } else {
-      entry = { messages: [], flushing: false };
+      entry = { timer: undefined, messages: [], flushing: false };
       this.groups.set(groupId, entry);
     }
 
     entry.messages.push(message);
     entry.timer = setTimeout(() => {
-      entry.flushing = true;
-      const messages = [...entry.messages]; // snapshot before delete
+      entry!.flushing = true;
+      const messages = [...entry!.messages]; // snapshot before delete
       this.groups.delete(groupId);
       Promise.resolve(this.onFlush(groupId, messages)).catch((err) => {
         console.error("[MediaGroupBuffer] onFlush error", err);

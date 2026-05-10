@@ -1,8 +1,8 @@
-export function splitTelegramText(text, limit = 3500) {
+export function splitTelegramText(text: string, limit = 3500): string[] {
   const value = String(text || "");
   if (value.length <= limit) return [value];
 
-  const chunks = [];
+  const chunks: string[] = [];
   let remaining = value;
 
   while (remaining.length > limit) {
@@ -28,8 +28,8 @@ export function splitTelegramText(text, limit = 3500) {
     }
 
     let chunk = remaining.slice(0, splitAt).trim();
-    
-    // Handle code blocks: if we have an odd number of triple backticks, 
+
+    // Handle code blocks: if we have an odd number of triple backticks,
     // we are likely splitting inside a code block.
     const backticks = (chunk.match(/```/g) || []).length;
     if (backticks % 2 !== 0) {
@@ -56,11 +56,11 @@ export function splitTelegramText(text, limit = 3500) {
   return chunks.filter(Boolean);
 }
 
-export function renderTelegramPlainText(text) {
+export function renderTelegramPlainText(text: string): string {
   return String(text || "").trim();
 }
 
-export function escapeTelegramMarkdownV2(text) {
+export function escapeTelegramMarkdownV2(text: string): string {
   const value = String(text || "");
 
   // Split into chunks: code blocks vs non-code
@@ -73,15 +73,13 @@ export function escapeTelegramMarkdownV2(text) {
       }
 
       // 1. Identify and protect valid simple markdown pairs (*bold*, _italic_, ~strikethrough~, ||spoiler||)
-      // We use a non-greedy match. Note: this doesn't handle complex nesting but covers 95% of agent output.
-      const protectedPairs = [];
+      const protectedPairs: string[] = [];
       let temp = part.replace(/(\*[^\*\n]+\*|_[^_\n]+_|~[^~\n]+~|\|\|[^|\n]+\|\||\[[^\]\n]+\]\([^\)\n]+\))/g, (match) => {
         protectedPairs.push(match);
         return `\x01${protectedPairs.length - 1}\x02`;
       });
 
       // 2. Escape all reserved characters in the remaining text
-      // Reserved: _ * [ ] ( ) ~ ` > # + - = | { } . !
       temp = temp.replace(/([_\\*\[\]()~`>#+\-=|{}.!])/g, "\\$1");
 
       // 3. Restore protected pairs
@@ -92,7 +90,7 @@ export function escapeTelegramMarkdownV2(text) {
     .join("");
 }
 
-export function escapeTelegramHtml(text) {
+export function escapeTelegramHtml(text: string): string {
   return String(text || "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -100,15 +98,16 @@ export function escapeTelegramHtml(text) {
     .replace(/"/g, "&quot;");
 }
 
-export function toTelegramEntitiesText(text) {
+export function toTelegramEntitiesText(text: string): { text: string; entities: any[] } {
   let value = String(text || "");
   // Convert markdown headings to bold: ### Title → **Title**
-  value = value.replace(/^###\s+(.+)$/gm, "**$1**")
+  value = value
+    .replace(/^###\s+(.+)$/gm, "**$1**")
     .replace(/^##\s+(.+)$/gm, "**$1**")
     .replace(/^#\s+(.+)$/gm, "**$1**");
 
-  const entities = [];
-  const output = [];
+  const entities: any[] = [];
+  const output: string[] = [];
 
   let i = 0;
   while (i < value.length) {
@@ -148,7 +147,7 @@ export function toTelegramEntitiesText(text) {
       }
     }
 
-    output.push(value[i]);
+    output.push(value[i]!);
     i += 1;
   }
 

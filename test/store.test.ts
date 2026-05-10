@@ -7,7 +7,7 @@ import { createFileStore } from "../src/store.js";
 describe("file store", () => {
   it("writes atomically and preserves readable json", async () => {
     const dir = await mkdtemp(join(tmpdir(), "agent-bridge-store-"));
-    const file = join(dir, "state.json");
+    const file = join(dir, "state.tson");
     const store = createFileStore(file, { codex: 0, gemini: 0 });
 
     await store.write({ codex: 5 });
@@ -20,7 +20,7 @@ describe("file store", () => {
 
   it("recovers from corrupt json on read", async () => {
     const dir = await mkdtemp(join(tmpdir(), "agent-bridge-store-"));
-    const file = join(dir, "state.json");
+    const file = join(dir, "state.tson");
     await writeFile(file, "not-json");
     const store = createFileStore(file, { codex: 0, gemini: 0 });
 
@@ -31,7 +31,7 @@ describe("file store", () => {
 
   it("serializes concurrent writes without losing updates", async () => {
     const dir = await mkdtemp(join(tmpdir(), "agent-bridge-store-"));
-    const file = join(dir, "state.json");
+    const file = join(dir, "state.tson");
     const storeA = createFileStore(file, { codex: 0, gemini: 0 });
     const storeB = createFileStore(file, { codex: 0, gemini: 0 });
 

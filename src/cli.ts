@@ -1,0 +1,422 @@
+import { spawn } from "node:child_process";
+import type { CliOptions, CliResult, BridgeConfig } from "./types.js";
+
+/**
+ * Builds the CLI invocation for a bot.
+ */
+export function buildCliInvocation({
+  bot,
+  prompt,
+  sessionId,
+  command,
+  model,
+  executionMode = "safe",
+  outputFormat = null,
+}: {
+  bot: string;
+  prompt: string;
+  sessionId: string | null;
+  command: string;
+  model: string | null;
+  executionMode?: "safe" | "trusted";
+  outputFormat?: "json" | null;
+}): { command: string; args: string[] } {
+  const args = [];
+
+  if (bot === "codex") {
+    if (model) {
+      args.push("--model", model);
+    }
+    if (sessionId) {
+      args.push("--thread", sessionId);
+    }
+    if (executionMode === "trusted") {
+      args.push("--dangerously-bypass-approvals-and-sandbox");
+    }
+    if (outputFormat === "json") {
+      args.push("--output", "json");
+    }
+    args.push(prompt);
+  } else if (bot === "gemini") {
+    if (model) {
+      args.push("--model", model);
+    }
+    if (sessionId) {
+      args.push("--session", sessionId);
+    }
+    if (executionMode === "trusted") {
+      args.push("--approval-mode", "yolo");
+    }
+    if (outputFormat === "json") {
+      args.push("--output", "json");
+    }
+    args.push(prompt);
+  }
+
+  return { command, args };
+}
+
+/**
+ * Builds a fallback invocation for Gemini if ACP fails.
+ */
+export function buildGeminiFallbackInvocation({
+  command,
+  model,
+  prompt,
+}: {
+  command: string;
+  model: string | null;
+  prompt: string;
+}): { command: string; args: string[] } {
+  const args = [];
+  if (model) {
+    args.push("--model", model);
+  }
+  args.push(prompt);
+  return { command, args };
+}
+
+/**
+ * Validates the bridge configuration.
+ */
+export function validateBridgeConfig(config: any): { ok: boolean; errors: string[] } {
+  const errors: string[] = [];
+
+  if (!config.allowedUserId) {
+    errors.push("TELEGRAM_ALLOWED_USER_ID is required");
+  }
+
+  // Skip bot validation - each service validates its own bot in index.ts
+  // This allows gemini service to run without codex token and vice versa
+
+  return {
+    ok: errors.length === 0,
+    errors,
+  };
+}
+
+/**
+ * Parses the execution options from a bridge config.
+ */
+export function buildExecutionOptions(config: BridgeConfig): CliOptions {
+  return {
+    timeoutMs: config.cliTimeoutMs,
+  };
+}
+
+/**
+ * Parses the CLI result.
+ */
+export function parseCliResult({ bot, stdout }: { bot: string; stdout: string }): CliResult {
+  if (bot === "codex") {
+    return parseCodexResult(stdout);
+  } else if (bot === "gemini") {
+    // If output was JSON, use specific parser
+    if (stdout.trim().startsWith("{")) {
+      try {
+        return parseGeminiStreamJson(stdout);
+      } catch {
+        // fallthrough to text parser
+      }
+    }
+    return parseGeminiResult(stdout);
+  }
+  throw new Error(`Unknown bot type: ${bot}`);
+}
+
+function parseCodexResult(stdout: string): CliResult {
+  let sessionId: string | null = null;
+  const textChunks: string[] = [];
+
+  const appendText = (value: string) => {
+    if (!value) return;
+    if (value.startsWith("[thread:")) {
+      const match = value.match(/\[thread:([^\]]+)\]/);
+      if (match) sessionId = match[1];
+    } else {
+      textChunks.push(value);
+    }
+  };
+
+  const lines = stdout.split("\n").map((v) => v.trim()).filter(Boolean);
+  for (const line of lines) {
+    // Codex JSON output has "text" and "threadId" fields
+    if (line.startsWith("{") && line.endsWith("}")) {
+      try {
+        const parsed = JSON.parse(line);
+        if (parsed.text) textChunks.push(parsed.text);
+        if (parsed.threadId) sessionId = parsed.threadId;
+        continue;
+      } catch {
+        // not valid json, treat as text
+      }
+    }
+    appendText(line);
+  }
+
+  return {
+    text: textChunks.join("\n").trim(),
+    sessionId,
+  };
+}
+
+function parseGeminiResult(stdout: string): CliResult {
+  let sessionId: string | null = null;
+  let text = "";
+
+  // The Gemini CLI output can be messy. 
+  // We look for a JSON block or treat everything as text.
+  const cleaned = stdout.replace(/\x1B\[[0-9;]*[mK]/g, ""); // strip ansi
+
+  // Check for the [session:...] marker if not in JSON mode
+  const sessionMatch = cleaned.match(/\[session:([^\]]+)\]/);
+  if (sessionMatch) {
+    sessionId = sessionMatch[1];
+  }
+
+  const lines = cleaned.split("\n").filter(l => {
+    if (l.includes("[session:")) return false;
+    return true;
+  });
+
+  text = lines.join("\n").trim();
+
+  return { text, sessionId };
+}
+
+function parseGeminiAcpResult(stdout: string): CliResult {
+  const lines = stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  let text = "";
+  let sessionId: string | null = null;
+
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed.type === "chunk" && parsed.text) {
+        text += parsed.text;
+      } else if (parsed.type === "complete" && parsed.sessionId) {
+        sessionId = parsed.sessionId;
+      }
+    } catch {
+      // ignore non-json lines
+    }
+  }
+
+  return { text: text.trim(), sessionId };
+}
+
+function parseGeminiStreamJson(stdout: string): CliResult {
+  const lines = stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+  let text = "";
+  let sessionId: string | null = null;
+
+  for (const line of lines) {
+    try {
+      const parsed = JSON.parse(line);
+      // Handle the specialized stream format from Gemini CLI
+      if (parsed.chunk) {
+        text += parsed.chunk;
+      }
+      if (parsed.sessionId) {
+        sessionId = parsed.sessionId;
+      }
+      // If it's a full result object
+      if (parsed.text && !parsed.chunk) {
+        text = parsed.text;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return { text: text.trim(), sessionId };
+}
+
+/**
+ * Runs a CLI command and returns stdout.
+ */
+export async function runCli(command: string, args: string[], cwd: string, options: CliOptions = {}): Promise<string> {
+  const timeoutMs = options.timeoutMs ?? 120000;
+  const idleTimeoutMs = options.idleTimeoutMs ?? null;
+  const killGraceMs = options.killGraceMs ?? 5000;
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd, shell: false });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+
+    const doReject = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    };
+
+    const doResolve = (val: string) => {
+      if (settled) return;
+      settled = true;
+      resolve(val);
+    };
+
+    const timer = setTimeout(() => {
+      doReject(new Error(`CLI hard timeout after ${timeoutMs}ms`));
+      child.kill("SIGTERM");
+      setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* ignore */ } }, killGraceMs);
+    }, timeoutMs);
+
+    let idleTimer: NodeJS.Timeout | null = null;
+    const resetIdleTimer = () => {
+      if (idleTimeoutMs === null) return;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        doReject(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`));
+        child.kill("SIGTERM");
+      }, idleTimeoutMs);
+    };
+
+    resetIdleTimer();
+
+    child.stdout.on("data", (data) => {
+      stdout += data;
+      resetIdleTimer();
+    });
+
+    child.stderr.on("data", (data) => {
+      stderr += data;
+      resetIdleTimer();
+    });
+
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      if (idleTimer) clearTimeout(idleTimer);
+
+      if (settled) return;
+
+      if (signal) {
+        doReject(new Error(`CLI killed by signal ${signal}: ${stderr}`));
+      } else if (code !== 0 && code !== null) {
+        doReject(new Error(`CLI exited with code ${code}: ${stderr}`));
+      } else {
+        doResolve(stdout);
+      }
+    });
+
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      if (idleTimer) clearTimeout(idleTimer);
+      doReject(err);
+    });
+  });
+}
+
+/**
+ * Runs a CLI command asynchronously with progress support.
+ */
+export async function runCliAsync(
+  command: string,
+  args: string[],
+  cwd: string,
+  options: CliOptions = {}
+): Promise<{ text: string }> {
+  const timeoutMs = options.timeoutMs ?? 300000;
+  const idleTimeoutMs = options.idleTimeoutMs ?? null;
+  const killGraceMs = options.killGraceMs ?? 5000;
+  const onProgress = options.onProgress;
+  const onCancel = options.onCancel;
+
+  return new Promise((resolve, reject) => {
+    // shell:false + detached:true creates the child in its own process group so
+    // process.kill(-pid) can cleanly kill the whole tree.
+    const child = spawn(command, args, { cwd, shell: false, detached: true });
+    const pid = child.pid;
+    let settled = false;
+
+    const doReject = (err: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    };
+
+    const doResolve = (val: { text: string }) => {
+      if (settled) return;
+      settled = true;
+      resolve(val);
+    };
+
+    const killProcessTree = () => {
+      if (pid) {
+        try {
+          process.kill(-pid, "SIGTERM");
+          setTimeout(() => {
+            try { process.kill(-pid, "SIGKILL"); } catch { /* ignore */ }
+          }, killGraceMs);
+        } catch { /* ignore */ }
+      }
+    };
+
+    const killTree = () => {
+      killProcessTree();
+      doReject(new Error("CLI process was killed"));
+    };
+
+    if (onCancel) {
+      onCancel(killTree);
+    }
+
+    let stdout = "";
+    let stderr = "";
+
+    const timer = setTimeout(() => {
+      killProcessTree();
+      doReject(new Error(`CLI hard timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    // Idle timeout: reject if no output is received within the window.
+    let idleTimer: NodeJS.Timeout | null = null;
+    const resetIdleTimer = () => {
+      if (idleTimeoutMs === null) return;
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        killProcessTree();
+        doReject(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`));
+      }, idleTimeoutMs);
+    };
+    resetIdleTimer();
+
+    child.stdout.on("data", (data) => {
+      const chunk = data.toString();
+      stdout += chunk;
+      resetIdleTimer();
+      if (onProgress) onProgress(chunk);
+    });
+
+    child.stderr.on("data", (data) => {
+      stderr += data;
+      resetIdleTimer();
+    });
+
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      if (idleTimer) clearTimeout(idleTimer);
+      if (settled) return;
+
+      if (signal) {
+        doReject(new Error(`CLI killed by signal ${signal}: ${stderr}`));
+      } else if (code !== 0 && code !== null) {
+        doReject(new Error(`CLI exited with code ${code}: ${stderr}`));
+      } else {
+        doResolve({ text: stdout });
+      }
+    });
+
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      if (idleTimer) clearTimeout(idleTimer);
+      doReject(err);
+    });
+  });
+}

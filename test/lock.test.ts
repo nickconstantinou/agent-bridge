@@ -5,8 +5,8 @@ import path from "node:path";
 import os from "node:os";
 
 describe("Telegram Polling Lease", () => {
-  let tempDir;
-  let lockPath;
+  let tempDir: string;
+  let lockPath: string;
 
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agent-bridge-lock-test-"));
@@ -14,7 +14,9 @@ describe("Telegram Polling Lease", () => {
   });
 
   afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    if (tempDir) {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("acquires a lock and prevents others from acquiring it", async () => {
@@ -47,9 +49,9 @@ describe("Telegram Polling Lease", () => {
   it("acquires a lock even when the parent directory does not exist yet", async () => {
     const client = new TelegramClient("token");
     const missingDir = path.join(tempDir, "sub", "dir");
-    const lockInMissingDir = path.join(missingDir, "telegram.lock");
+    const missingLockPath = path.join(missingDir, "telegram.lock");
 
-    const acquired = await client.acquireLease(lockInMissingDir);
+    const acquired = await client.acquireLease(missingLockPath);
     expect(acquired).toBe(true);
 
     await client.releaseLease();
@@ -58,19 +60,18 @@ describe("Telegram Polling Lease", () => {
   it("handles concurrent stale-lock deletion gracefully (TOCTTOU)", async () => {
     const client = new TelegramClient("token");
 
-    // Write a stale lock (dead PID)
+    // Write a stale lock with a dead PID
     await fs.writeFile(lockPath, "999999");
 
-    // Simulate another process deleting the stale lock between our readFile and unlink.
-    const origUnlink = fs.unlink;
+    // Simulate the race: another process deletes the stale lock between our
+    // readFile and unlink calls by monkey-patching fs.unlink.
+    const origUnlink = fs.unlink.bind(fs);
     let unlinkCalled = false;
-    fs.unlink = async (p) => {
+    (fs as any).unlink = async (p: string) => {
       if (!unlinkCalled && p === lockPath) {
         unlinkCalled = true;
-        // Remove the file ourselves first, then throw ENOENT as the real concurrent delete would
         try { await origUnlink(p); } catch { /* already gone */ }
-        const err = new Error("ENOENT");
-        err.code = "ENOENT";
+        const err = Object.assign(new Error("ENOENT"), { code: "ENOENT" });
         throw err;
       }
       return origUnlink(p);
@@ -80,7 +81,7 @@ describe("Telegram Polling Lease", () => {
       const acquired = await client.acquireLease(lockPath);
       expect(acquired).toBe(true);
     } finally {
-      fs.unlink = origUnlink;
+      (fs as any).unlink = origUnlink;
       await client.releaseLease();
     }
   });
@@ -89,7 +90,6 @@ describe("Telegram Polling Lease", () => {
     const client = new TelegramClient("token");
     
     // Create a stale lock with a PID that is unlikely to be running
-    // 999999 is usually safe on Linux for "not running" unless the system has extreme uptime/load
     const stalePid = "999999";
     await fs.writeFile(lockPath, stalePid);
 

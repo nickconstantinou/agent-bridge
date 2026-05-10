@@ -105,16 +105,22 @@ export async function sendMessageWithProgress({ client, outbox, kind, chatId, ex
     lastUpdateMs = now;
     const raw = currentText || "...";
     // Telegram rejects edits longer than 4096 chars; keep the tail (most recent output).
-    const editText = raw.length > MAX_TELEGRAM_TEXT
-      ? raw.slice(-MAX_TELEGRAM_TEXT)
-      : raw;
+    const editText = raw.length > MAX_TELEGRAM_TEXT ? raw.slice(-MAX_TELEGRAM_TEXT) : raw;
     try {
-      await client.editMessageText({
+      const editBody = {
         chat_id: chatId,
         message_id: placeholderMessageId,
         ...rest,
         text: editText,
-      });
+      };
+
+      if (isGemini) {
+        const entitiesPayload = toTelegramEntitiesText(editText);
+        editBody.text = entitiesPayload.text;
+        if (entitiesPayload.entities.length > 0) editBody.entities = entitiesPayload.entities;
+      }
+
+      await client.editMessageText(editBody);
     } catch (err) {
       console.warn(`[${kind}] progress edit failed`, err.message);
     }
@@ -148,12 +154,20 @@ export async function sendMessageWithProgress({ client, outbox, kind, chatId, ex
     // 4. Replace placeholder with final result
     if (placeholderMessageId) {
       try {
-        await client.editMessageText({
+        const finalBody = {
           chat_id: chatId,
           message_id: placeholderMessageId,
           ...rest,
           text: finalText,
-        });
+        };
+
+        if (isGemini) {
+          const entitiesPayload = toTelegramEntitiesText(finalText);
+          finalBody.text = entitiesPayload.text;
+          if (entitiesPayload.entities.length > 0) finalBody.entities = entitiesPayload.entities;
+        }
+
+        await client.editMessageText(finalBody);
       } catch (editErr) {
         // Fallback: send new message if edit fails
         console.warn(`[${kind}] final edit failed, sending new message`, editErr.message);

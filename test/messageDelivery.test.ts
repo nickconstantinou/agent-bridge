@@ -90,24 +90,28 @@ describe("sendMessageWithProgress", () => {
     }
   });
 
-  it("updates placeholder with error message on failure", async () => {
+  it("edits placeholder with error and does not rethrow (prevents duplicate message)", async () => {
     const client = createMockClient();
     const outbox = createMockOutbox();
     const chatId = 123;
     const execution = Promise.reject(new Error("CLI failed"));
 
+    // Should resolve (not throw) so the caller does not send a second error message
     await expect(sendMessageWithProgress({
       client,
       outbox,
       kind: "gemini",
       chatId,
       execution,
-    })).rejects.toThrow("CLI failed");
+    })).resolves.toBeNull();
 
+    // Error shown via placeholder edit
     expect(client.editMessageText).toHaveBeenCalledWith(
       expect.objectContaining({
         text: expect.stringContaining("❌ CLI failed"),
       })
     );
+    // Only one sendMessage call (the placeholder) — no second error message
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
   });
 });

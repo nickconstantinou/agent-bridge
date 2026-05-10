@@ -105,15 +105,18 @@ describe("agent bridge MVP", () => {
     expect(args).not.toContain("--output");
   });
 
-  it("gemini session invocation uses --session-id not --session", () => {
+  it("gemini session invocation uses --resume to continue an existing session", () => {
     const { args } = buildCliInvocation({
       bot: "gemini",
       prompt: "hello",
-      sessionId: "session-abc-123",
+      sessionId: "4229bce3-5009-429e-a3cb-d1bdaa8cfeed",
       command: "gemini",
       model: null,
     });
-    expect(args).toContain("--session-id");
+    const idx = args.indexOf("--resume");
+    expect(idx).toBeGreaterThan(-1);
+    expect(args[idx + 1]).toBe("4229bce3-5009-429e-a3cb-d1bdaa8cfeed");
+    expect(args).not.toContain("--session-id");
     expect(args).not.toContain("--session");
   });
 

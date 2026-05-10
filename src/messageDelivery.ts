@@ -199,8 +199,8 @@ export async function sendMessageWithProgress({
     return { ...result, onProgress: wrappedOnProgress };
   } catch (err: any) {
     clearInterval(typingInterval);
-    // On error, try to edit placeholder with error message
     if (placeholderMessageId) {
+      // Error displayed via placeholder edit — do not rethrow to prevent duplicate error message
       try {
         const errorBody: any = {
           chat_id: chatId,
@@ -212,6 +212,8 @@ export async function sendMessageWithProgress({
       } catch {
         /* ignore edit failure */
       }
+      console.error(`[${kind}] execution error`, err);
+      return null;
     }
     throw err;
   }

@@ -45,7 +45,7 @@ export function buildCliInvocation({
       args.push("--model", model);
     }
     if (sessionId) {
-      args.push("--session-id", sessionId);
+      args.push("--resume", sessionId);
     }
     if (executionMode === "trusted") {
       args.push("--yolo");

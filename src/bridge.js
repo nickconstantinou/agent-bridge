@@ -48,6 +48,17 @@ export function isAuthorizedMessage(message, allowedUserId) {
 }
 
 /**
+ * Extracts the forum thread ID from a batch of messages, preferring the first message.
+ * Using the first message is most reliable because Telegram guarantees it carries
+ * the thread context even when later messages in a media group omit it.
+ * @param {object[]} messages
+ * @returns {number|undefined}
+ */
+export function extractThreadId(messages) {
+  return messages[0]?.message_thread_id;
+}
+
+/**
  * Extracts prompt text from a Telegram message.
  * @param {object} message - The Telegram message object.
  * @returns {string|null}

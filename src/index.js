@@ -6,6 +6,7 @@ import {
   createFileSettingsStore,
   createSessionStore,
   extractPromptText,
+  extractThreadId,
   getCliWorkingDir,
   getBridgeProjectDir,
   handleCommand,
@@ -82,7 +83,9 @@ class BridgeBot {
     this.mediaBuffer = new MediaGroupBuffer({
       timeoutMs: 1500,
       onFlush: (groupId, messages) => {
-        void this.handleMessages(messages);
+        this.handleMessages(messages).catch((err) => {
+          console.error(`[${this.kind}] mediaBuffer flush error`, err);
+        });
       },
     });
   }
@@ -144,7 +147,7 @@ class BridgeBot {
   async handleMessages(messages) {
     const primaryMessage = messages.find((m) => m.text || m.caption) || messages[0];
 
-    const threadId = primaryMessage.message_thread_id;
+    const threadId = extractThreadId(messages);
     const prompt = extractPromptText(primaryMessage);
     if (!prompt) return;
 

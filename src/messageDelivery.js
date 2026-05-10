@@ -94,6 +94,8 @@ export async function sendMessageWithProgress({ client, outbox, kind, chatId, ex
   let currentText = "";
   const UPDATE_INTERVAL_MS = 2000;
 
+  const MAX_TELEGRAM_TEXT = 4096;
+
   const flushProgress = async (text, isFinal = false) => {
     currentText = text;
     const now = Date.now();
@@ -101,12 +103,17 @@ export async function sendMessageWithProgress({ client, outbox, kind, chatId, ex
     if (!placeholderMessageId) return;
 
     lastUpdateMs = now;
+    const raw = currentText || "...";
+    // Telegram rejects edits longer than 4096 chars; keep the tail (most recent output).
+    const editText = raw.length > MAX_TELEGRAM_TEXT
+      ? raw.slice(-MAX_TELEGRAM_TEXT)
+      : raw;
     try {
       await client.editMessageText({
         chat_id: chatId,
         message_id: placeholderMessageId,
         ...rest,
-        text: currentText || "...",
+        text: editText,
       });
     } catch (err) {
       console.warn(`[${kind}] progress edit failed`, err.message);

@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 
 export class TelegramClient {
   constructor(token, fetchImpl = fetch) {
@@ -10,42 +11,49 @@ export class TelegramClient {
   }
 
   async acquireLease(lockPath) {
+    // Ensure the parent directory exists (fix: .data/ may not exist on fresh installs).
+    await fs.mkdir(path.dirname(lockPath), { recursive: true });
+
     try {
       this.lockHandle = await fs.open(lockPath, "wx");
       this.lockPath = lockPath;
-      // Write PID to lock file for debugging
       await this.lockHandle.writeFile(String(process.pid));
       return true;
     } catch (error) {
-      if (error.code === "EEXIST") {
-        // Check if the lock is stale
-        try {
-          const content = await fs.readFile(lockPath, "utf-8");
-          const pid = Number.parseInt(content.trim(), 10);
-          if (Number.isFinite(pid)) {
-            try {
-              process.kill(pid, 0); // Throws if process is dead
-              // If it doesn't throw, the process is alive.
-              throw new Error(`Polling already locked by an active process (PID: ${pid}, lock file: ${lockPath})`);
-            } catch (killError) {
-              if (killError.code === "ESRCH") {
-                // Process is dead, remove stale lock
-                console.warn(`[telegram] removing stale lock for dead PID ${pid}`);
-                await fs.unlink(lockPath);
-                return this.acquireLease(lockPath);
-              }
-              throw killError;
-            }
-          }
-        } catch (readError) {
-          // If file was deleted between catch and read, just retry
-          if (readError.code === "ENOENT") return this.acquireLease(lockPath);
-          throw readError;
-        }
-        
+      if (error.code !== "EEXIST") throw error;
+
+      // Lock file exists — check whether it belongs to a dead process (stale).
+      let pid;
+      try {
+        const content = await fs.readFile(lockPath, "utf-8");
+        pid = Number.parseInt(content.trim(), 10);
+      } catch (readError) {
+        // File vanished between EEXIST and readFile — another process cleaned it up; retry.
+        if (readError.code === "ENOENT") return this.acquireLease(lockPath);
+        throw readError;
+      }
+
+      if (!Number.isFinite(pid)) {
         throw new Error(`Polling already locked by another process (lock file exists: ${lockPath})`);
       }
-      throw error;
+
+      try {
+        process.kill(pid, 0); // Throws ESRCH if process is gone, EPERM if alive but not ours
+        throw new Error(`Polling already locked by an active process (PID: ${pid}, lock file: ${lockPath})`);
+      } catch (killError) {
+        if (killError.code !== "ESRCH") throw killError;
+      }
+
+      // Process is dead — remove stale lock.  Another process might race us here
+      // (TOCTTOU); if so we get ENOENT, which we treat as "lock is gone, retry".
+      console.warn(`[telegram] removing stale lock for dead PID ${pid}`);
+      try {
+        await fs.unlink(lockPath);
+      } catch (unlinkError) {
+        if (unlinkError.code !== "ENOENT") throw unlinkError;
+        // Concurrent process already removed the stale lock — safe to retry.
+      }
+      return this.acquireLease(lockPath);
     }
   }
 
@@ -136,22 +144,29 @@ export class MediaGroupBuffer {
   push(message) {
     const groupId = message.media_group_id;
     if (!groupId) {
-      this.onFlush(null, [message]);
+      Promise.resolve(this.onFlush(null, [message])).catch((err) => {
+        console.error("[MediaGroupBuffer] onFlush error", err);
+      });
       return;
     }
 
     let entry = this.groups.get(groupId);
-    if (entry) {
+    // If the entry is already being flushed, start a fresh one for new messages.
+    if (entry && !entry.flushing) {
       clearTimeout(entry.timer);
     } else {
-      entry = { messages: [] };
+      entry = { messages: [], flushing: false };
       this.groups.set(groupId, entry);
     }
 
     entry.messages.push(message);
     entry.timer = setTimeout(() => {
+      entry.flushing = true;
+      const messages = [...entry.messages]; // snapshot before delete
       this.groups.delete(groupId);
-      this.onFlush(groupId, entry.messages);
+      Promise.resolve(this.onFlush(groupId, messages)).catch((err) => {
+        console.error("[MediaGroupBuffer] onFlush error", err);
+      });
     }, this.timeoutMs);
   }
 }

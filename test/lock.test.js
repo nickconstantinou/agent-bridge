@@ -44,6 +44,47 @@ describe("Telegram Polling Lease", () => {
     await expect(fs.stat(lockPath)).rejects.toThrow();
   });
 
+  it("acquires a lock even when the parent directory does not exist yet", async () => {
+    const client = new TelegramClient("token");
+    const missingDir = path.join(tempDir, "sub", "dir");
+    const lockInMissingDir = path.join(missingDir, "telegram.lock");
+
+    const acquired = await client.acquireLease(lockInMissingDir);
+    expect(acquired).toBe(true);
+
+    await client.releaseLease();
+  });
+
+  it("handles concurrent stale-lock deletion gracefully (TOCTTOU)", async () => {
+    const client = new TelegramClient("token");
+
+    // Write a stale lock (dead PID)
+    await fs.writeFile(lockPath, "999999");
+
+    // Simulate another process deleting the stale lock between our readFile and unlink.
+    const origUnlink = fs.unlink;
+    let unlinkCalled = false;
+    fs.unlink = async (p) => {
+      if (!unlinkCalled && p === lockPath) {
+        unlinkCalled = true;
+        // Remove the file ourselves first, then throw ENOENT as the real concurrent delete would
+        try { await origUnlink(p); } catch { /* already gone */ }
+        const err = new Error("ENOENT");
+        err.code = "ENOENT";
+        throw err;
+      }
+      return origUnlink(p);
+    };
+
+    try {
+      const acquired = await client.acquireLease(lockPath);
+      expect(acquired).toBe(true);
+    } finally {
+      fs.unlink = origUnlink;
+      await client.releaseLease();
+    }
+  });
+
   it("recovers from a stale lock if the process is no longer running", async () => {
     const client = new TelegramClient("token");
     

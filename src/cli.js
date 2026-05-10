@@ -430,23 +430,24 @@ export async function runCliAsync(command, args, cwd, options = {}) {
 		idleTimer = null;
 	};
 
-	const scheduleIdleTimeout = () => {
-		if (!idleTimeoutMs || finished) return;
-		clearIdleTimer();
-		idleTimer = setTimeout(() => {
-			if (finished) return;
-			killChildTree();
-			settled = true;
-			reject(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`));
-		}, idleTimeoutMs);
-		idleTimer.unref?.();
-	};
-
 	return new Promise((resolve, reject) => {
+		// scheduleIdleTimeout must live inside the Promise so reject is in scope.
+		const scheduleIdleTimeout = () => {
+			if (!idleTimeoutMs || finished) return;
+			clearIdleTimer();
+			idleTimer = setTimeout(() => {
+				if (finished) return;
+				killChildTree();
+				settled = true;
+				reject(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`));
+			}, idleTimeoutMs);
+			idleTimer.unref?.();
+		};
+
 		// Spawn in a new process group for clean kill of the entire tree
-		child = spawn(command, args, { 
-			stdio: ["ignore", "pipe", "pipe"], 
-			cwd, 
+		child = spawn(command, args, {
+			stdio: ["ignore", "pipe", "pipe"],
+			cwd,
 			detached: true,
 			shell: false,
 		});

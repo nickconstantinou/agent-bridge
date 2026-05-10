@@ -76,6 +76,36 @@ describe("sendMessageWithProgress", () => {
     expect(result.text).toBe("Partial response");
   });
 
+  it("truncates progress text to 4096 chars to stay within Telegram API limits", async () => {
+    const edits = [];
+    const client = createMockClient({
+      sendMessage: vi.fn(async () => ({ ok: true, result: { message_id: 1 } })),
+      sendChatAction: vi.fn(async () => ({ ok: true })),
+      editMessageText: vi.fn(async (body) => {
+        edits.push(body.text);
+        return { ok: true };
+      }),
+    });
+    const outbox = createMockOutbox();
+    const bigChunk = "x".repeat(5000);
+
+    await sendMessageWithProgress({
+      client,
+      outbox,
+      kind: "codex",
+      chatId: 123,
+      execution: (onProgress) => {
+        onProgress(bigChunk);
+        return Promise.resolve({ text: "done", sessionId: null });
+      },
+    });
+
+    // Any intermediate edit should be at most 4096 chars
+    for (const editText of edits) {
+      expect(editText.length).toBeLessThanOrEqual(4096);
+    }
+  });
+
   it("replaces placeholder on final result", async () => {
     const client = createMockClient({ editMessageText: vi.fn() });
     const outbox = createMockOutbox();

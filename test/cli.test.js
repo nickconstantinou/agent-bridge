@@ -47,6 +47,18 @@ describe("runCliAsync", () => {
   });
 });
 
+describe("runCliAsync idle timeout", () => {
+  it("rejects with idle timeout when process is silent and idleTimeoutMs is set", async () => {
+    await expect(
+      runCliAsync("bash", ["-lc", "sleep 5"], getCliWorkingDir(), {
+        timeoutMs: 500,
+        idleTimeoutMs: 50,
+        killGraceMs: 25,
+      }),
+    ).rejects.toThrow(/idle timeout/i);
+  }, 2000);
+});
+
 describe("cli timeout handling", () => {
   it("rejects on timeout for a hanging process", async () => {
     const start = Date.now();

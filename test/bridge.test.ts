@@ -33,19 +33,20 @@ describe("agent bridge MVP", () => {
     expect(extractPromptText({} as any)).toBeNull();
   });
 
-  it("creates fresh codex invocation", () => {
-    expect(
-      buildCliInvocation({
-        bot: "codex",
-        prompt: "hello",
-        sessionId: null,
-        command: "codex",
-        model: null,
-      }),
-    ).toEqual({
+  it("creates fresh codex invocation using exec subcommand", () => {
+    const { command, args } = buildCliInvocation({
+      bot: "codex",
+      prompt: "hello",
+      sessionId: null,
       command: "codex",
-      args: ["hello"],
+      model: null,
     });
+    expect(command).toBe("codex");
+    expect(args[0]).toBe("exec");
+    expect(args).toContain("hello");
+    expect(args).toContain("--skip-git-repo-check");
+    expect(args).not.toContain("--thread");
+    expect(args).not.toContain("--output");
   });
 
   it("creates trusted codex invocation only when explicitly requested", () => {
@@ -61,34 +62,59 @@ describe("agent bridge MVP", () => {
     ).toContain("--dangerously-bypass-approvals-and-sandbox");
   });
 
-  it("creates resume codex invocation", () => {
-    expect(
-      buildCliInvocation({
-        bot: "codex",
-        prompt: "hello again",
-        sessionId: "thread-123",
-        command: "codex",
-        model: null,
-      }),
-    ).toEqual({
+  it("creates resume codex invocation using exec resume subcommand", () => {
+    const { args } = buildCliInvocation({
+      bot: "codex",
+      prompt: "hello again",
+      sessionId: "019e1299-3d2c-7f11-8194-500feee6614e",
       command: "codex",
-      args: ["--thread", "thread-123", "hello again"],
+      model: null,
     });
+    expect(args[0]).toBe("exec");
+    expect(args[1]).toBe("resume");
+    expect(args).toContain("019e1299-3d2c-7f11-8194-500feee6614e");
+    expect(args).toContain("hello again");
+    expect(args).not.toContain("--thread");
   });
 
-  it("creates fresh gemini invocation", () => {
-    expect(
-      buildCliInvocation({
-        bot: "gemini",
-        prompt: "hello",
-        sessionId: null,
-        command: "gemini",
-        model: "gemini-pro",
-      }),
-    ).toEqual({
-      command: "gemini",
-      args: ["--model", "gemini-pro", "hello"],
+  it("codex json invocation uses --json flag not --output", () => {
+    const { args } = buildCliInvocation({
+      bot: "codex",
+      prompt: "hello",
+      sessionId: null,
+      command: "codex",
+      model: null,
+      outputFormat: "json",
     });
+    expect(args).toContain("--json");
+    expect(args).not.toContain("--output");
+  });
+
+  it("creates fresh gemini invocation with --prompt flag for non-interactive mode", () => {
+    const { command, args } = buildCliInvocation({
+      bot: "gemini",
+      prompt: "hello",
+      sessionId: null,
+      command: "gemini",
+      model: "gemini-pro",
+    });
+    expect(command).toBe("gemini");
+    const idx = args.indexOf("--prompt");
+    expect(idx).toBeGreaterThan(-1);
+    expect(args[idx + 1]).toBe("hello");
+    expect(args).not.toContain("--output");
+  });
+
+  it("gemini session invocation uses --session-id not --session", () => {
+    const { args } = buildCliInvocation({
+      bot: "gemini",
+      prompt: "hello",
+      sessionId: "session-abc-123",
+      command: "gemini",
+      model: null,
+    });
+    expect(args).toContain("--session-id");
+    expect(args).not.toContain("--session");
   });
 
   it("kills the CLI process group on idle timeout", async () => {
@@ -102,13 +128,28 @@ describe("agent bridge MVP", () => {
     ).rejects.toThrow(/CLI idle timeout/);
   });
 
-  it("parses codex output", () => {
-    expect(
-      parseCliResult({
-        bot: "codex",
-        stdout: "hello back\n[thread:thread-123]",
-      }),
-    ).toEqual({ text: "hello back", sessionId: "thread-123" });
+  it("parses codex JSONL output with item.completed agent_message", () => {
+    const stdout = [
+      '{"type":"thread.started","thread_id":"abc-123"}',
+      '{"type":"turn.started"}',
+      '{"type":"item.completed","item":{"type":"agent_message","text":"Hello back"}}',
+      '{"type":"turn.completed"}',
+    ].join("\n");
+    expect(parseCliResult({ bot: "codex", stdout })).toEqual({
+      text: "Hello back",
+      sessionId: "abc-123",
+    });
+  });
+
+  it("parses codex JSONL output with response.completed event", () => {
+    const stdout = [
+      '{"type":"thread.started","thread_id":"xyz-789"}',
+      '{"type":"response.completed","output_text":"Final answer"}',
+    ].join("\n");
+    expect(parseCliResult({ bot: "codex", stdout })).toEqual({
+      text: "Final answer",
+      sessionId: "xyz-789",
+    });
   });
 
   it("parses gemini output", () => {

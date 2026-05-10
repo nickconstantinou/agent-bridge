@@ -24,17 +24,20 @@ export function buildCliInvocation({
   const args = [];
 
   if (bot === "codex") {
+    if (sessionId) {
+      args.push("exec", "resume", sessionId);
+    } else {
+      args.push("exec");
+    }
+    args.push("--skip-git-repo-check");
     if (model) {
       args.push("--model", model);
-    }
-    if (sessionId) {
-      args.push("--thread", sessionId);
     }
     if (executionMode === "trusted") {
       args.push("--dangerously-bypass-approvals-and-sandbox");
     }
     if (outputFormat === "json") {
-      args.push("--output", "json");
+      args.push("--json");
     }
     args.push(prompt);
   } else if (bot === "gemini") {
@@ -42,15 +45,12 @@ export function buildCliInvocation({
       args.push("--model", model);
     }
     if (sessionId) {
-      args.push("--session", sessionId);
+      args.push("--session-id", sessionId);
     }
     if (executionMode === "trusted") {
-      args.push("--approval-mode", "yolo");
+      args.push("--yolo");
     }
-    if (outputFormat === "json") {
-      args.push("--output", "json");
-    }
-    args.push(prompt);
+    args.push("--prompt", prompt);
   }
 
   return { command, args };
@@ -72,7 +72,7 @@ export function buildGeminiFallbackInvocation({
   if (model) {
     args.push("--model", model);
   }
-  args.push(prompt);
+  args.push("--prompt", prompt);
   return { command, args };
 }
 
@@ -126,36 +126,34 @@ export function parseCliResult({ bot, stdout }: { bot: string; stdout: string })
 
 function parseCodexResult(stdout: string): CliResult {
   let sessionId: string | null = null;
-  const textChunks: string[] = [];
-
-  const appendText = (value: string) => {
-    if (!value) return;
-    if (value.startsWith("[thread:")) {
-      const match = value.match(/\[thread:([^\]]+)\]/);
-      if (match) sessionId = match[1];
-    } else {
-      textChunks.push(value);
-    }
-  };
+  let finalText: string | null = null;
+  const deltaChunks: string[] = [];
 
   const lines = stdout.split("\n").map((v) => v.trim()).filter(Boolean);
   for (const line of lines) {
-    // Codex JSON output has "text" and "threadId" fields
-    if (line.startsWith("{") && line.endsWith("}")) {
-      try {
-        const parsed = JSON.parse(line);
-        if (parsed.text) textChunks.push(parsed.text);
-        if (parsed.threadId) sessionId = parsed.threadId;
-        continue;
-      } catch {
-        // not valid json, treat as text
+    if (!line.startsWith("{")) continue;
+    try {
+      const e = JSON.parse(line);
+      if (e.type === "thread.started" && e.thread_id) {
+        sessionId = e.thread_id;
+      } else if (
+        (e.type === "item.completed" || e.type === "item.updated") &&
+        e.item?.type === "agent_message" &&
+        typeof e.item.text === "string"
+      ) {
+        finalText = e.item.text;
+      } else if (e.type === "response.completed" && typeof e.output_text === "string") {
+        finalText = e.output_text;
+      } else if (e.type === "response.output_text.delta" && e.delta) {
+        deltaChunks.push(e.delta);
       }
+    } catch {
+      // not JSON, skip
     }
-    appendText(line);
   }
 
   return {
-    text: textChunks.join("\n").trim(),
+    text: (finalText ?? deltaChunks.join("")).trim(),
     sessionId,
   };
 }

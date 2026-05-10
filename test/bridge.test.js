@@ -8,7 +8,6 @@ import {
   isAuthorizedMessage,
   extractPromptText,
   buildCliInvocation,
-  buildGeminiFallbackInvocation,
   parseCliResult,
   createMemorySessionStore,
   createMemorySettingsStore,
@@ -213,30 +212,6 @@ describe("agent bridge MVP", () => {
     });
   });
 
-  it("creates gemini read-only fallback invocation", () => {
-    expect(
-      buildGeminiFallbackInvocation({
-        command: "gemini",
-        model: "gemini-3-flash-preview",
-        prompt: "probe tools",
-      }),
-    ).toEqual({
-      command: "gemini",
-      args: [
-        "--skip-trust",
-        "--approval-mode",
-        "plan",
-        "--include-directories",
-        getBridgeProjectDir(),
-        "--model",
-        "gemini-3-flash-preview",
-        "--output-format",
-        "json",
-        "-p",
-        "probe tools\n\nDo not use tools. Answer from inspection and reasoning only. If a tool would be required, say exactly what is blocked.",
-      ],
-    });
-  });
 
   it("kills the CLI process group on idle timeout", async () => {
     const dir = mkdtempSync(join(tmpdir(), "agent-bridge-cli-"));

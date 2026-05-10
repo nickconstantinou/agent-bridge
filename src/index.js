@@ -1,6 +1,5 @@
 import dotenv from "dotenv";
 import {
-  buildGeminiFallbackInvocation,
   buildModelKeyboard,
   buildModelsText,
   createFileSessionStore,
@@ -141,8 +140,8 @@ class BridgeBot {
     const chatId = message.chat.id;
     const sessionId = await sessionStore.get(this.kind);
 
-    // Choose async or sync based on config
-    const useAsync = config.asyncEnabled && this.kind === "gemini";
+    // Choose async or sync based on config (sync is default)
+    const useAsync = config.asyncEnabled === true;
 
     try {
       const result = useAsync
@@ -170,7 +169,7 @@ class BridgeBot {
       prompt,
       sessionId,
       executionMode: config.executionMode,
-      outputFormat: "text", // Use text for streaming
+      outputFormat: "json", // Use json for better parsing and session ID extraction
     });
 
     const isCliTimeout = (error) => /CLI (idle timeout|timed out)/i.test(String(error?.message || error));
@@ -237,74 +236,13 @@ class BridgeBot {
       try {
         result = parseCliResult({ bot: this.kind, stdout });
       } catch (parseError) {
-        if (this.kind === "gemini" && process.env.GEMINI_ACP === "1") {
-          const fallbackInvocation = buildCliInvocation({
-            bot: this.kind,
-            command: this.config.command,
-            model,
-            prompt,
-            sessionId,
-            executionMode: config.executionMode,
-            outputFormat: "json",
-          });
-          const fallbackStdout = await runCli(
-            fallbackInvocation.command,
-            fallbackInvocation.args,
-            getCliWorkingDir(),
-            { timeoutMs: config.cliTimeoutMs, idleTimeoutMs: config.cliIdleTimeoutMs }
-          );
-          result = parseCliResult({ bot: this.kind, stdout: fallbackStdout });
-        } else {
-          throw parseError;
-        }
+        // No fallback - throw parse error directly
+        throw parseError;
       }
       if (result.sessionId) await sessionStore.set(this.kind, result.sessionId);
       return result;
     } catch (error) {
-      const message = String(error?.message || error);
-      if (this.kind === "gemini" && sessionId && error?.isCliError && /Invalid session identifier/i.test(message)) {
-        await sessionStore.set(this.kind, null);
-        return this.executePrompt(prompt, null, chatId);
-      }
-      if (this.kind === "gemini" && isCliTimeout(error)) {
-        const fallbackInvocation = buildGeminiFallbackInvocation({
-          command: this.config.command,
-          model,
-          prompt,
-        });
-        const fallbackStdout = await runCli(
-          fallbackInvocation.command,
-          fallbackInvocation.args,
-          getCliWorkingDir(),
-          { timeoutMs: config.geminiFallbackTimeoutMs, idleTimeoutMs: config.cliIdleTimeoutMs, killGraceMs: 5000 }
-        );
-        const fallbackResult = parseCliResult({ bot: this.kind, stdout: fallbackStdout });
-        if (fallbackResult.sessionId) await sessionStore.set(this.kind, fallbackResult.sessionId);
-        return {
-          ...fallbackResult,
-          text: `[Gemini timed out in tool mode, fell back to read-only mode]\n\n${fallbackResult.text}`,
-        };
-      }
-      if (streamGemini) {
-        const fallbackInvocation = buildCliInvocation({
-          bot: this.kind,
-          command: this.config.command,
-          model,
-          prompt,
-          sessionId,
-          executionMode: config.executionMode,
-          outputFormat: "json",
-        });
-        const fallbackStdout = await runCli(
-          fallbackInvocation.command,
-          fallbackInvocation.args,
-          getCliWorkingDir(),
-          { timeoutMs: config.cliTimeoutMs, idleTimeoutMs: config.cliIdleTimeoutMs }
-        );
-        const fallbackResult = parseCliResult({ bot: this.kind, stdout: fallbackStdout });
-        if (fallbackResult.sessionId) await sessionStore.set(this.kind, fallbackResult.sessionId);
-        return fallbackResult;
-      }
+      // No fallback - throw error directly
       throw error;
     } finally {
       await typingTracker.stop();

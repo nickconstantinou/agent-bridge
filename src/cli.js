@@ -191,7 +191,16 @@ function parseGeminiResult(stdout) {
 
   // Fallback: if no JSON found or parsing failed, check if it's just plain text
   // but usually we expect JSON from Gemini with --output-format json
-  const lines = cleaned.split("\n").filter(l => !l.startsWith("Error:"));
+  const warnings = [
+    "Warning: True color",
+    "YOLO mode is enabled",
+    "Ripgrep is not available",
+    "Falling back to GrepTool"
+  ];
+  const lines = cleaned.split("\n").filter(l => {
+    const trimmed = l.trim();
+    return !trimmed.startsWith("Error:") && !warnings.some(w => trimmed.startsWith(w));
+  });
   if (lines.length > 0) {
     return { text: lines.join("\n").trim(), sessionId: null };
   }
@@ -419,11 +428,11 @@ export async function runCliAsync(command, args, cwd, options = {}) {
 	};
 
 	return new Promise((resolve, reject) => {
-		// Spawn in same process group for clean kill
+		// Spawn in a new process group for clean kill of the entire tree
 		child = spawn(command, args, { 
 			stdio: ["ignore", "pipe", "pipe"], 
 			cwd, 
-			detached: false, setsid: true,
+			detached: true,
 			shell: false,
 		});
 

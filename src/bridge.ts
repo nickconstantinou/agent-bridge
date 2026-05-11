@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { runCli, runCliAsync, parseCliResult, buildCliInvocation, validateBridgeConfig, buildExecutionOptions } from "./cli.js";
+import { runCli, runCliAsync, parseCliResult, buildCliInvocation, validateBridgeConfig, buildExecutionOptions, isCapacityExhaustedError, getGeminiFallbackModel } from "./cli.js";
 import { createFileStore, createMemoryStore } from "./store.js";
 import type { TelegramMessage, Store, BridgeConfig } from "./types.js";
 
@@ -90,6 +90,6 @@ export async function buildModelsText(kind: string, { settingsStore, config }: {
   return `[${kind} model settings]\n\nCurrent: ${current}\n\nSelect a model below:`;
 }
 
-export { runCli, runCliAsync, parseCliResult, validateBridgeConfig, buildCliInvocation, buildExecutionOptions };
+export { runCli, runCliAsync, parseCliResult, validateBridgeConfig, buildCliInvocation, buildExecutionOptions, isCapacityExhaustedError, getGeminiFallbackModel };
 export { handleCommand } from "./commands.js";
 export { createMemoryStore as createMemorySessionStore, createMemoryStore as createMemorySettingsStore } from "./store.js";

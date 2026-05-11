@@ -234,6 +234,25 @@ function parseGeminiStreamJson(stdout: string): CliResult {
   return { text: text.trim(), sessionId };
 }
 
+const GEMINI_FALLBACK_CHAIN = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+
+export function isCapacityExhaustedError(err: Error): boolean {
+  const msg = err.message || "";
+  return (
+    msg.includes("MODEL_CAPACITY_EXHAUSTED") ||
+    msg.includes("No capacity available") ||
+    msg.includes("rateLimitExceeded")
+  );
+}
+
+export function getGeminiFallbackModel(currentModel: string | null): string | null {
+  if (!currentModel || !GEMINI_FALLBACK_CHAIN.includes(currentModel)) {
+    return "gemini-2.5-flash-lite";
+  }
+  const idx = GEMINI_FALLBACK_CHAIN.indexOf(currentModel);
+  return idx < GEMINI_FALLBACK_CHAIN.length - 1 ? GEMINI_FALLBACK_CHAIN[idx + 1] : null;
+}
+
 /**
  * Runs a CLI command and returns stdout.
  */
@@ -261,6 +280,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
     };
 
     const timer = setTimeout(() => {
+      console.error(`[TIMEOUT] CLI hard timeout after ${timeoutMs}ms - killing process\n`);
       doReject(new Error(`CLI hard timeout after ${timeoutMs}ms`));
       child.kill("SIGTERM");
       setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* ignore */ } }, killGraceMs);

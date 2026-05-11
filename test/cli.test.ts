@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { runCli, runCliAsync } from "../src/cli.js";
+import { runCli, runCliAsync, isCapacityExhaustedError, getGeminiFallbackModel } from "../src/cli.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,5 +43,31 @@ describe("CLI Runner", () => {
 
     if (killFn) (killFn as () => void)();
     await expect(p).rejects.toThrow();
+  });
+});
+
+describe("gemini model fallback", () => {
+  it("detects capacity-exhausted errors by message content", () => {
+    expect(isCapacityExhaustedError(
+      new Error("CLI exited with code 1: No capacity available for model gemini-2.5-flash")
+    )).toBe(true);
+    expect(isCapacityExhaustedError(
+      new Error("CLI exited with code 1: MODEL_CAPACITY_EXHAUSTED")
+    )).toBe(true);
+    expect(isCapacityExhaustedError(new Error("CLI hard timeout after 120000ms"))).toBe(false);
+    expect(isCapacityExhaustedError(new Error("Network error"))).toBe(false);
+  });
+
+  it("returns next model in fallback chain", () => {
+    expect(getGeminiFallbackModel("gemini-2.5-flash")).toBe("gemini-2.5-flash-lite");
+  });
+
+  it("returns null at last fallback model", () => {
+    expect(getGeminiFallbackModel("gemini-2.5-flash-lite")).toBeNull();
+  });
+
+  it("falls back to lite for unknown or null models", () => {
+    expect(getGeminiFallbackModel(null)).toBe("gemini-2.5-flash-lite");
+    expect(getGeminiFallbackModel("gemini-3-flash-preview")).toBe("gemini-2.5-flash-lite");
   });
 });

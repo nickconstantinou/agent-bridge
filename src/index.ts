@@ -16,6 +16,8 @@ import {
   validateBridgeConfig,
   runCli,
   runCliAsync,
+  isCapacityExhaustedError,
+  getGeminiFallbackModel,
 } from "./bridge.js";
 import { createTelegramOutbox } from "./outbox.js";
 import { createBridgeState, createFileBridgeState } from "./state.js";
@@ -236,7 +238,31 @@ class BridgeBot {
       if (result?.sessionId) await sessionStore.set(this.kind, result.sessionId);
       return result;
     } catch (error) {
-      // No fallback - throw error directly
+      if (this.kind === "gemini" && isCapacityExhaustedError(error as Error)) {
+        const fallbackModel = getGeminiFallbackModel(model);
+        if (fallbackModel) {
+          const fallbackInvocation = buildCliInvocation({
+            bot: this.kind,
+            command: this.config.command,
+            model: fallbackModel,
+            prompt,
+            sessionId,
+            executionMode: config.executionMode,
+            outputFormat: "json",
+          });
+          const cliResult = await runCliAsync(fallbackInvocation.command, fallbackInvocation.args, getCliWorkingDir(), {
+            timeoutMs: config.cliTimeoutMs,
+            idleTimeoutMs: null,
+            onProgress,
+          });
+          const result = parseCliResult({ bot: this.kind, stdout: cliResult.text });
+          if (result?.sessionId) await sessionStore.set(this.kind, result.sessionId);
+          return {
+            ...result,
+            text: `⚠️ Fell back to ${fallbackModel} (${model || "default"} at capacity)\n\n${result.text}`,
+          };
+        }
+      }
       throw error;
     } finally {
       await typingTracker.stop();
@@ -264,17 +290,33 @@ class BridgeBot {
         timeoutMs: config.cliTimeoutMs,
         idleTimeoutMs: null, // Typing indicator provides liveness
       });
-      let result;
-      try {
-        result = parseCliResult({ bot: this.kind, stdout });
-      } catch (parseError) {
-        // No fallback - throw parse error directly
-        throw parseError;
-      }
+      const result = parseCliResult({ bot: this.kind, stdout });
       if (result.sessionId) await sessionStore.set(this.kind, result.sessionId);
       return result;
     } catch (error) {
-      // No fallback - throw error directly
+      if (this.kind === "gemini" && isCapacityExhaustedError(error as Error)) {
+        const fallbackModel = getGeminiFallbackModel(model);
+        if (fallbackModel) {
+          const fallbackInvocation = buildCliInvocation({
+            bot: this.kind,
+            command: this.config.command,
+            model: fallbackModel,
+            prompt,
+            sessionId,
+            executionMode: config.executionMode,
+          });
+          const stdout = await runCli(fallbackInvocation.command, fallbackInvocation.args, getCliWorkingDir(), {
+            timeoutMs: config.cliTimeoutMs,
+            idleTimeoutMs: null,
+          });
+          const result = parseCliResult({ bot: this.kind, stdout });
+          if (result.sessionId) await sessionStore.set(this.kind, result.sessionId);
+          return {
+            ...result,
+            text: `⚠️ Fell back to ${fallbackModel} (${model || "default"} at capacity)\n\n${result.text}`,
+          };
+        }
+      }
       throw error;
     } finally {
       await typingTracker.stop();

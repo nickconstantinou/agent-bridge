@@ -188,7 +188,9 @@ export async function sendMessageWithProgress({
 
         await client.editMessageText(finalBody);
       } catch (editErr: any) {
-        // Fallback: send new message if edit fails
+        // "message is not modified" means progress streaming already set this text — not an error
+        if (editErr.message?.includes("message is not modified")) return;
+        // Fallback: send new message if edit fails for any other reason
         console.warn(`[${kind}] final edit failed, sending new message`, editErr.message);
         await sendTelegramMessage({ client, outbox, kind, chatId, body: { ...body, text: finalText } });
       }

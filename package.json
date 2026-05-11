@@ -12,6 +12,7 @@
     "dotenv": "^17.2.3"
   },
   "devDependencies": {
+    "tsx": "^4.21.0",
     "vitest": "^4.0.7"
   }
 }

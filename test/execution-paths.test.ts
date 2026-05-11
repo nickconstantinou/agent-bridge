@@ -15,16 +15,15 @@ describe("Execution Path Selection - TDD", () => {
       expect(hasImport).toBe(false);
     });
 
-    it("REMOVE: fallback code from executePrompt", async () => {
+    it("timeout-based fallback removed; capacity-based fallback uses isCapacityExhaustedError", async () => {
       const fs = await import("fs");
       const src = fs.readFileSync("src/index.ts", "utf-8");
-      
-      // Fallback code blocks should be removed
-      const hasFallback = src.includes("fallbackInvocation");
-      const hasFallbackCheck = src.includes("isCliTimeout(error)") && src.includes("fallback");
-      
-      // After removal: no fallback in either path
-      expect(hasFallback).toBe(false);
+
+      // Old timeout-based fallback must be gone
+      expect(src.includes("isCliTimeout(error)")).toBe(false);
+      // New capacity-based fallback is intentionally present
+      expect(src.includes("isCapacityExhaustedError")).toBe(true);
+      expect(src.includes("getGeminiFallbackModel")).toBe(true);
     });
 
     it("REMOVE: kind-specific CLI args in cli", async () => {

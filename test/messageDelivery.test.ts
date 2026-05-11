@@ -140,4 +140,26 @@ describe("sendMessageWithProgress", () => {
     // Only one sendMessage call (the placeholder) — no second error message
     expect(client.sendMessage).toHaveBeenCalledTimes(1);
   });
+
+  it("does not send duplicate message when final edit returns 'message is not modified'", async () => {
+    const client = {
+      sendMessage: vi.fn(async () => ({ ok: true, result: { message_id: 1 } })),
+      sendChatAction: vi.fn(async () => ({ ok: true })),
+      editMessageText: vi.fn(async () => {
+        throw new Error("Bad Request: message is not modified: specified new message content and reply markup are identical");
+      }),
+    } as any as TelegramClient;
+    const outbox = createMockOutbox();
+
+    await sendMessageWithProgress({
+      client,
+      outbox,
+      kind: "codex",
+      chatId: 123,
+      execution: Promise.resolve({ text: "Hello", sessionId: null }),
+    });
+
+    // Only one sendMessage call (the placeholder) — no second duplicate message
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+  });
 });

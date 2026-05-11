@@ -1,138 +1,136 @@
 # agent-bridge
 
-Tiny single-user Telegram bridge for Codex CLI and Gemini CLI.
+Telegram bridge for Codex CLI and Gemini CLI. Single-user, TypeScript, streaming-first.
 
-## Scope
+## What it does
 
-- one shared repo, two separate service instances
-- 2 Telegram bots: one for Codex, one for Gemini
-- ignores unauthorized users silently
-- text in, text out
-- maintains one persisted session per bot
-- simple commands: `/start`, `/models`, `/model <name>`, `/model reset`, `/reset`
+Polls a Telegram bot for messages, routes them to the Codex or Gemini CLI, and streams responses back by editing a placeholder message in real time. Two bots run as separate systemd services from the same codebase.
 
-## Production-Grade Enhancements
+## Features
 
-- **Media Group Aggregation**: Buffers photo/video albums into a single agent prompt.
-- **Adaptive Rate Limiting**: Automatically handles Telegram's `429` (Too Many Requests) errors with smart backoff.
-- **Forum/Topic Support**: Captures and preserves `message_thread_id` for correct conversation routing.
-- **Robust Concurrency Locking**: Multi-node safety with automated stale lock recovery (via PID verification).
-- **Smart MarkdownV2 Escaping**: AST-aware formatter that protects valid pairs and escapes orphaned markers.
-- **Progressive Streaming**: Real-time feedback with throttled message edits (every 2 seconds).
+- **Streaming responses** — edits a placeholder message as the CLI outputs, then replaces with the final result
+- **Session continuity** — persists CLI session IDs per chat in SQLite so conversations resume across restarts
+- **Kill switch** — `/stop` or `/cancel` aborts the running process immediately
+- **Forum/topic support** — threads replies into the correct Telegram forum topic
+- **Media group batching** — aggregates multi-photo messages into a single agent prompt
+- **Gemini model fallback** — automatically retries with a smaller model on capacity exhaustion
+- **Concurrency lock** — one execution per chat at a time (SQLite atomic lock, no race conditions)
+- **Rate limit handling** — automatic retry on Telegram 429 responses
+
+## Requirements
+
+- Node 22+
+- `codex` and/or `gemini` CLI on `$PATH`
+- Two Telegram bots created via [@BotFather](https://t.me/BotFather)
 
 ## Setup
 
-1. Install Node 22+
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Copy env file:
-   ```bash
-   cp .env.example .env
-   ```
-4. Fill in `.env`
-5. Make sure these CLIs work on the server:
-   ```bash
-   codex --help
-   gemini --help
-   ```
-6. Start:
-   ```bash
-   node src/index.js
-   ```
-
-## Run persistently with systemd
-
-Recommended on a Linux server.
-
-### Codex service
-
-1. Create `/etc/systemd/system/agent-bridge-codex.service`:
-   ```bash
-   sudo tee /etc/systemd/system/agent-bridge-codex.service >/dev/null <<'EOF'
-   [Unit]
-   Description=Telegram bridge for Codex
-   After=network-online.target
-   Wants=network-online.target
-
-   [Service]
-   Type=simple
-   User=<your-user>
-   Environment=BRIDGE_ROOT_DIR=<your-home-dir>
-   Environment=BRIDGE_PROJECT_DIR=<absolute-path-to-this-repo>
-   Environment=BRIDGE_ENV_FILE=<absolute-path-to-service-env-file>
-   Environment=CODEX_PROJECT_DIR=<absolute-path-to-codex-repo>
-   Environment=TELEGRAM_BOT_TOKEN_CODEX=<codex-bot-token>
-   Environment=TELEGRAM_ALLOWED_USER_ID=<your-telegram-user-id>
-   WorkingDirectory=<absolute-path-to-this-repo>
-   ExecStart=/usr/bin/env node src/index.js
-   Restart=always
-   RestartSec=5
-   Environment=NODE_ENV=production
-
-   [Install]
-   WantedBy=multi-user.target
-   EOF
-   ```
-2. Reload systemd:
-   ```bash
-   sudo systemctl daemon-reload
-   ```
-3. Enable and start the service:
-   ```bash
-   sudo systemctl enable --now agent-bridge-codex
-   ```
-4. Check status:
-   ```bash
-   systemctl status agent-bridge-codex
-   ```
-5. Follow logs:
-   ```bash
-   journalctl -u agent-bridge-codex -f
-   ```
-
-### Gemini service
-
-Pattern is identical. Use `agent-bridge-gemini.service` and set `TELEGRAM_BOT_TOKEN_GEMINI` and `GEMINI_PROJECT_DIR`.
-
-## Notes
-
-- Each service keeps one session id in its own `.data/sessions.json`.
-- If the process restarts, sessions are restored from that file.
-- Processed Telegram update ids are stored in `.data/state.json`.
-- Polling leases (locks) are stored in `.data/telegram-kind.lock`.
-- Unauthorized Telegram users are ignored silently.
-- Model overrides are stored in `.data/settings.json`.
-- Trusted mode maps to Codex `--dangerously-bypass-approvals-and-sandbox` and Gemini `--approval-mode yolo`.
-- `CLI_TIMEOUT_MS` is the hard cap for agent execution.
-- `BRIDGE_ASYNC_ENABLED` (default: true) enables real-time progressive streaming.
-- `OUTBOUND_MIN_INTERVAL_MS` (default: 1100) controls the outbox rate limit.
-
-## Example .env
-
-```env
-TELEGRAM_BOT_TOKEN_CODEX=123456:replace-me
-TELEGRAM_BOT_TOKEN_GEMINI=123456:replace-me
-TELEGRAM_ALLOWED_USER_ID=123456789
-BRIDGE_ROOT_DIR=/path/to/your/home
-BRIDGE_PROJECT_DIR=/path/to/your/agent-bridge-repo
-CODEX_PROJECT_DIR=/home/your-user/path/to/codex-repo
-GEMINI_PROJECT_DIR=/home/your-user/path/to/gemini-repo
-CODEX_COMMAND=codex
-GEMINI_COMMAND=gemini
-BRIDGE_ASYNC_ENABLED=true
-POLL_INTERVAL_MS=1000
-OUTBOUND_MIN_INTERVAL_MS=1100
-CLI_TIMEOUT_MS=300000
-GEMINI_FALLBACK_TIMEOUT_MS=120000
-SESSION_STORE_PATH=.data/sessions.json
-SETTINGS_STORE_PATH=.data/settings.json
-BRIDGE_STATE_PATH=.data/state.json
+```bash
+npm install
+cp .env.codex.example .env.codex    # fill in bot token + user ID
+cp .env.gemini.example .env.gemini
 ```
 
-## Test
+Run a single bot for development:
 
 ```bash
-npm test
+BRIDGE_ENV_FILE=.env.gemini ./node_modules/.bin/tsx src/index.ts
 ```
+
+## Commands
+
+| Command | Action |
+|---------|--------|
+| `/reset` | Clear the current CLI session (start fresh) |
+| `/models` | Show and change the active model |
+| `/stop` | Abort the currently running CLI process |
+| `/cancel` | Same as `/stop` |
+
+All other text is forwarded to the CLI as a prompt.
+
+## Configuration
+
+Each service reads its own `.env` file:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `TELEGRAM_BOT_TOKEN_CODEX` | Codex | — | Bot token |
+| `TELEGRAM_BOT_TOKEN_GEMINI` | Gemini | — | Bot token |
+| `TELEGRAM_ALLOWED_USER_ID` | Yes | — | Your Telegram user ID (everyone else is silently ignored) |
+| `CODEX_COMMAND` | No | `codex` | CLI binary |
+| `GEMINI_COMMAND` | No | `gemini` | CLI binary |
+| `CODEX_MODEL` / `GEMINI_MODEL` | No | — | Default model |
+| `DB_PATH` | No | `<project-dir>/.data/bridge.sqlite` | SQLite database path |
+| `CLI_TIMEOUT_MS` | No | `300000` | Hard execution timeout (ms) |
+| `BRIDGE_ASYNC_ENABLED` | No | `true` | Enable streaming (disable for sync/plain mode) |
+| `BRIDGE_EXECUTION_MODE` | No | `safe` | `safe` or `trusted` |
+| `POLL_INTERVAL_MS` | No | `1000` | Telegram long-poll idle interval (ms) |
+| `BRIDGE_ROOT_DIR` | No | `$HOME` | Working directory for CLI execution |
+| `BRIDGE_PROJECT_DIR` | No | auto-detected | Repo path (used for default DB location) |
+
+## Systemd deployment
+
+```bash
+bash scripts/install.sh
+```
+
+Or copy manually:
+
+```bash
+sudo cp systemd/agent-bridge-gemini.service /etc/systemd/system/
+sudo cp systemd/agent-bridge-codex.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now agent-bridge-gemini agent-bridge-codex
+```
+
+Follow logs:
+
+```bash
+journalctl -u agent-bridge-gemini -f
+journalctl -u agent-bridge-codex -f
+```
+
+## Development
+
+```bash
+npm test                    # run all tests (vitest)
+npm test -- --watch         # watch mode
+npm test -- test/cli.test.ts  # single file
+```
+
+## Architecture
+
+```
+Telegram Poll
+    │
+    ▼
+handleUpdate()
+    ├── /stop, /cancel → abortCliProcess() + db.unlock()
+    ├── callback_query → model selector (inline keyboard)
+    └── message → MediaGroupBuffer (1500ms flush)
+                      │
+                      ▼
+               handleMessages()
+                      ├── handleCommand() → /reset, /models
+                      ├── db.tryLock()   → busy guard (rejects if already running)
+                      └── sendMessageWithProgress()
+                                │
+                                ▼
+                         executePromptAsync()
+                                ├── runCliAsync() → streams onProgress chunks
+                                │       └── StreamingUpdater.push()
+                                │               ├── DM: debounced editMessageText (1500ms)
+                                │               └── Group: sendMessageDraft (immediate)
+                                └── StreamingUpdater.flush() → final editMessageText
+```
+
+## State
+
+All state lives in a single SQLite database (`bridge_state` table, WAL mode):
+
+| Row key | Value | Purpose |
+|---------|-------|---------|
+| `session:<chatId>:<bot>` | session ID | CLI session per chat, persisted across restarts |
+| `lock:<chatId>` | `0` / `1` | Atomic execution lock |
+| `$polling:<bot>` | last update_id | Telegram polling offset |
+| `<bot>` | model name | Per-bot model override (set via `/models`) |

@@ -10,9 +10,7 @@ export interface BridgeConfig {
   cliTimeoutMs: number;
   geminiFallbackTimeoutMs: number;
   asyncEnabled: boolean;
-  sessionStorePath: string;
-  settingsStorePath: string;
-  bridgeStatePath?: string;
+  dbPath: string;
   bots: {
     codex: BotConfig;
     gemini: BotConfig;
@@ -85,6 +83,7 @@ export interface CliOptions {
   killGraceMs?: number;
   onProgress?: (text: string) => void;
   onCancel?: (kill: () => void) => void;
+  chatId?: number | string;
 }
 
 /**
@@ -95,18 +94,3 @@ export interface CliResult {
   sessionId: string | null;
 }
 
-/**
- * Bridge State persistence structure.
- */
-export interface BridgeStateData {
-  processedUpdates: Record<string, number>;
-  acceptedUpdates: Record<string, number[]>;
-}
-
-/**
- * Store interface for persistence.
- */
-export interface Store<T> {
-  read(): Promise<T>;
-  write(data: Partial<T>): Promise<void>;
-}

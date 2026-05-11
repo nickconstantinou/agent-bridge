@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { runCli, runCliAsync, isCapacityExhaustedError, getGeminiFallbackModel } from "../src/cli.js";
+import { runCli, runCliAsync, abortCliProcess, isCapacityExhaustedError, getGeminiFallbackModel } from "../src/cli.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,6 +43,38 @@ describe("CLI Runner", () => {
 
     if (killFn) (killFn as () => void)();
     await expect(p).rejects.toThrow();
+  });
+});
+
+describe("abortCliProcess", () => {
+  it("returns false when no process is registered for the chatId", () => {
+    expect(abortCliProcess("chat-does-not-exist")).toBe(false);
+  });
+
+  it("resolves cleanly when process is killed via abortCliProcess (runCliAsync)", async () => {
+    const chatId = "test-abort-async";
+    const p = runCliAsync("sleep", ["10"], process.cwd(), { chatId });
+    // Give spawn a tick to register
+    await new Promise((r) => setTimeout(r, 50));
+    const aborted = abortCliProcess(chatId);
+    expect(aborted).toBe(true);
+    // Should resolve (not reject) with partial stdout
+    await expect(p).resolves.toMatchObject({ text: expect.any(String) });
+  }, 5000);
+
+  it("resolves cleanly when process is killed via abortCliProcess (runCli)", async () => {
+    const chatId = "test-abort-sync";
+    const p = runCli("sleep", ["10"], process.cwd(), { chatId });
+    await new Promise((r) => setTimeout(r, 50));
+    const aborted = abortCliProcess(chatId);
+    expect(aborted).toBe(true);
+    await expect(p).resolves.toEqual(expect.any(String));
+  }, 5000);
+
+  it("returns false for already-completed process", async () => {
+    const chatId = "test-abort-done";
+    await runCli("echo", ["hi"], process.cwd(), { chatId });
+    expect(abortCliProcess(chatId)).toBe(false);
   });
 });
 

@@ -1,5 +1,17 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import type { CliOptions, CliResult, BridgeConfig } from "./types.js";
+
+const activeProcesses = new Map<number | string, ChildProcess>();
+const abortedChildren = new WeakSet<ChildProcess>();
+
+export function abortCliProcess(chatId: number | string): boolean {
+  const child = activeProcesses.get(chatId);
+  if (!child) return false;
+  abortedChildren.add(child);
+  child.kill("SIGKILL");
+  activeProcesses.delete(chatId);
+  return true;
+}
 
 /**
  * Builds the CLI invocation for a bot.
@@ -263,6 +275,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
 
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, shell: false });
+    if (options.chatId != null) activeProcesses.set(options.chatId, child);
     let stdout = "";
     let stderr = "";
     let settled = false;
@@ -311,10 +324,13 @@ export async function runCli(command: string, args: string[], cwd: string, optio
     child.on("close", (code, signal) => {
       clearTimeout(timer);
       if (idleTimer) clearTimeout(idleTimer);
+      if (options.chatId != null) activeProcesses.delete(options.chatId);
 
       if (settled) return;
 
-      if (signal) {
+      if (signal && abortedChildren.has(child)) {
+        doResolve(stdout);
+      } else if (signal) {
         doReject(new Error(`CLI killed by signal ${signal}: ${stderr}`));
       } else if (code !== 0 && code !== null) {
         doReject(new Error(`CLI exited with code ${code}: ${stderr}`));
@@ -326,6 +342,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
     child.on("error", (err) => {
       clearTimeout(timer);
       if (idleTimer) clearTimeout(idleTimer);
+      if (options.chatId != null) activeProcesses.delete(options.chatId);
       doReject(err);
     });
   });
@@ -350,6 +367,7 @@ export async function runCliAsync(
     // shell:false + detached:true creates the child in its own process group so
     // process.kill(-pid) can cleanly kill the whole tree.
     const child = spawn(command, args, { cwd, shell: false, detached: true });
+    if (options.chatId != null) activeProcesses.set(options.chatId, child);
     const pid = child.pid;
     let settled = false;
 
@@ -420,9 +438,12 @@ export async function runCliAsync(
     child.on("close", (code, signal) => {
       clearTimeout(timer);
       if (idleTimer) clearTimeout(idleTimer);
+      if (options.chatId != null) activeProcesses.delete(options.chatId);
       if (settled) return;
 
-      if (signal) {
+      if (signal && abortedChildren.has(child)) {
+        doResolve({ text: stdout });
+      } else if (signal) {
         doReject(new Error(`CLI killed by signal ${signal}: ${stderr}`));
       } else if (code !== 0 && code !== null) {
         doReject(new Error(`CLI exited with code ${code}: ${stderr}`));
@@ -434,6 +455,7 @@ export async function runCliAsync(
     child.on("error", (err) => {
       clearTimeout(timer);
       if (idleTimer) clearTimeout(idleTimer);
+      if (options.chatId != null) activeProcesses.delete(options.chatId);
       doReject(err);
     });
   });

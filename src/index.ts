@@ -2,9 +2,6 @@ import dotenv from "dotenv";
 import {
   buildModelKeyboard,
   buildModelsText,
-  createFileSessionStore,
-  createFileSettingsStore,
-  createSessionStore,
   extractPromptText,
   extractThreadId,
   getCliWorkingDir,
@@ -18,10 +15,10 @@ import {
   runCliAsync,
   isCapacityExhaustedError,
   getGeminiFallbackModel,
+  abortCliProcess,
+  openDb,
+  BridgeDb,
 } from "./bridge.js";
-import { createTelegramOutbox } from "./outbox.js";
-import { createBridgeState, createFileBridgeState } from "./state.js";
-import { processTelegramUpdate } from "./updateLifecycle.js";
 import { TelegramClient, MediaGroupBuffer } from "./telegram.js";
 import { sendTelegramMessage, sendMessageWithProgress } from "./messageDelivery.js";
 import type { BridgeConfig, BotConfig, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult } from "./types.js";
@@ -47,8 +44,7 @@ const config: BridgeConfig = {
   cliTimeoutMs: Number(process.env.CLI_TIMEOUT_MS || 300000),
   geminiFallbackTimeoutMs: Number(process.env.GEMINI_FALLBACK_TIMEOUT_MS || 120000),
   asyncEnabled: process.env.BRIDGE_ASYNC_ENABLED !== "false",
-  sessionStorePath: process.env.SESSION_STORE_PATH || `${getBridgeProjectDir()}/.data/sessions.json`,
-  settingsStorePath: process.env.SETTINGS_STORE_PATH || `${getBridgeProjectDir()}/.data/settings.json`,
+  dbPath: process.env.DB_PATH || `${getBridgeProjectDir()}/.data/bridge.sqlite`,
   bots: {
     codex: {
       token: process.env.TELEGRAM_BOT_TOKEN_CODEX,
@@ -68,14 +64,7 @@ if (!validation.ok) {
   throw new Error(`Invalid bridge config:\n- ${validation.errors.join("\n- ")}`);
 }
 
-const sessionStore = createSessionStore(createFileSessionStore(config.sessionStorePath));
-const settingsStore = createFileSettingsStore(config.settingsStorePath);
-const bridgeState = createBridgeState(
-  createFileBridgeState(process.env.BRIDGE_STATE_PATH || `${getBridgeProjectDir()}/.data/state.json`)
-);
-const outbox = createTelegramOutbox({
-  minIntervalMs: Number(process.env.OUTBOUND_MIN_INTERVAL_MS || 1100),
-});
+const db = openDb(config.dbPath);
 
 class BridgeBot {
   kind: "codex" | "gemini";
@@ -98,15 +87,7 @@ class BridgeBot {
   }
 
   async run(): Promise<void> {
-    const lockPath = `${getBridgeProjectDir()}/.data/telegram-${this.kind}.lock`;
-    try {
-      await this.client.acquireLease(lockPath);
-    } catch (error: any) {
-      console.error(`[${this.kind}] ${error.message}`);
-      return;
-    }
-
-    let offset = (await bridgeState.getProcessedUpdateId(this.kind)) + 1;
+    let offset = db.getLastUpdateId(this.kind) + 1;
     console.log(`[${this.kind}] bot online (offset: ${offset})`);
 
     for (;;) {
@@ -118,14 +99,14 @@ class BridgeBot {
         });
 
         for (const update of (updates.result as any) ?? []) {
-          offset = update.update_id + 1;
+          const updateId: number = update.update_id;
+          offset = updateId + 1;
           try {
-            await processTelegramUpdate(this.kind, update, bridgeState, (currentUpdate: TelegramUpdate) =>
-              this.handleUpdate(currentUpdate)
-            );
+            await this.handleUpdate(update);
           } catch (error) {
             console.error(`[${this.kind}] update handling failed`, error);
           }
+          db.setLastUpdateId(this.kind, updateId);
         }
 
         if (!(updates.result as any)?.length) {
@@ -148,6 +129,22 @@ class BridgeBot {
     if (!message) return;
     if (!isAuthorizedMessage(message, config.allowedUserId)) return;
 
+    const rawText = (message.text || message.caption || "").trim().toLowerCase();
+    if (rawText === "/stop" || rawText === "/cancel") {
+      const chatId = message.chat.id;
+      const chatKey = String(chatId);
+      const threadId = message.message_thread_id;
+      abortCliProcess(chatKey);
+      db.unlock(chatKey);
+      await sendTelegramMessage({
+        client: this.client,
+        kind: this.kind,
+        chatId,
+        body: { text: "🛑 Execution aborted by user.", message_thread_id: threadId },
+      });
+      return;
+    }
+
     this.mediaBuffer.push(message);
   }
 
@@ -158,29 +155,38 @@ class BridgeBot {
     const prompt = extractPromptText(primaryMessage);
     if (!prompt) return;
 
-    const commandResponse = await handleCommand(this.kind, prompt, {
-      settingsStore,
-      sessionStore,
+    const chatId = primaryMessage.chat.id;
+    const chatKey = String(chatId);
+
+    const commandResponse = handleCommand(this.kind, prompt, {
+      db,
+      chatId: chatKey,
       config,
     });
     if (commandResponse) {
-      await this.sendText(primaryMessage.chat.id, { text: commandResponse, message_thread_id: threadId });
+      await this.sendText(chatId, { text: commandResponse, message_thread_id: threadId });
       return;
     }
 
-    const chatId = primaryMessage.chat.id;
-    const sessionId = await sessionStore.get(this.kind);
-
-    // Choose async or sync based on config (sync is default)
+    const sessionId = db.getSession(chatKey, this.kind);
     const useAsync = config.asyncEnabled === true;
+    const chatType = primaryMessage.chat.type;
+
+    if (!db.tryLock(chatKey)) {
+      await this.sendText(chatId, {
+        text: "⏳ System is currently busy. Please wait for the current request to finish.",
+        message_thread_id: threadId,
+      });
+      return;
+    }
 
     try {
       if (useAsync) {
         await sendMessageWithProgress({
           client: this.client,
-          outbox,
           kind: this.kind,
           chatId,
+          chatType,
           body: { message_thread_id: threadId },
           execution: (onProgress: (text: string) => void) =>
             this.executePromptAsync(prompt, sessionId, chatId, { message_thread_id: threadId }, onProgress),
@@ -192,24 +198,21 @@ class BridgeBot {
     } catch (error) {
       console.error(`[${this.kind}] prompt execution failed`, error);
       const messageText = String((error as any)?.message || error);
-      const text = messageText.slice(0, 4000);
       await sendTelegramMessage({
         client: this.client,
-        outbox,
         kind: this.kind,
         chatId,
-        body: { text: `Error: ${text}`, message_thread_id: threadId },
+        body: { text: `Error: ${messageText.slice(0, 4000)}`, message_thread_id: threadId },
       });
+    } finally {
+      db.unlock(chatKey);
     }
   }
 
-  /**
-   * Async prompt execution - sends immediate ack, streams progress, replaces placeholder, typing indicator.
-   */
-  async executePromptAsync(prompt: string, sessionId: string | null, chatId: number, body: any = {}, onProgress = (text: string) => {}): Promise<CliResult> {
+  async executePromptAsync(prompt: string, sessionId: string | null, chatId: number, body: any = {}, onProgress = (_text: string) => {}): Promise<CliResult> {
     const { message_thread_id: threadId } = body;
-    const defaults = await settingsStore.read();
-    const model = (defaults as any)[this.kind] || this.config.defaultModel;
+    const chatKey = String(chatId);
+    const model = db.getSetting(this.kind) || this.config.defaultModel;
     const invocation = buildCliInvocation({
       bot: this.kind,
       command: this.config.command,
@@ -217,25 +220,23 @@ class BridgeBot {
       prompt,
       sessionId,
       executionMode: config.executionMode,
-      outputFormat: "json", // Use json for better parsing and session ID extraction
+      outputFormat: "json",
     });
 
-    // Start typing indicator
-    const typingTracker = createTypingTracker(this.client, outbox, chatId, this.kind, { message_thread_id: threadId });
+    const typingTracker = createTypingTracker(this.client, chatId, this.kind, { message_thread_id: threadId });
     await typingTracker.start();
 
     try {
-      // Run with async CLI runner (no idle timeout - onProgress provides liveness)
       const cliResult = await runCliAsync(invocation.command, invocation.args, getCliWorkingDir(), {
         timeoutMs: config.cliTimeoutMs,
-        idleTimeoutMs: null, // Disable idle timeout - onProgress callback proves liveness
+        idleTimeoutMs: null,
         onProgress,
-        onCancel: () => {}, // TODO: wire to cancel command
+        onCancel: () => {},
+        chatId: chatKey,
       });
 
-      // Parse result
       const result = parseCliResult({ bot: this.kind, stdout: cliResult.text });
-      if (result?.sessionId) await sessionStore.set(this.kind, result.sessionId);
+      if (result?.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
       return result;
     } catch (error) {
       if (this.kind === "gemini" && isCapacityExhaustedError(error as Error)) {
@@ -254,9 +255,10 @@ class BridgeBot {
             timeoutMs: config.cliTimeoutMs,
             idleTimeoutMs: null,
             onProgress,
+            chatId: chatKey,
           });
           const result = parseCliResult({ bot: this.kind, stdout: cliResult.text });
-          if (result?.sessionId) await sessionStore.set(this.kind, result.sessionId);
+          if (result?.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
           return {
             ...result,
             text: `⚠️ Fell back to ${fallbackModel} (${model || "default"} at capacity)\n\n${result.text}`,
@@ -271,8 +273,8 @@ class BridgeBot {
 
   async executePrompt(prompt: string, sessionId: string | null, chatId: number, body: any = {}): Promise<CliResult> {
     const { message_thread_id: threadId } = body;
-    const defaults = await settingsStore.read();
-    const model = (defaults as any)[this.kind] || this.config.defaultModel;
+    const chatKey = String(chatId);
+    const model = db.getSetting(this.kind) || this.config.defaultModel;
     const invocation = buildCliInvocation({
       bot: this.kind,
       command: this.config.command,
@@ -282,16 +284,17 @@ class BridgeBot {
       executionMode: config.executionMode,
     });
 
-    const typingTracker = createTypingTracker(this.client, outbox, chatId, this.kind, { message_thread_id: threadId });
+    const typingTracker = createTypingTracker(this.client, chatId, this.kind, { message_thread_id: threadId });
 
     try {
       await typingTracker.start();
       const stdout = await runCli(invocation.command, invocation.args, getCliWorkingDir(), {
         timeoutMs: config.cliTimeoutMs,
-        idleTimeoutMs: null, // Typing indicator provides liveness
+        idleTimeoutMs: null,
+        chatId: chatKey,
       });
       const result = parseCliResult({ bot: this.kind, stdout });
-      if (result.sessionId) await sessionStore.set(this.kind, result.sessionId);
+      if (result.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
       return result;
     } catch (error) {
       if (this.kind === "gemini" && isCapacityExhaustedError(error as Error)) {
@@ -308,9 +311,10 @@ class BridgeBot {
           const stdout = await runCli(fallbackInvocation.command, fallbackInvocation.args, getCliWorkingDir(), {
             timeoutMs: config.cliTimeoutMs,
             idleTimeoutMs: null,
+            chatId: chatKey,
           });
           const result = parseCliResult({ bot: this.kind, stdout });
-          if (result.sessionId) await sessionStore.set(this.kind, result.sessionId);
+          if (result.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
           return {
             ...result,
             text: `⚠️ Fell back to ${fallbackModel} (${model || "default"} at capacity)\n\n${result.text}`,
@@ -337,7 +341,7 @@ class BridgeBot {
     if (!chatId || !messageId) return;
 
     if (value === "reset") {
-      await settingsStore.write({ [this.kind]: null });
+      db.setSetting(this.kind, null);
       await this.client.answerCallbackQuery({
         callback_query_id: callbackQuery.id,
         text: `${this.kind} reset`,
@@ -345,13 +349,13 @@ class BridgeBot {
       await this.client.editMessageText({
         chat_id: chatId,
         message_id: messageId,
-        text: await buildModelsText(this.kind, { settingsStore, config }),
-        reply_markup: await buildModelKeyboard(this.kind),
+        text: buildModelsText(this.kind, { db, config }),
+        reply_markup: buildModelKeyboard(this.kind),
       });
       return;
     }
 
-    await settingsStore.write({ [this.kind]: value });
+    db.setSetting(this.kind, value);
     await this.client.answerCallbackQuery({
       callback_query_id: callbackQuery.id,
       text: `${this.kind} set to ${value}`,
@@ -359,17 +363,17 @@ class BridgeBot {
     await this.client.editMessageText({
       chat_id: chatId,
       message_id: messageId,
-      text: await buildModelsText(this.kind, { settingsStore, config }),
-      reply_markup: await buildModelKeyboard(this.kind),
+      text: buildModelsText(this.kind, { db, config }),
+      reply_markup: buildModelKeyboard(this.kind),
     });
   }
 
   async sendText(chatId: number, body: any): Promise<void> {
-    await sendTelegramMessage({ client: this.client, outbox, kind: this.kind, chatId, body });
+    await sendTelegramMessage({ client: this.client, kind: this.kind, chatId, body });
   }
 }
 
-function createTypingTracker(client: TelegramClient, outbox: any, chatId: number, kind: string, body: any = {}) {
+function createTypingTracker(client: TelegramClient, chatId: number, kind: string, body: any = {}) {
   let timer: NodeJS.Timeout | null = null;
   let active = false;
   const { message_thread_id: threadId } = body;
@@ -377,7 +381,7 @@ function createTypingTracker(client: TelegramClient, outbox: any, chatId: number
   const sendTyping = async () => {
     if (!active) return;
     try {
-      await outbox.send(chatId, { chat_id: chatId, message_thread_id: threadId, action: "typing" }, (message: any) => client.sendChatAction(message));
+      await client.sendChatAction({ chat_id: chatId, message_thread_id: threadId, action: "typing" });
     } catch (error: any) {
       console.warn(`[${kind}] typing indicator failed`, error.message);
     }
@@ -400,53 +404,23 @@ function createTypingTracker(client: TelegramClient, outbox: any, chatId: number
   };
 }
 
-async function healBridgeState() {
-  const state = await bridgeState.read();
-  const healed = {
-    ...state,
-    processedUpdates: {
-      codex: sanitizeCursor((state as any).processedUpdates?.codex),
-      gemini: sanitizeCursor((state as any).processedUpdates?.gemini),
-    },
-  };
-
-  if (
-    healed.processedUpdates.codex !== (state as any).processedUpdates?.codex ||
-    healed.processedUpdates.gemini !== (state as any).processedUpdates?.gemini
-  ) {
-    console.warn(
-      "[bridge] healing invalid processedUpdates state",
-      (state as any).processedUpdates,
-      "->",
-      healed.processedUpdates
-    );
-    await bridgeState.setProcessedUpdateId("codex", healed.processedUpdates.codex);
-    await bridgeState.setProcessedUpdateId("gemini", healed.processedUpdates.gemini);
-  }
-}
-
-function sanitizeCursor(value: any): number {
-  return Number.isFinite(value) && value >= 0 ? value : 0;
-}
-
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 console.log("[bridge] starting bots...");
-await healBridgeState();
 
 const bots = (Object.entries(config.bots) as [("codex" | "gemini"), BotConfig][])
   .filter(([, bot]) => bot.token)
   .map(([kind, botConfig]) => new BridgeBot(kind, botConfig));
 
-const shutdown = async (signal: string) => {
-  console.log(`[bridge] ${signal} received, releasing leases...`);
-  await Promise.all(bots.map((bot) => bot.client.releaseLease()));
+const shutdown = (signal: string) => {
+  console.log(`[bridge] ${signal} received, shutting down...`);
+  db.close();
   process.exit(0);
 };
 
-process.on("SIGINT", () => void shutdown("SIGINT"));
-process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
 
 await Promise.all(bots.map((bot) => bot.run()));

@@ -1,23 +1,20 @@
-import { describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   buildExecutionOptions,
-  createSessionStore,
   isAuthorizedMessage,
   extractPromptText,
   buildCliInvocation,
   parseCliResult,
-  createMemorySessionStore,
-  createMemorySettingsStore,
   handleCommand,
   getBridgeProjectDir,
   validateBridgeConfig,
-  } from "../src/bridge.js";
-  import { runCli } from "../src/cli.js";
-  import type { TelegramMessage, BridgeConfig } from "../src/types.js";
-
+} from "../src/bridge.js";
+import { openDb, BridgeDb } from "../src/db.js";
+import { runCli } from "../src/cli.js";
+import type { TelegramMessage, BridgeConfig } from "../src/types.js";
 
 describe("agent bridge MVP", () => {
   it("authorizes only the configured telegram user id", () => {
@@ -164,15 +161,6 @@ describe("agent bridge MVP", () => {
     ).toEqual({ text: "hi from gemini", sessionId: "session-123" });
   });
 
-  it("stores one session per bot", async () => {
-    const store = createSessionStore(createMemorySessionStore({}));
-    expect(await store.get("codex")).toBeNull();
-    await store.set("codex", "thread-1");
-    await store.set("gemini", "session-2");
-    expect(await store.get("codex")).toBe("thread-1");
-    expect(await store.get("gemini")).toBe("session-2");
-  });
-
   it("validates bridge config", () => {
     const result = validateBridgeConfig({
       allowedUserId: "",
@@ -183,30 +171,39 @@ describe("agent bridge MVP", () => {
   });
 
   describe("handleCommand", () => {
-    const config = { 
-        bots: { 
-            codex: { defaultModel: "gpt-4o", command: "c", token: "t" }, 
-            gemini: { defaultModel: "gemini-1.5-pro", command: "g", token: "t" } 
-        } 
+    const config = {
+      bots: {
+        codex: { defaultModel: "gpt-4o", command: "c", token: "t" },
+        gemini: { defaultModel: "gemini-1.5-pro", command: "g", token: "t" },
+      },
     } as any as BridgeConfig;
-    const settingsStore = createMemorySettingsStore({});
-    const sessionStore = createSessionStore(createMemorySessionStore({}));
-    const deps = { settingsStore, sessionStore, config };
 
-    it("handles /reset to clear session", async () => {
-      await sessionStore.set("gemini", "session-123");
-      const result = await handleCommand("gemini", "/reset", deps);
+    let db: BridgeDb;
+
+    beforeEach(() => { db = openDb(":memory:"); });
+    afterEach(() => { db.close(); });
+
+    it("handles /reset to clear session for the chat", () => {
+      db.setSession("123", "gemini", "session-123");
+      const result = handleCommand("gemini", "/reset", { db, chatId: "123", config });
       expect(result).toContain("gemini session reset");
-      expect(await sessionStore.get("gemini")).toBeNull();
+      expect(db.getSession("123", "gemini")).toBeNull();
     });
 
-    it("handles /models", async () => {
-      const result = await handleCommand("gemini", "/models", deps);
+    it("only resets the session for the target chat, not others", () => {
+      db.setSession("123", "gemini", "s-123");
+      db.setSession("456", "gemini", "s-456");
+      handleCommand("gemini", "/reset", { db, chatId: "123", config });
+      expect(db.getSession("456", "gemini")).toBe("s-456");
+    });
+
+    it("handles /models", () => {
+      const result = handleCommand("gemini", "/models", { db, chatId: "123", config });
       expect(result).toContain("Current model:");
     });
 
-    it("handles /start", async () => {
-      const result = await handleCommand("gemini", "/start", deps);
+    it("handles /start", () => {
+      const result = handleCommand("gemini", "/start", { db, chatId: "123", config });
       expect(result).toContain("gemini bridge ready");
     });
   });

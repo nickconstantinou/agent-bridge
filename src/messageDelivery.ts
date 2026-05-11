@@ -1,16 +1,156 @@
 import { splitTelegramText, escapeTelegramMarkdownV2, toTelegramEntitiesText } from "./render.js";
 import type { TelegramClient } from "./telegram.js";
-import type { TelegramMessage, CliResult } from "./types.js";
+import type { CliResult } from "./types.js";
+
+const MAX_TELEGRAM_TEXT = 4096;
+const DEBOUNCE_MS = 1500;
+
+interface StreamEntry {
+  updateTimer: NodeJS.Timeout | null;
+  lastText: string;
+  lastSendTime: number;
+}
+
+const activeStreams = new Map<number, StreamEntry>();
+
+function truncate(text: string): string {
+  return text.length > MAX_TELEGRAM_TEXT ? text.slice(-MAX_TELEGRAM_TEXT) : text;
+}
+
+class StreamingUpdater {
+  private readonly client: TelegramClient;
+  private readonly chatId: number;
+  private readonly messageId: number;
+  private readonly isDm: boolean;
+  private readonly isGemini: boolean;
+  private readonly rest: Record<string, any>;
+  private readonly kind: string;
+
+  constructor({
+    client,
+    chatId,
+    messageId,
+    isDm,
+    isGemini,
+    rest,
+    kind,
+  }: {
+    client: TelegramClient;
+    chatId: number;
+    messageId: number;
+    isDm: boolean;
+    isGemini: boolean;
+    rest: Record<string, any>;
+    kind: string;
+  }) {
+    this.client = client;
+    this.chatId = chatId;
+    this.messageId = messageId;
+    this.isDm = isDm;
+    this.isGemini = isGemini;
+    this.rest = rest;
+    this.kind = kind;
+    activeStreams.set(chatId, { updateTimer: null, lastText: "", lastSendTime: 0 });
+  }
+
+  push(text: string): void {
+    const entry = activeStreams.get(this.chatId);
+    if (!entry) return;
+    entry.lastText = text;
+
+    if (!this.isDm) {
+      // Group/channel: bypass debouncing, use draft transport
+      const editText = truncate(text);
+      const extra: Record<string, any> = {};
+      if (this.isGemini) {
+        const ep = toTelegramEntitiesText(editText);
+        extra.text = ep.text;
+        if (ep.entities.length > 0) extra.entities = ep.entities;
+        void this.client.sendMessageDraft(this.chatId, ep.text, extra);
+      } else {
+        void this.client.sendMessageDraft(this.chatId, editText);
+      }
+      return;
+    }
+
+    // DM: debounce editMessageText to avoid rate limits
+    const now = Date.now();
+    const elapsed = now - entry.lastSendTime;
+
+    if (elapsed >= DEBOUNCE_MS) {
+      if (entry.updateTimer) {
+        clearTimeout(entry.updateTimer);
+        entry.updateTimer = null;
+      }
+      entry.lastSendTime = now;
+      void this.doEdit(text);
+    } else if (!entry.updateTimer) {
+      const remaining = DEBOUNCE_MS - elapsed;
+      entry.updateTimer = setTimeout(() => {
+        const e = activeStreams.get(this.chatId);
+        if (!e) return;
+        e.updateTimer = null;
+        e.lastSendTime = Date.now();
+        void this.doEdit(e.lastText);
+      }, remaining);
+    }
+    // else: timer already pending — it will read lastText when it fires
+  }
+
+  async flush(finalText: string): Promise<void> {
+    const entry = activeStreams.get(this.chatId);
+    if (entry?.updateTimer) {
+      clearTimeout(entry.updateTimer);
+    }
+    activeStreams.delete(this.chatId);
+
+    const editText = truncate(finalText || "...");
+    const finalBody: any = {
+      chat_id: this.chatId,
+      message_id: this.messageId,
+      ...this.rest,
+      text: editText,
+    };
+
+    if (this.isGemini) {
+      const ep = toTelegramEntitiesText(editText);
+      finalBody.text = ep.text;
+      if (ep.entities.length > 0) finalBody.entities = ep.entities;
+    }
+
+    await this.client.editMessageText(finalBody);
+  }
+
+  private async doEdit(text: string): Promise<void> {
+    const editText = truncate(text || "...");
+    const editBody: any = {
+      chat_id: this.chatId,
+      message_id: this.messageId,
+      ...this.rest,
+      text: editText,
+    };
+    if (this.isGemini) {
+      const ep = toTelegramEntitiesText(editText);
+      editBody.text = ep.text;
+      if (ep.entities.length > 0) editBody.entities = ep.entities;
+    }
+    try {
+      await this.client.editMessageText(editBody);
+    } catch (err: any) {
+      if (!err.message?.includes("message is not modified")) {
+        console.warn(`[${this.kind}] stream edit failed`, err.message);
+      }
+    }
+  }
+}
 
 export async function sendTelegramMessage({
   client,
-  outbox,
   kind,
   chatId,
   body,
 }: {
   client: TelegramClient;
-  outbox: any;
   kind: string;
   chatId: number;
   body: any;
@@ -29,136 +169,92 @@ export async function sendTelegramMessage({
     };
 
     if (isGemini) {
-      const entitiesPayload = toTelegramEntitiesText(chunkText);
-      chunkBody.text = entitiesPayload.text;
-      if (entitiesPayload.entities.length > 0) chunkBody.entities = entitiesPayload.entities;
+      const ep = toTelegramEntitiesText(chunkText);
+      chunkBody.text = ep.text;
+      if (ep.entities.length > 0) chunkBody.entities = ep.entities;
       delete chunkBody.parse_mode;
+      await client.sendMessage(chunkBody);
+      continue;
     }
 
     if (i > 0) delete chunkBody.reply_markup;
 
-    if (isGemini) {
-      await outbox.send(chatId, chunkBody, (message: any) => client.sendMessage(message));
-      continue;
-    }
-
     try {
-      await outbox.send(chatId, chunkBody, (message: any) => client.sendMessage(message));
+      await client.sendMessage(chunkBody);
     } catch (error: any) {
       try {
         console.warn(`[${kind}] Raw MarkdownV2 failed, trying escaped`, error.message);
-        const escapedBody = { ...chunkBody, text: escapeTelegramMarkdownV2(chunks[i]) };
-        await outbox.send(chatId, escapedBody, (message: any) => client.sendMessage(message));
+        await client.sendMessage({ ...chunkBody, text: escapeTelegramMarkdownV2(chunks[i]) });
       } catch (escapeError: any) {
         console.warn(`[${kind}] Escaped MarkdownV2 failed, falling back to plain text`, escapeError.message);
         const plainBody = { ...chunkBody, text: chunks[i] };
         delete plainBody.parse_mode;
-        await outbox.send(chatId, plainBody, (message: any) => client.sendMessage(message));
+        await client.sendMessage(plainBody);
       }
     }
   }
 }
 
-/**
- * Send a message with progress streaming.
- * Sends initial placeholder, streams updates via editMessageText, replaces on final.
- */
 export async function sendMessageWithProgress({
   client,
-  outbox,
   kind,
   chatId,
+  chatType = "private",
   execution,
   placeholderText = "🤔 Thinking...",
   onProgress = () => {},
   body = {},
 }: {
   client: TelegramClient;
-  outbox: any;
   kind: string;
   chatId: number;
+  chatType?: string;
   execution: ((onProgress: (text: string) => void) => Promise<CliResult>) | Promise<CliResult>;
   placeholderText?: string;
   onProgress?: (text: string) => void;
   body?: any;
-}): Promise<CliResult | any> {
+}): Promise<CliResult | null> {
+  const isDm = chatType === "private";
   const isGemini = kind === "gemini";
   const { text: _ignored, ...rest } = body;
 
   const sendTyping = async () => {
     try {
-      await outbox.send(chatId, { chat_id: chatId, ...rest, action: "typing" }, (msg: any) => client.sendChatAction(msg));
+      await client.sendChatAction({ chat_id: chatId, ...rest, action: "typing" });
     } catch {
       /* ignore */
     }
   };
 
-  // 1. Send typing indicator
   await sendTyping();
   const typingInterval = setInterval(sendTyping, 4500);
 
-  // 2. Send placeholder message
-  const placeholderBody = {
-    chat_id: chatId,
-    ...rest,
-    text: placeholderText,
-  };
+  // Send placeholder
   let placeholderMsg: any;
   try {
-    placeholderMsg = await outbox.send(chatId, placeholderBody, (msg: any) => client.sendMessage(msg));
+    placeholderMsg = await client.sendMessage({ chat_id: chatId, ...rest, text: placeholderText });
   } catch (err) {
     clearInterval(typingInterval);
     throw err;
   }
 
   const placeholderMessageId = placeholderMsg?.result?.message_id;
+  if (!placeholderMessageId) {
+    clearInterval(typingInterval);
+    throw new Error("sendMessage did not return a message_id");
+  }
 
-  let lastUpdateMs = Date.now();
+  const updater = new StreamingUpdater({ client, chatId, messageId: placeholderMessageId, isDm, isGemini, rest, kind });
+
   let currentText = "";
-  const UPDATE_INTERVAL_MS = 2000;
-
-  const MAX_TELEGRAM_TEXT = 4096;
-
-  const flushProgress = async (text: string, isFinal = false) => {
-    currentText = text;
-    const now = Date.now();
-    if (!isFinal && now - lastUpdateMs < UPDATE_INTERVAL_MS) return;
-    if (!placeholderMessageId) return;
-
-    lastUpdateMs = now;
-    const raw = currentText || "...";
-    // Telegram rejects edits longer than 4096 chars; keep the tail (most recent output).
-    const editText = raw.length > MAX_TELEGRAM_TEXT ? raw.slice(-MAX_TELEGRAM_TEXT) : raw;
-    try {
-      const editBody: any = {
-        chat_id: chatId,
-        message_id: placeholderMessageId,
-        ...rest,
-        text: editText,
-      };
-
-      if (isGemini) {
-        const entitiesPayload = toTelegramEntitiesText(editText);
-        editBody.text = entitiesPayload.text;
-        if (entitiesPayload.entities.length > 0) editBody.entities = entitiesPayload.entities;
-      }
-
-      await client.editMessageText(editBody);
-    } catch (err: any) {
-      console.warn(`[${kind}] progress edit failed`, err.message);
-    }
-  };
-
-  // Wrap onProgress to flush to Telegram
   const originalOnProgress = onProgress;
   const wrappedOnProgress = (chunk: string) => {
-    const newText = (currentText || "") + chunk;
-    void flushProgress(newText, false);
+    currentText += chunk;
+    updater.push(currentText);
     originalOnProgress?.(chunk);
   };
 
   try {
-    // 3. Wait for execution, streaming progress
     let result: any;
     if (typeof execution === "function") {
       result = await execution(wrappedOnProgress);
@@ -168,57 +264,33 @@ export async function sendMessageWithProgress({
 
     const finalText = result?.text || currentText || "";
 
-    // 4. Replace placeholder with final result
-    if (placeholderMessageId) {
-      try {
-        // editMessageText has a 4096 char limit; slice to avoid MESSAGE_TOO_LONG
-        const editText = finalText.length > MAX_TELEGRAM_TEXT ? finalText.slice(-MAX_TELEGRAM_TEXT) : finalText;
-        const finalBody: any = {
-          chat_id: chatId,
-          message_id: placeholderMessageId,
-          ...rest,
-          text: editText,
-        };
-
-        if (isGemini) {
-          const entitiesPayload = toTelegramEntitiesText(editText);
-          finalBody.text = entitiesPayload.text;
-          if (entitiesPayload.entities.length > 0) finalBody.entities = entitiesPayload.entities;
-        }
-
-        await client.editMessageText(finalBody);
-      } catch (editErr: any) {
-        // "message is not modified" means progress streaming already set this text — not an error
-        if (editErr.message?.includes("message is not modified")) return;
-        // Fallback: send new message if edit fails for any other reason
+    try {
+      await updater.flush(finalText);
+    } catch (editErr: any) {
+      if (editErr.message?.includes("message is not modified")) {
+        // Progress streaming already set this text — no-op
+      } else {
         console.warn(`[${kind}] final edit failed, sending new message`, editErr.message);
-        await sendTelegramMessage({ client, outbox, kind, chatId, body: { ...body, text: finalText } });
+        await sendTelegramMessage({ client, kind, chatId, body: { ...body, text: finalText } });
       }
-    } else {
-      // No placeholder, send fresh
-      await sendTelegramMessage({ client, outbox, kind, chatId, body: { ...body, text: finalText } });
     }
 
     clearInterval(typingInterval);
     return { ...result, onProgress: wrappedOnProgress };
   } catch (err: any) {
     clearInterval(typingInterval);
-    if (placeholderMessageId) {
-      // Error displayed via placeholder edit — do not rethrow to prevent duplicate error message
-      try {
-        const errorBody: any = {
-          chat_id: chatId,
-          message_id: placeholderMessageId,
-          ...rest,
-          text: `❌ ${err.message?.slice(0, 4000) || String(err)}`,
-        };
-        await client.editMessageText(errorBody);
-      } catch {
-        /* ignore edit failure */
-      }
-      console.error(`[${kind}] execution error`, err);
-      return null;
+    // Show error in the placeholder edit so the user sees it without a duplicate message
+    try {
+      await client.editMessageText({
+        chat_id: chatId,
+        message_id: placeholderMessageId,
+        ...rest,
+        text: `❌ ${err.message?.slice(0, 4000) || String(err)}`,
+      });
+    } catch {
+      /* ignore edit failure */
     }
-    throw err;
+    console.error(`[${kind}] execution error`, err);
+    return null;
   }
 }

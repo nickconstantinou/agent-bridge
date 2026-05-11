@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, type Mock } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { sendTelegramMessage, sendMessageWithProgress } from "../src/messageDelivery.js";
 import { extractThreadId } from "../src/bridge.js";
 import type { TelegramClient } from "../src/telegram.js";
@@ -8,23 +8,14 @@ const createMockClient = () => ({
   token: "t",
   fetch: vi.fn(),
   baseUrl: "b",
-  lockHandle: null,
-  lockPath: null,
-  acquireLease: vi.fn(),
-  releaseLease: vi.fn(),
   call: vi.fn(),
   getUpdates: vi.fn(),
-  sendMessage: vi.fn(async (body) => ({ ok: true, result: { message_id: 456, ...body } })),
+  sendMessage: vi.fn(async (body: any) => ({ ok: true, result: { message_id: 456, ...body } })),
   sendChatAction: vi.fn(async () => ({ ok: true, result: true })),
   editMessageText: vi.fn(async () => ({ ok: true, result: true })),
+  sendMessageDraft: vi.fn(async () => ({ ok: true })),
   answerCallbackQuery: vi.fn(),
 } as any as TelegramClient);
-
-const createMockOutbox = () => ({
-  send: vi.fn(async (chatId, body, fn) => {
-    return fn({ chat_id: chatId, ...body });
-  }),
-});
 
 describe("extractThreadId", () => {
   it("returns thread id from the first message", () => {
@@ -55,12 +46,11 @@ describe("extractThreadId", () => {
 describe("Forum Topic Routing", () => {
   it("passes message_thread_id to sendMessage", async () => {
     const client = createMockClient();
-    const outbox = createMockOutbox();
     const chatId = 123;
     const threadId = 789;
     const body = { text: "Hello forum", message_thread_id: threadId };
 
-    await sendTelegramMessage({ client, outbox, kind: "gemini", chatId, body });
+    await sendTelegramMessage({ client, kind: "gemini", chatId, body });
 
     expect(client.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -73,14 +63,12 @@ describe("Forum Topic Routing", () => {
 
   it("passes message_thread_id to sendMessageWithProgress and editMessageText", async () => {
     const client = createMockClient();
-    const outbox = createMockOutbox();
     const chatId = 123;
     const threadId = 789;
     const execution = Promise.resolve({ text: "Final forum response", sessionId: "s1" } as CliResult);
 
     await sendMessageWithProgress({
       client,
-      outbox,
       kind: "gemini",
       chatId,
       execution,

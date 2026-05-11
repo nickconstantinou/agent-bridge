@@ -1,21 +1,19 @@
-import type { Store, BridgeConfig } from "./types.js";
+import type { BridgeConfig } from "./types.js";
+import type { BridgeDb } from "./db.js";
 
-/**
- * Handle bot commands.
- */
-export async function handleCommand(
+export function handleCommand(
   kind: "codex" | "gemini",
   prompt: string,
   {
-    settingsStore,
-    sessionStore,
+    db,
+    chatId,
     config,
   }: {
-    settingsStore: Store<any>;
-    sessionStore: any;
+    db: BridgeDb;
+    chatId: string;
     config: BridgeConfig;
   }
-): Promise<string | null> {
+): string | null {
   const text = String(prompt || "").trim();
 
   if (text === "/start") {
@@ -23,19 +21,14 @@ export async function handleCommand(
   }
 
   if (text === "/reset") {
-    await sessionStore.set(kind, null);
+    db.setSession(chatId, kind, null);
     return `${kind} session reset.`;
   }
 
   if (text === "/models") {
-    return `Models for ${kind}:\n\n${await buildModelsText(kind, { settingsStore, config })}`;
+    const current = db.getSetting(kind) || config.bots[kind].defaultModel || "default";
+    return `Models for ${kind}:\n\nCurrent model: ${current}\n\nAvailable models: soon...`;
   }
 
   return null;
-}
-
-async function buildModelsText(kind: string, { settingsStore, config }: { settingsStore: Store<any>; config: BridgeConfig }) {
-  const defaults = await settingsStore.read();
-  const current = defaults[kind] || config.bots[kind as "codex" | "gemini"].defaultModel || "default";
-  return `Current model: ${current}\n\nAvailable models: soon...`;
 }

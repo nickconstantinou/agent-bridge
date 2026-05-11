@@ -40,16 +40,15 @@ describe("Execution Path Selection - TDD", () => {
   });
 
   describe("Phase 3: Generic flag works for all bots", () => {
-    it("selection NOT in path selection (line 145 area)", async () => {
+    it("useAsync assignment does not branch on bot kind", async () => {
       const fs = await import("fs");
       const src = fs.readFileSync("src/index.ts", "utf-8");
-      
-      // Find the selection logic line
-      const line145 = src.split('\n')[144];
-      
-      // Selection should NOT check kind
-      expect(line145).not.toContain("this.kind");
-      expect(line145).not.toContain('"gemini"');
+
+      // The useAsync flag must be set from config alone, not per-bot-kind
+      const useAsyncLine = src.split("\n").find((l) => l.includes("useAsync") && l.includes("=") && !l.includes("if") && !l.includes("await"));
+      expect(useAsyncLine).toBeDefined();
+      expect(useAsyncLine).not.toContain("this.kind");
+      expect(useAsyncLine).not.toContain('"gemini"');
     });
   });
 });

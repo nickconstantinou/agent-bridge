@@ -9,3 +9,6 @@ coverage/
 .data/
 .data-codex/
 .data-gemini/
+src/*.js
+src/*.js.map
+dist/

@@ -61,6 +61,32 @@ describe("sendMessageWithProgress", () => {
     expect(client.editMessageText).toHaveBeenCalled();
   });
 
+  it("slices final edit text to MAX_TELEGRAM_TEXT to prevent MESSAGE_TOO_LONG on editMessageText", async () => {
+    const edits: string[] = [];
+    const client = {
+      sendMessage: vi.fn(async () => ({ ok: true, result: { message_id: 1 } })),
+      sendChatAction: vi.fn(async () => ({ ok: true })),
+      editMessageText: vi.fn(async (body: any) => {
+        edits.push(body.text);
+        return { ok: true };
+      }),
+    } as any as TelegramClient;
+    const outbox = createMockOutbox();
+    const longText = "z".repeat(8000);
+
+    await sendMessageWithProgress({
+      client,
+      outbox,
+      kind: "codex",
+      chatId: 123,
+      execution: Promise.resolve({ text: longText, sessionId: null }),
+    });
+
+    // The final edit (last editMessageText call) must not exceed 4096 chars
+    const lastEdit = edits[edits.length - 1];
+    expect(lastEdit.length).toBeLessThanOrEqual(4096);
+  });
+
   it("truncates progress text to 4096 chars to stay within Telegram API limits", async () => {
     const edits: string[] = [];
     const client = {

@@ -171,15 +171,17 @@ export async function sendMessageWithProgress({
     // 4. Replace placeholder with final result
     if (placeholderMessageId) {
       try {
+        // editMessageText has a 4096 char limit; slice to avoid MESSAGE_TOO_LONG
+        const editText = finalText.length > MAX_TELEGRAM_TEXT ? finalText.slice(-MAX_TELEGRAM_TEXT) : finalText;
         const finalBody: any = {
           chat_id: chatId,
           message_id: placeholderMessageId,
           ...rest,
-          text: finalText,
+          text: editText,
         };
 
         if (isGemini) {
-          const entitiesPayload = toTelegramEntitiesText(finalText);
+          const entitiesPayload = toTelegramEntitiesText(editText);
           finalBody.text = entitiesPayload.text;
           if (entitiesPayload.entities.length > 0) finalBody.entities = entitiesPayload.entities;
         }

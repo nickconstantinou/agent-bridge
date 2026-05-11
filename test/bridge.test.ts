@@ -173,8 +173,8 @@ describe("agent bridge MVP", () => {
   describe("handleCommand", () => {
     const config = {
       bots: {
-        codex: { defaultModel: "gpt-4o", command: "c", token: "t" },
-        gemini: { defaultModel: "gemini-1.5-pro", command: "g", token: "t" },
+        codex: { modelPreference: ["gpt-4o"], command: "c", token: "t" },
+        gemini: { modelPreference: ["gemini-1.5-pro"], command: "g", token: "t" },
       },
     } as any as BridgeConfig;
 
@@ -197,9 +197,10 @@ describe("agent bridge MVP", () => {
       expect(db.getSession("456", "gemini")).toBe("s-456");
     });
 
-    it("handles /models", () => {
+    it("handles /models showing current and available models", () => {
       const result = handleCommand("gemini", "/models", { db, chatId: "123", config });
-      expect(result).toContain("Current model:");
+      expect(result).toContain("Current: gemini-1.5-pro");
+      expect(result).toContain("Available: gemini-1.5-pro");
     });
 
     it("handles /start", () => {

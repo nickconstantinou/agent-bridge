@@ -23,7 +23,7 @@ describe("Execution Path Selection - TDD", () => {
       expect(src.includes("isCliTimeout(error)")).toBe(false);
       // New capacity-based fallback is intentionally present
       expect(src.includes("isCapacityExhaustedError")).toBe(true);
-      expect(src.includes("getGeminiFallbackModel")).toBe(true);
+      expect(src.includes("getNextFallbackModel")).toBe(true);
     });
 
     it("REMOVE: kind-specific CLI args in cli", async () => {

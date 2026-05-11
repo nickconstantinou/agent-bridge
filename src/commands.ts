@@ -26,8 +26,10 @@ export function handleCommand(
   }
 
   if (text === "/models") {
-    const current = db.getSetting(kind) || config.bots[kind].defaultModel || "default";
-    return `Models for ${kind}:\n\nCurrent model: ${current}\n\nAvailable models: soon...`;
+    const bot = config.bots[kind];
+    const current = db.getSetting(kind) || bot.modelPreference[0] || "default";
+    const available = bot.modelPreference.length > 0 ? bot.modelPreference.join(", ") : "none configured";
+    return `Models for ${kind}:\n\nCurrent: ${current}\nAvailable: ${available}`;
   }
 
   return null;

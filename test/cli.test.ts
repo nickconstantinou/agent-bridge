@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { runCli, runCliAsync, abortCliProcess, isCapacityExhaustedError, getGeminiFallbackModel } from "../src/cli.js";
+import { runCli, runCliAsync, abortCliProcess, isCapacityExhaustedError, getNextFallbackModel } from "../src/cli.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -78,7 +78,7 @@ describe("abortCliProcess", () => {
   });
 });
 
-describe("gemini model fallback", () => {
+describe("model fallback", () => {
   it("detects capacity-exhausted errors by message content", () => {
     expect(isCapacityExhaustedError(
       new Error("CLI exited with code 1: No capacity available for model gemini-2.5-flash")
@@ -90,16 +90,33 @@ describe("gemini model fallback", () => {
     expect(isCapacityExhaustedError(new Error("Network error"))).toBe(false);
   });
 
-  it("returns next model in fallback chain", () => {
-    expect(getGeminiFallbackModel("gemini-2.5-flash")).toBe("gemini-2.5-flash-lite");
+  it("returns the next model in the preference list", () => {
+    const prefs = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+    expect(getNextFallbackModel("gemini-2.5-flash", prefs)).toBe("gemini-2.5-flash-lite");
   });
 
-  it("returns null at last fallback model", () => {
-    expect(getGeminiFallbackModel("gemini-2.5-flash-lite")).toBeNull();
+  it("returns null when already at the last model in the list", () => {
+    const prefs = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+    expect(getNextFallbackModel("gemini-2.5-flash-lite", prefs)).toBeNull();
   });
 
-  it("falls back to lite for unknown or null models", () => {
-    expect(getGeminiFallbackModel(null)).toBe("gemini-2.5-flash-lite");
-    expect(getGeminiFallbackModel("gemini-3-flash-preview")).toBe("gemini-2.5-flash-lite");
+  it("returns null when current model is not in the preference list", () => {
+    const prefs = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+    expect(getNextFallbackModel("gemini-unknown", prefs)).toBeNull();
+  });
+
+  it("returns null when current model is null", () => {
+    expect(getNextFallbackModel(null, ["gemini-2.5-flash", "gemini-2.5-flash-lite"])).toBeNull();
+  });
+
+  it("returns null when preference list has only one entry", () => {
+    expect(getNextFallbackModel("gemini-2.5-flash", ["gemini-2.5-flash"])).toBeNull();
+  });
+
+  it("walks a three-model chain correctly", () => {
+    const prefs = ["a", "b", "c"];
+    expect(getNextFallbackModel("a", prefs)).toBe("b");
+    expect(getNextFallbackModel("b", prefs)).toBe("c");
+    expect(getNextFallbackModel("c", prefs)).toBeNull();
   });
 });

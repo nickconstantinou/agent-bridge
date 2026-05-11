@@ -14,7 +14,7 @@ import {
   runCli,
   runCliAsync,
   isCapacityExhaustedError,
-  getGeminiFallbackModel,
+  getNextFallbackModel,
   abortCliProcess,
   openDb,
   BridgeDb,
@@ -35,6 +35,10 @@ function getServiceKindFromEnvFile(path: string): "codex" | "gemini" | null {
   return null;
 }
 
+function parseModelPreference(raw: string | undefined): string[] {
+  return raw ? raw.split(",").map((s) => s.trim()).filter(Boolean) : [];
+}
+
 const config: BridgeConfig = {
   allowedUserId: process.env.TELEGRAM_ALLOWED_USER_ID || "",
   serviceEnvFile: process.env.BRIDGE_ENV_FILE || null,
@@ -49,12 +53,12 @@ const config: BridgeConfig = {
     codex: {
       token: process.env.TELEGRAM_BOT_TOKEN_CODEX,
       command: process.env.CODEX_COMMAND || "codex",
-      defaultModel: process.env.CODEX_MODEL || null,
+      modelPreference: parseModelPreference(process.env.CODEX_MODEL_PREFERENCE),
     },
     gemini: {
       token: process.env.TELEGRAM_BOT_TOKEN_GEMINI,
       command: process.env.GEMINI_COMMAND || "gemini",
-      defaultModel: process.env.GEMINI_MODEL || null,
+      modelPreference: parseModelPreference(process.env.GEMINI_MODEL_PREFERENCE),
     },
   },
 };
@@ -212,7 +216,7 @@ class BridgeBot {
   async executePromptAsync(prompt: string, sessionId: string | null, chatId: number, body: any = {}, onProgress = (_text: string) => {}): Promise<CliResult> {
     const { message_thread_id: threadId } = body;
     const chatKey = String(chatId);
-    const model = db.getSetting(this.kind) || this.config.defaultModel;
+    const model = db.getSetting(this.kind) || this.config.modelPreference[0] || null;
     const invocation = buildCliInvocation({
       bot: this.kind,
       command: this.config.command,
@@ -240,7 +244,7 @@ class BridgeBot {
       return result;
     } catch (error) {
       if (this.kind === "gemini" && isCapacityExhaustedError(error as Error)) {
-        const fallbackModel = getGeminiFallbackModel(model);
+        const fallbackModel = getNextFallbackModel(model, this.config.modelPreference);
         if (fallbackModel) {
           const fallbackInvocation = buildCliInvocation({
             bot: this.kind,
@@ -274,7 +278,7 @@ class BridgeBot {
   async executePrompt(prompt: string, sessionId: string | null, chatId: number, body: any = {}): Promise<CliResult> {
     const { message_thread_id: threadId } = body;
     const chatKey = String(chatId);
-    const model = db.getSetting(this.kind) || this.config.defaultModel;
+    const model = db.getSetting(this.kind) || this.config.modelPreference[0] || null;
     const invocation = buildCliInvocation({
       bot: this.kind,
       command: this.config.command,
@@ -298,7 +302,7 @@ class BridgeBot {
       return result;
     } catch (error) {
       if (this.kind === "gemini" && isCapacityExhaustedError(error as Error)) {
-        const fallbackModel = getGeminiFallbackModel(model);
+        const fallbackModel = getNextFallbackModel(model, this.config.modelPreference);
         if (fallbackModel) {
           const fallbackInvocation = buildCliInvocation({
             bot: this.kind,

@@ -23,7 +23,7 @@ export interface BridgeConfig {
 export interface BotConfig {
   token: string | undefined;
   command: string;
-  defaultModel: string | null;
+  modelPreference: string[];  // [0] = default, rest = fallbacks in priority order
 }
 
 /**

@@ -35,10 +35,12 @@ export function buildModelKeyboard(kind: string): any {
 }
 
 export function buildModelsText(kind: string, { db, config }: { db: BridgeDb; config: BridgeConfig }): string {
-  const current = db.getSetting(kind) || config.bots[kind as "codex" | "gemini"].defaultModel || "default";
-  return `[${kind} model settings]\n\nCurrent: ${current}\n\nSelect a model below:`;
+  const bot = config.bots[kind as "codex" | "gemini"];
+  const current = db.getSetting(kind) || bot.modelPreference[0] || "default";
+  const available = bot.modelPreference.length > 0 ? bot.modelPreference.join(", ") : "none configured";
+  return `[${kind} model settings]\n\nCurrent: ${current}\nAvailable: ${available}\n\nSelect a model below:`;
 }
 
-export { runCli, runCliAsync, parseCliResult, validateBridgeConfig, buildCliInvocation, buildExecutionOptions, isCapacityExhaustedError, getGeminiFallbackModel, abortCliProcess };
+export { runCli, runCliAsync, parseCliResult, validateBridgeConfig, buildCliInvocation, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess };
 export { openDb, BridgeDb };
 export { handleCommand } from "./commands.js";

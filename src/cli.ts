@@ -246,8 +246,6 @@ function parseGeminiStreamJson(stdout: string): CliResult {
   return { text: text.trim(), sessionId };
 }
 
-const GEMINI_FALLBACK_CHAIN = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
-
 export function isCapacityExhaustedError(err: Error): boolean {
   const msg = err.message || "";
   return (
@@ -257,12 +255,11 @@ export function isCapacityExhaustedError(err: Error): boolean {
   );
 }
 
-export function getGeminiFallbackModel(currentModel: string | null): string | null {
-  if (!currentModel || !GEMINI_FALLBACK_CHAIN.includes(currentModel)) {
-    return "gemini-2.5-flash-lite";
-  }
-  const idx = GEMINI_FALLBACK_CHAIN.indexOf(currentModel);
-  return idx < GEMINI_FALLBACK_CHAIN.length - 1 ? GEMINI_FALLBACK_CHAIN[idx + 1] : null;
+export function getNextFallbackModel(currentModel: string | null, modelPreference: string[]): string | null {
+  if (!currentModel || modelPreference.length <= 1) return null;
+  const idx = modelPreference.indexOf(currentModel);
+  if (idx === -1 || idx >= modelPreference.length - 1) return null;
+  return modelPreference[idx + 1];
 }
 
 /**

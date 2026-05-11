@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { runCli, runCliAsync, parseCliResult, buildCliInvocation, validateBridgeConfig, buildExecutionOptions, isCapacityExhaustedError, getGeminiFallbackModel } from "./cli.js";
+import { runCli, runCliAsync, parseCliResult, buildCliInvocation, validateBridgeConfig, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess } from "./cli.js";
 import { openDb, BridgeDb } from "./db.js";
 import type { TelegramMessage, BridgeConfig } from "./types.js";
 

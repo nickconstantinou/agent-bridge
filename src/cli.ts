@@ -331,9 +331,9 @@ export async function runCli(command: string, args: string[], cwd: string, optio
       if (signal && abortedChildren.has(child)) {
         doResolve(stdout);
       } else if (signal) {
-        doReject(new Error(`CLI killed by signal ${signal}: ${stderr}`));
+        doReject(new Error(`CLI killed by signal ${signal}: ${stderr || stdout}`));
       } else if (code !== 0 && code !== null) {
-        doReject(new Error(`CLI exited with code ${code}: ${stderr}`));
+        doReject(new Error(`CLI exited with code ${code}: ${stderr || stdout}`));
       } else {
         doResolve(stdout);
       }
@@ -444,9 +444,9 @@ export async function runCliAsync(
       if (signal && abortedChildren.has(child)) {
         doResolve({ text: stdout });
       } else if (signal) {
-        doReject(new Error(`CLI killed by signal ${signal}: ${stderr}`));
+        doReject(new Error(`CLI killed by signal ${signal}: ${stderr || stdout.slice(-2000)}`));
       } else if (code !== 0 && code !== null) {
-        doReject(new Error(`CLI exited with code ${code}: ${stderr}`));
+        doReject(new Error(`CLI exited with code ${code}: ${stderr || stdout.slice(-2000)}`));
       } else {
         doResolve({ text: stdout });
       }

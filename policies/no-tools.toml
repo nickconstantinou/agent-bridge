@@ -1,5 +1,0 @@
-[[rule]]
-toolName = "*"
-decision = "deny"
-priority = 999
-denyMessage = "Tool use is disabled for this Telegram bridge"

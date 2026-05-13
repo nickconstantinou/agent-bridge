@@ -260,29 +260,34 @@ export async function sendMessageWithProgress({
   await sendTyping();
   const typingInterval = setInterval(sendTyping, 4500);
 
-  // Send placeholder
-  let placeholderMsg: any;
-  try {
-    placeholderMsg = await client.sendMessage({ chat_id: chatId, ...rest, text: placeholderText });
-  } catch (err) {
-    clearInterval(typingInterval);
-    throw err;
-  }
+  const usePlaceholder = false;
+  let placeholderMessageId: number | null = null;
+  let updater: StreamingUpdater | null = null;
 
-  const placeholderMessageId = placeholderMsg?.result?.message_id;
-  if (!placeholderMessageId) {
-    clearInterval(typingInterval);
-    throw new Error("sendMessage did not return a message_id");
-  }
+  if (usePlaceholder) {
+    let placeholderMsg: any;
+    try {
+      placeholderMsg = await client.sendMessage({ chat_id: chatId, ...rest, text: placeholderText });
+    } catch (err) {
+      clearInterval(typingInterval);
+      throw err;
+    }
 
-  const updater = new StreamingUpdater({ client, chatId, messageId: placeholderMessageId, isDm, isGemini, rest, kind });
+    placeholderMessageId = placeholderMsg?.result?.message_id;
+    if (!placeholderMessageId) {
+      clearInterval(typingInterval);
+      throw new Error("sendMessage did not return a message_id");
+    }
+
+    updater = new StreamingUpdater({ client, chatId, messageId: placeholderMessageId, isDm, isGemini, rest, kind });
+  }
 
   let currentText = "";
   const originalOnProgress = onProgress;
   const wrappedOnProgress = (chunk: string) => {
     currentText += chunk;
     const preview = kind === "codex" ? extractCodexProgressText(currentText) : currentText;
-    if (preview) updater.push(preview);
+    if (preview && updater) updater.push(preview);
     originalOnProgress?.(chunk);
   };
 
@@ -296,31 +301,39 @@ export async function sendMessageWithProgress({
 
     const finalText = result?.text || currentText || "";
 
-    try {
-      await updater.flush(finalText);
-    } catch (editErr: any) {
-      if (editErr.message?.includes("message is not modified")) {
-        // Progress streaming already set this text — no-op
-      } else {
-        console.warn(`[${kind}] final edit failed, sending new message`, editErr.message);
-        await sendTelegramMessage({ client, kind, chatId, body: { ...body, text: finalText } });
+    if (updater) {
+      try {
+        await updater.flush(finalText);
+      } catch (editErr: any) {
+        if (editErr.message?.includes("message is not modified")) {
+          // Progress streaming already set this text — no-op
+        } else {
+          console.warn(`[${kind}] final edit failed, sending new message`, editErr.message);
+          await sendTelegramMessage({ client, kind, chatId, body: { ...body, text: finalText } });
+        }
       }
+    } else {
+      await sendTelegramMessage({ client, kind, chatId, body: { ...body, text: finalText } });
     }
 
     clearInterval(typingInterval);
     return { ...result, onProgress: wrappedOnProgress };
   } catch (err: any) {
     clearInterval(typingInterval);
-    // Show error in the placeholder edit so the user sees it without a duplicate message
-    try {
-      await client.editMessageText({
-        chat_id: chatId,
-        message_id: placeholderMessageId,
-        ...rest,
-        text: `❌ ${err.message?.slice(0, 4000) || String(err)}`,
-      });
-    } catch {
-      /* ignore edit failure */
+    const errorText = `❌ ${err.message?.slice(0, 4000) || String(err)}`;
+    if (placeholderMessageId) {
+      try {
+        await client.editMessageText({
+          chat_id: chatId,
+          message_id: placeholderMessageId,
+          ...rest,
+          text: errorText,
+        });
+      } catch {
+        /* ignore edit failure */
+      }
+    } else {
+      await sendTelegramMessage({ client, kind, chatId, body: { ...body, text: errorText } });
     }
     console.error(`[${kind}] execution error`, err);
     return null;

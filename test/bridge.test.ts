@@ -135,6 +135,19 @@ describe("agent bridge MVP", () => {
     expect(args).not.toContain("--session");
   });
 
+  it("gemini new session can use --session-id for stable resume", () => {
+    const { args } = buildCliInvocation({
+      bot: "gemini",
+      prompt: "hello",
+      sessionId: "4229bce3-5009-429e-a3cb-d1bdaa8cfeed",
+      sessionMode: "session-id",
+      command: "gemini",
+      model: null,
+    });
+    expect(args).toContain("--session-id");
+    expect(args).not.toContain("--resume");
+  });
+
   it("kills the CLI process group on idle timeout", async () => {
     await expect(
       runCli(

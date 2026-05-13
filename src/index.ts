@@ -1,4 +1,5 @@
 import dotenv from "dotenv";
+import { randomUUID } from "node:crypto";
 import {
   buildModelKeyboard,
   buildModelsText,
@@ -174,6 +175,7 @@ class BridgeBot {
     }
 
     const sessionId = db.getSession(chatKey, this.kind);
+    const geminiSessionId = this.kind === "gemini" && !sessionId ? randomUUID() : sessionId;
     const useAsync = config.asyncEnabled === true;
     const chatType = primaryMessage.chat.type;
 
@@ -194,10 +196,10 @@ class BridgeBot {
           chatType,
           body: { message_thread_id: threadId },
           execution: (onProgress: (text: string) => void) =>
-            this.executePromptAsync(prompt, sessionId, chatId, { message_thread_id: threadId }, onProgress),
+            this.executePromptAsync(prompt, geminiSessionId, chatId, { message_thread_id: threadId }, onProgress),
         });
       } else {
-        const result = await this.executePrompt(prompt, sessionId, chatId, { message_thread_id: threadId });
+        const result = await this.executePrompt(prompt, geminiSessionId, chatId, { message_thread_id: threadId });
         await this.sendText(chatId, { text: result.text, message_thread_id: threadId });
       }
     } catch (error) {
@@ -224,9 +226,13 @@ class BridgeBot {
       model,
       prompt,
       sessionId,
+      sessionMode: this.kind === "gemini" && !db.getSession(chatKey, this.kind) ? "session-id" : "resume",
       executionMode: config.executionMode,
       outputFormat: "json",
     });
+    if (this.kind === "gemini" && sessionId && !db.getSession(chatKey, this.kind)) {
+      db.setSession(chatKey, this.kind, sessionId);
+    }
 
     const typingTracker = createTypingTracker(this.client, chatId, this.kind, { message_thread_id: threadId });
     await typingTracker.start();
@@ -253,6 +259,7 @@ class BridgeBot {
             model: fallbackModel,
             prompt,
             sessionId,
+            sessionMode: "resume",
             executionMode: config.executionMode,
             outputFormat: "json",
           });
@@ -286,8 +293,12 @@ class BridgeBot {
       model,
       prompt,
       sessionId,
+      sessionMode: this.kind === "gemini" && !db.getSession(chatKey, this.kind) ? "session-id" : "resume",
       executionMode: config.executionMode,
     });
+    if (this.kind === "gemini" && sessionId && !db.getSession(chatKey, this.kind)) {
+      db.setSession(chatKey, this.kind, sessionId);
+    }
 
     const typingTracker = createTypingTracker(this.client, chatId, this.kind, { message_thread_id: threadId });
 
@@ -311,6 +322,7 @@ class BridgeBot {
             model: fallbackModel,
             prompt,
             sessionId,
+            sessionMode: "resume",
             executionMode: config.executionMode,
           });
           const stdout = await runCli(fallbackInvocation.command, fallbackInvocation.args, getCliWorkingDir(this.kind), {

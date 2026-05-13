@@ -64,6 +64,7 @@ export function buildCliInvocation({
   bot,
   prompt,
   sessionId,
+  sessionMode = "resume",
   command,
   model,
   executionMode = "safe",
@@ -72,6 +73,7 @@ export function buildCliInvocation({
   bot: string;
   prompt: string;
   sessionId: string | null;
+  sessionMode?: "resume" | "session-id";
   command: string;
   model: string | null;
   executionMode?: "safe" | "trusted";
@@ -101,7 +103,11 @@ export function buildCliInvocation({
       args.push("--model", model);
     }
     if (sessionId) {
-      args.push("--resume", sessionId);
+      if (sessionMode === "session-id") {
+        args.push("--session-id", sessionId);
+      } else {
+        args.push("--resume", sessionId);
+      }
     }
     if (executionMode === "trusted") {
       args.push("--yolo");

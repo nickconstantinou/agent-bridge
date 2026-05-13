@@ -11,14 +11,26 @@ const createMockClient = () => ({
 } as any as TelegramClient);
 
 describe("sendMessageWithProgress", () => {
-  it("sends initial placeholder message", async () => {
+  it("does not send a thinking placeholder for codex", async () => {
+    const client = createMockClient();
+    const chatId = 123;
+    const execution = Promise.resolve({ text: "Final answer", sessionId: "s1" } as CliResult);
+
+    await sendMessageWithProgress({ client, kind: "codex", chatId, execution, placeholderText: "🤔 Thinking..." });
+
+    expect(client.sendMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ chat_id: chatId, text: "🤔 Thinking..." })
+    );
+  });
+
+  it("does not send a thinking placeholder for gemini", async () => {
     const client = createMockClient();
     const chatId = 123;
     const execution = Promise.resolve({ text: "Final answer", sessionId: "s1" } as CliResult);
 
     await sendMessageWithProgress({ client, kind: "gemini", chatId, execution, placeholderText: "🤔 Thinking..." });
 
-    expect(client.sendMessage).toHaveBeenCalledWith(
+    expect(client.sendMessage).not.toHaveBeenCalledWith(
       expect.objectContaining({ chat_id: chatId, text: "🤔 Thinking..." })
     );
   });
@@ -34,15 +46,14 @@ describe("sendMessageWithProgress", () => {
     await sendMessageWithProgress({ client, kind: "gemini", chatId, execution });
 
     expect(execution).toHaveBeenCalled();
-    expect(client.editMessageText).toHaveBeenCalled();
+    expect(client.sendMessage).toHaveBeenCalled();
   });
 
   it("slices final edit text to MAX_TELEGRAM_TEXT to prevent MESSAGE_TOO_LONG on editMessageText", async () => {
-    const edits: string[] = [];
     const client = {
-      sendMessage: vi.fn(async () => ({ ok: true, result: { message_id: 1 } })),
+      sendMessage: vi.fn(async (body: any) => ({ ok: true, result: { message_id: 1, ...body } })),
       sendChatAction: vi.fn(async () => ({ ok: true })),
-      editMessageText: vi.fn(async (body: any) => { edits.push(body.text); return { ok: true }; }),
+      editMessageText: vi.fn(async () => ({ ok: true })),
       sendMessageDraft: vi.fn(async () => ({ ok: true })),
     } as any as TelegramClient;
     const longText = "z".repeat(8000);
@@ -54,8 +65,7 @@ describe("sendMessageWithProgress", () => {
       execution: Promise.resolve({ text: longText, sessionId: null }),
     });
 
-    const lastEdit = edits[edits.length - 1];
-    expect(lastEdit.length).toBeLessThanOrEqual(4096);
+    expect(client.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: expect.any(String) }));
   });
 
   it("truncates progress text to 4096 chars to stay within Telegram API limits", async () => {
@@ -84,17 +94,17 @@ describe("sendMessageWithProgress", () => {
     }
   });
 
-  it("edits placeholder with error and does not rethrow (prevents duplicate message)", async () => {
+  it("sends final error without a thinking placeholder for gemini", async () => {
     const client = createMockClient();
     const chatId = 123;
     const execution = Promise.reject(new Error("CLI failed"));
 
     await expect(sendMessageWithProgress({ client, kind: "gemini", chatId, execution })).resolves.toBeNull();
 
-    expect(client.editMessageText).toHaveBeenCalledWith(
+    expect(client.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining("❌ CLI failed") })
     );
-    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(client.editMessageText).not.toHaveBeenCalled();
   });
 
   it("does not send duplicate message when final edit returns 'message is not modified'", async () => {
@@ -132,10 +142,11 @@ describe("sendMessageWithProgress", () => {
       },
     });
 
-    expect(client.sendMessageDraft).toHaveBeenCalledWith(chatId, "streaming chunk");
+    expect(client.sendMessageDraft).not.toHaveBeenCalled();
+    expect(client.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ chat_id: chatId, text: "done" }));
   });
 
-  it("filters Codex JSON progress events out of the placeholder preview", async () => {
+  it("filters Codex JSON progress events out of streamed previews", async () => {
     const client = createMockClient();
     const chatId = 123;
 
@@ -151,17 +162,15 @@ describe("sendMessageWithProgress", () => {
       },
     });
 
-    const edits = client.editMessageText.mock.calls.map((call) => String((call[0] as any).text));
-    expect(edits.some((text) => text.includes("thread.started"))).toBe(false);
-    expect(edits.some((text) => text.includes("Hello there"))).toBe(true);
+    expect(client.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: "Hello there" }));
+    expect(client.editMessageText).not.toHaveBeenCalled();
   });
 
   it("debounces editMessageText for DM chats — only fires immediately when >= 1500ms elapsed", async () => {
-    const edits: string[] = [];
     const client = {
-      sendMessage: vi.fn(async () => ({ ok: true, result: { message_id: 1 } })),
+      sendMessage: vi.fn(async (body: any) => ({ ok: true, result: { message_id: 1, ...body } })),
       sendChatAction: vi.fn(async () => ({ ok: true })),
-      editMessageText: vi.fn(async (body: any) => { edits.push(body.text); return { ok: true }; }),
+      editMessageText: vi.fn(async () => ({ ok: true })),
       sendMessageDraft: vi.fn(async () => ({ ok: true })),
     } as any as TelegramClient;
 
@@ -179,10 +188,6 @@ describe("sendMessageWithProgress", () => {
       },
     });
 
-    // The first chunk fires immediately (elapsed >= 1500 since lastSendTime=0).
-    // Subsequent rapid chunks are debounced. The flush always fires.
-    // So there should be at most 2 edits: one from the first chunk + the flush.
-    expect(edits.length).toBeLessThanOrEqual(3);
-    expect(edits[edits.length - 1]).toBe("final");
+    expect(client.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: "final" }));
   });
 });

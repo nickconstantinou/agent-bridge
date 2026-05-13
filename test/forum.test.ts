@@ -61,7 +61,7 @@ describe("Forum Topic Routing", () => {
     );
   });
 
-  it("passes message_thread_id to sendMessageWithProgress and editMessageText", async () => {
+  it("passes message_thread_id to sendMessageWithProgress and final send", async () => {
     const client = createMockClient();
     const chatId = 123;
     const threadId = 789;
@@ -82,7 +82,7 @@ describe("Forum Topic Routing", () => {
       })
     );
 
-    expect(client.editMessageText).toHaveBeenCalledWith(
+    expect(client.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         chat_id: chatId,
         message_thread_id: threadId,

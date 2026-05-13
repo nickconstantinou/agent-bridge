@@ -16,6 +16,7 @@ import {
   isCapacityExhaustedError,
   getNextFallbackModel,
   abortCliProcess,
+  shutdownCliProcesses,
   openDb,
   BridgeDb,
 } from "./bridge.js";
@@ -231,7 +232,7 @@ class BridgeBot {
     await typingTracker.start();
 
     try {
-      const cliResult = await runCliAsync(invocation.command, invocation.args, getCliWorkingDir(), {
+      const cliResult = await runCliAsync(invocation.command, invocation.args, getCliWorkingDir(this.kind), {
         timeoutMs: config.cliTimeoutMs,
         idleTimeoutMs: null,
         onProgress,
@@ -255,7 +256,7 @@ class BridgeBot {
             executionMode: config.executionMode,
             outputFormat: "json",
           });
-          const cliResult = await runCliAsync(fallbackInvocation.command, fallbackInvocation.args, getCliWorkingDir(), {
+          const cliResult = await runCliAsync(fallbackInvocation.command, fallbackInvocation.args, getCliWorkingDir(this.kind), {
             timeoutMs: config.cliTimeoutMs,
             idleTimeoutMs: null,
             onProgress,
@@ -292,7 +293,7 @@ class BridgeBot {
 
     try {
       await typingTracker.start();
-      const stdout = await runCli(invocation.command, invocation.args, getCliWorkingDir(), {
+      const stdout = await runCli(invocation.command, invocation.args, getCliWorkingDir(this.kind), {
         timeoutMs: config.cliTimeoutMs,
         idleTimeoutMs: null,
         chatId: chatKey,
@@ -312,7 +313,7 @@ class BridgeBot {
             sessionId,
             executionMode: config.executionMode,
           });
-          const stdout = await runCli(fallbackInvocation.command, fallbackInvocation.args, getCliWorkingDir(), {
+          const stdout = await runCli(fallbackInvocation.command, fallbackInvocation.args, getCliWorkingDir(this.kind), {
             timeoutMs: config.cliTimeoutMs,
             idleTimeoutMs: null,
             chatId: chatKey,
@@ -420,6 +421,7 @@ const bots = (Object.entries(config.bots) as [("codex" | "gemini"), BotConfig][]
 
 const shutdown = (signal: string) => {
   console.log(`[bridge] ${signal} received, shutting down...`);
+  shutdownCliProcesses();
   db.close();
   process.exit(0);
 };

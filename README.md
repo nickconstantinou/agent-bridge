@@ -27,15 +27,27 @@ Polls a Telegram bot for messages, routes them to the Codex or Gemini CLI, and s
 
 ```bash
 npm install
-cp .env.codex.example .env.codex    # fill in bot token + user ID
+cp .env.codex.example .env.codex
 cp .env.gemini.example .env.gemini
 ```
+
+Then fill in:
+- `TELEGRAM_BOT_TOKEN_CODEX` in `.env.codex`
+- `TELEGRAM_BOT_TOKEN_GEMINI` in `.env.gemini`
+- `TELEGRAM_ALLOWED_USER_ID` in both files
 
 Run a single bot for development:
 
 ```bash
 BRIDGE_ENV_FILE=.env.gemini ./node_modules/.bin/tsx src/index.ts
 ```
+
+Important:
+- Gemini service uses `.env.gemini`
+- Codex service uses `.env.codex`
+- `BRIDGE_ENV_FILE` must point at the bot-specific env file
+- `BRIDGE_PROJECT_DIR` should point at the agent-bridge repo
+- `CODEX_PROJECT_DIR` / `GEMINI_PROJECT_DIR` may override the CLI working dir per bot
 
 ## Commands
 

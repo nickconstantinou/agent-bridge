@@ -5,6 +5,14 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SYSTEMD_DIR="/etc/systemd/system"
 DEFAULTS_DIR="/etc/default"
 
+cat <<'EOF'
+agent-bridge install
+- codex service reads: .env.codex
+- gemini service reads: .env.gemini
+- BRIDGE_ENV_FILE must point at the bot-specific env file
+- CODEX_PROJECT_DIR / GEMINI_PROJECT_DIR override the CLI cwd per bot
+EOF
+
 prompt() {
   local var="$1" label="$2" default="${3:-}"
   local current="${!var:-}"

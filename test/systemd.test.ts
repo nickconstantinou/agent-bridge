@@ -6,8 +6,10 @@ describe("systemd templates", () => {
     const codex = readFileSync(new URL("../systemd/agent-bridge-codex.service", import.meta.url), "utf8");
     const gemini = readFileSync(new URL("../systemd/agent-bridge-gemini.service", import.meta.url), "utf8");
 
-    expect(codex).toContain("EnvironmentFile=/etc/default/agent-bridge-codex");
-    expect(gemini).toContain("EnvironmentFile=/etc/default/agent-bridge-gemini");
+    expect(codex).toContain("EnvironmentFile=/home/openclaw/.openclaw/workspace/projects/agent-bridge/.env.codex");
+    expect(gemini).toContain("EnvironmentFile=/home/openclaw/.openclaw/workspace/projects/agent-bridge/.env.gemini");
+    expect(codex).toContain("BRIDGE_ENV_FILE=/home/openclaw/.openclaw/workspace/projects/agent-bridge/.env.codex");
+    expect(gemini).toContain("BRIDGE_ENV_FILE=/home/openclaw/.openclaw/workspace/projects/agent-bridge/.env.gemini");
     expect(codex).toContain('cd "${BRIDGE_PROJECT_DIR:?}" && exec ./node_modules/.bin/tsx src/index.ts');
     expect(gemini).toContain('cd "${BRIDGE_PROJECT_DIR:?}" && exec ./node_modules/.bin/tsx src/index.ts');
 

@@ -135,6 +135,27 @@ describe("sendMessageWithProgress", () => {
     expect(client.sendMessageDraft).toHaveBeenCalledWith(chatId, "streaming chunk");
   });
 
+  it("filters Codex JSON progress events out of the placeholder preview", async () => {
+    const client = createMockClient();
+    const chatId = 123;
+
+    await sendMessageWithProgress({
+      client,
+      kind: "codex",
+      chatId,
+      chatType: "private",
+      execution: (onProgress: (chunk: string) => void) => {
+        onProgress('{"type":"thread.started","thread_id":"019e2159-b93a-7572-9067-c78a08615db7"}\n');
+        onProgress('{"type":"response.output_text.delta","delta":"Hello there"}\n');
+        return Promise.resolve({ text: "Hello there", sessionId: null });
+      },
+    });
+
+    const edits = client.editMessageText.mock.calls.map((call) => String((call[0] as any).text));
+    expect(edits.some((text) => text.includes("thread.started"))).toBe(false);
+    expect(edits.some((text) => text.includes("Hello there"))).toBe(true);
+  });
+
   it("debounces editMessageText for DM chats — only fires immediately when >= 1500ms elapsed", async () => {
     const edits: string[] = [];
     const client = {

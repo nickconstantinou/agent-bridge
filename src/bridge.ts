@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { runCli, runCliAsync, parseCliResult, buildCliInvocation, validateBridgeConfig, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess } from "./cli.js";
+import { runCli, runCliAsync, parseCliResult, buildCliInvocation, validateBridgeConfig, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses } from "./cli.js";
 import { openDb, BridgeDb } from "./db.js";
 import type { TelegramMessage, BridgeConfig } from "./types.js";
 
@@ -7,8 +7,10 @@ export function getBridgeProjectDir(): string {
   return process.env.BRIDGE_PROJECT_DIR || `${homedir()}/.openclaw/workspace/projects/agent-bridge`;
 }
 
-export function getCliWorkingDir(): string {
-  return process.env.BRIDGE_ROOT_DIR || homedir();
+export function getCliWorkingDir(bot?: "codex" | "gemini"): string {
+  if (bot === "codex" && process.env.CODEX_PROJECT_DIR) return process.env.CODEX_PROJECT_DIR;
+  if (bot === "gemini" && process.env.GEMINI_PROJECT_DIR) return process.env.GEMINI_PROJECT_DIR;
+  return process.env.BRIDGE_PROJECT_DIR || process.env.BRIDGE_ROOT_DIR || homedir();
 }
 
 export function isAuthorizedMessage(message: TelegramMessage, allowedUserId: string): boolean {
@@ -41,6 +43,6 @@ export function buildModelsText(kind: string, { db, config }: { db: BridgeDb; co
   return `[${kind} model settings]\n\nCurrent: ${current}\nAvailable: ${available}\n\nSelect a model below:`;
 }
 
-export { runCli, runCliAsync, parseCliResult, validateBridgeConfig, buildCliInvocation, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess };
+export { runCli, runCliAsync, parseCliResult, validateBridgeConfig, buildCliInvocation, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses };
 export { openDb, BridgeDb };
 export { handleCommand } from "./commands.js";

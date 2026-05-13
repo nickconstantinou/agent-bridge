@@ -4,13 +4,57 @@ import type { CliOptions, CliResult, BridgeConfig } from "./types.js";
 const activeProcesses = new Map<number | string, ChildProcess>();
 const abortedChildren = new WeakSet<ChildProcess>();
 
+function markChildAborted(child: ChildProcess): void {
+  abortedChildren.add(child);
+}
+
+function killChild(child: ChildProcess): void {
+  markChildAborted(child);
+  try {
+    child.kill("SIGTERM");
+  } catch {
+    // ignore
+  }
+  setTimeout(() => {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // ignore
+    }
+  }, 5_000);
+}
+
 export function abortCliProcess(chatId: number | string): boolean {
   const child = activeProcesses.get(chatId);
   if (!child) return false;
-  abortedChildren.add(child);
-  child.kill("SIGKILL");
+  killChild(child);
   activeProcesses.delete(chatId);
   return true;
+}
+
+export function shutdownCliProcesses(): number {
+  const children = [...activeProcesses.values()];
+  for (const child of children) {
+    killChild(child);
+  }
+  const count = children.length;
+  activeProcesses.clear();
+  return count;
+}
+
+if (typeof process !== "undefined") {
+  const cleanup = () => {
+    shutdownCliProcesses();
+  };
+  process.once("beforeExit", cleanup);
+  process.once("SIGINT", () => {
+    cleanup();
+    process.exit(0);
+  });
+  process.once("SIGTERM", () => {
+    cleanup();
+    process.exit(0);
+  });
 }
 
 /**
@@ -262,6 +306,12 @@ export function getNextFallbackModel(currentModel: string | null, modelPreferenc
   return modelPreference[idx + 1];
 }
 
+function formatSpawnLog(command: string, args: string[], cwd: string, chatId?: number | string): string {
+  const visibleArgs = args.map((arg) => (arg.includes(" ") ? `"${arg}"` : arg)).join(" ");
+  const chatPart = chatId != null ? ` chatId=${String(chatId)}` : "";
+  return `[spawn]${chatPart} cwd=${cwd} command=${command} args=${visibleArgs}`;
+}
+
 /**
  * Runs a CLI command and returns stdout.
  */
@@ -271,7 +321,9 @@ export async function runCli(command: string, args: string[], cwd: string, optio
   const killGraceMs = options.killGraceMs ?? 5000;
 
   return new Promise((resolve, reject) => {
+    console.log(formatSpawnLog(command, args, cwd, options.chatId));
     const child = spawn(command, args, { cwd, shell: false });
+    child.stdin?.end();
     if (options.chatId != null) activeProcesses.set(options.chatId, child);
     let stdout = "";
     let stderr = "";
@@ -290,7 +342,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
     };
 
     const timer = setTimeout(() => {
-      console.error(`[TIMEOUT] CLI hard timeout after ${timeoutMs}ms - killing process\n`);
+      console.error(`[TIMEOUT] CLI hard timeout after ${timeoutMs}ms - killing process\n${formatSpawnLog(command, args, cwd, options.chatId)}`);
       doReject(new Error(`CLI hard timeout after ${timeoutMs}ms`));
       child.kill("SIGTERM");
       setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* ignore */ } }, killGraceMs);
@@ -314,7 +366,9 @@ export async function runCli(command: string, args: string[], cwd: string, optio
     });
 
     child.stderr.on("data", (data) => {
-      stderr += data;
+      const chunk = data.toString();
+      stderr += chunk;
+      console.error(`[stderr]${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${child.pid ?? "?"} ${chunk.trimEnd()}`);
       resetIdleTimer();
     });
 
@@ -322,6 +376,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
       clearTimeout(timer);
       if (idleTimer) clearTimeout(idleTimer);
       if (options.chatId != null) activeProcesses.delete(options.chatId);
+      console.log(`[close]${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${child.pid ?? "?"} code=${code} signal=${signal ?? "none"}`);
 
       if (settled) return;
 
@@ -363,7 +418,9 @@ export async function runCliAsync(
   return new Promise((resolve, reject) => {
     // shell:false + detached:true creates the child in its own process group so
     // process.kill(-pid) can cleanly kill the whole tree.
+    console.log(formatSpawnLog(command, args, cwd, options.chatId));
     const child = spawn(command, args, { cwd, shell: false, detached: true });
+    child.stdin?.end();
     if (options.chatId != null) activeProcesses.set(options.chatId, child);
     const pid = child.pid;
     let settled = false;
@@ -404,6 +461,7 @@ export async function runCliAsync(
     let stderr = "";
 
     const timer = setTimeout(() => {
+      console.error(`[TIMEOUT] CLI hard timeout after ${timeoutMs}ms${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"}`);
       killProcessTree();
       doReject(new Error(`CLI hard timeout after ${timeoutMs}ms`));
     }, timeoutMs);
@@ -428,7 +486,9 @@ export async function runCliAsync(
     });
 
     child.stderr.on("data", (data) => {
-      stderr += data;
+      const chunk = data.toString();
+      stderr += chunk;
+      console.error(`[stderr]${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"} ${chunk.trimEnd()}`);
       resetIdleTimer();
     });
 
@@ -436,6 +496,7 @@ export async function runCliAsync(
       clearTimeout(timer);
       if (idleTimer) clearTimeout(idleTimer);
       if (options.chatId != null) activeProcesses.delete(options.chatId);
+      console.log(`[close]${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"} code=${code} signal=${signal ?? "none"}`);
       if (settled) return;
 
       if (signal && abortedChildren.has(child)) {

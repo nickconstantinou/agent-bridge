@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
-import { runCli, runCliAsync, abortCliProcess, isCapacityExhaustedError, getNextFallbackModel } from "../src/cli.js";
+import { describe, expect, it, vi, afterEach } from "vitest";
+import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel } from "../src/cli.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +20,20 @@ describe("CLI Runner", () => {
   it("runs a simple command and returns stdout", async () => {
     const output = await runCli("echo", ["hello"], process.cwd());
     expect(output.trim()).toBe("hello");
+  });
+
+  it("closes stdin so commands that wait for input can finish", async () => {
+    const output = await runCli("bash", ["-lc", "read -r _ || true; echo done"], process.cwd(), {
+      timeoutMs: 2000,
+    });
+    expect(output).toContain("done");
+  }, 5000);
+
+  it("logs spawn details for debugging", async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runCli("echo", ["hello world"], process.cwd(), { chatId: "debug-chat" });
+    expect(spy.mock.calls.some((call) => String(call[0]).includes("[spawn]") && String(call[0]).includes("debug-chat"))).toBe(true);
+    spy.mockRestore();
   });
 
   it("throws on non-zero exit code", async () => {
@@ -47,6 +61,10 @@ describe("CLI Runner", () => {
 });
 
 describe("abortCliProcess", () => {
+  afterEach(() => {
+    shutdownCliProcesses();
+  });
+
   it("returns false when no process is registered for the chatId", () => {
     expect(abortCliProcess("chat-does-not-exist")).toBe(false);
   });
@@ -76,6 +94,16 @@ describe("abortCliProcess", () => {
     await runCli("echo", ["hi"], process.cwd(), { chatId });
     expect(abortCliProcess(chatId)).toBe(false);
   });
+
+  it("kills all tracked processes during shutdown", async () => {
+    const asyncPromise = runCliAsync("sleep", ["10"], process.cwd(), { chatId: "shutdown-async" });
+    const syncPromise = runCli("sleep", ["10"], process.cwd(), { chatId: "shutdown-sync" });
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(shutdownCliProcesses()).toBe(2);
+    await expect(asyncPromise).resolves.toMatchObject({ text: expect.any(String) });
+    await expect(syncPromise).resolves.toEqual(expect.any(String));
+  }, 5000);
 });
 
 describe("model fallback", () => {

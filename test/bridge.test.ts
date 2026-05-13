@@ -10,6 +10,7 @@ import {
   parseCliResult,
   handleCommand,
   getBridgeProjectDir,
+  getCliWorkingDir,
   validateBridgeConfig,
 } from "../src/bridge.js";
 import { openDb, BridgeDb } from "../src/db.js";
@@ -44,6 +45,23 @@ describe("agent bridge MVP", () => {
     expect(args).toContain("--skip-git-repo-check");
     expect(args).not.toContain("--thread");
     expect(args).not.toContain("--output");
+  });
+
+  it("uses the bot-specific project dir when BRIDGE_PROJECT_DIR is not enough", () => {
+    const prevBridgeRoot = process.env.BRIDGE_ROOT_DIR;
+    const prevCodexProjectDir = process.env.CODEX_PROJECT_DIR;
+    const prevGeminiProjectDir = process.env.GEMINI_PROJECT_DIR;
+
+    process.env.BRIDGE_ROOT_DIR = "/tmp/bridge-root";
+    process.env.CODEX_PROJECT_DIR = "/tmp/codex-repo";
+    process.env.GEMINI_PROJECT_DIR = "/tmp/gemini-repo";
+
+    expect(getCliWorkingDir("codex")).toBe("/tmp/codex-repo");
+    expect(getCliWorkingDir("gemini")).toBe("/tmp/gemini-repo");
+
+    if (prevBridgeRoot === undefined) delete process.env.BRIDGE_ROOT_DIR; else process.env.BRIDGE_ROOT_DIR = prevBridgeRoot;
+    if (prevCodexProjectDir === undefined) delete process.env.CODEX_PROJECT_DIR; else process.env.CODEX_PROJECT_DIR = prevCodexProjectDir;
+    if (prevGeminiProjectDir === undefined) delete process.env.GEMINI_PROJECT_DIR; else process.env.GEMINI_PROJECT_DIR = prevGeminiProjectDir;
   });
 
   it("creates trusted codex invocation only when explicitly requested", () => {

@@ -4,6 +4,7 @@ import {
   buildSharedMemorySetupPlan,
   defaultSharedMemoryDbPath,
   getSharedMemoryHomeDir,
+  renderMemoryInstructionFile,
   parseClaudeSharedMemoryConfig,
   parseCodexSharedMemoryConfig,
   parseGeminiSharedMemoryConfig,
@@ -175,5 +176,41 @@ describe("setup plan", () => {
     });
 
     expect(plan.errors).toContain("Node.js 22+ is required for the installer.");
+  });
+});
+
+describe("instruction file rendering", () => {
+  it("creates a managed shared-memory block for codex home instructions", () => {
+    const rendered = renderMemoryInstructionFile("", {
+      agent: "codex",
+      projectId: "server",
+      dbPath: "/tmp/shared-memory.db",
+    });
+    expect(rendered).toContain("<!-- agent-bridge:shared-memory:start -->");
+    expect(rendered).toContain("Use `search_knowledge` at the start of each task");
+    expect(rendered).toContain('`project_id: "server"`');
+  });
+
+  it("replaces the managed block without deleting surrounding content", () => {
+    const existing = [
+      "# Existing Notes",
+      "",
+      "<!-- agent-bridge:shared-memory:start -->",
+      "old",
+      "<!-- agent-bridge:shared-memory:end -->",
+      "",
+      "Keep this",
+    ].join("\n");
+
+    const rendered = renderMemoryInstructionFile(existing, {
+      agent: "gemini",
+      projectId: "server",
+      dbPath: "/tmp/shared-memory.db",
+    });
+
+    expect(rendered).toContain("# Existing Notes");
+    expect(rendered).toContain("Keep this");
+    expect(rendered).not.toContain("\nold\n");
+    expect(rendered).toContain("Agent: Gemini");
   });
 });

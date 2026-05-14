@@ -27,6 +27,9 @@ export interface SharedMemorySetupPlan {
   errors: string[];
 }
 
+const memoryBlockStart = "<!-- agent-bridge:shared-memory:start -->";
+const memoryBlockEnd = "<!-- agent-bridge:shared-memory:end -->";
+
 export function defaultSharedMemoryDbPath(homeDir: string): string {
   return `${homeDir}/.agent-bridge/shared-memory/knowledgegraph.sqlite`;
 }
@@ -50,6 +53,39 @@ export function buildKnowledgeGraphProvider(storagePath: string): SharedMemoryPr
     storageKind: "sqlite",
     storagePath,
   };
+}
+
+export function renderMemoryInstructionFile(existingContent: string, input: {
+  agent: "codex" | "gemini" | "claude";
+  projectId: string;
+  dbPath: string;
+}): string {
+  const label = input.agent === "codex" ? "Codex" : input.agent === "gemini" ? "Gemini" : "Claude";
+  const section = [
+    memoryBlockStart,
+    "## Shared Memory",
+    "",
+    `Agent: ${label}`,
+    `Shared SQLite: \`${input.dbPath}\``,
+    "",
+    "- Use `search_knowledge` at the start of each task when prior project context may matter.",
+    `- Always include \`project_id: "${input.projectId}"\` when reading or writing shared memory.`,
+    "- Record durable project facts and architectural decisions with `add_observations`.",
+    "- Do not store ephemeral chat noise, tentative brainstorming, or repeated status updates.",
+    memoryBlockEnd,
+  ].join("\n");
+
+  const trimmed = existingContent.trim();
+  const pattern = new RegExp(
+    `${memoryBlockStart.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?${memoryBlockEnd.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+    "m",
+  );
+
+  if (!trimmed) return `${section}\n`;
+  if (pattern.test(existingContent)) {
+    return `${existingContent.replace(pattern, section).trim()}\n`;
+  }
+  return `${trimmed}\n\n${section}\n`;
 }
 
 function renderCodexSection(provider: SharedMemoryProvider): string {

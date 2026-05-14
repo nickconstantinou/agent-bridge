@@ -110,6 +110,11 @@ The setup script updates:
 - `~/.codex/config.toml`
 - `~/.gemini/settings.json`
 - `~/.claude.json`
+- `~/AGENTS.md`
+- `~/GEMINI.md`
+- `~/CLAUDE.md`
+
+Those markdown files receive a managed "Shared Memory" block so the agents know when to query and update the knowledge graph without taking ownership of the rest of the file.
 
 The bridge runtime database remains separate from the shared MCP memory database.
 

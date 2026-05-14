@@ -43,6 +43,10 @@ The bridge can configure a loosely coupled MCP memory provider for external CLIs
   - `~/.codex/config.toml`
   - `~/.gemini/settings.json`
   - `~/.claude.json`
+- Managed instruction files:
+  - `~/AGENTS.md`
+  - `~/GEMINI.md`
+  - `~/CLAUDE.md`
 
 Bootstrap:
 
@@ -66,6 +70,8 @@ Record durable project facts as entities, relations, or observations.
 Do not store ephemeral chat noise, tentative brainstorming, or repeated status updates.
 Prefer updating existing entities over creating duplicates.
 ```
+
+The setup script writes this as a managed markdown block so it can be updated later without replacing the rest of your home-level instruction files.
 
 ---
 

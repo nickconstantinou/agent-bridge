@@ -39,6 +39,19 @@ npm run verify:shared-memory
 - `~/.codex/config.toml`
 - `~/.gemini/settings.json`
 - `~/.claude.json`
+- `~/AGENTS.md`
+- `~/GEMINI.md`
+- `~/CLAUDE.md`
+
+The markdown instruction files receive a managed shared-memory block bounded by:
+
+```md
+<!-- agent-bridge:shared-memory:start -->
+...
+<!-- agent-bridge:shared-memory:end -->
+```
+
+This lets the installer update the memory handshake rules later without overwriting the rest of the file.
 
 ## Memory handshake prompt
 

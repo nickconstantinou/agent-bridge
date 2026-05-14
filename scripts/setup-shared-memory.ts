@@ -6,6 +6,7 @@ import {
   buildKnowledgeGraphProvider,
   defaultSharedMemoryDbPath,
   getSharedMemoryHomeDir,
+  renderMemoryInstructionFile,
   renderClaudeConfig,
   renderCodexConfig,
   renderGeminiConfig,
@@ -22,6 +23,9 @@ const provider = buildKnowledgeGraphProvider(dbPath);
 const codexPath = join(homeDir, ".codex", "config.toml");
 const geminiPath = join(homeDir, ".gemini", "settings.json");
 const claudePath = join(homeDir, ".claude.json");
+const codexInstructionsPath = join(homeDir, "AGENTS.md");
+const geminiInstructionsPath = join(homeDir, "GEMINI.md");
+const claudeInstructionsPath = join(homeDir, "CLAUDE.md");
 
 function readText(path: string): string {
   return existsSync(path) ? readFileSync(path, "utf8") : "";
@@ -35,16 +39,38 @@ function writeText(path: string, content: string): void {
 const existingCodex = readText(codexPath);
 const existingGemini = readText(geminiPath);
 const existingClaude = readText(claudePath);
+const existingCodexInstructions = readText(codexInstructionsPath);
+const existingGeminiInstructions = readText(geminiInstructionsPath);
+const existingClaudeInstructions = readText(claudeInstructionsPath);
 
 const nextCodex = renderCodexConfig(existingCodex, provider);
 const nextGemini = renderGeminiConfig(existingGemini, provider);
 const nextClaude = renderClaudeConfig(existingClaude, provider);
+const projectId = process.env.SHARED_MEMORY_PROJECT_ID || "server";
+const nextCodexInstructions = renderMemoryInstructionFile(existingCodexInstructions, {
+  agent: "codex",
+  projectId,
+  dbPath,
+});
+const nextGeminiInstructions = renderMemoryInstructionFile(existingGeminiInstructions, {
+  agent: "gemini",
+  projectId,
+  dbPath,
+});
+const nextClaudeInstructions = renderMemoryInstructionFile(existingClaudeInstructions, {
+  agent: "claude",
+  projectId,
+  dbPath,
+});
 
 if (!verifyOnly) {
   mkdirSync(dirname(dbPath), { recursive: true });
   writeText(codexPath, nextCodex);
   writeText(geminiPath, nextGemini);
   writeText(claudePath, nextClaude);
+  writeText(codexInstructionsPath, nextCodexInstructions);
+  writeText(geminiInstructionsPath, nextGeminiInstructions);
+  writeText(claudeInstructionsPath, nextClaudeInstructions);
 }
 
 const result = verifySharedMemoryConfigs({
@@ -66,5 +92,8 @@ if (verifyOnly) {
   console.log(`shared-memory setup: wrote ${codexPath}`);
   console.log(`shared-memory setup: wrote ${geminiPath}`);
   console.log(`shared-memory setup: wrote ${claudePath}`);
+  console.log(`shared-memory setup: wrote ${codexInstructionsPath}`);
+  console.log(`shared-memory setup: wrote ${geminiInstructionsPath}`);
+  console.log(`shared-memory setup: wrote ${claudeInstructionsPath}`);
   console.log(`shared-memory setup: SQLite path ${dbPath}`);
 }

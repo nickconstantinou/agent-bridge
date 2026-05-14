@@ -50,6 +50,8 @@ Bootstrap:
 npm run setup:shared-memory
 ```
 
+Run this as the target user, not with `sudo`. The systemd install step is separate.
+
 Verify:
 
 ```bash

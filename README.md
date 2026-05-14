@@ -25,6 +25,8 @@ Polls a Telegram bot for messages, routes them to the Codex or Gemini CLI, and s
 
 ## Setup
 
+User-scope setup:
+
 ```bash
 npm install
 cp .env.codex.example .env.codex
@@ -112,6 +114,8 @@ The setup script updates:
 The bridge runtime database remains separate from the shared MCP memory database.
 
 ## Systemd deployment
+
+`sudo` is only required for the systemd install step. Do not run the shared-memory setup step with `sudo`, or it will target the wrong home directory.
 
 ```bash
 sudo bash scripts/install.sh

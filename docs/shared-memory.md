@@ -26,6 +26,8 @@ SHARED_MEMORY_DB_PATH=/absolute/path/to/knowledgegraph.sqlite
 npm run setup:shared-memory
 ```
 
+Run this as the target user. Do not run it with `sudo`.
+
 ## Verify
 
 ```bash
@@ -52,3 +54,4 @@ Prefer updating existing entities over creating duplicates.
 - The bridge runtime database and MCP memory database are separate.
 - Config patching is idempotent.
 - The implementation is provider-based so `knowledgegraph-mcp` can be replaced later.
+- Systemd installation is root-scoped, but shared-memory configuration is user-scoped.

@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import {
   buildKnowledgeGraphProvider,
   defaultSharedMemoryDbPath,
+  getSharedMemoryHomeDir,
   renderClaudeConfig,
   renderCodexConfig,
   renderGeminiConfig,
@@ -14,7 +15,7 @@ import {
 const args = new Set(process.argv.slice(2));
 const verifyOnly = args.has("--verify");
 
-const homeDir = process.env.HOME || homedir();
+const homeDir = getSharedMemoryHomeDir(process.env, homedir());
 const dbPath = process.env.SHARED_MEMORY_DB_PATH || defaultSharedMemoryDbPath(homeDir);
 const provider = buildKnowledgeGraphProvider(dbPath);
 

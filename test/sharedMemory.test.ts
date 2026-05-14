@@ -3,6 +3,7 @@ import {
   buildKnowledgeGraphProvider,
   buildSharedMemorySetupPlan,
   defaultSharedMemoryDbPath,
+  getSharedMemoryHomeDir,
   parseClaudeSharedMemoryConfig,
   parseCodexSharedMemoryConfig,
   parseGeminiSharedMemoryConfig,
@@ -28,6 +29,14 @@ describe("shared memory provider", () => {
     expect(defaultSharedMemoryDbPath("/home/tester")).toBe(
       "/home/tester/.agent-bridge/shared-memory/knowledgegraph.sqlite",
     );
+  });
+
+  it("prefers an explicit shared-memory home over HOME", () => {
+    const home = getSharedMemoryHomeDir({
+      SHARED_MEMORY_HOME: "/home/openclaw",
+      HOME: "/root",
+    });
+    expect(home).toBe("/home/openclaw");
   });
 });
 

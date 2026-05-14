@@ -31,6 +31,13 @@ export function defaultSharedMemoryDbPath(homeDir: string): string {
   return `${homeDir}/.agent-bridge/shared-memory/knowledgegraph.sqlite`;
 }
 
+export function getSharedMemoryHomeDir(env: {
+  SHARED_MEMORY_HOME?: string | undefined;
+  HOME?: string | undefined;
+}, fallbackHome?: string): string {
+  return env.SHARED_MEMORY_HOME || env.HOME || fallbackHome || "";
+}
+
 export function buildKnowledgeGraphProvider(storagePath: string): SharedMemoryProvider {
   return {
     providerId: "knowledgegraph-mcp",

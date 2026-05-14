@@ -75,4 +75,12 @@ describe("Idle Timeout Removal", () => {
     
     expect(usesConfigAssignment).toBe(false);
   });
+
+  it("install script runs shared-memory setup as the target user instead of the sudo home", async () => {
+    const fs = await import("fs");
+    const installScript = fs.readFileSync("scripts/install.sh", "utf-8");
+    expect(installScript).toContain('TARGET_USER="${SUDO_USER:-${USER}}"');
+    expect(installScript).toContain('SHARED_MEMORY_HOME="${TARGET_HOME}"');
+    expect(installScript).toContain('sudo -u "${TARGET_USER}"');
+  });
 });

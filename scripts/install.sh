@@ -5,6 +5,8 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SYSTEMD_DIR="/etc/systemd/system"
 DEFAULTS_DIR="/etc/default"
 NODE_MIN_MAJOR=22
+TARGET_USER="${SUDO_USER:-${USER}}"
+TARGET_HOME="$(getent passwd "${TARGET_USER}" | cut -d: -f6)"
 
 cat <<'EOF'
 agent-bridge install
@@ -26,6 +28,13 @@ require_node() {
   major="${version%%.*}"
   if (( major < NODE_MIN_MAJOR )); then
     echo "Node.js ${NODE_MIN_MAJOR}+ is required. Found ${version}." >&2
+    exit 1
+  fi
+}
+
+ensure_target_user() {
+  if [[ -z "${TARGET_USER}" || -z "${TARGET_HOME}" ]]; then
+    echo "Unable to resolve the target user and home directory." >&2
     exit 1
   fi
 }
@@ -133,6 +142,7 @@ ensure_cli() {
 }
 
 require_node
+ensure_target_user
 
 if [[ "${1:-}" != "--skip-cli-install" ]]; then
   if command -v npm >/dev/null 2>&1; then
@@ -143,7 +153,12 @@ if [[ "${1:-}" != "--skip-cli-install" ]]; then
     CODEX_COMMAND="${CODEX_COMMAND:-$(command -v codex || true)}"
     GEMINI_COMMAND="${GEMINI_COMMAND:-$(command -v gemini || true)}"
     CLAUDE_COMMAND="${CLAUDE_COMMAND:-$(command -v claude || true)}"
-    (cd "${REPO_DIR}" && ./node_modules/.bin/tsx scripts/setup-shared-memory.ts)
+    if [[ "${USER}" == "${TARGET_USER}" ]]; then
+      (cd "${REPO_DIR}" && SHARED_MEMORY_HOME="${TARGET_HOME}" ./node_modules/.bin/tsx scripts/setup-shared-memory.ts)
+    else
+      sudo -u "${TARGET_USER}" env HOME="${TARGET_HOME}" SHARED_MEMORY_HOME="${TARGET_HOME}" \
+        bash -lc "cd \"${REPO_DIR}\" && ./node_modules/.bin/tsx scripts/setup-shared-memory.ts"
+    fi
   fi
 fi
 

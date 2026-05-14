@@ -31,9 +31,10 @@ Run this as the target user. Do not run it with `sudo`.
 The setup script performs two runtime steps before patching CLI config:
 
 - installs `knowledgegraph-mcp` and `node@22` under `$HOME/.agent-bridge/shared-memory/provider`
+- writes a preload shim at `$HOME/.agent-bridge/shared-memory/provider/stdio-clean-log-preload.cjs`
 - writes a stable wrapper at `$HOME/.local/bin/agent-bridge-knowledgegraph-mcp`
 
-The CLI configs point at that wrapper, not at `npx`, so the MCP server runs with the same Node 22 runtime it was built against.
+The CLI configs point at that wrapper, not at `npx`, so the MCP server runs with the same Node 22 runtime it was built against. The preload shim also redirects package `console.log` startup noise to `stderr`, which keeps stdio MCP handshakes clean.
 
 ## Verify
 

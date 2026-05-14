@@ -42,6 +42,10 @@ export function defaultSharedMemoryWrapperPath(homeDir: string): string {
   return `${homeDir}/.local/bin/agent-bridge-knowledgegraph-mcp`;
 }
 
+export function defaultSharedMemoryPreloadPath(homeDir: string): string {
+  return `${homeDir}/.agent-bridge/shared-memory/provider/stdio-clean-log-preload.cjs`;
+}
+
 export function getSharedMemoryHomeDir(env: {
   SHARED_MEMORY_HOME?: string | undefined;
   HOME?: string | undefined;
@@ -64,6 +68,30 @@ export function buildKnowledgeGraphProvider(
     storageKind: "sqlite",
     storagePath,
   };
+}
+
+export function renderSharedMemoryPreloadScript(): string {
+  return [
+    "const util = require('node:util');",
+    "console.log = (...args) => {",
+    "  process.stderr.write(`${util.format(...args)}\\n`);",
+    "};",
+    "",
+  ].join("\n");
+}
+
+export function renderSharedMemoryWrapperScript(input: {
+  installPrefix: string;
+  preloadPath: string;
+}): string {
+  const nodePath = `${input.installPrefix}/node_modules/node/bin/node`;
+  const entryPath = `${input.installPrefix}/node_modules/knowledgegraph-mcp/dist/index.js`;
+  return [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    `exec ${JSON.stringify(nodePath)} --require ${JSON.stringify(input.preloadPath)} ${JSON.stringify(entryPath)} "$@"`,
+    "",
+  ].join("\n");
 }
 
 export function renderMemoryInstructionFile(existingContent: string, input: {

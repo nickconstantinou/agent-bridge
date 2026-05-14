@@ -104,9 +104,10 @@ npm run setup:shared-memory
 This setup now installs a persistent user-local MCP runtime and wrapper:
 
 - runtime prefix: `$HOME/.agent-bridge/shared-memory/provider`
+- preload shim: `$HOME/.agent-bridge/shared-memory/provider/stdio-clean-log-preload.cjs`
 - wrapper command: `$HOME/.local/bin/agent-bridge-knowledgegraph-mcp`
 
-The wrapper pins `knowledgegraph-mcp` to a local Node 22 runtime so it does not depend on the host `node` binary or the fragile raw `npx knowledgegraph-mcp` path.
+The wrapper pins `knowledgegraph-mcp` to a local Node 22 runtime so it does not depend on the host `node` binary or the fragile raw `npx knowledgegraph-mcp` path. The preload shim redirects package startup `console.log` output to `stderr` so MCP stdio handshakes stay clean.
 
 Verify:
 

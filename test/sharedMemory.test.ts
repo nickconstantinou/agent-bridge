@@ -4,9 +4,12 @@ import {
   buildSharedMemorySetupPlan,
   defaultSharedMemoryDbPath,
   defaultSharedMemoryInstallPrefix,
+  defaultSharedMemoryPreloadPath,
   defaultSharedMemoryWrapperPath,
   getSharedMemoryHomeDir,
   renderMemoryInstructionFile,
+  renderSharedMemoryPreloadScript,
+  renderSharedMemoryWrapperScript,
   parseClaudeSharedMemoryConfig,
   parseCodexSharedMemoryConfig,
   parseGeminiSharedMemoryConfig,
@@ -43,6 +46,9 @@ describe("shared memory provider", () => {
     );
     expect(defaultSharedMemoryWrapperPath("/home/tester")).toBe(
       "/home/tester/.local/bin/agent-bridge-knowledgegraph-mcp",
+    );
+    expect(defaultSharedMemoryPreloadPath("/home/tester")).toBe(
+      "/home/tester/.agent-bridge/shared-memory/provider/stdio-clean-log-preload.cjs",
     );
   });
 
@@ -240,5 +246,26 @@ describe("instruction file rendering", () => {
     expect(rendered).toContain("Keep this");
     expect(rendered).not.toContain("\nold\n");
     expect(rendered).toContain("Agent: Gemini");
+  });
+});
+
+describe("runtime launcher rendering", () => {
+  it("creates a preload script that redirects console.log to stderr", () => {
+    const rendered = renderSharedMemoryPreloadScript();
+    expect(rendered).toContain("const util = require('node:util');");
+    expect(rendered).toContain("console.log = (...args) => {");
+    expect(rendered).toContain("process.stderr.write(`${util.format(...args)}\\n`);");
+  });
+
+  it("creates a wrapper that preloads the stdio cleanup shim", () => {
+    const rendered = renderSharedMemoryWrapperScript({
+      installPrefix: "/home/tester/.agent-bridge/shared-memory/provider",
+      preloadPath: "/home/tester/.agent-bridge/shared-memory/provider/stdio-clean-log-preload.cjs",
+    });
+
+    expect(rendered).toContain("#!/usr/bin/env bash");
+    expect(rendered).toContain("set -euo pipefail");
+    expect(rendered).toContain('--require "/home/tester/.agent-bridge/shared-memory/provider/stdio-clean-log-preload.cjs"');
+    expect(rendered).toContain('"/home/tester/.agent-bridge/shared-memory/provider/node_modules/knowledgegraph-mcp/dist/index.js"');
   });
 });

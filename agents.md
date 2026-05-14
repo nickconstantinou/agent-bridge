@@ -40,6 +40,7 @@ The bridge can configure a loosely coupled MCP memory provider for external CLIs
 - Default storage: SQLite
 - Default path: `$HOME/.agent-bridge/shared-memory/knowledgegraph.sqlite`
 - Runtime prefix: `$HOME/.agent-bridge/shared-memory/provider`
+- Preload shim: `$HOME/.agent-bridge/shared-memory/provider/stdio-clean-log-preload.cjs`
 - Wrapper command: `$HOME/.local/bin/agent-bridge-knowledgegraph-mcp`
 - Managed configs:
   - `~/.codex/config.toml`
@@ -58,7 +59,7 @@ npm run setup:shared-memory
 
 Run this as the target user, not with `sudo`. The systemd install step is separate.
 
-The setup script installs `knowledgegraph-mcp` into the user-local runtime prefix above and writes the wrapper command into the CLI configs. That avoids the broken raw `npx knowledgegraph-mcp` launch path and pins the provider to a local Node 22 runtime.
+The setup script installs `knowledgegraph-mcp` into the user-local runtime prefix above and writes the wrapper command into the CLI configs. That avoids the broken raw `npx knowledgegraph-mcp` launch path, pins the provider to a local Node 22 runtime, and redirects package startup `console.log` noise to `stderr` so MCP stdio stays parseable.
 
 Verify:
 

@@ -9,6 +9,7 @@ import {
   buildCliInvocation,
   parseCliResult,
   handleCommand,
+  isBridgeCommand,
   getBridgeProjectDir,
   getCliWorkingDir,
   validateBridgeConfig,
@@ -28,7 +29,15 @@ describe("agent bridge MVP", () => {
   it("extracts plain message text", () => {
     expect(extractPromptText({ text: "hello" } as any)).toBe("hello");
     expect(extractPromptText({ text: "   " } as any)).toBeNull();
+    expect(extractPromptText({ text: "/start" } as any)).toBeNull();
     expect(extractPromptText({} as any)).toBeNull();
+  });
+
+  it("recognizes supported bridge commands", () => {
+    expect(isBridgeCommand("/start")).toBe(true);
+    expect(isBridgeCommand("/models")).toBe(true);
+    expect(isBridgeCommand("/memory")).toBe(true);
+    expect(isBridgeCommand("hello")).toBe(false);
   });
 
   it("creates fresh codex invocation using exec subcommand", () => {
@@ -217,7 +226,8 @@ describe("agent bridge MVP", () => {
     it("handles /reset to clear session for the chat", () => {
       db.setSession("123", "gemini", "session-123");
       const result = handleCommand("gemini", "/reset", { db, chatId: "123", config });
-      expect(result).toContain("gemini session reset");
+      expect(result?.kind).toBe("message");
+      expect(result && "text" in result ? result.text : "").toContain("gemini session reset");
       expect(db.getSession("123", "gemini")).toBeNull();
     });
 
@@ -230,13 +240,22 @@ describe("agent bridge MVP", () => {
 
     it("handles /models showing current and available models", () => {
       const result = handleCommand("gemini", "/models", { db, chatId: "123", config });
-      expect(result).toContain("Current: gemini-1.5-pro");
-      expect(result).toContain("Available: gemini-1.5-pro");
+      expect(result?.kind).toBe("message");
+      expect(result && "text" in result ? result.text : "").toContain("Current: gemini-1.5-pro");
+      expect(result && "text" in result ? result.text : "").toContain("Available: gemini-1.5-pro");
     });
 
     it("handles /start", () => {
       const result = handleCommand("gemini", "/start", { db, chatId: "123", config });
-      expect(result).toContain("gemini bridge ready");
+      expect(result?.kind).toBe("message");
+      expect(result && "text" in result ? result.text : "").toContain("gemini bridge ready");
+    });
+
+    it("builds an executable memory smoke test command", () => {
+      const result = handleCommand("codex", "/memory", { db, chatId: "123", config });
+      expect(result?.kind).toBe("execute");
+      expect(result && "prompt" in result ? result.prompt : "").toContain("search_knowledge");
+      expect(result && "prompt" in result ? result.prompt : "").toContain('project_id: "server"');
     });
   });
 });

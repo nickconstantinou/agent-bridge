@@ -59,6 +59,7 @@ Important:
 |---------|--------|
 | `/reset` | Clear the current CLI session (start fresh) |
 | `/models` | Show and change the active model |
+| `/memory` | Run a shared-memory MCP smoke test through the live CLI path |
 | `/stop` | Abort the currently running CLI process |
 | `/cancel` | Same as `/stop` |
 

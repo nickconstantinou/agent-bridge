@@ -73,6 +73,14 @@ Prefer updating existing entities over creating duplicates.
 
 The setup script writes this as a managed markdown block so it can be updated later without replacing the rest of your home-level instruction files.
 
+Smoke test:
+
+```text
+/memory
+```
+
+This runs a live CLI-path MCP verification by asking the bridged agent to call `search_knowledge` and report whether the shared-memory tools are available.
+
 ---
 
 ## Data Storage — SQLite Only

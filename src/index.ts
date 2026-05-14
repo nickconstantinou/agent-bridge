@@ -8,6 +8,7 @@ import {
   getCliWorkingDir,
   getBridgeProjectDir,
   handleCommand,
+  isBridgeCommand,
   isAuthorizedMessage,
   parseCliResult,
   buildCliInvocation,
@@ -158,20 +159,24 @@ class BridgeBot {
     const primaryMessage = messages.find((m) => m.text || m.caption) || messages[0];
 
     const threadId = extractThreadId(messages);
-    const prompt = extractPromptText(primaryMessage);
-    if (!prompt) return;
+    const rawText = (primaryMessage.text || primaryMessage.caption || "").trim();
+    const commandText = isBridgeCommand(rawText) ? rawText : null;
+    const prompt = commandText ? null : extractPromptText(primaryMessage);
+    if (!commandText && !prompt) return;
 
     const chatId = primaryMessage.chat.id;
     const chatKey = String(chatId);
 
-    const commandResponse = handleCommand(this.kind, prompt, {
+    const commandResponse = commandText ? handleCommand(this.kind, commandText, {
       db,
       chatId: chatKey,
       config,
-    });
+    }) : null;
     if (commandResponse) {
-      await this.sendText(chatId, { text: commandResponse, message_thread_id: threadId });
-      return;
+      if (commandResponse.kind === "message") {
+        await this.sendText(chatId, { text: commandResponse.text, message_thread_id: threadId });
+        return;
+      }
     }
 
     const sessionId = db.getSession(chatKey, this.kind);
@@ -196,10 +201,10 @@ class BridgeBot {
           chatType,
           body: { message_thread_id: threadId },
           execution: (onProgress: (text: string) => void) =>
-            this.executePromptAsync(prompt, geminiSessionId, chatId, { message_thread_id: threadId }, onProgress),
+            this.executePromptAsync(commandResponse?.kind === "execute" ? commandResponse.prompt : prompt!, geminiSessionId, chatId, { message_thread_id: threadId }, onProgress),
         });
       } else {
-        const result = await this.executePrompt(prompt, geminiSessionId, chatId, { message_thread_id: threadId });
+        const result = await this.executePrompt(commandResponse?.kind === "execute" ? commandResponse.prompt : prompt!, geminiSessionId, chatId, { message_thread_id: threadId });
         await this.sendText(chatId, { text: result.text, message_thread_id: threadId });
       }
     } catch (error) {

@@ -114,7 +114,7 @@ The bridge runtime database remains separate from the shared MCP memory database
 ## Systemd deployment
 
 ```bash
-bash scripts/install.sh
+sudo bash scripts/install.sh
 ```
 
 Or copy manually:

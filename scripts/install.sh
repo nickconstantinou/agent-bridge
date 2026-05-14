@@ -30,6 +30,32 @@ require_node() {
   fi
 }
 
+env_file_get() {
+  local file="$1" key="$2"
+  [[ -f "${file}" ]] || return 0
+  awk -F= -v key="${key}" '
+    $0 !~ /^[[:space:]]*#/ && $1 == key {
+      sub(/^[^=]*=/, "");
+      print;
+      exit
+    }
+  ' "${file}"
+}
+
+seed_from_env_file() {
+  local file="$1"
+  local key value
+  for key in BRIDGE_ROOT_DIR BRIDGE_PROJECT_DIR TELEGRAM_ALLOWED_USER_ID TELEGRAM_BOT_TOKEN_CODEX TELEGRAM_BOT_TOKEN_GEMINI CODEX_COMMAND GEMINI_COMMAND CLAUDE_COMMAND BRIDGE_EXECUTION_MODE; do
+    value="$(env_file_get "${file}" "${key}")"
+    if [[ -n "${value}" && -z "${!key:-}" ]]; then
+      export "${key}=${value}"
+    fi
+  done
+}
+
+seed_from_env_file "${REPO_DIR}/.env.codex"
+seed_from_env_file "${REPO_DIR}/.env.gemini"
+
 prompt() {
   local var="$1" label="$2" default="${3:-}"
   local current="${!var:-}"

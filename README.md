@@ -29,12 +29,14 @@ Polls a Telegram bot for messages, routes them to the Codex or Gemini CLI, and s
 npm install
 cp .env.codex.example .env.codex
 cp .env.gemini.example .env.gemini
+npm run setup:shared-memory
 ```
 
 Then fill in:
 - `TELEGRAM_BOT_TOKEN_CODEX` in `.env.codex`
 - `TELEGRAM_BOT_TOKEN_GEMINI` in `.env.gemini`
 - `TELEGRAM_ALLOWED_USER_ID` in both files
+- shared memory MCP config is written to `~/.codex/config.toml`, `~/.gemini/settings.json`, and `~/.claude.json`
 
 Run a single bot for development:
 
@@ -79,6 +81,35 @@ Each service reads its own `.env` file:
 | `POLL_INTERVAL_MS` | No | `1000` | Telegram long-poll idle interval (ms) |
 | `BRIDGE_ROOT_DIR` | No | `$HOME` | Working directory for CLI execution |
 | `BRIDGE_PROJECT_DIR` | No | auto-detected | Repo path (used for default DB location) |
+
+## Shared MCP memory
+
+`agent-bridge` can bootstrap a shared `knowledgegraph-mcp` SQLite memory layer for Codex, Gemini, and Claude Code.
+
+Default SQLite path:
+
+```bash
+$HOME/.agent-bridge/shared-memory/knowledgegraph.sqlite
+```
+
+Setup:
+
+```bash
+npm run setup:shared-memory
+```
+
+Verify:
+
+```bash
+npm run verify:shared-memory
+```
+
+The setup script updates:
+- `~/.codex/config.toml`
+- `~/.gemini/settings.json`
+- `~/.claude.json`
+
+The bridge runtime database remains separate from the shared MCP memory database.
 
 ## Systemd deployment
 

@@ -32,6 +32,39 @@ Each bot is an **independent systemd service** sharing the same TypeScript sourc
 | `agent-bridge-gemini.service` | `.env.gemini` | `.data-gemini/` |
 | `agent-bridge-codex.service` | `.env.codex` | `.data-codex/` |
 
+## Shared MCP Memory
+
+The bridge can configure a loosely coupled MCP memory provider for external CLIs without changing the bridge runtime.
+
+- Default provider: `knowledgegraph-mcp`
+- Default storage: SQLite
+- Default path: `$HOME/.agent-bridge/shared-memory/knowledgegraph.sqlite`
+- Managed configs:
+  - `~/.codex/config.toml`
+  - `~/.gemini/settings.json`
+  - `~/.claude.json`
+
+Bootstrap:
+
+```bash
+npm run setup:shared-memory
+```
+
+Verify:
+
+```bash
+npm run verify:shared-memory
+```
+
+Memory handshake prompt:
+
+```text
+On startup, check shared memory for relevant project facts and prior architectural decisions.
+Record durable project facts as entities, relations, or observations.
+Do not store ephemeral chat noise, tentative brainstorming, or repeated status updates.
+Prefer updating existing entities over creating duplicates.
+```
+
 ---
 
 ## Data Storage — SQLite Only

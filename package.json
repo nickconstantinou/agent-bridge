@@ -6,7 +6,9 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "setup:shared-memory": "tsx scripts/setup-shared-memory.ts",
+    "verify:shared-memory": "tsx scripts/setup-shared-memory.ts --verify"
   },
   "dependencies": {
     "better-sqlite3": "^12.9.0",

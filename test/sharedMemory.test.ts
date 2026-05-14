@@ -3,6 +3,8 @@ import {
   buildKnowledgeGraphProvider,
   buildSharedMemorySetupPlan,
   defaultSharedMemoryDbPath,
+  defaultSharedMemoryInstallPrefix,
+  defaultSharedMemoryWrapperPath,
   getSharedMemoryHomeDir,
   renderMemoryInstructionFile,
   parseClaudeSharedMemoryConfig,
@@ -16,11 +18,14 @@ import {
 
 describe("shared memory provider", () => {
   it("builds a knowledgegraph provider with sqlite defaults", () => {
-    const provider = buildKnowledgeGraphProvider("/tmp/shared-memory.db");
+    const provider = buildKnowledgeGraphProvider(
+      "/tmp/shared-memory.db",
+      "/home/tester/.local/bin/agent-bridge-knowledgegraph-mcp",
+    );
     expect(provider.providerId).toBe("knowledgegraph-mcp");
     expect(provider.serverName).toBe("shared_memory");
-    expect(provider.command).toBe("npx");
-    expect(provider.args).toEqual(["-y", "knowledgegraph-mcp"]);
+    expect(provider.command).toBe("/home/tester/.local/bin/agent-bridge-knowledgegraph-mcp");
+    expect(provider.args).toEqual([]);
     expect(provider.env).toEqual({
       KNOWLEDGEGRAPH_SQLITE_PATH: "/tmp/shared-memory.db",
     });
@@ -29,6 +34,15 @@ describe("shared memory provider", () => {
   it("uses an absolute db path under the home directory by default", () => {
     expect(defaultSharedMemoryDbPath("/home/tester")).toBe(
       "/home/tester/.agent-bridge/shared-memory/knowledgegraph.sqlite",
+    );
+  });
+
+  it("uses stable default install paths under the home directory", () => {
+    expect(defaultSharedMemoryInstallPrefix("/home/tester")).toBe(
+      "/home/tester/.agent-bridge/shared-memory/provider",
+    );
+    expect(defaultSharedMemoryWrapperPath("/home/tester")).toBe(
+      "/home/tester/.local/bin/agent-bridge-knowledgegraph-mcp",
     );
   });
 
@@ -43,10 +57,13 @@ describe("shared memory provider", () => {
 
 describe("codex config rendering", () => {
   it("appends a shared memory section when absent", () => {
-    const rendered = renderCodexConfig("", buildKnowledgeGraphProvider("/tmp/shared-memory.db"));
+    const rendered = renderCodexConfig(
+      "",
+      buildKnowledgeGraphProvider("/tmp/shared-memory.db", "/tmp/agent-bridge-knowledgegraph-mcp"),
+    );
     expect(rendered).toContain("[mcp_servers.shared_memory]");
-    expect(rendered).toContain('command = "npx"');
-    expect(rendered).toContain('args = ["-y", "knowledgegraph-mcp"]');
+    expect(rendered).toContain('command = "/tmp/agent-bridge-knowledgegraph-mcp"');
+    expect(rendered).toContain("args = []");
     expect(rendered).toContain('KNOWLEDGEGRAPH_SQLITE_PATH = "/tmp/shared-memory.db"');
   });
 
@@ -66,7 +83,7 @@ command = "keep"
 
     const rendered = renderCodexConfig(
       existing,
-      buildKnowledgeGraphProvider("/tmp/shared-memory.db"),
+      buildKnowledgeGraphProvider("/tmp/shared-memory.db", "/tmp/agent-bridge-knowledgegraph-mcp"),
     );
 
     expect(rendered).toContain('[foo]\nbar = "baz"');
@@ -79,27 +96,33 @@ command = "keep"
 describe("json config rendering", () => {
   it("adds shared memory to gemini settings while preserving unrelated data", () => {
     const existing = JSON.stringify({ theme: "dark", mcpServers: { other: { command: "x" } } });
-    const rendered = renderGeminiConfig(existing, buildKnowledgeGraphProvider("/tmp/shared-memory.db"));
+    const rendered = renderGeminiConfig(
+      existing,
+      buildKnowledgeGraphProvider("/tmp/shared-memory.db", "/tmp/agent-bridge-knowledgegraph-mcp"),
+    );
     const parsed = JSON.parse(rendered);
     expect(parsed.theme).toBe("dark");
     expect(parsed.mcpServers.other.command).toBe("x");
-    expect(parsed.mcpServers.shared_memory.command).toBe("npx");
+    expect(parsed.mcpServers.shared_memory.command).toBe("/tmp/agent-bridge-knowledgegraph-mcp");
     expect(parsed.mcpServers.shared_memory.env.KNOWLEDGEGRAPH_SQLITE_PATH).toBe("/tmp/shared-memory.db");
   });
 
   it("adds shared memory to claude config while preserving unrelated data", () => {
     const existing = JSON.stringify({ projects: [], mcpServers: { existing: { command: "x" } } });
-    const rendered = renderClaudeConfig(existing, buildKnowledgeGraphProvider("/tmp/shared-memory.db"));
+    const rendered = renderClaudeConfig(
+      existing,
+      buildKnowledgeGraphProvider("/tmp/shared-memory.db", "/tmp/agent-bridge-knowledgegraph-mcp"),
+    );
     const parsed = JSON.parse(rendered);
     expect(parsed.projects).toEqual([]);
     expect(parsed.mcpServers.existing.command).toBe("x");
-    expect(parsed.mcpServers.shared_memory.args).toEqual(["-y", "knowledgegraph-mcp"]);
+    expect(parsed.mcpServers.shared_memory.args).toEqual([]);
   });
 });
 
 describe("config parsing", () => {
   it("extracts shared memory settings from each config format", () => {
-    const provider = buildKnowledgeGraphProvider("/tmp/shared-memory.db");
+    const provider = buildKnowledgeGraphProvider("/tmp/shared-memory.db", "/tmp/agent-bridge-knowledgegraph-mcp");
     const codex = parseCodexSharedMemoryConfig(renderCodexConfig("", provider));
     const gemini = parseGeminiSharedMemoryConfig(renderGeminiConfig("{}", provider));
     const claude = parseClaudeSharedMemoryConfig(renderClaudeConfig("{}", provider));
@@ -112,7 +135,7 @@ describe("config parsing", () => {
 
 describe("shared memory verification", () => {
   it("passes when all configs point to the same provider and db path", () => {
-    const provider = buildKnowledgeGraphProvider("/tmp/shared-memory.db");
+    const provider = buildKnowledgeGraphProvider("/tmp/shared-memory.db", "/tmp/agent-bridge-knowledgegraph-mcp");
     const result = verifySharedMemoryConfigs({
       codex: renderCodexConfig("", provider),
       gemini: renderGeminiConfig("{}", provider),
@@ -124,8 +147,8 @@ describe("shared memory verification", () => {
   });
 
   it("fails when one cli points at a different database path", () => {
-    const good = buildKnowledgeGraphProvider("/tmp/shared-memory.db");
-    const bad = buildKnowledgeGraphProvider("/tmp/other.db");
+    const good = buildKnowledgeGraphProvider("/tmp/shared-memory.db", "/tmp/agent-bridge-knowledgegraph-mcp");
+    const bad = buildKnowledgeGraphProvider("/tmp/other.db", "/tmp/agent-bridge-knowledgegraph-mcp");
     const result = verifySharedMemoryConfigs({
       codex: renderCodexConfig("", good),
       gemini: renderGeminiConfig("{}", good),
@@ -137,7 +160,7 @@ describe("shared memory verification", () => {
   });
 
   it("fails when a config uses a relative database path", () => {
-    const provider = buildKnowledgeGraphProvider("relative/shared-memory.db");
+    const provider = buildKnowledgeGraphProvider("relative/shared-memory.db", "/tmp/agent-bridge-knowledgegraph-mcp");
     const result = verifySharedMemoryConfigs({
       codex: renderCodexConfig("", provider),
       gemini: renderGeminiConfig("{}", provider),
@@ -157,11 +180,14 @@ describe("setup plan", () => {
       hasGemini: false,
       hasClaude: false,
       dbPath: "/tmp/shared-memory.db",
+      installPrefix: "/tmp/provider",
+      wrapperPath: "/tmp/agent-bridge-knowledgegraph-mcp",
     });
 
     expect(plan.installs).toEqual([
       "npm install -g @google/gemini-cli",
       "npm install -g @anthropic-ai/claude-code",
+      'npx -y node@22 $(which npm) install --prefix "/tmp/provider" knowledgegraph-mcp node@22',
     ]);
     expect(plan.errors).toEqual([]);
   });
@@ -173,6 +199,8 @@ describe("setup plan", () => {
       hasGemini: false,
       hasClaude: false,
       dbPath: "/tmp/shared-memory.db",
+      installPrefix: "/tmp/provider",
+      wrapperPath: "/tmp/agent-bridge-knowledgegraph-mcp",
     });
 
     expect(plan.errors).toContain("Node.js 22+ is required for the installer.");

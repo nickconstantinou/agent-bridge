@@ -28,6 +28,13 @@ npm run setup:shared-memory
 
 Run this as the target user. Do not run it with `sudo`.
 
+The setup script performs two runtime steps before patching CLI config:
+
+- installs `knowledgegraph-mcp` and `node@22` under `$HOME/.agent-bridge/shared-memory/provider`
+- writes a stable wrapper at `$HOME/.local/bin/agent-bridge-knowledgegraph-mcp`
+
+The CLI configs point at that wrapper, not at `npx`, so the MCP server runs with the same Node 22 runtime it was built against.
+
 ## Verify
 
 ```bash
@@ -68,3 +75,4 @@ Prefer updating existing entities over creating duplicates.
 - Config patching is idempotent.
 - The implementation is provider-based so `knowledgegraph-mcp` can be replaced later.
 - Systemd installation is root-scoped, but shared-memory configuration is user-scoped.
+- The runtime wrapper is persistent and user-local, which avoids ephemeral `npx` native-module failures.

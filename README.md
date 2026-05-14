@@ -101,6 +101,13 @@ Setup:
 npm run setup:shared-memory
 ```
 
+This setup now installs a persistent user-local MCP runtime and wrapper:
+
+- runtime prefix: `$HOME/.agent-bridge/shared-memory/provider`
+- wrapper command: `$HOME/.local/bin/agent-bridge-knowledgegraph-mcp`
+
+The wrapper pins `knowledgegraph-mcp` to a local Node 22 runtime so it does not depend on the host `node` binary or the fragile raw `npx knowledgegraph-mcp` path.
+
 Verify:
 
 ```bash
@@ -124,6 +131,7 @@ The bridge runtime database remains separate from the shared MCP memory database
 `sudo` is only required for the systemd install step. Do not run the shared-memory setup step with `sudo`, or it will target the wrong home directory.
 
 ```bash
+npm run setup:shared-memory
 sudo bash scripts/install.sh
 ```
 

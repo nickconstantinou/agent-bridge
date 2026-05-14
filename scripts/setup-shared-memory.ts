@@ -1,10 +1,13 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
+import { spawnSync } from "node:child_process";
 import {
   buildKnowledgeGraphProvider,
   defaultSharedMemoryDbPath,
+  defaultSharedMemoryInstallPrefix,
+  defaultSharedMemoryWrapperPath,
   getSharedMemoryHomeDir,
   renderMemoryInstructionFile,
   renderClaudeConfig,
@@ -18,7 +21,9 @@ const verifyOnly = args.has("--verify");
 
 const homeDir = getSharedMemoryHomeDir(process.env, homedir());
 const dbPath = process.env.SHARED_MEMORY_DB_PATH || defaultSharedMemoryDbPath(homeDir);
-const provider = buildKnowledgeGraphProvider(dbPath);
+const installPrefix = process.env.SHARED_MEMORY_INSTALL_PREFIX || defaultSharedMemoryInstallPrefix(homeDir);
+const wrapperPath = process.env.SHARED_MEMORY_WRAPPER_PATH || defaultSharedMemoryWrapperPath(homeDir);
+const provider = buildKnowledgeGraphProvider(dbPath, wrapperPath);
 
 const codexPath = join(homeDir, ".codex", "config.toml");
 const geminiPath = join(homeDir, ".gemini", "settings.json");
@@ -34,6 +39,29 @@ function readText(path: string): string {
 function writeText(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content, "utf8");
+}
+
+function installKnowledgeGraphRuntime(prefix: string): void {
+  const npmPath = process.env.npm_execpath || "npm";
+  const install = spawnSync(
+    "npx",
+    ["-y", "node@22", npmPath, "install", "--prefix", prefix, "knowledgegraph-mcp", "node@22"],
+    { stdio: "inherit" },
+  );
+  if (install.status !== 0) {
+    process.exit(install.status ?? 1);
+  }
+}
+
+function renderWrapperScript(prefix: string): string {
+  const nodePath = join(prefix, "node_modules", "node", "bin", "node");
+  const entryPath = join(prefix, "node_modules", "knowledgegraph-mcp", "dist", "index.js");
+  return [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    `exec ${JSON.stringify(nodePath)} ${JSON.stringify(entryPath)} "$@"`,
+    "",
+  ].join("\n");
 }
 
 const existingCodex = readText(codexPath);
@@ -65,6 +93,9 @@ const nextClaudeInstructions = renderMemoryInstructionFile(existingClaudeInstruc
 
 if (!verifyOnly) {
   mkdirSync(dirname(dbPath), { recursive: true });
+  installKnowledgeGraphRuntime(installPrefix);
+  writeText(wrapperPath, renderWrapperScript(installPrefix));
+  chmodSync(wrapperPath, 0o755);
   writeText(codexPath, nextCodex);
   writeText(geminiPath, nextGemini);
   writeText(claudePath, nextClaude);
@@ -95,5 +126,7 @@ if (verifyOnly) {
   console.log(`shared-memory setup: wrote ${codexInstructionsPath}`);
   console.log(`shared-memory setup: wrote ${geminiInstructionsPath}`);
   console.log(`shared-memory setup: wrote ${claudeInstructionsPath}`);
+  console.log(`shared-memory setup: installed runtime ${installPrefix}`);
+  console.log(`shared-memory setup: wrote wrapper ${wrapperPath}`);
   console.log(`shared-memory setup: SQLite path ${dbPath}`);
 }

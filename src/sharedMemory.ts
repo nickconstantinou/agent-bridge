@@ -34,6 +34,14 @@ export function defaultSharedMemoryDbPath(homeDir: string): string {
   return `${homeDir}/.agent-bridge/shared-memory/knowledgegraph.sqlite`;
 }
 
+export function defaultSharedMemoryInstallPrefix(homeDir: string): string {
+  return `${homeDir}/.agent-bridge/shared-memory/provider`;
+}
+
+export function defaultSharedMemoryWrapperPath(homeDir: string): string {
+  return `${homeDir}/.local/bin/agent-bridge-knowledgegraph-mcp`;
+}
+
 export function getSharedMemoryHomeDir(env: {
   SHARED_MEMORY_HOME?: string | undefined;
   HOME?: string | undefined;
@@ -41,12 +49,15 @@ export function getSharedMemoryHomeDir(env: {
   return env.SHARED_MEMORY_HOME || env.HOME || fallbackHome || "";
 }
 
-export function buildKnowledgeGraphProvider(storagePath: string): SharedMemoryProvider {
+export function buildKnowledgeGraphProvider(
+  storagePath: string,
+  commandPath: string,
+): SharedMemoryProvider {
   return {
     providerId: "knowledgegraph-mcp",
     serverName: "shared_memory",
-    command: "npx",
-    args: ["-y", "knowledgegraph-mcp"],
+    command: commandPath,
+    args: [],
     env: {
       KNOWLEDGEGRAPH_SQLITE_PATH: storagePath,
     },
@@ -279,6 +290,8 @@ export function buildSharedMemorySetupPlan(input: {
   hasGemini: boolean;
   hasClaude: boolean;
   dbPath: string;
+  installPrefix: string;
+  wrapperPath: string;
 }): SharedMemorySetupPlan {
   const installs: string[] = [];
   const errors: string[] = [];
@@ -291,10 +304,17 @@ export function buildSharedMemorySetupPlan(input: {
   if (!isAbsolute(input.dbPath)) {
     errors.push("Shared memory SQLite path must be absolute.");
   }
+  if (!isAbsolute(input.installPrefix)) {
+    errors.push("Shared memory install prefix must be absolute.");
+  }
+  if (!isAbsolute(input.wrapperPath)) {
+    errors.push("Shared memory wrapper path must be absolute.");
+  }
 
   if (!input.hasCodex) installs.push("npm install -g @openai/codex");
   if (!input.hasGemini) installs.push("npm install -g @google/gemini-cli");
   if (!input.hasClaude) installs.push("npm install -g @anthropic-ai/claude-code");
+  installs.push(`npx -y node@22 $(which npm) install --prefix "${input.installPrefix}" knowledgegraph-mcp node@22`);
 
   return { installs, errors };
 }

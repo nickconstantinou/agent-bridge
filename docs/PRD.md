@@ -34,9 +34,8 @@
 │                 │     │    └── kill on timeout / abort           │
 │                 │     │         │                                 │
 │                 │     │         ▼                                 │
-│                 │     │  StreamingUpdater                        │
-│                 │     │    ├── DM: debounced editMessageText      │
-│                 │     │    └── Group: sendMessageDraft           │
+│                 │     │  sendMessageWithProgress                 │
+│                 │     │    └── sendTelegramMessage (final send)  │
 └─────────────────┘     └──────────────────────────────────────────┘
          │                            │
          ▼                            ▼
@@ -56,41 +55,34 @@ Telegram Update
     ▼
 handleUpdate()
     ├── callback_query → model selector (inline keyboard)
-    ├── /stop or /cancel → abortCliProcess() + db.unlock() + ack
+    ├── /stop or /cancel → abortCliProcess() → db.unlock() (guarded) + abortedChats.add()
     └── message → isAuthorizedMessage() → MediaGroupBuffer (1500ms flush)
                                                     │
                                                     ▼
                                            handleMessages()
+                                                    ├── abortedChats.delete(chatKey)
                                                     ├── extractPromptText()  → ignore commands
                                                     ├── handleCommand()      → /reset, /models
-                                                    ├── db.tryLock()         → busy guard
-                                                    └── sendMessageWithProgress()
+                                                    ├── db.tryLock()         → enqueue (max 5) or execute
+                                                    └── sendMessageWithProgress(isAborted)
                                                                 │
                                                                 ▼
                                                        executePromptAsync()
                                                                 ├── buildCliInvocation()
                                                                 ├── db.getSession()
                                                                 ├── runCliAsync() → onProgress
-                                                                │       └── StreamingUpdater.push()
                                                                 ├── parseCliResult()
-                                                                ├── db.setSession()
-                                                                └── StreamingUpdater.flush()
+                                                                └── db.setSession()
+                                                    finally: db.unlock() → drainQueue()
 ```
 
 ---
 
 ## 4. Features
 
-### 4.1 Streaming Transport
+### 4.1 Message Delivery
 
-`StreamingUpdater` handles in-progress output:
-
-| Chat type | Mechanism | Debounce |
-|-----------|-----------|---------|
-| DM (private) | `editMessageText` | 1500ms (avoids Telegram rate limits) |
-| Group / supergroup | `sendMessageDraft` | None (bypass debounce) |
-
-Final output always calls `editMessageText` with the complete response. "Message is not modified" errors are treated as a no-op.
+`sendMessageWithProgress` sends a typing indicator while the CLI runs, then sends the final response via `sendTelegramMessage`. If `/stop` was called during execution, `isAborted()` returns true and the final send is suppressed to prevent double-messages.
 
 ### 4.2 Session Persistence
 
@@ -107,19 +99,27 @@ Sessions are stored per chat in SQLite and restored across service restarts. `/r
 
 `/stop` and `/cancel` are intercepted in `handleUpdate` before `db.tryLock()`, so they work even when a lock is held.
 
-### 4.4 Gemini Model Fallback
+### 4.4 Model Fallback
 
-On `MODEL_CAPACITY_EXHAUSTED` / `No capacity available` / `rateLimitExceeded`, the bridge retries with the next model in the fallback chain:
+On `MODEL_CAPACITY_EXHAUSTED` / `No capacity available` / `rateLimitExceeded`, the bridge retries with the next model in the preference chain. Configured via `CODEX_MODEL_PREFERENCE` / `GEMINI_MODEL_PREFERENCE` (comma-separated, priority order):
 
+**Codex** (ChatGPT account auth):
 ```
-gemini-2.5-flash → gemini-2.5-flash-lite → (give up)
+gpt-5.5 → gpt-5.4 → gpt-5.4-mini → (give up)
 ```
 
-The response is prepended with a warning notice.
+**Gemini**:
+```
+gemini-3.1-pro-preview → gemini-3.1-flash-lite-preview → gemini-2.5-pro → gemini-2.5-flash-lite → (give up)
+```
 
-### 4.5 Concurrency Lock
+The response is prepended with a warning notice when a fallback is used.
 
-`db.tryLock(chatId)` is an atomic SQLite `UPDATE … WHERE active_execution_lock = 0` — only one execution per chat at a time. Lock is released in a `finally` block. If busy, the user receives "⏳ System is currently busy."
+### 4.5 Concurrency Lock & Message Queue
+
+`db.tryLock(chatId)` is an atomic SQLite `UPDATE … WHERE active_execution_lock = 0` — only one execution per chat at a time. Lock is released in a `finally` block which also calls `drainQueue(chatKey)`.
+
+If a chat is busy, the incoming message is queued (max `MAX_QUEUE_DEPTH = 5`). The user receives a position notice. When execution finishes, `drainQueue` pops the next item via `setImmediate` and calls `handleMessages` with a synthetic message. If the queue is full, the user receives "⏳ Queue is full."
 
 ### 4.6 Rate Limit Handling
 
@@ -143,7 +143,6 @@ Photos sent as an album share a `media_group_id`. `MediaGroupBuffer` collects me
 | Setting | Default | Env variable |
 |--------|---------|-------------|
 | CLI hard timeout | 300s | `CLI_TIMEOUT_MS` |
-| Gemini fallback timeout | 120s | `GEMINI_FALLBACK_TIMEOUT_MS` |
 | Idle timeout | Disabled | — |
 
 ---
@@ -160,7 +159,6 @@ interface BridgeConfig {
   pollIntervalMs: number;
   executionMode: "safe" | "trusted";
   cliTimeoutMs: number;
-  geminiFallbackTimeoutMs: number;
   asyncEnabled: boolean;
   dbPath: string;
   bots: {

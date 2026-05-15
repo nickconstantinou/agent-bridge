@@ -8,7 +8,6 @@ export interface BridgeConfig {
   pollIntervalMs: number;
   executionMode: "safe" | "trusted";
   cliTimeoutMs: number;
-  geminiFallbackTimeoutMs: number;
   asyncEnabled: boolean;
   dbPath: string;
   bots: {

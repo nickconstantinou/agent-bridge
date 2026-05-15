@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import { sendTelegramMessage, sendMessageWithProgress } from "../src/messageDelivery.js";
 import type { TelegramClient } from "../src/telegram.js";
 import type { CliResult } from "../src/types.js";
@@ -16,7 +17,7 @@ describe("sendMessageWithProgress", () => {
     const chatId = 123;
     const execution = Promise.resolve({ text: "Final answer", sessionId: "s1" } as CliResult);
 
-    await sendMessageWithProgress({ client, kind: "codex", chatId, execution, placeholderText: "🤔 Thinking..." });
+    await sendMessageWithProgress({ client, kind: "codex", chatId, execution });
 
     expect(client.sendMessage).not.toHaveBeenCalledWith(
       expect.objectContaining({ chat_id: chatId, text: "🤔 Thinking..." })
@@ -28,7 +29,7 @@ describe("sendMessageWithProgress", () => {
     const chatId = 123;
     const execution = Promise.resolve({ text: "Final answer", sessionId: "s1" } as CliResult);
 
-    await sendMessageWithProgress({ client, kind: "gemini", chatId, execution, placeholderText: "🤔 Thinking..." });
+    await sendMessageWithProgress({ client, kind: "gemini", chatId, execution });
 
     expect(client.sendMessage).not.toHaveBeenCalledWith(
       expect.objectContaining({ chat_id: chatId, text: "🤔 Thinking..." })
@@ -82,7 +83,6 @@ describe("sendMessageWithProgress", () => {
       client,
       kind: "codex",
       chatId: 123,
-      chatType: "private",
       execution: (onProgress: (chunk: string) => void) => {
         onProgress(bigChunk);
         return Promise.resolve({ text: "done", sessionId: null });
@@ -135,7 +135,6 @@ describe("sendMessageWithProgress", () => {
       client,
       kind: "codex",
       chatId,
-      chatType: "supergroup",
       execution: (onProgress: (chunk: string) => void) => {
         onProgress("streaming chunk");
         return Promise.resolve({ text: "done", sessionId: null });
@@ -154,7 +153,6 @@ describe("sendMessageWithProgress", () => {
       client,
       kind: "codex",
       chatId,
-      chatType: "private",
       execution: (onProgress: (chunk: string) => void) => {
         onProgress('{"type":"thread.started","thread_id":"019e2159-b93a-7572-9067-c78a08615db7"}\n');
         onProgress('{"type":"response.output_text.delta","delta":"Hello there"}\n');
@@ -178,7 +176,6 @@ describe("sendMessageWithProgress", () => {
       client,
       kind: "codex",
       chatId: 123,
-      chatType: "private",
       execution: (onProgress: (chunk: string) => void) => {
         // Three rapid chunks — only the first should fire immediately (lastSendTime=0)
         onProgress("a");
@@ -189,5 +186,28 @@ describe("sendMessageWithProgress", () => {
     });
 
     expect(client.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ text: "final" }));
+  });
+});
+
+describe("dead code removed from messageDelivery.ts", () => {
+  it("usePlaceholder, StreamingUpdater, and activeStreams are not present", () => {
+    const src = readFileSync("src/messageDelivery.ts", "utf-8");
+    expect(src).not.toContain("usePlaceholder");
+    expect(src).not.toContain("StreamingUpdater");
+    expect(src).not.toContain("activeStreams");
+  });
+});
+
+describe("isAborted suppression", () => {
+  it("suppresses final sendTelegramMessage when isAborted() returns true", async () => {
+    const client = createMockClient();
+    await sendMessageWithProgress({
+      client,
+      kind: "codex",
+      chatId: 123,
+      execution: Promise.resolve({ text: "partial", sessionId: null }),
+      isAborted: () => true,
+    });
+    expect(client.sendMessage).not.toHaveBeenCalled();
   });
 });

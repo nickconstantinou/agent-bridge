@@ -68,8 +68,13 @@ export function escapeTelegramMarkdownV2(text: string): string {
 
   return parts
     .map((part) => {
-      if (part.startsWith("```") || part.startsWith("`")) {
-        return part.replace(/([\\`])/g, "\\$1");
+      if (part.startsWith("```")) {
+        const body = part.slice(3, part.length - 3).replace(/\\/g, "\\\\");
+        return "```" + body + "```";
+      }
+      if (part.startsWith("`")) {
+        const body = part.slice(1, part.length - 1).replace(/\\/g, "\\\\");
+        return "`" + body + "`";
       }
 
       // 1. Identify and protect valid simple markdown pairs (*bold*, _italic_, ~strikethrough~, ||spoiler||)

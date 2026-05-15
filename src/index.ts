@@ -42,6 +42,9 @@ function parseModelPreference(raw: string | undefined): string[] {
   return raw ? raw.split(",").map((s) => s.trim()).filter(Boolean) : [];
 }
 
+const MAX_QUEUE_DEPTH = 5;
+type QueuedMessage = { prompt: string; chatId: number; threadId?: number };
+
 const config: BridgeConfig = {
   allowedUserId: process.env.TELEGRAM_ALLOWED_USER_ID || "",
   serviceEnvFile: process.env.BRIDGE_ENV_FILE || null,
@@ -49,7 +52,6 @@ const config: BridgeConfig = {
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 1000),
   executionMode: (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") || "safe",
   cliTimeoutMs: Number(process.env.CLI_TIMEOUT_MS || 300000),
-  geminiFallbackTimeoutMs: Number(process.env.GEMINI_FALLBACK_TIMEOUT_MS || 120000),
   asyncEnabled: process.env.BRIDGE_ASYNC_ENABLED !== "false",
   dbPath: process.env.DB_PATH || `${getBridgeProjectDir()}/.data/bridge.sqlite`,
   bots: {
@@ -78,6 +80,8 @@ class BridgeBot {
   config: BotConfig;
   client: TelegramClient;
   mediaBuffer: MediaGroupBuffer;
+  private abortedChats = new Set<string>();
+  private pendingQueues = new Map<string, QueuedMessage[]>();
 
   constructor(kind: "codex" | "gemini", botConfig: BotConfig) {
     this.kind = kind;
@@ -141,8 +145,11 @@ class BridgeBot {
       const chatId = message.chat.id;
       const chatKey = String(chatId);
       const threadId = message.message_thread_id;
-      abortCliProcess(chatKey);
-      db.unlock(chatKey);
+      const wasAborted = abortCliProcess(chatKey);
+      if (wasAborted) {
+        db.unlock(chatKey);
+        this.abortedChats.add(chatKey);
+      }
       await sendTelegramMessage({
         client: this.client,
         kind: this.kind,
@@ -166,6 +173,7 @@ class BridgeBot {
 
     const chatId = primaryMessage.chat.id;
     const chatKey = String(chatId);
+    this.abortedChats.delete(chatKey);
 
     const commandResponse = commandText ? handleCommand(this.kind, commandText, {
       db,
@@ -182,11 +190,20 @@ class BridgeBot {
     const sessionId = db.getSession(chatKey, this.kind);
     const geminiSessionId = this.kind === "gemini" && !sessionId ? randomUUID() : sessionId;
     const useAsync = config.asyncEnabled === true;
-    const chatType = primaryMessage.chat.type;
 
     if (!db.tryLock(chatKey)) {
+      const queue = this.pendingQueues.get(chatKey) ?? [];
+      if (queue.length >= MAX_QUEUE_DEPTH) {
+        await this.sendText(chatId, {
+          text: `⏳ Queue is full (max ${MAX_QUEUE_DEPTH}). Please wait.`,
+          message_thread_id: threadId,
+        });
+        return;
+      }
+      queue.push({ prompt: commandResponse?.kind === "execute" ? commandResponse.prompt : prompt!, chatId, threadId });
+      this.pendingQueues.set(chatKey, queue);
       await this.sendText(chatId, {
-        text: "⏳ System is currently busy. Please wait for the current request to finish.",
+        text: `⏳ Queued (position ${queue.length} of ${MAX_QUEUE_DEPTH}). Will process shortly.`,
         message_thread_id: threadId,
       });
       return;
@@ -198,8 +215,8 @@ class BridgeBot {
           client: this.client,
           kind: this.kind,
           chatId,
-          chatType,
           body: { message_thread_id: threadId },
+          isAborted: () => this.abortedChats.has(chatKey),
           execution: (onProgress: (text: string) => void) =>
             this.executePromptAsync(commandResponse?.kind === "execute" ? commandResponse.prompt : prompt!, geminiSessionId, chatId, { message_thread_id: threadId }, onProgress),
         });
@@ -218,7 +235,29 @@ class BridgeBot {
       });
     } finally {
       db.unlock(chatKey);
+      this.drainQueue(chatKey);
     }
+  }
+
+  private drainQueue(chatKey: string): void {
+    const queue = this.pendingQueues.get(chatKey);
+    if (!queue?.length) return;
+    const next = queue.shift()!;
+    if (!queue.length) this.pendingQueues.delete(chatKey);
+    setImmediate(() => {
+      this.sendText(next.chatId, {
+        text: "▶️ Processing your queued message...",
+        message_thread_id: next.threadId,
+      }).catch(() => {});
+      const syntheticMessage: TelegramMessage = {
+        message_id: 0,
+        chat: { id: next.chatId, type: "private" },
+        text: next.prompt,
+      };
+      this.handleMessages([syntheticMessage]).catch((err) =>
+        console.error(`[${this.kind}] drainQueue error`, err)
+      );
+    });
   }
 
   async executePromptAsync(prompt: string, sessionId: string | null, chatId: number, body: any = {}, onProgress = (_text: string) => {}): Promise<CliResult> {
@@ -235,10 +274,6 @@ class BridgeBot {
       executionMode: config.executionMode,
       outputFormat: "json",
     });
-    if (this.kind === "gemini" && sessionId && !db.getSession(chatKey, this.kind)) {
-      db.setSession(chatKey, this.kind, sessionId);
-    }
-
     const typingTracker = createTypingTracker(this.client, chatId, this.kind, { message_thread_id: threadId });
     await typingTracker.start();
 
@@ -301,10 +336,6 @@ class BridgeBot {
       sessionMode: this.kind === "gemini" && !db.getSession(chatKey, this.kind) ? "session-id" : "resume",
       executionMode: config.executionMode,
     });
-    if (this.kind === "gemini" && sessionId && !db.getSession(chatKey, this.kind)) {
-      db.setSession(chatKey, this.kind, sessionId);
-    }
-
     const typingTracker = createTypingTracker(this.client, chatId, this.kind, { message_thread_id: threadId });
 
     try {

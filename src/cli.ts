@@ -15,13 +15,14 @@ function killChild(child: ChildProcess): void {
   } catch {
     // ignore
   }
-  setTimeout(() => {
+  const sigkillTimer = setTimeout(() => {
     try {
       child.kill("SIGKILL");
     } catch {
       // ignore
     }
   }, 5_000);
+  child.once("close", () => clearTimeout(sigkillTimer));
 }
 
 export function abortCliProcess(chatId: number | string): boolean {
@@ -40,21 +41,6 @@ export function shutdownCliProcesses(): number {
   const count = children.length;
   activeProcesses.clear();
   return count;
-}
-
-if (typeof process !== "undefined") {
-  const cleanup = () => {
-    shutdownCliProcesses();
-  };
-  process.once("beforeExit", cleanup);
-  process.once("SIGINT", () => {
-    cleanup();
-    process.exit(0);
-  });
-  process.once("SIGTERM", () => {
-    cleanup();
-    process.exit(0);
-  });
 }
 
 /**
@@ -115,26 +101,6 @@ export function buildCliInvocation({
     args.push("--prompt", prompt);
   }
 
-  return { command, args };
-}
-
-/**
- * Builds a fallback invocation for Gemini if ACP fails.
- */
-export function buildGeminiFallbackInvocation({
-  command,
-  model,
-  prompt,
-}: {
-  command: string;
-  model: string | null;
-  prompt: string;
-}): { command: string; args: string[] } {
-  const args = [];
-  if (model) {
-    args.push("--model", model);
-  }
-  args.push("--prompt", prompt);
   return { command, args };
 }
 
@@ -242,31 +208,6 @@ function parseGeminiResult(stdout: string): CliResult {
   text = lines.join("\n").trim();
 
   return { text, sessionId };
-}
-
-function parseGeminiAcpResult(stdout: string): CliResult {
-  const lines = stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  let text = "";
-  let sessionId: string | null = null;
-
-  for (const line of lines) {
-    try {
-      const parsed = JSON.parse(line);
-      if (parsed.type === "chunk" && parsed.text) {
-        text += parsed.text;
-      } else if (parsed.type === "complete" && parsed.sessionId) {
-        sessionId = parsed.sessionId;
-      }
-    } catch {
-      // ignore non-json lines
-    }
-  }
-
-  return { text: text.trim(), sessionId };
 }
 
 function parseGeminiStreamJson(stdout: string): CliResult {

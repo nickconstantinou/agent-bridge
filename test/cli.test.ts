@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
 import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel } from "../src/cli.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -146,5 +147,31 @@ describe("model fallback", () => {
     expect(getNextFallbackModel("a", prefs)).toBe("b");
     expect(getNextFallbackModel("b", prefs)).toBe("c");
     expect(getNextFallbackModel("c", prefs)).toBeNull();
+  });
+});
+
+describe("cli.ts signal handler hygiene", () => {
+  it("does not register SIGTERM or SIGINT handlers at module scope", () => {
+    const src = readFileSync("src/cli.ts", "utf-8");
+    expect(src).not.toMatch(/process\.once\(["']SIGTERM["']/);
+    expect(src).not.toMatch(/process\.once\(["']SIGINT["']/);
+  });
+
+  it("killChild stores sigkillTimer handle and clears it on child close", () => {
+    const src = readFileSync("src/cli.ts", "utf-8");
+    expect(src).toMatch(/const sigkillTimer\s*=\s*setTimeout/);
+    expect(src).toMatch(/child\.once\(["']close["'][^}]*clearTimeout\(sigkillTimer\)/s);
+  });
+});
+
+describe("dead code removed from cli.ts", () => {
+  it("buildGeminiFallbackInvocation is not present", () => {
+    const src = readFileSync("src/cli.ts", "utf-8");
+    expect(src).not.toContain("buildGeminiFallbackInvocation");
+  });
+
+  it("parseGeminiAcpResult is not present", () => {
+    const src = readFileSync("src/cli.ts", "utf-8");
+    expect(src).not.toContain("parseGeminiAcpResult");
   });
 });

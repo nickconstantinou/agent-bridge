@@ -1,4 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -257,5 +258,65 @@ describe("agent bridge MVP", () => {
       expect(result && "prompt" in result ? result.prompt : "").toContain("search_knowledge");
       expect(result && "prompt" in result ? result.prompt : "").toContain('project_id: "server"');
     });
+  });
+});
+
+describe("dead config fields removed", () => {
+  it("geminiFallbackTimeoutMs is not present in types.ts or index.ts", () => {
+    expect(readFileSync("src/types.ts", "utf-8")).not.toContain("geminiFallbackTimeoutMs");
+    expect(readFileSync("src/index.ts", "utf-8")).not.toContain("geminiFallbackTimeoutMs");
+  });
+});
+
+describe("premature setSession removed", () => {
+  it("db.setSession does not appear before await runCli in index.ts", () => {
+    const src = readFileSync("src/index.ts", "utf-8");
+    expect(src).not.toMatch(
+      /db\.setSession\(chatKey,\s*this\.kind,\s*sessionId\)[\s\S]{0,200}await runCli/
+    );
+  });
+});
+
+describe("/stop handler unlock guard", () => {
+  it("db.unlock is guarded by abortCliProcess return value", () => {
+    const src = readFileSync("src/index.ts", "utf-8");
+    expect(src).toMatch(/const (?:aborted|wasAborted)\s*=\s*abortCliProcess\(chatKey\)/);
+    expect(src).toMatch(/if\s*\((?:aborted|wasAborted)\)\s*\{?\s*db\.unlock\(chatKey\)/s);
+  });
+});
+
+describe("abortedChats Set", () => {
+  it("BridgeBot has abortedChats Set, /stop adds to it, handleMessages clears it", () => {
+    const src = readFileSync("src/index.ts", "utf-8");
+    expect(src).toMatch(/private\s+abortedChats\s*=\s*new Set/);
+    expect(src).toMatch(/this\.abortedChats\.add\(chatKey\)/);
+    expect(src).toMatch(/this\.abortedChats\.delete\(chatKey\)/);
+  });
+});
+
+describe("message queue", () => {
+  it("QueuedMessage type, MAX_QUEUE_DEPTH=5, and pendingQueues Map exist", () => {
+    const src = readFileSync("src/index.ts", "utf-8");
+    expect(src).toContain("QueuedMessage");
+    expect(src).toMatch(/MAX_QUEUE_DEPTH\s*=\s*5/);
+    expect(src).toMatch(/pendingQueues\s*=\s*new Map/);
+  });
+
+  it("tryLock failure enqueues or reports queue full", () => {
+    const src = readFileSync("src/index.ts", "utf-8");
+    expect(src).toMatch(/Queue is full/);
+    expect(src).toMatch(/Queued \(position/);
+  });
+
+  it("drainQueue is called after db.unlock in finally", () => {
+    const src = readFileSync("src/index.ts", "utf-8");
+    expect(src).toMatch(/finally\s*\{[^}]*db\.unlock\(chatKey\)[^}]*this\.drainQueue\(chatKey\)/s);
+  });
+
+  it("drainQueue uses setImmediate and sends processing notice", () => {
+    const src = readFileSync("src/index.ts", "utf-8");
+    expect(src).toContain("drainQueue");
+    expect(src).toMatch(/setImmediate/);
+    expect(src).toMatch(/Processing your queued message/);
   });
 });

@@ -6,17 +6,13 @@ describe("escapeTelegramMarkdownV2", () => {
     expect(escapeTelegramMarkdownV2("Hello-world.!")).toBe("Hello\\-world\\.\\!");
   });
 
-  it("escapes backticks inside code blocks as required by Telegram", () => {
-    const text = "Fixed: `v1.0.0-beta`";
-    // Telegram V2 docs: "Inside pre and code entities, all '`', and '\' characters must be escaped"
-    // BUT the wrapping backticks themselves should probably NOT be escaped if they are delimiters.
-    // My implementation is currently escaping the delimiters because they are part of the 'part'.
-    expect(escapeTelegramMarkdownV2(text)).toBe("Fixed: \\`v1.0.0-beta\\`");
+  it("does not escape the delimiter backticks of inline code", () => {
+    expect(escapeTelegramMarkdownV2("`v1.0.0-beta`")).toBe("`v1.0.0-beta`");
+    expect(escapeTelegramMarkdownV2("Fixed: `v1.0.0-beta`")).toBe("Fixed: `v1.0.0-beta`");
   });
 
-  it("escapes backticks inside triple backtick blocks", () => {
-    const text = "Check this:\n```\nconst x = 1-2;\n```";
-    expect(escapeTelegramMarkdownV2(text)).toBe("Check this:\n\\`\\`\\`\nconst x = 1-2;\n\\`\\`\\`");
+  it("does not escape triple-backtick fences", () => {
+    expect(escapeTelegramMarkdownV2("```\nconst x = 1-2;\n```")).toBe("```\nconst x = 1-2;\n```");
   });
 
   it("preserves bold and italic syntax while escaping content", () => {

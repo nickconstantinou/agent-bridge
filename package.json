@@ -7,6 +7,7 @@
     "start": "tsx src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "agent-memory": "tsx scripts/agent-memory.ts",
     "setup:shared-memory": "tsx scripts/setup-shared-memory.ts",
     "verify:shared-memory": "tsx scripts/setup-shared-memory.ts --verify"
   },

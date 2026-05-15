@@ -4,18 +4,11 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import {
-  buildKnowledgeGraphProvider,
-  defaultSharedMemoryDbPath,
-  defaultSharedMemoryInstallPrefix,
-  defaultSharedMemoryPreloadPath,
-  defaultSharedMemoryWrapperPath,
+  defaultAgentMemoryDbPath,
+  defaultAgentMemoryWrapperPath,
   getSharedMemoryHomeDir,
-  renderMemoryInstructionFile,
-  renderClaudeConfig,
-  renderCodexConfig,
-  renderGeminiConfig,
-  renderSharedMemoryPreloadScript,
-  renderSharedMemoryWrapperScript,
+  renderAgentMemoryInstructionFile,
+  renderAgentMemoryWrapperScript,
   verifySharedMemoryConfigs,
 } from "../src/sharedMemory.js";
 
@@ -23,18 +16,13 @@ const args = new Set(process.argv.slice(2));
 const verifyOnly = args.has("--verify");
 
 const homeDir = getSharedMemoryHomeDir(process.env, homedir());
-const dbPath = process.env.SHARED_MEMORY_DB_PATH || defaultSharedMemoryDbPath(homeDir);
-const installPrefix = process.env.SHARED_MEMORY_INSTALL_PREFIX || defaultSharedMemoryInstallPrefix(homeDir);
-const wrapperPath = process.env.SHARED_MEMORY_WRAPPER_PATH || defaultSharedMemoryWrapperPath(homeDir);
-const preloadPath = process.env.SHARED_MEMORY_PRELOAD_PATH || defaultSharedMemoryPreloadPath(homeDir);
-const provider = buildKnowledgeGraphProvider(dbPath, wrapperPath);
+const dbPath = process.env.AGENT_MEMORY_DB_PATH || defaultAgentMemoryDbPath(homeDir);
+const wrapperPath = process.env.AGENT_MEMORY_WRAPPER_PATH || defaultAgentMemoryWrapperPath(homeDir);
 
-const codexPath = join(homeDir, ".codex", "config.toml");
-const geminiPath = join(homeDir, ".gemini", "settings.json");
-const claudePath = join(homeDir, ".claude.json");
 const codexInstructionsPath = join(homeDir, "AGENTS.md");
 const geminiInstructionsPath = join(homeDir, "GEMINI.md");
 const claudeInstructionsPath = join(homeDir, "CLAUDE.md");
+const repoRoot = join(process.cwd());
 
 function readText(path: string): string {
   return existsSync(path) ? readFileSync(path, "utf8") : "";
@@ -45,83 +33,36 @@ function writeText(path: string, content: string): void {
   writeFileSync(path, content, "utf8");
 }
 
-function installKnowledgeGraphRuntime(prefix: string): void {
-  const npmPath = process.env.npm_execpath || "npm";
-  const install = spawnSync(
-    "npx",
-    ["-y", "node@22", npmPath, "install", "--prefix", prefix, "knowledgegraph-mcp", "node@22"],
-    { stdio: "inherit" },
-  );
-  if (install.status !== 0) {
-    process.exit(install.status ?? 1);
-  }
-}
-
-const existingCodex = readText(codexPath);
-const existingGemini = readText(geminiPath);
-const existingClaude = readText(claudePath);
 const existingCodexInstructions = readText(codexInstructionsPath);
 const existingGeminiInstructions = readText(geminiInstructionsPath);
 const existingClaudeInstructions = readText(claudeInstructionsPath);
 
-const nextCodex = renderCodexConfig(existingCodex, provider);
-const nextGemini = renderGeminiConfig(existingGemini, provider);
-const nextClaude = renderClaudeConfig(existingClaude, provider);
-const projectId = process.env.SHARED_MEMORY_PROJECT_ID || "server";
-const nextCodexInstructions = renderMemoryInstructionFile(existingCodexInstructions, {
-  agent: "codex",
-  projectId,
-  dbPath,
-});
-const nextGeminiInstructions = renderMemoryInstructionFile(existingGeminiInstructions, {
-  agent: "gemini",
-  projectId,
-  dbPath,
-});
-const nextClaudeInstructions = renderMemoryInstructionFile(existingClaudeInstructions, {
-  agent: "claude",
-  projectId,
-  dbPath,
-});
+const nextCodexInstructions = renderAgentMemoryInstructionFile(existingCodexInstructions, "codex", dbPath);
+const nextGeminiInstructions = renderAgentMemoryInstructionFile(existingGeminiInstructions, "gemini", dbPath);
+const nextClaudeInstructions = renderAgentMemoryInstructionFile(existingClaudeInstructions, "claude", dbPath);
 
 if (!verifyOnly) {
-  mkdirSync(dirname(dbPath), { recursive: true });
-  installKnowledgeGraphRuntime(installPrefix);
-  writeText(preloadPath, renderSharedMemoryPreloadScript());
-  writeText(wrapperPath, renderSharedMemoryWrapperScript({ installPrefix, preloadPath }));
+  const wrapper = renderAgentMemoryWrapperScript({ repoRoot });
+  writeText(wrapperPath, wrapper);
   chmodSync(wrapperPath, 0o755);
-  writeText(codexPath, nextCodex);
-  writeText(geminiPath, nextGemini);
-  writeText(claudePath, nextClaude);
   writeText(codexInstructionsPath, nextCodexInstructions);
   writeText(geminiInstructionsPath, nextGeminiInstructions);
   writeText(claudeInstructionsPath, nextClaudeInstructions);
+  spawnSync("npx", ["tsx", "scripts/seed-agent-memory.ts"], { stdio: "inherit" });
 }
 
-const result = verifySharedMemoryConfigs({
-  codex: verifyOnly ? existingCodex : nextCodex,
-  gemini: verifyOnly ? existingGemini : nextGemini,
-  claude: verifyOnly ? existingClaude : nextClaude,
-});
-
+const result = verifySharedMemoryConfigs({ codex: nextCodexInstructions, gemini: nextGeminiInstructions, claude: nextClaudeInstructions });
 if (!result.ok) {
-  for (const error of result.errors) {
-    console.error(`shared-memory verify: ${error}`);
-  }
+  for (const error of result.errors) console.error(`shared-memory verify: ${error}`);
   process.exit(1);
 }
 
 if (verifyOnly) {
   console.log(`shared-memory verify: OK (${dbPath})`);
 } else {
-  console.log(`shared-memory setup: wrote ${codexPath}`);
-  console.log(`shared-memory setup: wrote ${geminiPath}`);
-  console.log(`shared-memory setup: wrote ${claudePath}`);
   console.log(`shared-memory setup: wrote ${codexInstructionsPath}`);
   console.log(`shared-memory setup: wrote ${geminiInstructionsPath}`);
   console.log(`shared-memory setup: wrote ${claudeInstructionsPath}`);
-  console.log(`shared-memory setup: installed runtime ${installPrefix}`);
-  console.log(`shared-memory setup: wrote preload ${preloadPath}`);
   console.log(`shared-memory setup: wrote wrapper ${wrapperPath}`);
   console.log(`shared-memory setup: SQLite path ${dbPath}`);
 }

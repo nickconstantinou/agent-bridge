@@ -16,11 +16,11 @@ export function isBridgeCommand(text: string): boolean {
 function buildMemorySmokePrompt(kind: "codex" | "gemini"): string {
   return [
     `Run a shared memory smoke test for the ${kind} bridge session.`,
-    `Use the shared memory MCP tools directly.`,
-    `1. Call search_knowledge with project_id: "server" and a query relevant to agent-bridge.`,
+    `Use the local agent-memory CLI from the shell if needed.`,
+    `1. Run agent-memory recall with a query relevant to agent-bridge.`,
     `2. Do not write or modify memory during this test.`,
     `3. Reply in exactly this format:`,
-    `MCP_AVAILABLE: yes|no`,
+    `MEMORY_AVAILABLE: yes|no`,
     `TOOL_USED: <tool-name-or-none>`,
     `RESULT_SUMMARY: <short summary>`,
     `ERROR: <none-or-short error>`,

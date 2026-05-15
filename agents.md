@@ -32,21 +32,14 @@ Each bot is an **independent systemd service** sharing the same TypeScript sourc
 | `agent-bridge-gemini.service` | `.env.gemini` | `.data-gemini/` |
 | `agent-bridge-codex.service` | `.env.codex` | `.data-codex/` |
 
-## Shared MCP Memory
+## Shared Memory
 
-The bridge can configure a loosely coupled MCP memory provider for external CLIs without changing the bridge runtime.
+The bridge now uses a local shell-callable `agent-memory` CLI backed by SQLite.
 
-- Default provider: `knowledgegraph-mcp`
 - Default storage: SQLite
-- Default path: `$HOME/.agent-bridge/shared-memory/knowledgegraph.sqlite`
-- Runtime prefix: `$HOME/.agent-bridge/shared-memory/provider`
-- Preload shim: `$HOME/.agent-bridge/shared-memory/provider/stdio-clean-log-preload.cjs`
-- Wrapper command: `$HOME/.local/bin/agent-bridge-knowledgegraph-mcp`
+- Default path: `$HOME/.agent-bridge/shared-memory/agent-memory.sqlite`
+- Wrapper command: `$HOME/.local/bin/agent-memory`
 - Managed configs:
-  - `~/.codex/config.toml`
-  - `~/.gemini/settings.json`
-  - `~/.claude.json`
-- Managed instruction files:
   - `~/AGENTS.md`
   - `~/GEMINI.md`
   - `~/CLAUDE.md`
@@ -59,7 +52,7 @@ npm run setup:shared-memory
 
 Run this as the target user, not with `sudo`. The systemd install step is separate.
 
-The setup script installs `knowledgegraph-mcp` into the user-local runtime prefix above and writes the wrapper command into the CLI configs. That avoids the broken raw `npx knowledgegraph-mcp` launch path, pins the provider to a local Node 22 runtime, and redirects package startup `console.log` noise to `stderr` so MCP stdio stays parseable.
+The setup script writes the `agent-memory` wrapper and updates the instruction files so agents recall before important decisions and store durable facts after learning them.
 
 Verify:
 
@@ -71,9 +64,9 @@ Memory handshake prompt:
 
 ```text
 On startup, check shared memory for relevant project facts and prior architectural decisions.
-Record durable project facts as entities, relations, or observations.
+Record durable project facts in the local SQLite memory store.
 Do not store ephemeral chat noise, tentative brainstorming, or repeated status updates.
-Prefer updating existing entities over creating duplicates.
+Prefer updating existing memories over creating duplicates.
 ```
 
 The setup script writes this as a managed markdown block so it can be updated later without replacing the rest of your home-level instruction files.
@@ -84,7 +77,7 @@ Smoke test:
 /memory
 ```
 
-This runs a live CLI-path MCP verification by asking the bridged agent to call `search_knowledge` and report whether the shared-memory tools are available.
+This runs a live CLI-path check by asking the bridged agent to use `agent-memory` and report whether the shared-memory tools are available.
 
 ---
 

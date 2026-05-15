@@ -257,8 +257,8 @@ describe("agent bridge MVP", () => {
     it("builds an executable memory smoke test command", () => {
       const result = handleCommand("codex", "/memory", { db, chatId: "123", config });
       expect(result?.kind).toBe("execute");
-      expect(result && "prompt" in result ? result.prompt : "").toContain("search_knowledge");
-      expect(result && "prompt" in result ? result.prompt : "").toContain('project_id: "server"');
+      expect(result && "prompt" in result ? result.prompt : "").toContain("agent-memory recall");
+      expect(result && "prompt" in result ? result.prompt : "").toContain("MEMORY_AVAILABLE: yes|no");
     });
   });
 });

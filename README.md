@@ -15,12 +15,14 @@ Polls a Telegram bot for messages, routes them to the Codex or Gemini CLI, and s
 - **Media group batching** — aggregates multi-photo messages into a single agent prompt
 - **Gemini model fallback** — automatically retries with a smaller model on capacity exhaustion
 - **Concurrency lock** — one execution per chat at a time (SQLite atomic lock, no race conditions)
+- **Shared memory CLI** — local `agent-memory` commands store and recall durable project facts in SQLite
 - **Rate limit handling** — automatic retry on Telegram 429 responses
 
 ## Requirements
 
 - Node 22+
 - `codex` and/or `gemini` CLI on `$PATH`
+- `npm` on `$PATH`
 - Two Telegram bots created via [@BotFather](https://t.me/BotFather)
 
 ## Setup
@@ -38,7 +40,8 @@ Then fill in:
 - `TELEGRAM_BOT_TOKEN_CODEX` in `.env.codex`
 - `TELEGRAM_BOT_TOKEN_GEMINI` in `.env.gemini`
 - `TELEGRAM_ALLOWED_USER_ID` in both files
-- shared memory MCP config is written to `~/.codex/config.toml`, `~/.gemini/settings.json`, and `~/.claude.json`
+- shared memory instructions are written to `~/AGENTS.md`, `~/GEMINI.md`, and `~/CLAUDE.md`
+- `agent-memory` is installed as a shell wrapper in `~/.local/bin/agent-memory`
 
 Run a single bot for development:
 
@@ -59,7 +62,7 @@ Important:
 |---------|--------|
 | `/reset` | Clear the current CLI session (start fresh) |
 | `/models` | Show and change the active model |
-| `/memory` | Run a shared-memory MCP smoke test through the live CLI path |
+| `/memory` | Run a shared-memory CLI smoke test through the live CLI path |
 | `/stop` | Abort the currently running CLI process |
 | `/cancel` | Same as `/stop` |
 
@@ -85,14 +88,14 @@ Each service reads its own `.env` file:
 | `BRIDGE_ROOT_DIR` | No | `$HOME` | Working directory for CLI execution |
 | `BRIDGE_PROJECT_DIR` | No | auto-detected | Repo path (used for default DB location) |
 
-## Shared MCP memory
+## Shared memory
 
-`agent-bridge` can bootstrap a shared `knowledgegraph-mcp` SQLite memory layer for Codex, Gemini, and Claude Code.
+`agent-bridge` ships a local `agent-memory` CLI backed by SQLite.
 
 Default SQLite path:
 
 ```bash
-$HOME/.agent-bridge/shared-memory/knowledgegraph.sqlite
+$HOME/.agent-bridge/shared-memory/agent-memory.sqlite
 ```
 
 Setup:
@@ -101,41 +104,23 @@ Setup:
 npm run setup:shared-memory
 ```
 
-This setup now installs a persistent user-local MCP runtime and wrapper:
-
-- runtime prefix: `$HOME/.agent-bridge/shared-memory/provider`
-- preload shim: `$HOME/.agent-bridge/shared-memory/provider/stdio-clean-log-preload.cjs`
-- wrapper command: `$HOME/.local/bin/agent-bridge-knowledgegraph-mcp`
-
-The wrapper pins `knowledgegraph-mcp` to a local Node 22 runtime so it does not depend on the host `node` binary or the fragile raw `npx knowledgegraph-mcp` path. The preload shim redirects package startup `console.log` output to `stderr` so MCP stdio handshakes stay clean.
-
-Verify:
-
-```bash
-npm run verify:shared-memory
-```
-
-The setup script updates:
-- `~/.codex/config.toml`
-- `~/.gemini/settings.json`
-- `~/.claude.json`
+This writes a shell wrapper to `~/.local/bin/agent-memory` and updates:
 - `~/AGENTS.md`
 - `~/GEMINI.md`
 - `~/CLAUDE.md`
 
-Those markdown files receive a managed "Shared Memory" block so the agents know when to query and update the knowledge graph without taking ownership of the rest of the file.
+The instructions tell each agent when to call `agent-memory recall`, `add`, `list`, `search`, `update`, and `delete`.
 
-The bridge runtime database remains separate from the shared MCP memory database.
+The bridge runtime database remains separate from the shared memory database.
 
 ## Systemd deployment
 
-`sudo` is only required for the systemd install step. Do not run the shared-memory setup step with `sudo`, or it will target the wrong home directory.
+`sudo` is only required for the systemd install step.
 
 ```bash
 npm run setup:shared-memory
 sudo bash scripts/install.sh
 ```
-
 Or copy manually:
 
 ```bash

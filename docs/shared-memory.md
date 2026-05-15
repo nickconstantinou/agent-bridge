@@ -1,79 +1,43 @@
-# Shared MCP Memory
+# Shared Memory
 
-`agent-bridge` can configure a shared MCP memory provider for:
+`agent-bridge` now uses a local shell-callable CLI, `agent-memory`, instead of MCP on the critical path.
 
-- Codex CLI
-- Gemini CLI
-- Claude Code
+## Database
 
-The current default provider is `knowledgegraph-mcp` with SQLite storage. This is intentionally kept separate from the bridge's own runtime SQLite database so the memory provider can be swapped later without changing Telegram bridge behavior.
-
-## Default storage
+Default SQLite path:
 
 ```bash
-$HOME/.agent-bridge/shared-memory/knowledgegraph.sqlite
+$HOME/.agent-bridge/shared-memory/agent-memory.sqlite
 ```
 
 Override with:
 
 ```bash
-SHARED_MEMORY_DB_PATH=/absolute/path/to/knowledgegraph.sqlite
+AGENT_MEMORY_DB_PATH=/absolute/path/to/agent-memory.sqlite
 ```
 
-## Setup
+## Commands
 
 ```bash
-npm run setup:shared-memory
+agent-memory add --type decision --scope project --text "..."
+agent-memory recall --query "..." --scope project --limit 10 --json
+agent-memory search --query "..." --scope project --limit 10 --json
+agent-memory list --scope project --json
+agent-memory update --id mem_123 --text "..."
+agent-memory delete --id mem_123
 ```
 
-Run this as the target user. Do not run it with `sudo`.
+## Backup
 
-The setup script performs two runtime steps before patching CLI config:
-
-- installs `knowledgegraph-mcp` and `node@22` under `$HOME/.agent-bridge/shared-memory/provider`
-- writes a preload shim at `$HOME/.agent-bridge/shared-memory/provider/stdio-clean-log-preload.cjs`
-- writes a stable wrapper at `$HOME/.local/bin/agent-bridge-knowledgegraph-mcp`
-
-The CLI configs point at that wrapper, not at `npx`, so the MCP server runs with the same Node 22 runtime it was built against. The preload shim also redirects package `console.log` startup noise to `stderr`, which keeps stdio MCP handshakes clean.
-
-## Verify
+Back up the SQLite file directly, or copy the whole directory:
 
 ```bash
-npm run verify:shared-memory
+cp ~/.agent-bridge/shared-memory/agent-memory.sqlite /backup/
 ```
 
-## Files managed
+## Agent usage
 
-- `~/.codex/config.toml`
-- `~/.gemini/settings.json`
-- `~/.claude.json`
-- `~/AGENTS.md`
-- `~/GEMINI.md`
-- `~/CLAUDE.md`
-
-The markdown instruction files receive a managed shared-memory block bounded by:
-
-```md
-<!-- agent-bridge:shared-memory:start -->
-...
-<!-- agent-bridge:shared-memory:end -->
-```
-
-This lets the installer update the memory handshake rules later without overwriting the rest of the file.
-
-## Memory handshake prompt
-
-```text
-On startup, check shared memory for relevant project facts and prior architectural decisions.
-Record durable project facts as entities, relations, or observations.
-Do not store ephemeral chat noise, tentative brainstorming, or repeated status updates.
-Prefer updating existing entities over creating duplicates.
-```
-
-## Design constraints
-
-- The bridge runtime database and MCP memory database are separate.
-- Config patching is idempotent.
-- The implementation is provider-based so `knowledgegraph-mcp` can be replaced later.
-- Systemd installation is root-scoped, but shared-memory configuration is user-scoped.
-- The runtime wrapper is persistent and user-local, which avoids ephemeral `npx` native-module failures.
+- Query before architectural or behavior changes.
+- Store durable project facts, bug fixes, decisions, and conventions.
+- Do not store secrets or transient chat noise.
+- MCP is optional, but not required for memory.

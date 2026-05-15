@@ -14,7 +14,7 @@ agent-bridge install
 - gemini service reads: .env.gemini
 - BRIDGE_ENV_FILE must point at the bot-specific env file
 - CODEX_PROJECT_DIR / GEMINI_PROJECT_DIR override the CLI cwd per bot
-- shared MCP memory is configured automatically for codex, gemini, and claude
+- shared local memory is configured automatically for codex, gemini, and claude
 EOF
 
 require_node() {
@@ -174,4 +174,4 @@ sudo systemctl enable --now agent-bridge-codex agent-bridge-gemini
 
 echo "Installed and started agent-bridge-codex and agent-bridge-gemini"
 echo "Defaults written to ${DEFAULTS_DIR}/agent-bridge-codex and ${DEFAULTS_DIR}/agent-bridge-gemini"
-echo "Shared MCP memory configured for codex, gemini, and claude"
+echo "Shared local memory configured for codex, gemini, and claude"

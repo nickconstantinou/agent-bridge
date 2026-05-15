@@ -28,9 +28,13 @@ export function extractPromptText(message: TelegramMessage): string | null {
   return text;
 }
 
-export function buildModelKeyboard(kind: string): any {
+export function buildModelKeyboard(kind: string, modelPreference: string[]): any {
+  const modelButtons = modelPreference.map((m) => [
+    { text: m, callback_data: `model:${kind}:${m}` },
+  ]);
   return {
     inline_keyboard: [
+      ...modelButtons,
       [{ text: "Reset to Default", callback_data: `model:${kind}:reset` }],
     ],
   };

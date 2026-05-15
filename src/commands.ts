@@ -1,8 +1,10 @@
 import type { BridgeConfig } from "./types.js";
 import type { BridgeDb } from "./db.js";
+import { buildModelKeyboard, buildModelsText } from "./bridge.js";
 
 export type CommandResult =
   | { kind: "message"; text: string }
+  | { kind: "keyboard_message"; text: string; reply_markup: any }
   | { kind: "execute"; prompt: string };
 
 const bridgeCommands = new Set(["/start", "/reset", "/models", "/memory"]);
@@ -54,11 +56,10 @@ export function handleCommand(
 
   if (text === "/models") {
     const bot = config.bots[kind];
-    const current = db.getSetting(kind) || bot.modelPreference[0] || "default";
-    const available = bot.modelPreference.length > 0 ? bot.modelPreference.join(", ") : "none configured";
     return {
-      kind: "message",
-      text: `Models for ${kind}:\n\nCurrent: ${current}\nAvailable: ${available}`,
+      kind: "keyboard_message",
+      text: buildModelsText(kind, { db, config }),
+      reply_markup: buildModelKeyboard(kind, bot.modelPreference),
     };
   }
 

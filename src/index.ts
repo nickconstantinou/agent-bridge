@@ -185,6 +185,14 @@ class BridgeBot {
         await this.sendText(chatId, { text: commandResponse.text, message_thread_id: threadId });
         return;
       }
+      if (commandResponse.kind === "keyboard_message") {
+        await this.sendText(chatId, {
+          text: commandResponse.text,
+          reply_markup: commandResponse.reply_markup,
+          message_thread_id: threadId,
+        });
+        return;
+      }
     }
 
     const sessionId = db.getSession(chatKey, this.kind);
@@ -403,7 +411,7 @@ class BridgeBot {
         chat_id: chatId,
         message_id: messageId,
         text: buildModelsText(this.kind, { db, config }),
-        reply_markup: buildModelKeyboard(this.kind),
+        reply_markup: buildModelKeyboard(this.kind, this.config.modelPreference),
       });
       return;
     }
@@ -417,7 +425,7 @@ class BridgeBot {
       chat_id: chatId,
       message_id: messageId,
       text: buildModelsText(this.kind, { db, config }),
-      reply_markup: buildModelKeyboard(this.kind),
+      reply_markup: buildModelKeyboard(this.kind, this.config.modelPreference),
     });
   }
 

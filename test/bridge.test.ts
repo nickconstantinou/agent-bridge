@@ -14,6 +14,8 @@ import {
   getBridgeProjectDir,
   getCliWorkingDir,
   validateBridgeConfig,
+  buildModelKeyboard,
+  buildModelsText,
 } from "../src/bridge.js";
 import { openDb, BridgeDb } from "../src/db.js";
 import { runCli } from "../src/cli.js";
@@ -239,11 +241,11 @@ describe("agent bridge MVP", () => {
       expect(db.getSession("456", "gemini")).toBe("s-456");
     });
 
-    it("handles /models showing current and available models", () => {
+    it("handles /models returning keyboard_message with current model info", () => {
       const result = handleCommand("gemini", "/models", { db, chatId: "123", config });
-      expect(result?.kind).toBe("message");
-      expect(result && "text" in result ? result.text : "").toContain("Current: gemini-1.5-pro");
-      expect(result && "text" in result ? result.text : "").toContain("Available: gemini-1.5-pro");
+      expect(result?.kind).toBe("keyboard_message");
+      expect(result && "text" in result ? result.text : "").toContain("gemini-1.5-pro");
+      expect((result as any)?.reply_markup?.inline_keyboard).toBeDefined();
     });
 
     it("handles /start", () => {
@@ -318,5 +320,100 @@ describe("message queue", () => {
     expect(src).toContain("drainQueue");
     expect(src).toMatch(/setImmediate/);
     expect(src).toMatch(/Processing your queued message/);
+  });
+});
+
+describe("model keyboard", () => {
+  const prefs = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"];
+
+  it("includes one button per model in the preference list", () => {
+    const kb = buildModelKeyboard("codex", prefs);
+    const allButtons = kb.inline_keyboard.flat();
+    for (const model of prefs) {
+      expect(allButtons.some((b: any) => b.text === model)).toBe(true);
+    }
+  });
+
+  it("each model button carries the correct callback_data", () => {
+    const kb = buildModelKeyboard("codex", prefs);
+    const allButtons = kb.inline_keyboard.flat();
+    for (const model of prefs) {
+      const btn = allButtons.find((b: any) => b.text === model);
+      expect(btn?.callback_data).toBe(`model:codex:${model}`);
+    }
+  });
+
+  it("includes a Reset to Default button", () => {
+    const kb = buildModelKeyboard("codex", prefs);
+    const allButtons = kb.inline_keyboard.flat();
+    expect(allButtons.some((b: any) => b.callback_data === "model:codex:reset")).toBe(true);
+  });
+
+  it("returns an empty keyboard when preference list is empty", () => {
+    const kb = buildModelKeyboard("codex", []);
+    const allButtons = kb.inline_keyboard.flat();
+    expect(allButtons.some((b: any) => b.text === "gpt-5.5")).toBe(false);
+    expect(allButtons.some((b: any) => b.callback_data === "model:codex:reset")).toBe(true);
+  });
+});
+
+describe("/models command returns keyboard_message", () => {
+  const makeConfig = (prefs: string[]): BridgeConfig => ({
+    allowedUserId: "1",
+    serviceEnvFile: null,
+    serviceKind: "codex",
+    pollIntervalMs: 1000,
+    executionMode: "safe",
+    cliTimeoutMs: 300000,
+    asyncEnabled: true,
+    dbPath: ":memory:",
+    bots: {
+      codex: { token: "t", command: "codex", modelPreference: prefs },
+      gemini: { token: "t", command: "gemini", modelPreference: [] },
+    },
+  });
+
+  it("returns kind keyboard_message for /models", () => {
+    const result = handleCommand("codex", "/models", {
+      db: { getSetting: () => null } as any,
+      chatId: "1",
+      config: makeConfig(["gpt-5.5", "gpt-5.4"]),
+    });
+    expect(result?.kind).toBe("keyboard_message");
+  });
+
+  it("keyboard_message includes reply_markup with model buttons", () => {
+    const result = handleCommand("codex", "/models", {
+      db: { getSetting: () => null } as any,
+      chatId: "1",
+      config: makeConfig(["gpt-5.5", "gpt-5.4"]),
+    }) as any;
+    const allButtons = result.reply_markup.inline_keyboard.flat();
+    expect(allButtons.some((b: any) => b.text === "gpt-5.5")).toBe(true);
+    expect(allButtons.some((b: any) => b.text === "gpt-5.4")).toBe(true);
+  });
+
+  it("keyboard_message includes text describing current model", () => {
+    const result = handleCommand("codex", "/models", {
+      db: { getSetting: () => "gpt-5.4" } as any,
+      chatId: "1",
+      config: makeConfig(["gpt-5.5", "gpt-5.4"]),
+    }) as any;
+    expect(result.text).toContain("gpt-5.4");
+  });
+});
+
+describe("handleMessages sends reply_markup for /models", () => {
+  it("handleMessages passes reply_markup to sendText for keyboard_message commands", () => {
+    const src = readFileSync("src/index.ts", "utf-8");
+    expect(src).toMatch(/keyboard_message/);
+    expect(src).toMatch(/reply_markup.*commandResponse/s);
+  });
+});
+
+describe("handleCallback uses full model keyboard", () => {
+  it("handleCallback passes modelPreference to buildModelKeyboard", () => {
+    const src = readFileSync("src/index.ts", "utf-8");
+    expect(src).toMatch(/buildModelKeyboard\(\s*this\.kind\s*,\s*this\.config\.modelPreference/);
   });
 });

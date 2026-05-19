@@ -196,24 +196,24 @@ function parseCodexResult(stdout: string): CliResult {
 
 function parseGeminiResult(stdout: string): CliResult {
   let sessionId: string | null = null;
-  let text = "";
 
-  // The Gemini CLI output can be messy. 
-  // We look for a JSON block or treat everything as text.
   const cleaned = stdout.replace(/\x1B\[[0-9;]*[mK]/g, ""); // strip ansi
 
-  // Check for the [session:...] marker if not in JSON mode
   const sessionMatch = cleaned.match(/\[session:([^\]]+)\]/);
   if (sessionMatch) {
     sessionId = sessionMatch[1];
   }
 
-  const lines = cleaned.split("\n").filter(l => {
-    if (l.includes("[session:")) return false;
-    return true;
-  });
+  // Strip thinking blocks: Gemini CLI appends [Thought: true] at the end of each thinking section.
+  // Take only content after the last such marker.
+  const THOUGHT_MARKER = "[Thought: true]";
+  const lastThoughtIdx = cleaned.lastIndexOf(THOUGHT_MARKER);
+  const textContent = lastThoughtIdx !== -1
+    ? cleaned.slice(lastThoughtIdx + THOUGHT_MARKER.length)
+    : cleaned;
 
-  text = lines.join("\n").trim();
+  const lines = textContent.split("\n").filter(l => !l.includes("[session:"));
+  const text = lines.join("\n").trim();
 
   return { text, sessionId };
 }

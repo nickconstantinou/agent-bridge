@@ -29,9 +29,9 @@ export function extractPromptText(message: TelegramMessage): string | null {
   return text;
 }
 
-export function buildModelKeyboard(kind: string, modelPreference: string[]): any {
+export function buildModelKeyboard(kind: string, modelPreference: string[], currentModel?: string | null): any {
   const modelButtons = modelPreference.map((m) => [
-    { text: m, callback_data: `model:${kind}:${m}` },
+    { text: currentModel === m ? `✓ ${m}` : m, callback_data: `model:${kind}:${m}` },
   ]);
   return {
     inline_keyboard: [

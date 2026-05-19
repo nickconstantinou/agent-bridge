@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -278,6 +278,31 @@ describe("agent bridge MVP", () => {
     ).toEqual({ text: "hi from gemini", sessionId: "session-123" });
   });
 
+  it("strips gemini thinking blocks from output", () => {
+    const stdout = [
+      "Executing Shared Memory Test I'm verifying the shared memory system.",
+      "[Thought: true]Conducting Smoke Test I'm now invoking search_knowledge.",
+      "[Thought: true]",
+      "MCP_AVAILABLE: yes",
+      "TOOL_USED: search_knowledge",
+      "RESULT_SUMMARY: found 4 entities",
+      "ERROR: none",
+    ].join("\n");
+    const result = parseCliResult({ bot: "gemini", stdout });
+    expect(result.text).not.toContain("[Thought: true]");
+    expect(result.text).not.toContain("Executing Shared Memory Test");
+    expect(result.text).not.toContain("Conducting Smoke Test");
+    expect(result.text).toContain("MCP_AVAILABLE: yes");
+    expect(result.text).toContain("RESULT_SUMMARY: found 4 entities");
+  });
+
+  it("leaves gemini output unchanged when no thinking blocks present", () => {
+    const stdout = "MCP_AVAILABLE: yes\nERROR: none\n[session:abc]";
+    const result = parseCliResult({ bot: "gemini", stdout });
+    expect(result.text).toBe("MCP_AVAILABLE: yes\nERROR: none");
+    expect(result.sessionId).toBe("abc");
+  });
+
   it("validates bridge config", () => {
     const result = validateBridgeConfig({
       allowedUserIds: new Set(),
@@ -417,6 +442,58 @@ describe("/models command returns keyboard_message", () => {
       config: makeConfig(["gpt-5.5", "gpt-5.4"]),
     }) as any;
     expect(result.text).toContain("gpt-5.4");
+  });
+});
+
+describe("handleMessages sends reply_markup for /models", () => {
+  it("handleMessages passes reply_markup to sendText for keyboard_message commands", () => {
+    const src = readFileSync("src/index.ts", "utf-8");
+    expect(src).toMatch(/keyboard_message/);
+    expect(src).toMatch(/reply_markup.*commandResponse/s);
+  });
+});
+
+describe("handleCallback uses full model keyboard", () => {
+  it("handleCallback passes modelPreference to buildModelKeyboard", () => {
+    const src = readFileSync("src/index.ts", "utf-8");
+    expect(src).toMatch(/buildModelKeyboard\(\s*this\.kind\s*,\s*this\.config\.modelPreference/);
+  });
+});
+
+describe("model keyboard current model indicator", () => {
+  const prefs = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"];
+
+  it("marks the active model button with a checkmark", () => {
+    const kb = buildModelKeyboard("codex", prefs, "gpt-5.4");
+    const allButtons = kb.inline_keyboard.flat();
+    expect(allButtons.some((b: any) => b.text === "✓ gpt-5.4")).toBe(true);
+  });
+
+  it("does not mark non-active models with a checkmark", () => {
+    const kb = buildModelKeyboard("codex", prefs, "gpt-5.4");
+    const allButtons = kb.inline_keyboard.flat();
+    expect(allButtons.some((b: any) => b.text === "✓ gpt-5.5")).toBe(false);
+    expect(allButtons.some((b: any) => b.text === "✓ gpt-5.4-mini")).toBe(false);
+  });
+
+  it("active button still has correct callback_data", () => {
+    const kb = buildModelKeyboard("codex", prefs, "gpt-5.4");
+    const allButtons = kb.inline_keyboard.flat();
+    const btn = allButtons.find((b: any) => b.text === "✓ gpt-5.4");
+    expect(btn?.callback_data).toBe("model:codex:gpt-5.4");
+  });
+
+  it("shows no checkmark when currentModel is null", () => {
+    const kb = buildModelKeyboard("codex", prefs, null);
+    const allButtons = kb.inline_keyboard.flat();
+    expect(allButtons.every((b: any) => !b.text.startsWith("✓"))).toBe(true);
+  });
+});
+
+describe("model selection confirmation", () => {
+  it("handleCallback uses show_alert:true in answerCallbackQuery for model set", () => {
+    const src = readFileSync("src/index.ts", "utf-8");
+    expect(src).toMatch(/answerCallbackQuery[\s\S]{0,200}show_alert:\s*true/s);
   });
 });
 

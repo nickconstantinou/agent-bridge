@@ -63,7 +63,7 @@ export function handleCommand(
     return {
       kind: "keyboard_message",
       text: buildModelsText(kind, { db, config }),
-      reply_markup: buildModelKeyboard(kind, bot.modelPreference),
+      reply_markup: buildModelKeyboard(kind, bot.modelPreference, db.getSetting(kind)),
     };
   }
 

@@ -413,13 +413,13 @@ class BridgeBot {
       db.setSetting(this.kind, null);
       await this.client.answerCallbackQuery({
         callback_query_id: callbackQuery.id,
-        text: `${this.kind} reset`,
+        text: `${this.kind} reset to default`,
       });
       await this.client.editMessageText({
         chat_id: chatId,
         message_id: messageId,
         text: buildModelsText(this.kind, { db, config }),
-        reply_markup: buildModelKeyboard(this.kind, this.config.modelPreference),
+        reply_markup: buildModelKeyboard(this.kind, this.config.modelPreference, null),
       });
       return;
     }
@@ -427,13 +427,14 @@ class BridgeBot {
     db.setSetting(this.kind, value);
     await this.client.answerCallbackQuery({
       callback_query_id: callbackQuery.id,
-      text: `${this.kind} set to ${value}`,
+      text: `✓ ${this.kind} model set to ${value}`,
+      show_alert: true,
     });
     await this.client.editMessageText({
       chat_id: chatId,
       message_id: messageId,
       text: buildModelsText(this.kind, { db, config }),
-      reply_markup: buildModelKeyboard(this.kind, this.config.modelPreference),
+      reply_markup: buildModelKeyboard(this.kind, this.config.modelPreference, value),
     });
   }
 

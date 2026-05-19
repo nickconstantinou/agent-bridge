@@ -283,6 +283,7 @@ describe("agent bridge MVP", () => {
       "Executing Shared Memory Test I'm verifying the shared memory system.",
       "[Thought: true]Conducting Smoke Test I'm now invoking search_knowledge.",
       "[Thought: true]",
+      "The memory store contains 4 entities.",
       "MCP_AVAILABLE: yes",
       "TOOL_USED: search_knowledge",
       "RESULT_SUMMARY: found 4 entities",
@@ -292,14 +293,34 @@ describe("agent bridge MVP", () => {
     expect(result.text).not.toContain("[Thought: true]");
     expect(result.text).not.toContain("Executing Shared Memory Test");
     expect(result.text).not.toContain("Conducting Smoke Test");
-    expect(result.text).toContain("MCP_AVAILABLE: yes");
-    expect(result.text).toContain("RESULT_SUMMARY: found 4 entities");
+    expect(result.text).toContain("The memory store contains 4 entities.");
+    expect(result.text).not.toContain("MCP_AVAILABLE");
+    expect(result.text).not.toContain("RESULT_SUMMARY");
   });
 
-  it("leaves gemini output unchanged when no thinking blocks present", () => {
-    const stdout = "MCP_AVAILABLE: yes\nERROR: none\n[session:abc]";
+  it("strips CRITICAL INSTRUCTION headers and metadata footer from Gemini output", () => {
+    const stdout = [
+      "CRITICAL INSTRUCTION 1: Use specific tools where possible.",
+      "CRITICAL INSTRUCTION 2: Related tools: No tools needed.",
+      "",
+      "I ran the agent-memory recall tool. The memory database contains 0 memories.MEMORY_AVAILABLE: yes",
+      "TOOL_USED: default_api:run_shell_command",
+      "RESULT_SUMMARY: The agent-memory CLI returned zero results.",
+      "ERROR: none",
+    ].join("\n");
     const result = parseCliResult({ bot: "gemini", stdout });
-    expect(result.text).toBe("MCP_AVAILABLE: yes\nERROR: none");
+    expect(result.text).not.toContain("CRITICAL INSTRUCTION");
+    expect(result.text).not.toContain("MEMORY_AVAILABLE");
+    expect(result.text).not.toContain("TOOL_USED");
+    expect(result.text).not.toContain("RESULT_SUMMARY");
+    expect(result.text).not.toContain("ERROR: none");
+    expect(result.text).toContain("I ran the agent-memory recall tool");
+  });
+
+  it("leaves gemini output unchanged when no thinking blocks or metadata present", () => {
+    const stdout = "The memory store has 4 entities.\n[session:abc]";
+    const result = parseCliResult({ bot: "gemini", stdout });
+    expect(result.text).toBe("The memory store has 4 entities.");
     expect(result.sessionId).toBe("abc");
   });
 

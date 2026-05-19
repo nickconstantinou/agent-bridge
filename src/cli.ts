@@ -208,11 +208,23 @@ function parseGeminiResult(stdout: string): CliResult {
   // Take only content after the last such marker.
   const THOUGHT_MARKER = "[Thought: true]";
   const lastThoughtIdx = cleaned.lastIndexOf(THOUGHT_MARKER);
-  const textContent = lastThoughtIdx !== -1
+  const afterThinking = lastThoughtIdx !== -1
     ? cleaned.slice(lastThoughtIdx + THOUGHT_MARKER.length)
     : cleaned;
 
-  const lines = textContent.split("\n").filter(l => !l.includes("[session:"));
+  // Strip CRITICAL INSTRUCTION header lines Gemini sometimes prepends.
+  const withoutCritical = afterThinking
+    .split("\n")
+    .filter(l => !/^CRITICAL INSTRUCTION \d+:/i.test(l.trim()))
+    .join("\n");
+
+  // Strip structured metadata footer (MEMORY_AVAILABLE, MCP_AVAILABLE, TOOL_USED,
+  // RESULT_SUMMARY, ERROR). These may appear inline (no newline before the key).
+  const FOOTER_RE = /\b(MEMORY_AVAILABLE|MCP_AVAILABLE|TOOL_USED|RESULT_SUMMARY|ERROR):\s/;
+  const footerIdx = withoutCritical.search(FOOTER_RE);
+  const withoutFooter = footerIdx !== -1 ? withoutCritical.slice(0, footerIdx).trimEnd() : withoutCritical;
+
+  const lines = withoutFooter.split("\n").filter(l => !l.includes("[session:"));
   const text = lines.join("\n").trim();
 
   return { text, sessionId };

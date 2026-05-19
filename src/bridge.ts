@@ -1,5 +1,5 @@
 import { homedir } from "node:os";
-import { runCli, runCliAsync, parseCliResult, buildCliInvocation, validateBridgeConfig, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses } from "./cli.js";
+import { runCli, runCliAsync, parseCliResult, buildCliInvocation, validateBridgeConfig, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses, toUserMessage } from "./cli.js";
 import { openDb, BridgeDb } from "./db.js";
 import type { TelegramMessage, BridgeConfig } from "./types.js";
 
@@ -7,14 +7,15 @@ export function getBridgeProjectDir(): string {
   return process.env.BRIDGE_PROJECT_DIR || `${homedir()}/.openclaw/workspace/projects/agent-bridge`;
 }
 
-export function getCliWorkingDir(bot?: "codex" | "gemini"): string {
+export function getCliWorkingDir(bot?: "codex" | "gemini" | "claude"): string {
   if (bot === "codex" && process.env.CODEX_PROJECT_DIR) return process.env.CODEX_PROJECT_DIR;
   if (bot === "gemini" && process.env.GEMINI_PROJECT_DIR) return process.env.GEMINI_PROJECT_DIR;
+  if (bot === "claude" && process.env.CLAUDE_PROJECT_DIR) return process.env.CLAUDE_PROJECT_DIR;
   return process.env.BRIDGE_PROJECT_DIR || process.env.BRIDGE_ROOT_DIR || homedir();
 }
 
-export function isAuthorizedMessage(message: TelegramMessage, allowedUserId: string): boolean {
-  return String(message?.from?.id ?? "") === String(allowedUserId);
+export function isAuthorizedMessage(message: TelegramMessage, allowedUserIds: ReadonlySet<string>): boolean {
+  return allowedUserIds.has(String(message?.from?.id ?? ""));
 }
 
 export function extractThreadId(messages: TelegramMessage[]): number | undefined {
@@ -41,12 +42,12 @@ export function buildModelKeyboard(kind: string, modelPreference: string[]): any
 }
 
 export function buildModelsText(kind: string, { db, config }: { db: BridgeDb; config: BridgeConfig }): string {
-  const bot = config.bots[kind as "codex" | "gemini"];
+  const bot = config.bots[kind as "codex" | "gemini" | "claude"];
   const current = db.getSetting(kind) || bot.modelPreference[0] || "default";
   const available = bot.modelPreference.length > 0 ? bot.modelPreference.join(", ") : "none configured";
   return `[${kind} model settings]\n\nCurrent: ${current}\nAvailable: ${available}\n\nSelect a model below:`;
 }
 
-export { runCli, runCliAsync, parseCliResult, validateBridgeConfig, buildCliInvocation, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses };
+export { runCli, runCliAsync, parseCliResult, validateBridgeConfig, buildCliInvocation, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses, toUserMessage };
 export { openDb, BridgeDb };
 export { handleCommand, isBridgeCommand } from "./commands.js";

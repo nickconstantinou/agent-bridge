@@ -50,15 +50,13 @@ describe("CLI Runner", () => {
     expect(chunks.length).toBeGreaterThan(0);
   });
 
-  it("supports cancellation", async () => {
-    let killFn: (() => void) | undefined;
-    const p = runCliAsync("sleep", ["10"], process.cwd(), {
-      onCancel: (k) => { killFn = k; },
-    });
-
-    if (killFn) (killFn as () => void)();
-    await expect(p).rejects.toThrow();
-  });
+  it("resolves cleanly when aborted mid-run", async () => {
+    const chatId = "test-cancel-midrun";
+    const p = runCliAsync("sleep", ["10"], process.cwd(), { chatId });
+    await new Promise((r) => setTimeout(r, 50));
+    abortCliProcess(chatId);
+    await expect(p).resolves.toMatchObject({ text: expect.any(String) });
+  }, 5000);
 });
 
 describe("abortCliProcess", () => {
@@ -157,10 +155,10 @@ describe("cli.ts signal handler hygiene", () => {
     expect(src).not.toMatch(/process\.once\(["']SIGINT["']/);
   });
 
-  it("killChild stores sigkillTimer handle and clears it on child close", () => {
+  it("killWithGrace schedules SIGKILL and clears it via child close handler", () => {
     const src = readFileSync("src/cli.ts", "utf-8");
-    expect(src).toMatch(/const sigkillTimer\s*=\s*setTimeout/);
-    expect(src).toMatch(/child\.once\(["']close["'][^}]*clearTimeout\(sigkillTimer\)/s);
+    expect(src).toContain("killWithGrace");
+    expect(src).toMatch(/child\.once\(["']close["'][^}]*clearTimeout/s);
   });
 });
 

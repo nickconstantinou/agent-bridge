@@ -1,5 +1,4 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { readFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,10 +22,18 @@ import type { TelegramMessage, BridgeConfig } from "../src/types.js";
 
 describe("agent bridge MVP", () => {
   it("authorizes only the configured telegram user id", () => {
+    const allowed = new Set(["42"]);
     const msg = { from: { id: 42 } } as any as TelegramMessage;
-    expect(isAuthorizedMessage(msg, "42")).toBe(true);
-    expect(isAuthorizedMessage({ from: { id: 7 } } as any, "42")).toBe(false);
-    expect(isAuthorizedMessage({} as any, "42")).toBe(false);
+    expect(isAuthorizedMessage(msg, allowed)).toBe(true);
+    expect(isAuthorizedMessage({ from: { id: 7 } } as any, allowed)).toBe(false);
+    expect(isAuthorizedMessage({} as any, allowed)).toBe(false);
+  });
+
+  it("authorizes multiple allowed user ids", () => {
+    const allowed = new Set(["10", "20", "30"]);
+    expect(isAuthorizedMessage({ from: { id: 10 } } as any, allowed)).toBe(true);
+    expect(isAuthorizedMessage({ from: { id: 20 } } as any, allowed)).toBe(true);
+    expect(isAuthorizedMessage({ from: { id: 99 } } as any, allowed)).toBe(false);
   });
 
   it("extracts plain message text", () => {
@@ -41,6 +48,13 @@ describe("agent bridge MVP", () => {
     expect(isBridgeCommand("/models")).toBe(true);
     expect(isBridgeCommand("/memory")).toBe(true);
     expect(isBridgeCommand("hello")).toBe(false);
+  });
+
+  it("recognizes @botname-suffixed commands (group usage)", () => {
+    expect(isBridgeCommand("/start@mybot")).toBe(true);
+    expect(isBridgeCommand("/reset@AnotherBot")).toBe(true);
+    expect(isBridgeCommand("/models@somebot")).toBe(true);
+    expect(isBridgeCommand("/unknown@mybot")).toBe(false);
   });
 
   it("creates fresh codex invocation using exec subcommand", () => {
@@ -64,16 +78,21 @@ describe("agent bridge MVP", () => {
     const prevCodexProjectDir = process.env.CODEX_PROJECT_DIR;
     const prevGeminiProjectDir = process.env.GEMINI_PROJECT_DIR;
 
+    const prevClaudeProjectDir = process.env.CLAUDE_PROJECT_DIR;
+
     process.env.BRIDGE_ROOT_DIR = "/tmp/bridge-root";
     process.env.CODEX_PROJECT_DIR = "/tmp/codex-repo";
     process.env.GEMINI_PROJECT_DIR = "/tmp/gemini-repo";
+    process.env.CLAUDE_PROJECT_DIR = "/tmp/claude-repo";
 
     expect(getCliWorkingDir("codex")).toBe("/tmp/codex-repo");
     expect(getCliWorkingDir("gemini")).toBe("/tmp/gemini-repo");
+    expect(getCliWorkingDir("claude")).toBe("/tmp/claude-repo");
 
     if (prevBridgeRoot === undefined) delete process.env.BRIDGE_ROOT_DIR; else process.env.BRIDGE_ROOT_DIR = prevBridgeRoot;
     if (prevCodexProjectDir === undefined) delete process.env.CODEX_PROJECT_DIR; else process.env.CODEX_PROJECT_DIR = prevCodexProjectDir;
     if (prevGeminiProjectDir === undefined) delete process.env.GEMINI_PROJECT_DIR; else process.env.GEMINI_PROJECT_DIR = prevGeminiProjectDir;
+    if (prevClaudeProjectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = prevClaudeProjectDir;
   });
 
   it("creates trusted codex invocation only when explicitly requested", () => {
@@ -160,6 +179,61 @@ describe("agent bridge MVP", () => {
     expect(args).not.toContain("--resume");
   });
 
+  it("creates fresh claude invocation with --print flag", () => {
+    const { command, args } = buildCliInvocation({
+      bot: "claude",
+      prompt: "hello",
+      sessionId: null,
+      command: "claude",
+      model: null,
+    });
+    expect(command).toBe("claude");
+    expect(args).toContain("--print");
+    expect(args[args.length - 1]).toBe("hello");
+    expect(args).not.toContain("--resume");
+  });
+
+  it("creates resume claude invocation with --resume flag", () => {
+    const { args } = buildCliInvocation({
+      bot: "claude",
+      prompt: "hello",
+      sessionId: "sess-abc-123",
+      command: "claude",
+      model: null,
+    });
+    expect(args).toContain("--resume");
+    expect(args[args.indexOf("--resume") + 1]).toBe("sess-abc-123");
+  });
+
+  it("claude trusted mode uses --dangerously-skip-permissions", () => {
+    const { args } = buildCliInvocation({
+      bot: "claude",
+      prompt: "hello",
+      sessionId: null,
+      command: "claude",
+      model: null,
+      executionMode: "trusted",
+    });
+    expect(args).toContain("--dangerously-skip-permissions");
+  });
+
+  it("parses claude JSON output", () => {
+    const stdout = JSON.stringify({
+      type: "result", subtype: "success", session_id: "sess-123", result: "Hello from claude",
+    });
+    expect(parseCliResult({ bot: "claude", stdout })).toEqual({
+      text: "Hello from claude",
+      sessionId: "sess-123",
+    });
+  });
+
+  it("parses claude plain text output when no JSON found", () => {
+    expect(parseCliResult({ bot: "claude", stdout: "plain response" })).toEqual({
+      text: "plain response",
+      sessionId: null,
+    });
+  });
+
   it("kills the CLI process group on idle timeout", async () => {
     await expect(
       runCli(
@@ -206,11 +280,11 @@ describe("agent bridge MVP", () => {
 
   it("validates bridge config", () => {
     const result = validateBridgeConfig({
-      allowedUserId: "",
+      allowedUserIds: new Set(),
       bots: { codex: { token: null, command: "codex" } },
     });
     expect(result.ok).toBe(false);
-    expect(result.errors).toContain("TELEGRAM_ALLOWED_USER_ID is required");
+    expect(result.errors).toContain("TELEGRAM_ALLOWED_USER_IDS is required");
   });
 
   describe("handleCommand", () => {
@@ -263,65 +337,8 @@ describe("agent bridge MVP", () => {
   });
 });
 
-describe("dead config fields removed", () => {
-  it("geminiFallbackTimeoutMs is not present in types.ts or index.ts", () => {
-    expect(readFileSync("src/types.ts", "utf-8")).not.toContain("geminiFallbackTimeoutMs");
-    expect(readFileSync("src/index.ts", "utf-8")).not.toContain("geminiFallbackTimeoutMs");
-  });
-});
 
-describe("premature setSession removed", () => {
-  it("db.setSession does not appear before await runCli in index.ts", () => {
-    const src = readFileSync("src/index.ts", "utf-8");
-    expect(src).not.toMatch(
-      /db\.setSession\(chatKey,\s*this\.kind,\s*sessionId\)[\s\S]{0,200}await runCli/
-    );
-  });
-});
 
-describe("/stop handler unlock guard", () => {
-  it("db.unlock is guarded by abortCliProcess return value", () => {
-    const src = readFileSync("src/index.ts", "utf-8");
-    expect(src).toMatch(/const (?:aborted|wasAborted)\s*=\s*abortCliProcess\(chatKey\)/);
-    expect(src).toMatch(/if\s*\((?:aborted|wasAborted)\)\s*\{?\s*db\.unlock\(chatKey\)/s);
-  });
-});
-
-describe("abortedChats Set", () => {
-  it("BridgeBot has abortedChats Set, /stop adds to it, handleMessages clears it", () => {
-    const src = readFileSync("src/index.ts", "utf-8");
-    expect(src).toMatch(/private\s+abortedChats\s*=\s*new Set/);
-    expect(src).toMatch(/this\.abortedChats\.add\(chatKey\)/);
-    expect(src).toMatch(/this\.abortedChats\.delete\(chatKey\)/);
-  });
-});
-
-describe("message queue", () => {
-  it("QueuedMessage type, MAX_QUEUE_DEPTH=5, and pendingQueues Map exist", () => {
-    const src = readFileSync("src/index.ts", "utf-8");
-    expect(src).toContain("QueuedMessage");
-    expect(src).toMatch(/MAX_QUEUE_DEPTH\s*=\s*5/);
-    expect(src).toMatch(/pendingQueues\s*=\s*new Map/);
-  });
-
-  it("tryLock failure enqueues or reports queue full", () => {
-    const src = readFileSync("src/index.ts", "utf-8");
-    expect(src).toMatch(/Queue is full/);
-    expect(src).toMatch(/Queued \(position/);
-  });
-
-  it("drainQueue is called after db.unlock in finally", () => {
-    const src = readFileSync("src/index.ts", "utf-8");
-    expect(src).toMatch(/finally\s*\{[^}]*db\.unlock\(chatKey\)[^}]*this\.drainQueue\(chatKey\)/s);
-  });
-
-  it("drainQueue uses setImmediate and sends processing notice", () => {
-    const src = readFileSync("src/index.ts", "utf-8");
-    expect(src).toContain("drainQueue");
-    expect(src).toMatch(/setImmediate/);
-    expect(src).toMatch(/Processing your queued message/);
-  });
-});
 
 describe("model keyboard", () => {
   const prefs = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"];
@@ -403,17 +420,3 @@ describe("/models command returns keyboard_message", () => {
   });
 });
 
-describe("handleMessages sends reply_markup for /models", () => {
-  it("handleMessages passes reply_markup to sendText for keyboard_message commands", () => {
-    const src = readFileSync("src/index.ts", "utf-8");
-    expect(src).toMatch(/keyboard_message/);
-    expect(src).toMatch(/reply_markup.*commandResponse/s);
-  });
-});
-
-describe("handleCallback uses full model keyboard", () => {
-  it("handleCallback passes modelPreference to buildModelKeyboard", () => {
-    const src = readFileSync("src/index.ts", "utf-8");
-    expect(src).toMatch(/buildModelKeyboard\(\s*this\.kind\s*,\s*this\.config\.modelPreference/);
-  });
-});

@@ -11,14 +11,16 @@ export interface TelegramResponse<T> {
 }
 
 export class TelegramClient {
-  token: string;
+  private readonly token: string;
   fetch: typeof fetch;
   baseUrl: string;
+  private readonly fetchTimeoutMs: number;
 
-  constructor(token: string, fetchImpl = fetch) {
+  constructor(token: string, fetchImpl = fetch, fetchTimeoutMs = 45_000) {
     this.token = token;
     this.fetch = fetchImpl;
     this.baseUrl = `https://api.telegram.org/bot${token}`;
+    this.fetchTimeoutMs = fetchTimeoutMs;
   }
 
   async call<T>(method: string, body: any = {}, retryCount = 0): Promise<TelegramResponse<T>> {
@@ -27,11 +29,19 @@ export class TelegramClient {
       payload.reply_markup = JSON.stringify(payload.reply_markup);
     }
 
-    const response = await this.fetch(`${this.baseUrl}/${method}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    const ac = new AbortController();
+    const fetchTimer = setTimeout(() => ac.abort(), this.fetchTimeoutMs);
+    let response: Response;
+    try {
+      response = await this.fetch(`${this.baseUrl}/${method}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: ac.signal,
+      });
+    } finally {
+      clearTimeout(fetchTimer);
+    }
 
     let data: any = null;
     try {
@@ -82,9 +92,6 @@ export class TelegramClient {
     return this.call("sendChatAction", body);
   }
 
-  async sendMessageDraft(chatId: number | string, text: string, extra: Record<string, any> = {}): Promise<TelegramResponse<any>> {
-    return this.call("sendMessageDraft", { chat_id: chatId, text, ...extra });
-  }
 }
 
 type FlushFn = (groupId: string | null, messages: TelegramMessage[]) => void | Promise<void>;

@@ -4,25 +4,23 @@ import type { CliOptions, CliResult, BridgeConfig } from "./types.js";
 const activeProcesses = new Map<number | string, ChildProcess>();
 const abortedChildren = new WeakSet<ChildProcess>();
 
-function markChildAborted(child: ChildProcess): void {
-  abortedChildren.add(child);
+const KILL_GRACE_MS = 5_000;
+
+function killWithGrace(child: ChildProcess, graceMs: number = KILL_GRACE_MS): void {
+  try { child.kill("SIGTERM"); } catch { /* ignore */ }
+  const t = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* ignore */ } }, graceMs);
+  child.once("close", () => clearTimeout(t));
 }
 
 function killChild(child: ChildProcess): void {
-  markChildAborted(child);
-  try {
-    child.kill("SIGTERM");
-  } catch {
-    // ignore
-  }
-  const sigkillTimer = setTimeout(() => {
-    try {
-      child.kill("SIGKILL");
-    } catch {
-      // ignore
-    }
-  }, 5_000);
-  child.once("close", () => clearTimeout(sigkillTimer));
+  abortedChildren.add(child);
+  killWithGrace(child);
+}
+
+function killProcessTree(child: ChildProcess, pid: number, graceMs: number = KILL_GRACE_MS): void {
+  try { process.kill(-pid, "SIGTERM"); } catch { /* ignore — process may have already exited */ }
+  const t = setTimeout(() => { try { process.kill(-pid, "SIGKILL"); } catch { /* ignore */ } }, graceMs);
+  child.once("close", () => clearTimeout(t));
 }
 
 export function abortCliProcess(chatId: number | string): boolean {
@@ -99,6 +97,13 @@ export function buildCliInvocation({
       args.push("--yolo");
     }
     args.push("--prompt", prompt);
+  } else if (bot === "claude") {
+    args.push("--print");
+    if (model) args.push("--model", model);
+    if (sessionId) args.push("--resume", sessionId);
+    if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
+    if (outputFormat === "json") args.push("--output-format", "json");
+    args.push(prompt);
   }
 
   return { command, args };
@@ -110,8 +115,8 @@ export function buildCliInvocation({
 export function validateBridgeConfig(config: any): { ok: boolean; errors: string[] } {
   const errors: string[] = [];
 
-  if (!config.allowedUserId) {
-    errors.push("TELEGRAM_ALLOWED_USER_ID is required");
+  if (!config.allowedUserIds?.size) {
+    errors.push("TELEGRAM_ALLOWED_USER_IDS is required");
   }
 
   // Skip bot validation - each service validates its own bot in index.ts
@@ -129,6 +134,7 @@ export function validateBridgeConfig(config: any): { ok: boolean; errors: string
 export function buildExecutionOptions(config: BridgeConfig): CliOptions {
   return {
     timeoutMs: config.cliTimeoutMs,
+    idleTimeoutMs: config.cliIdleTimeoutMs,
   };
 }
 
@@ -148,6 +154,8 @@ export function parseCliResult({ bot, stdout }: { bot: string; stdout: string })
       }
     }
     return parseGeminiResult(stdout);
+  } else if (bot === "claude") {
+    return parseClaudeResult(stdout);
   }
   throw new Error(`Unknown bot type: ${bot}`);
 }
@@ -237,12 +245,32 @@ function parseGeminiStreamJson(stdout: string): CliResult {
   return { text: text.trim(), sessionId };
 }
 
+function parseClaudeResult(stdout: string): CliResult {
+  const lines = stdout.split("\n").map(l => l.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].startsWith("{")) continue;
+    try {
+      const obj = JSON.parse(lines[i]);
+      if (obj.result != null) {
+        return { text: String(obj.result).trim(), sessionId: obj.session_id ?? null };
+      }
+    } catch { /* not JSON */ }
+  }
+  return { text: stdout.trim(), sessionId: null };
+}
+
+export function toUserMessage(err: Error): string {
+  return err.message.split(":")[0].trim();
+}
+
 export function isCapacityExhaustedError(err: Error): boolean {
   const msg = err.message || "";
   return (
     msg.includes("MODEL_CAPACITY_EXHAUSTED") ||
     msg.includes("No capacity available") ||
-    msg.includes("rateLimitExceeded")
+    msg.includes("rateLimitExceeded") ||
+    msg.includes("overloaded_error") ||
+    msg.includes("Overloaded")
   );
 }
 
@@ -263,9 +291,9 @@ function formatSpawnLog(command: string, args: string[], cwd: string, chatId?: n
  * Runs a CLI command and returns stdout.
  */
 export async function runCli(command: string, args: string[], cwd: string, options: CliOptions = {}): Promise<string> {
-  const timeoutMs = options.timeoutMs ?? 120000;
+  const timeoutMs = options.timeoutMs ?? 300_000;
   const idleTimeoutMs = options.idleTimeoutMs ?? null;
-  const killGraceMs = options.killGraceMs ?? 5000;
+  const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
 
   return new Promise((resolve, reject) => {
     console.log(formatSpawnLog(command, args, cwd, options.chatId));
@@ -291,8 +319,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
     const timer = setTimeout(() => {
       console.error(`[TIMEOUT] CLI hard timeout after ${timeoutMs}ms - killing process\n${formatSpawnLog(command, args, cwd, options.chatId)}`);
       doReject(new Error(`CLI hard timeout after ${timeoutMs}ms`));
-      child.kill("SIGTERM");
-      setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* ignore */ } }, killGraceMs);
+      killWithGrace(child, killGraceMs);
     }, timeoutMs);
 
     let idleTimer: NodeJS.Timeout | null = null;
@@ -301,7 +328,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         doReject(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`));
-        child.kill("SIGTERM");
+        killWithGrace(child, killGraceMs);
       }, idleTimeoutMs);
     };
 
@@ -349,6 +376,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
 
 /**
  * Runs a CLI command asynchronously with progress support.
+ * Uses detached:true so process.kill(-pid) kills the whole subprocess tree.
  */
 export async function runCliAsync(
   command: string,
@@ -356,15 +384,12 @@ export async function runCliAsync(
   cwd: string,
   options: CliOptions = {}
 ): Promise<{ text: string }> {
-  const timeoutMs = options.timeoutMs ?? 300000;
+  const timeoutMs = options.timeoutMs ?? 300_000;
   const idleTimeoutMs = options.idleTimeoutMs ?? null;
-  const killGraceMs = options.killGraceMs ?? 5000;
+  const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
   const onProgress = options.onProgress;
-  const onCancel = options.onCancel;
 
   return new Promise((resolve, reject) => {
-    // shell:false + detached:true creates the child in its own process group so
-    // process.kill(-pid) can cleanly kill the whole tree.
     console.log(formatSpawnLog(command, args, cwd, options.chatId));
     const child = spawn(command, args, { cwd, shell: false, detached: true });
     child.stdin?.end();
@@ -384,42 +409,21 @@ export async function runCliAsync(
       resolve(val);
     };
 
-    const killProcessTree = () => {
-      if (pid) {
-        try {
-          process.kill(-pid, "SIGTERM");
-          setTimeout(() => {
-            try { process.kill(-pid, "SIGKILL"); } catch { /* ignore */ }
-          }, killGraceMs);
-        } catch { /* ignore */ }
-      }
-    };
-
-    const killTree = () => {
-      killProcessTree();
-      doReject(new Error("CLI process was killed"));
-    };
-
-    if (onCancel) {
-      onCancel(killTree);
-    }
-
     let stdout = "";
     let stderr = "";
 
     const timer = setTimeout(() => {
       console.error(`[TIMEOUT] CLI hard timeout after ${timeoutMs}ms${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"}`);
-      killProcessTree();
+      if (pid) killProcessTree(child, pid, killGraceMs);
       doReject(new Error(`CLI hard timeout after ${timeoutMs}ms`));
     }, timeoutMs);
 
-    // Idle timeout: reject if no output is received within the window.
     let idleTimer: NodeJS.Timeout | null = null;
     const resetIdleTimer = () => {
       if (idleTimeoutMs === null) return;
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
-        killProcessTree();
+        if (pid) killProcessTree(child, pid, killGraceMs);
         doReject(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`));
       }, idleTimeoutMs);
     };

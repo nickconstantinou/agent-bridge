@@ -1,0 +1,17 @@
+[Unit]
+Description=Telegram bridge for Claude Code
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+EnvironmentFile=/home/openclaw/.openclaw/workspace/projects/agent-bridge/.env.claude
+Environment=BRIDGE_ENV_FILE=/home/openclaw/.openclaw/workspace/projects/agent-bridge/.env.claude
+ExecStart=/usr/bin/env bash -lc 'cd "${BRIDGE_PROJECT_DIR:?}" && exec ./node_modules/.bin/tsx src/index.ts'
+Restart=always
+RestartSec=5
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

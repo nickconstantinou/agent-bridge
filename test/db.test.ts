@@ -110,3 +110,45 @@ describe("BridgeDb settings", () => {
     expect(db.getSetting("codex")).toBeNull();
   });
 });
+
+describe("BridgeDb SQL guard", () => {
+  it("getSession throws on invalid bot kind", () => {
+    expect(() => db.getSession("chat1", "invalid" as any)).toThrow("Invalid bot kind");
+  });
+
+  it("setSession throws on invalid bot kind", () => {
+    expect(() => db.setSession("chat1", "invalid" as any, "s1")).toThrow("Invalid bot kind");
+  });
+
+  it("getSession allows claude bot kind", () => {
+    expect(() => db.getSession("chat1", "claude" as any)).not.toThrow();
+  });
+
+  it("setSession allows claude bot kind", () => {
+    expect(() => db.setSession("chat1", "claude" as any, "s1")).not.toThrow();
+  });
+});
+
+describe("Per-topic session isolation", () => {
+  it("composite chat:thread key isolates sessions between forum topics", () => {
+    db.setSession("100:10", "gemini", "s-topic-10");
+    db.setSession("100:20", "gemini", "s-topic-20");
+    expect(db.getSession("100:10", "gemini")).toBe("s-topic-10");
+    expect(db.getSession("100:20", "gemini")).toBe("s-topic-20");
+  });
+
+  it("resetting a topic session does not affect other topics", () => {
+    db.setSession("100:10", "gemini", "s-topic-10");
+    db.setSession("100:20", "gemini", "s-topic-20");
+    db.setSession("100:10", "gemini", null);
+    expect(db.getSession("100:10", "gemini")).toBeNull();
+    expect(db.getSession("100:20", "gemini")).toBe("s-topic-20");
+  });
+
+  it("per-user group key isolates sessions between users in the same group", () => {
+    db.setSession("-1001:10:111", "codex", "s-user-111");
+    db.setSession("-1001:10:222", "codex", "s-user-222");
+    expect(db.getSession("-1001:10:111", "codex")).toBe("s-user-111");
+    expect(db.getSession("-1001:10:222", "codex")).toBe("s-user-222");
+  });
+});

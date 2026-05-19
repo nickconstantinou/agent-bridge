@@ -9,11 +9,15 @@ export type CommandResult =
 
 const bridgeCommands = new Set(["/start", "/reset", "/models", "/memory"]);
 
-export function isBridgeCommand(text: string): boolean {
-  return bridgeCommands.has(String(text || "").trim().toLowerCase());
+function normalizeCommand(text: string): string {
+  return String(text || "").trim().toLowerCase().replace(/@\S+$/, "");
 }
 
-function buildMemorySmokePrompt(kind: "codex" | "gemini"): string {
+export function isBridgeCommand(text: string): boolean {
+  return bridgeCommands.has(normalizeCommand(text));
+}
+
+function buildMemorySmokePrompt(kind: "codex" | "gemini" | "claude"): string {
   return [
     `Run a shared memory smoke test for the ${kind} bridge session.`,
     `Use the local agent-memory CLI from the shell if needed.`,
@@ -28,7 +32,7 @@ function buildMemorySmokePrompt(kind: "codex" | "gemini"): string {
 }
 
 export function handleCommand(
-  kind: "codex" | "gemini",
+  kind: "codex" | "gemini" | "claude",
   prompt: string,
   {
     db,
@@ -40,7 +44,7 @@ export function handleCommand(
     config: BridgeConfig;
   }
 ): CommandResult | null {
-  const text = String(prompt || "").trim();
+  const text = normalizeCommand(prompt);
 
   if (text === "/start") {
     return {

@@ -1,4 +1,5 @@
 import { splitTelegramText, escapeTelegramMarkdownV2, toTelegramEntitiesText } from "./render.js";
+import { toUserMessage } from "./cli.js";
 import type { TelegramClient } from "./telegram.js";
 import type { CliResult } from "./types.js";
 
@@ -144,7 +145,7 @@ export async function sendMessageWithProgress({
     return { ...result, onProgress: wrappedOnProgress };
   } catch (err: any) {
     clearInterval(typingInterval);
-    const errorText = `❌ ${err.message?.slice(0, 4000) || String(err)}`;
+    const errorText = `❌ ${toUserMessage(err instanceof Error ? err : new Error(String(err)))}`;
     await sendTelegramMessage({ client, kind, chatId, body: { ...body, text: errorText } });
     console.error(`[${kind}] execution error`, err);
     return null;

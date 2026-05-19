@@ -52,28 +52,15 @@ describe("Execution Path Selection - TDD", () => {
     });
   });
 });
-describe("Idle Timeout Removal", () => {
-  it("sync path uses null idle timeout", async () => {
-    const fs = await import("fs");
-    const src = fs.readFileSync("src/index.ts", "utf-8");
-    
-    // executePrompt should use null idle timeout (typing provides liveness)
-    const syncUsesNullIdle = src.includes("idleTimeoutMs: null") && 
-      !src.match(/executePrompt[^]*idleTimeoutMs: (?!null)/);
-    
-    // Both paths should use null
-    expect(src).toContain("idleTimeoutMs: null");
-  });
-
-  it("CLI_IDLE_TIMEOUT_MS not used in config", async () => {
-    const fs = await import("fs");
-    const src = fs.readFileSync("src/index.ts", "utf-8");
-    
-    // cliIdleTimeoutMs from config should not be used (not in code as assignment)
-    // Check for the config line being used, not just mentioned
-    const usesConfigAssignment = src.includes("config.cliIdleTimeoutMs");
-    
-    expect(usesConfigAssignment).toBe(false);
+describe("Idle Timeout Config", () => {
+  it("buildExecutionOptions includes idleTimeoutMs from config", async () => {
+    const { buildExecutionOptions } = await import("../src/cli.js");
+    const opts = buildExecutionOptions({
+      cliTimeoutMs: 300_000,
+      cliIdleTimeoutMs: 60_000,
+    } as any);
+    expect(opts.timeoutMs).toBe(300_000);
+    expect(opts.idleTimeoutMs).toBe(60_000);
   });
 
   it("install script runs shared-memory setup as the target user instead of the sudo home", async () => {

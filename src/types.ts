@@ -2,17 +2,20 @@
  * Configuration for the Agent Bridge.
  */
 export interface BridgeConfig {
-  allowedUserId: string;
+  allowedUserIds: ReadonlySet<string>;
   serviceEnvFile: string | null;
-  serviceKind: "codex" | "gemini" | null;
+  serviceKind: "codex" | "gemini" | "claude" | null;
   pollIntervalMs: number;
   executionMode: "safe" | "trusted";
   cliTimeoutMs: number;
+  cliIdleTimeoutMs: number;
+  fetchTimeoutMs: number;
   asyncEnabled: boolean;
   dbPath: string;
   bots: {
     codex: BotConfig;
     gemini: BotConfig;
+    claude: BotConfig;
   };
 }
 
@@ -81,7 +84,6 @@ export interface CliOptions {
   idleTimeoutMs?: number | null;
   killGraceMs?: number;
   onProgress?: (text: string) => void;
-  onCancel?: (kill: () => void) => void;
   chatId?: number | string;
 }
 

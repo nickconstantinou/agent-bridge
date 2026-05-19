@@ -57,6 +57,18 @@ describe("TelegramClient", () => {
     await expect(client.sendMessage({ chat_id: 1, text: "hi" })).rejects.toThrow(/chat not found/);
   });
 
+  it("aborts fetch after fetchTimeoutMs and rejects with AbortError", async () => {
+    const fakeFetch = ((_url: string, options: any) =>
+      new Promise((_, reject) => {
+        options.signal.addEventListener("abort", () =>
+          reject(new DOMException("The operation was aborted", "AbortError"))
+        );
+      })
+    ) as any;
+    const client = new TelegramClient("token", fakeFetch, 50);
+    await expect(client.sendMessage({ chat_id: 1, text: "hi" })).rejects.toThrow("aborted");
+  }, 2000);
+
   it("supports chat actions for typing indicators", async () => {
     const calls: any[] = [];
     const fakeFetch = (async (url: string, options: any) => {

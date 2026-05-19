@@ -12,8 +12,9 @@ cat <<'EOF'
 agent-bridge install
 - codex service reads: .env.codex
 - gemini service reads: .env.gemini
+- claude service reads: .env.claude  (optional — skipped if no token provided)
 - BRIDGE_ENV_FILE must point at the bot-specific env file
-- CODEX_PROJECT_DIR / GEMINI_PROJECT_DIR override the CLI cwd per bot
+- CODEX_PROJECT_DIR / GEMINI_PROJECT_DIR / CLAUDE_PROJECT_DIR override the CLI cwd per bot
 - shared local memory is configured automatically for codex, gemini, and claude
 EOF
 
@@ -54,7 +55,7 @@ env_file_get() {
 seed_from_env_file() {
   local file="$1"
   local key value
-  for key in BRIDGE_ROOT_DIR BRIDGE_PROJECT_DIR TELEGRAM_ALLOWED_USER_ID TELEGRAM_BOT_TOKEN_CODEX TELEGRAM_BOT_TOKEN_GEMINI CODEX_COMMAND GEMINI_COMMAND CLAUDE_COMMAND BRIDGE_EXECUTION_MODE; do
+  for key in BRIDGE_ROOT_DIR BRIDGE_PROJECT_DIR TELEGRAM_ALLOWED_USER_ID TELEGRAM_BOT_TOKEN_CODEX TELEGRAM_BOT_TOKEN_GEMINI TELEGRAM_BOT_TOKEN_CLAUDE CODEX_COMMAND GEMINI_COMMAND CLAUDE_COMMAND BRIDGE_EXECUTION_MODE; do
     value="$(env_file_get "${file}" "${key}")"
     if [[ -n "${value}" && -z "${!key:-}" ]]; then
       export "${key}=${value}"
@@ -64,6 +65,7 @@ seed_from_env_file() {
 
 seed_from_env_file "${REPO_DIR}/.env.codex"
 seed_from_env_file "${REPO_DIR}/.env.gemini"
+seed_from_env_file "${REPO_DIR}/.env.claude"
 
 prompt() {
   local var="$1" label="$2" default="${3:-}"
@@ -93,6 +95,7 @@ prompt BRIDGE_PROJECT_DIR "Bridge project directory" "${REPO_DIR}"
 prompt TELEGRAM_ALLOWED_USER_ID "Telegram allowed user id"
 prompt TELEGRAM_BOT_TOKEN_CODEX "Codex bot token"
 prompt TELEGRAM_BOT_TOKEN_GEMINI "Gemini bot token"
+prompt TELEGRAM_BOT_TOKEN_CLAUDE "Claude bot token (leave blank to skip)"
 prompt CODEX_COMMAND "Codex command" "$(command -v codex || true)"
 prompt GEMINI_COMMAND "Gemini command" "$(command -v gemini || true)"
 prompt CLAUDE_COMMAND "Claude command" "$(command -v claude || true)"
@@ -126,6 +129,18 @@ TELEGRAM_ALLOWED_USER_ID=${TELEGRAM_ALLOWED_USER_ID}
 GEMINI_COMMAND=${GEMINI_COMMAND}
 BRIDGE_EXECUTION_MODE=${BRIDGE_EXECUTION_MODE}
 EOF
+
+if [[ -n "${TELEGRAM_BOT_TOKEN_CLAUDE:-}" ]]; then
+  cat > "${DEFAULTS_DIR}/agent-bridge-claude" <<EOF
+BRIDGE_ROOT_DIR=${BRIDGE_ROOT_DIR}
+BRIDGE_PROJECT_DIR=${BRIDGE_PROJECT_DIR}
+BRIDGE_ENV_FILE=${BRIDGE_PROJECT_DIR}/.env.claude
+TELEGRAM_BOT_TOKEN_CLAUDE=${TELEGRAM_BOT_TOKEN_CLAUDE}
+TELEGRAM_ALLOWED_USER_ID=${TELEGRAM_ALLOWED_USER_ID}
+CLAUDE_COMMAND=${CLAUDE_COMMAND}
+BRIDGE_EXECUTION_MODE=${BRIDGE_EXECUTION_MODE}
+EOF
+fi
 
 install_unit() {
   local name="$1"
@@ -164,14 +179,24 @@ fi
 
 ensure_var CODEX_COMMAND "Codex command"
 ensure_var GEMINI_COMMAND "Gemini command"
-ensure_var CLAUDE_COMMAND "Claude command"
+if [[ -n "${TELEGRAM_BOT_TOKEN_CLAUDE:-}" ]]; then
+  ensure_var CLAUDE_COMMAND "Claude command"
+fi
 
 install_unit agent-bridge-codex
 install_unit agent-bridge-gemini
 
-sudo systemctl daemon-reload
-sudo systemctl enable --now agent-bridge-codex agent-bridge-gemini
+UNITS_TO_ENABLE="agent-bridge-codex agent-bridge-gemini"
 
-echo "Installed and started agent-bridge-codex and agent-bridge-gemini"
-echo "Defaults written to ${DEFAULTS_DIR}/agent-bridge-codex and ${DEFAULTS_DIR}/agent-bridge-gemini"
+if [[ -n "${TELEGRAM_BOT_TOKEN_CLAUDE:-}" ]]; then
+  install_unit agent-bridge-claude
+  UNITS_TO_ENABLE="${UNITS_TO_ENABLE} agent-bridge-claude"
+fi
+
+sudo systemctl daemon-reload
+# shellcheck disable=SC2086
+sudo systemctl enable --now ${UNITS_TO_ENABLE}
+
+echo "Installed and started: ${UNITS_TO_ENABLE}"
+echo "Defaults written to ${DEFAULTS_DIR}/"
 echo "Shared local memory configured for codex, gemini, and claude"

@@ -1,6 +1,6 @@
 # Agent Bridge — Architecture
 
-The **Agent Bridge** connects Telegram directly to AI CLI backends (Codex, Gemini) using long-polling, structured JSON parsing, and per-chat execution locking.
+The **Agent Bridge** connects Telegram directly to AI CLI backends (Codex, Gemini, Claude Code) using long-polling, structured JSON parsing, and per-chat execution locking.
 
 ---
 
@@ -16,13 +16,13 @@ Telegram Bot Long-Polling
 │  • Per-chat locking (db.tryLock)                   │
 │  • Async streaming execution path                  │
 │  • CLI invocation → JSON → Telegram response        │
-└────────────────────┬────────────────────────────────┘
-                     │
-         ┌───────────┴────────────┐
-         │                        │
-    Gemini Bot              Codex Bot
-   (gemini CLI)           (codex CLI)
-   (systemd)              (systemd)
+└──────────────────┬──────────────────────────────────┘
+                   │
+      ┌────────────┼────────────┐
+      │            │            │
+ Gemini Bot   Codex Bot   Claude Bot
+ (gemini CLI) (codex CLI) (claude CLI)
+ (systemd)    (systemd)   (systemd)
 ```
 
 Each bot is an **independent systemd service** sharing the same TypeScript source, distinguished only by `BRIDGE_ENV_FILE` pointing to their own `.env` file:
@@ -31,6 +31,7 @@ Each bot is an **independent systemd service** sharing the same TypeScript sourc
 |---------|-----|----------|
 | `agent-bridge-gemini.service` | `.env.gemini` | `.data-gemini/` |
 | `agent-bridge-codex.service` | `.env.codex` | `.data-codex/` |
+| `agent-bridge-claude.service` | `.env.claude` | `.data-claude/` |
 
 ## Shared Memory
 
@@ -92,6 +93,7 @@ CREATE TABLE bridge_state (
   chat_id               TEXT    PRIMARY KEY,
   codex_session_id      TEXT,
   gemini_session_id     TEXT,
+  claude_session_id     TEXT,    -- added automatically by migration on first run
   active_execution_lock INTEGER NOT NULL DEFAULT 0,
   last_update_id        INTEGER NOT NULL DEFAULT 0
 );
@@ -105,8 +107,8 @@ CREATE TABLE settings (
 | Row / key pattern | Purpose |
 |-------------------|---------|
 | `<chatId>` | Per-chat session IDs and execution lock |
-| `$polling:gemini` / `$polling:codex` | Global polling offset per bot (sentinel rows) |
-| `gemini` / `codex` (in `settings`) | Active model override set via `/models` |
+| `$polling:gemini` / `$polling:codex` / `$polling:claude` | Global polling offset per bot (sentinel rows) |
+| `gemini` / `codex` / `claude` (in `settings`) | Active model override set via `/models` |
 
 **BridgeDb API:**
 
@@ -150,8 +152,8 @@ executePrompt() → runCli() → stdout → parseCliResult() → sendTelegramMes
 - Supports MarkdownV2 with automatic fallback to escaped, then plain text
 
 Both paths:
-- Use `idleTimeoutMs: null` (no idle timeout; typing indicator provides liveness)
-- Support model fallback on capacity exhaustion
+- Use `idleTimeoutMs` from config (default 60 000ms; kills CLI after that many ms with no output)
+- Support model fallback on capacity exhaustion for any bot with multiple models configured
 - Pass `chatId` to `runCli`/`runCliAsync` for the process registry
 
 ---
@@ -195,7 +197,12 @@ db.unlock(chatKey);
 | Bot | Flags |
 |-----|-------|
 | **Codex** | `exec [resume <sessionId>]`, `--skip-git-repo-check`, `--model <m>`, `--json`, `--dangerously-bypass-approvals-and-sandbox` (trusted) |
-| **Gemini** | `--model <m>`, `--resume <sessionId>`, `--yolo` (trusted), `--prompt <text>` |
+| **Gemini** | `--model <m>`, `--resume <sessionId>` or `--session-id <newId>`, `--yolo` (trusted), `--prompt <text>` |
+| **Claude** | `--print`, `--model <m>`, `--resume <sessionId>`, `--dangerously-skip-permissions` (trusted), `--output-format json` |
+
+Session handling differs per bot:
+- **Codex / Claude** — pass `sessionId` directly; new sessions receive no session arg (the CLI creates one)
+- **Gemini** — new sessions receive a pre-generated UUID via `--session-id`; existing sessions use `--resume`
 
 ### Parse Phase (`parseCliResult`)
 
@@ -204,23 +211,31 @@ db.unlock(chatKey);
 - `item.completed` / `response.completed` → `finalText`
 - `response.output_text.delta` → accumulates streaming chunks
 
-**Gemini** — strips ANSI codes, extracts `[session:…]` marker for `sessionId`, remainder is text.
+**Gemini** — strips ANSI codes, extracts `[session:…]` marker for `sessionId`, remainder is text. JSON Lines mode used when stdout begins with `{`.
+
+**Claude** — parses the last JSON object in stdout:
+```json
+{"type":"result","subtype":"success","session_id":"…","result":"response text"}
+```
+Falls back to plain-text if no JSON object with a `result` field is found.
 
 ### Error Messages
 
-When a CLI exits non-zero, the error message includes `stderr || stdout.slice(-2000)` — so errors written to stdout (e.g. Codex rate-limit banners) surface in full rather than appearing blank.
+When a CLI exits non-zero, the error message includes `stderr || stdout.slice(-2000)` — so errors written to stdout (e.g. rate-limit banners) surface in full rather than appearing blank. The `toUserMessage()` helper trims the message to its first colon-delimited segment before forwarding it to Telegram.
 
 ### Fallback Detection
 
 ```typescript
 export function isCapacityExhaustedError(err: Error): boolean {
-  return msg.includes("MODEL_CAPACITY_EXHAUSTED") ||
+  return msg.includes("MODEL_CAPACITY_EXHAUSTED") ||   // Codex
          msg.includes("No capacity available") ||
-         msg.includes("rateLimitExceeded");
+         msg.includes("rateLimitExceeded") ||           // Gemini
+         msg.includes("overloaded_error") ||            // Claude
+         msg.includes("Overloaded");
 }
 ```
 
-When triggered (Gemini only), `getNextFallbackModel(currentModel, modelPreference[])` picks the next entry in the preference list. If no fallback remains the error propagates and is shown to the user.
+When triggered, `getNextFallbackModel(currentModel, modelPreference[])` picks the next entry in the preference list for **any bot** that has multiple models configured. If no fallback remains the error propagates and is shown to the user.
 
 ---
 
@@ -231,6 +246,7 @@ Configured via `*_MODEL_PREFERENCE` env var (comma-delimited):
 ```
 GEMINI_MODEL_PREFERENCE=auto-gemini-3,auto,flash
 CODEX_MODEL_PREFERENCE=gpt-5.5,gpt-5.5-mini,gpt-5.4,gpt-5.4-mini
+CLAUDE_MODEL_PREFERENCE=claude-opus-4-7,claude-sonnet-4-6
 ```
 
 - `modelPreference[0]` = default passed to CLI
@@ -317,14 +333,19 @@ agent-bridge/
 │   ├── render.ts          — splitTelegramText, escapeTelegramMarkdownV2, toTelegramEntitiesText
 │   ├── commands.ts        — handleCommand(): /reset, /models, /start
 │   └── types.ts           — All shared interfaces (BridgeConfig, BotConfig, CliOptions, …)
-├── test/                  — Vitest test suite (87 tests)
+├── test/                  — Vitest test suite
 ├── docs/
 │   └── PRD.md             — Full product requirements document
 ├── systemd/
 │   ├── agent-bridge-gemini.service
-│   └── agent-bridge-codex.service
+│   ├── agent-bridge-codex.service
+│   └── agent-bridge-claude.service
+├── scripts/
+│   ├── install.sh          — First-time install (prompts for tokens, creates systemd units)
+│   └── install-deployment.sh — Update existing deployment (npm, CLI update, service reload)
 ├── .env.gemini            — Live Gemini config (gitignored)
 ├── .env.codex             — Live Codex config (gitignored)
+├── .env.claude            — Live Claude config (gitignored)
 ├── .env.*.example         — Template env files
 └── agents.md              — This file
 ```
@@ -335,18 +356,21 @@ agent-bridge/
 
 | Variable | Bot | Purpose |
 |----------|-----|---------|
-| `TELEGRAM_BOT_TOKEN_CODEX` / `_GEMINI` | Each | Bot token from @BotFather |
-| `TELEGRAM_ALLOWED_USER_ID` | Both | Numeric Telegram user ID (sole authorized user) |
-| `BRIDGE_ENV_FILE` | Service | Path to `.env.codex` / `.env.gemini` |
-| `CODEX_COMMAND` / `GEMINI_COMMAND` | Each | CLI binary path |
-| `CODEX_MODEL_PREFERENCE` / `GEMINI_MODEL_PREFERENCE` | Each | Comma-delimited model list; first = default, rest = fallbacks |
-| `BRIDGE_EXECUTION_MODE` | Both | `safe` (approval prompts) / `trusted` (bypass) |
-| `BRIDGE_ASYNC_ENABLED` | Both | `true` = streaming, `false` = sync (default: `true`) |
-| `CLI_TIMEOUT_MS` | Both | Hard timeout per CLI execution (default: 300000) |
-| `POLL_INTERVAL_MS` | Both | Idle sleep between empty poll cycles (default: 1000) |
+| `TELEGRAM_BOT_TOKEN_CODEX` | Codex | Bot token from @BotFather |
+| `TELEGRAM_BOT_TOKEN_GEMINI` | Gemini | Bot token from @BotFather |
+| `TELEGRAM_BOT_TOKEN_CLAUDE` | Claude | Bot token from @BotFather |
+| `TELEGRAM_ALLOWED_USER_IDS` | All | Comma-separated numeric Telegram user IDs. Legacy: `TELEGRAM_ALLOWED_USER_ID`. |
+| `BRIDGE_ENV_FILE` | Service | Path to `.env.codex` / `.env.gemini` / `.env.claude` |
+| `CODEX_COMMAND` / `GEMINI_COMMAND` / `CLAUDE_COMMAND` | Each | CLI binary path |
+| `CODEX_MODEL_PREFERENCE` / `GEMINI_MODEL_PREFERENCE` / `CLAUDE_MODEL_PREFERENCE` | Each | Comma-delimited model list; first = default, rest = fallbacks |
+| `CODEX_PROJECT_DIR` / `GEMINI_PROJECT_DIR` / `CLAUDE_PROJECT_DIR` | Each | Override CLI working directory for this bot |
+| `BRIDGE_EXECUTION_MODE` | All | `safe` (approval prompts) / `trusted` (bypass) |
+| `BRIDGE_ASYNC_ENABLED` | All | `true` = streaming, `false` = sync (default: `true`) |
+| `CLI_TIMEOUT_MS` | All | Hard timeout per CLI execution (default: 300 000ms) |
+| `CLI_IDLE_TIMEOUT_MS` | All | Kill CLI after this many ms with no stdout output (default: 60 000ms) |
+| `FETCH_TIMEOUT_MS` | All | Telegram API fetch timeout (default: 45 000ms) |
 | `DB_PATH` | Each | Path to SQLite database (default: `<project-dir>/.data/bridge.sqlite`) |
-| `BRIDGE_ROOT_DIR` | Both | Working directory for CLI execution (default: `$HOME`) |
-| `BRIDGE_PROJECT_DIR` | Both | Repo path (used for default `DB_PATH`) |
+| `BRIDGE_PROJECT_DIR` | All | Repo path (used for default `DB_PATH`) |
 
 ---
 
@@ -359,6 +383,7 @@ No lock files to clear. Just restart the service:
 ```bash
 sudo systemctl restart agent-bridge-gemini
 sudo systemctl restart agent-bridge-codex
+sudo systemctl restart agent-bridge-claude
 ```
 
 The SQLite polling offset persists across restarts — no re-processing of old updates.
@@ -366,9 +391,10 @@ The SQLite polling offset persists across restarts — no re-processing of old u
 ### Monitoring
 
 ```bash
-systemctl status agent-bridge-gemini agent-bridge-codex
+systemctl status agent-bridge-gemini agent-bridge-codex agent-bridge-claude
 journalctl -u agent-bridge-gemini -f
 journalctl -u agent-bridge-codex -f
+journalctl -u agent-bridge-claude -f
 ```
 
 ### 409 Conflict ("terminated by other getUpdates request")
@@ -378,9 +404,9 @@ Only one process per bot token is allowed to poll. If this appears, another inst
 ```bash
 ps aux | grep "tsx src/index.ts"
 kill -9 <pid>
-sudo systemctl start agent-bridge-gemini
+sudo systemctl start agent-bridge-claude   # or -gemini / -codex
 ```
 
-### Async Path — No Idle Timeout
+### Idle Timeout
 
-`runCliAsync` passes `idleTimeoutMs: null`. The typing indicator (sent every 4.5s) provides liveness. Use `/stop` to abort a runaway process.
+Both `runCli` and `runCliAsync` apply `CLI_IDLE_TIMEOUT_MS` (default 60 000ms). If the CLI produces no stdout for that duration it is killed with SIGTERM → SIGKILL (5s grace). Use `/stop` to abort a runaway process manually.

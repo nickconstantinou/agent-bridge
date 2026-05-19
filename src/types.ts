@@ -1,15 +1,15 @@
+export type BotKind = "codex" | "gemini" | "claude";
+
 /**
  * Configuration for the Agent Bridge.
+ * Timeout values are resolved per-CLI at runtime via resolveTimeoutsForKind().
  */
 export interface BridgeConfig {
   allowedUserIds: ReadonlySet<string>;
   serviceEnvFile: string | null;
-  serviceKind: "codex" | "gemini" | "claude" | null;
+  serviceKind: BotKind | null;
   pollIntervalMs: number;
   executionMode: "safe" | "trusted";
-  cliTimeoutMs: number;
-  cliIdleTimeoutMs: number;
-  fetchTimeoutMs: number;
   asyncEnabled: boolean;
   dbPath: string;
   bots: {

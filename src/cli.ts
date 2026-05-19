@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import type { CliOptions, CliResult, BridgeConfig } from "./types.js";
+import type { CliOptions, CliResult, BotKind } from "./types.js";
+import { resolveTimeoutsForKind } from "./timeouts.js";
 
 const activeProcesses = new Map<number | string, ChildProcess>();
 const abortedChildren = new WeakSet<ChildProcess>();
@@ -129,12 +130,14 @@ export function validateBridgeConfig(config: any): { ok: boolean; errors: string
 }
 
 /**
- * Parses the execution options from a bridge config.
+ * Resolve CLI execution options for a specific bot kind.
+ * Reads env vars at call time so tests can stub them.
  */
-export function buildExecutionOptions(config: BridgeConfig): CliOptions {
+export function buildExecutionOptions(kind: BotKind): CliOptions {
+  const t = resolveTimeoutsForKind(kind);
   return {
-    timeoutMs: config.cliTimeoutMs,
-    idleTimeoutMs: config.cliIdleTimeoutMs,
+    timeoutMs: t.cliTimeoutMs,
+    idleTimeoutMs: t.cliIdleTimeoutMs,
   };
 }
 
@@ -329,7 +332,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
     };
 
     const timer = setTimeout(() => {
-      console.error(`[TIMEOUT] CLI hard timeout after ${timeoutMs}ms - killing process\n${formatSpawnLog(command, args, cwd, options.chatId)}`);
+      console.error(`[HARD TIMEOUT] CLI hard timeout after ${timeoutMs}ms - killing process\n${formatSpawnLog(command, args, cwd, options.chatId)}`);
       doReject(new Error(`CLI hard timeout after ${timeoutMs}ms`));
       killWithGrace(child, killGraceMs);
     }, timeoutMs);
@@ -339,6 +342,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
       if (idleTimeoutMs === null) return;
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
+        console.error(`[IDLE TIMEOUT] CLI idle timeout after ${idleTimeoutMs}ms with no stdout/stderr${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""}`);
         doReject(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`));
         killWithGrace(child, killGraceMs);
       }, idleTimeoutMs);
@@ -425,7 +429,7 @@ export async function runCliAsync(
     let stderr = "";
 
     const timer = setTimeout(() => {
-      console.error(`[TIMEOUT] CLI hard timeout after ${timeoutMs}ms${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"}`);
+      console.error(`[HARD TIMEOUT] CLI hard timeout after ${timeoutMs}ms${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"}`);
       if (pid) killProcessTree(child, pid, killGraceMs);
       doReject(new Error(`CLI hard timeout after ${timeoutMs}ms`));
     }, timeoutMs);
@@ -435,6 +439,7 @@ export async function runCliAsync(
       if (idleTimeoutMs === null) return;
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
+        console.error(`[IDLE TIMEOUT] CLI idle timeout after ${idleTimeoutMs}ms with no stdout/stderr${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"}`);
         if (pid) killProcessTree(child, pid, killGraceMs);
         doReject(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`));
       }, idleTimeoutMs);

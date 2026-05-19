@@ -27,7 +27,8 @@ import {
 } from "./bridge.js";
 import { TelegramClient, MediaGroupBuffer } from "./telegram.js";
 import { sendTelegramMessage, sendMessageWithProgress } from "./messageDelivery.js";
-import type { BridgeConfig, BotConfig, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult } from "./types.js";
+import type { BridgeConfig, BotConfig, BotKind, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult } from "./types.js";
+import { resolveTimeoutsForKind } from "./timeouts.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env",
@@ -59,9 +60,6 @@ const config: BridgeConfig = {
   serviceKind: getServiceKindFromEnvFile(process.env.BRIDGE_ENV_FILE || ""),
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 1000),
   executionMode: (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") || "safe",
-  cliTimeoutMs: Number(process.env.CLI_TIMEOUT_MS || 300_000),
-  cliIdleTimeoutMs: Number(process.env.CLI_IDLE_TIMEOUT_MS || 60_000),
-  fetchTimeoutMs: Number(process.env.FETCH_TIMEOUT_MS || 45_000),
   asyncEnabled: process.env.BRIDGE_ASYNC_ENABLED !== "false",
   dbPath: process.env.DB_PATH || `${getBridgeProjectDir()}/.data/bridge.sqlite`,
   bots: {
@@ -91,17 +89,17 @@ if (!validation.ok) {
 const db = openDb(config.dbPath);
 
 class BridgeBot {
-  kind: "codex" | "gemini" | "claude";
+  kind: BotKind;
   config: BotConfig;
   client: TelegramClient;
   mediaBuffer: MediaGroupBuffer;
   private abortedChats = new Set<string>();
   private pendingQueues = new Map<string, QueuedMessage[]>();
 
-  constructor(kind: "codex" | "gemini" | "claude", botConfig: BotConfig) {
+  constructor(kind: BotKind, botConfig: BotConfig) {
     this.kind = kind;
     this.config = botConfig;
-    this.client = new TelegramClient(botConfig.token!, fetch, config.fetchTimeoutMs);
+    this.client = new TelegramClient(botConfig.token!, fetch, resolveTimeoutsForKind(kind).fetchTimeoutMs);
     this.mediaBuffer = new MediaGroupBuffer({
       timeoutMs: 1500,
       onFlush: (groupId, messages) => {
@@ -311,7 +309,7 @@ class BridgeBot {
     });
     try {
       const cliResult = await runCliAsync(invocation.command, invocation.args, getCliWorkingDir(this.kind), {
-        ...buildExecutionOptions(config),
+        ...buildExecutionOptions(this.kind),
         onProgress,
         chatId: chatKey,
       });
@@ -334,7 +332,7 @@ class BridgeBot {
             outputFormat: "json",
           });
           const cliResult = await runCliAsync(fallbackInvocation.command, fallbackInvocation.args, getCliWorkingDir(this.kind), {
-            ...buildExecutionOptions(config),
+            ...buildExecutionOptions(this.kind),
             onProgress,
             chatId: chatKey,
           });
@@ -368,7 +366,7 @@ class BridgeBot {
     try {
       await typingTracker.start();
       const stdout = await runCli(invocation.command, invocation.args, getCliWorkingDir(this.kind), {
-        ...buildExecutionOptions(config),
+        ...buildExecutionOptions(this.kind),
         chatId: chatKey,
       });
       const result = parseCliResult({ bot: this.kind, stdout });
@@ -388,7 +386,7 @@ class BridgeBot {
             executionMode: config.executionMode,
           });
           const stdout = await runCli(fallbackInvocation.command, fallbackInvocation.args, getCliWorkingDir(this.kind), {
-            ...buildExecutionOptions(config),
+            ...buildExecutionOptions(this.kind),
             chatId: chatKey,
           });
           const result = parseCliResult({ bot: this.kind, stdout });

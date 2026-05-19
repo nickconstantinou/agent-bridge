@@ -53,14 +53,20 @@ describe("Execution Path Selection - TDD", () => {
   });
 });
 describe("Idle Timeout Config", () => {
-  it("buildExecutionOptions includes idleTimeoutMs from config", async () => {
+  it("buildExecutionOptions returns per-kind timeouts (gemini idle default 240s)", async () => {
     const { buildExecutionOptions } = await import("../src/cli.js");
-    const opts = buildExecutionOptions({
-      cliTimeoutMs: 300_000,
-      cliIdleTimeoutMs: 60_000,
-    } as any);
-    expect(opts.timeoutMs).toBe(300_000);
-    expect(opts.idleTimeoutMs).toBe(60_000);
+    const savedGemini = process.env.GEMINI_CLI_IDLE_TIMEOUT_MS;
+    const savedGlobal = process.env.CLI_IDLE_TIMEOUT_MS;
+    delete process.env.GEMINI_CLI_IDLE_TIMEOUT_MS;
+    delete process.env.CLI_IDLE_TIMEOUT_MS;
+    try {
+      const opts = buildExecutionOptions("gemini");
+      expect(opts.idleTimeoutMs).toBe(240_000);
+      expect(opts.timeoutMs).toBe(600_000);
+    } finally {
+      if (savedGemini !== undefined) process.env.GEMINI_CLI_IDLE_TIMEOUT_MS = savedGemini;
+      if (savedGlobal !== undefined) process.env.CLI_IDLE_TIMEOUT_MS = savedGlobal;
+    }
   });
 
   it("install script runs shared-memory setup as the target user instead of the sudo home", async () => {

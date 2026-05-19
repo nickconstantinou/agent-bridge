@@ -92,6 +92,10 @@ export class TelegramClient {
     return this.call("sendChatAction", body);
   }
 
+  async setMyCommands(body: any): Promise<TelegramResponse<boolean>> {
+    return this.call("setMyCommands", body);
+  }
+
 }
 
 type FlushFn = (groupId: string | null, messages: TelegramMessage[]) => void | Promise<void>;

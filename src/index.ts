@@ -113,6 +113,15 @@ class BridgeBot {
   }
 
   async run(): Promise<void> {
+    await this.client.setMyCommands({
+      commands: [
+        { command: "models", description: "Switch model" },
+        { command: "reset",  description: "Clear current session" },
+        { command: "stop",   description: "Abort running execution" },
+        { command: "memory", description: "Run memory smoke test" },
+      ],
+    }).catch((err) => console.warn(`[${this.kind}] setMyCommands failed`, err));
+
     let offset = db.getLastUpdateId(this.kind) + 1;
     console.log(`[${this.kind}] bot online (offset: ${offset})`);
 

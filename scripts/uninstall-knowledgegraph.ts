@@ -2,9 +2,9 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 const targets = [
-  "/home/openclaw/.codex/config.toml",
-  "/home/openclaw/.gemini/settings.json",
-  "/home/openclaw/.claude.json",
+  "/home/content-crawler/.codex/config.toml",
+  "/home/content-crawler/.gemini/settings.json",
+  "/home/content-crawler/.claude.json",
 ];
 
 for (const path of targets) {

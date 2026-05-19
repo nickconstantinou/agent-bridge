@@ -491,9 +491,10 @@ describe("model keyboard current model indicator", () => {
 });
 
 describe("model selection confirmation", () => {
-  it("handleCallback uses show_alert:true in answerCallbackQuery for model set", () => {
+  it("handleCallback sends a follow-up message after model set instead of show_alert popup", () => {
     const src = readFileSync("src/index.ts", "utf-8");
-    expect(src).toMatch(/answerCallbackQuery[\s\S]{0,200}show_alert:\s*true/s);
+    expect(src).not.toMatch(/show_alert:\s*true/);
+    expect(src).toMatch(/sendText[\s\S]{0,100}Model set to/s);
   });
 });
 

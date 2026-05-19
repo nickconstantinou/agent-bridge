@@ -13,7 +13,6 @@ fi
 install_unit() {
   local name="$1"
   sed -e "s/BRIDGE_USER/$(whoami)/g" \
-      -e "s|BRIDGE_HOME|${HOME}|g" \
       "${REPO_DIR}/systemd/${name}.service" \
     | sudo tee "${SYSTEMD_DIR}/${name}.service" > /dev/null
   sudo chmod 0644 "${SYSTEMD_DIR}/${name}.service"

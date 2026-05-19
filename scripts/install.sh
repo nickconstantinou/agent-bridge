@@ -90,7 +90,7 @@ ensure_var() {
   fi
 }
 
-prompt BRIDGE_ROOT_DIR "Bridge root directory" "${HOME}"
+prompt BRIDGE_ROOT_DIR "Bridge root directory" "${TARGET_HOME}"
 prompt BRIDGE_PROJECT_DIR "Bridge project directory" "${REPO_DIR}"
 prompt TELEGRAM_ALLOWED_USER_ID "Telegram allowed user id"
 prompt TELEGRAM_BOT_TOKEN_CODEX "Codex bot token"
@@ -113,7 +113,7 @@ mkdir -p "${DEFAULTS_DIR}"
 cat > "${DEFAULTS_DIR}/agent-bridge-codex" <<EOF
 BRIDGE_ROOT_DIR=${BRIDGE_ROOT_DIR}
 BRIDGE_PROJECT_DIR=${BRIDGE_PROJECT_DIR}
-BRIDGE_ENV_FILE=${BRIDGE_PROJECT_DIR}/.env.codex
+BRIDGE_ENV_FILE=/etc/default/agent-bridge-codex
 TELEGRAM_BOT_TOKEN_CODEX=${TELEGRAM_BOT_TOKEN_CODEX}
 TELEGRAM_ALLOWED_USER_ID=${TELEGRAM_ALLOWED_USER_ID}
 CODEX_COMMAND=${CODEX_COMMAND}
@@ -123,7 +123,7 @@ EOF
 cat > "${DEFAULTS_DIR}/agent-bridge-gemini" <<EOF
 BRIDGE_ROOT_DIR=${BRIDGE_ROOT_DIR}
 BRIDGE_PROJECT_DIR=${BRIDGE_PROJECT_DIR}
-BRIDGE_ENV_FILE=${BRIDGE_PROJECT_DIR}/.env.gemini
+BRIDGE_ENV_FILE=/etc/default/agent-bridge-gemini
 TELEGRAM_BOT_TOKEN_GEMINI=${TELEGRAM_BOT_TOKEN_GEMINI}
 TELEGRAM_ALLOWED_USER_ID=${TELEGRAM_ALLOWED_USER_ID}
 GEMINI_COMMAND=${GEMINI_COMMAND}
@@ -134,7 +134,7 @@ if [[ -n "${TELEGRAM_BOT_TOKEN_CLAUDE:-}" ]]; then
   cat > "${DEFAULTS_DIR}/agent-bridge-claude" <<EOF
 BRIDGE_ROOT_DIR=${BRIDGE_ROOT_DIR}
 BRIDGE_PROJECT_DIR=${BRIDGE_PROJECT_DIR}
-BRIDGE_ENV_FILE=${BRIDGE_PROJECT_DIR}/.env.claude
+BRIDGE_ENV_FILE=/etc/default/agent-bridge-claude
 TELEGRAM_BOT_TOKEN_CLAUDE=${TELEGRAM_BOT_TOKEN_CLAUDE}
 TELEGRAM_ALLOWED_USER_ID=${TELEGRAM_ALLOWED_USER_ID}
 CLAUDE_COMMAND=${CLAUDE_COMMAND}
@@ -144,7 +144,10 @@ fi
 
 install_unit() {
   local name="$1"
-  sudo install -m 0644 "${REPO_DIR}/systemd/${name}.service" "${SYSTEMD_DIR}/${name}.service"
+  sed -e "s/BRIDGE_USER/${TARGET_USER}/g" \
+      "${REPO_DIR}/systemd/${name}.service" \
+    | sudo tee "${SYSTEMD_DIR}/${name}.service" > /dev/null
+  sudo chmod 0644 "${SYSTEMD_DIR}/${name}.service"
 }
 
 ensure_cli() {

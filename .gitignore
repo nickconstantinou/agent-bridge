@@ -6,9 +6,11 @@ coverage/
 .env
 .env.codex
 .env.gemini
+.env.claude
 .data/
 .data-codex/
 .data-gemini/
+.data-claude/
 src/*.js
 src/*.js.map
 dist/

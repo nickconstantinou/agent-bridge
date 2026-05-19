@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=openclaw
-EnvironmentFile=/home/openclaw/.openclaw/workspace/projects/agent-bridge/.env.codex
-Environment=BRIDGE_ENV_FILE=/home/openclaw/.openclaw/workspace/projects/agent-bridge/.env.codex
+User=BRIDGE_USER
+EnvironmentFile=%h/agent-bridge/.env.codex
+Environment=BRIDGE_ENV_FILE=%h/agent-bridge/.env.codex
 ExecStart=/usr/bin/env bash -lc 'cd "${BRIDGE_PROJECT_DIR:?}" && exec ./node_modules/.bin/tsx src/index.ts'
 Restart=always
 RestartSec=5

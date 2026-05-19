@@ -12,7 +12,9 @@ fi
 
 install_unit() {
   local name="$1"
-  sudo install -m 0644 "${REPO_DIR}/systemd/${name}.service" "${SYSTEMD_DIR}/${name}.service"
+  sed "s/BRIDGE_USER/$(whoami)/g" "${REPO_DIR}/systemd/${name}.service" \
+    | sudo tee "${SYSTEMD_DIR}/${name}.service" > /dev/null
+  sudo chmod 0644 "${SYSTEMD_DIR}/${name}.service"
 }
 
 if [[ "${1:-}" != "--skip-cli-install" ]]; then

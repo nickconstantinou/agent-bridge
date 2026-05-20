@@ -24,12 +24,12 @@ describe("sendMessageWithProgress", () => {
     );
   });
 
-  it("does not send a thinking placeholder for gemini", async () => {
+  it("does not send a thinking placeholder for antigravity", async () => {
     const client = createMockClient();
     const chatId = 123;
     const execution = Promise.resolve({ text: "Final answer", sessionId: "s1" } as CliResult);
 
-    await sendMessageWithProgress({ client, kind: "gemini", chatId, execution });
+    await sendMessageWithProgress({ client, kind: "antigravity", chatId, execution });
 
     expect(client.sendMessage).not.toHaveBeenCalledWith(
       expect.objectContaining({ chat_id: chatId, text: "🤔 Thinking..." })
@@ -44,7 +44,7 @@ describe("sendMessageWithProgress", () => {
       return { text: "Final answer", sessionId: "s1" } as CliResult;
     });
 
-    await sendMessageWithProgress({ client, kind: "gemini", chatId, execution });
+    await sendMessageWithProgress({ client, kind: "antigravity", chatId, execution });
 
     expect(execution).toHaveBeenCalled();
     expect(client.sendMessage).toHaveBeenCalled();
@@ -94,12 +94,12 @@ describe("sendMessageWithProgress", () => {
     }
   });
 
-  it("sends final error without a thinking placeholder for gemini", async () => {
+  it("sends final error without a thinking placeholder for antigravity", async () => {
     const client = createMockClient();
     const chatId = 123;
     const execution = Promise.reject(new Error("CLI failed"));
 
-    await expect(sendMessageWithProgress({ client, kind: "gemini", chatId, execution })).resolves.toBeNull();
+    await expect(sendMessageWithProgress({ client, kind: "antigravity", chatId, execution })).resolves.toBeNull();
 
     expect(client.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ text: expect.stringContaining("❌ CLI failed") })

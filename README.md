@@ -21,7 +21,7 @@ Polls a Telegram bot for messages, routes them to the Codex, Antigravity, or Cla
 ## Requirements
 
 - Node 22+
-- One or more of `codex`, `antigravity`, `claude` CLI on `$PATH`
+- One or more of `codex`, `agy`, `claude` CLI on `$PATH`
 - `npm` on `$PATH`
 - One Telegram bot per CLI backend, created via [@BotFather](https://t.me/BotFather)
 
@@ -81,7 +81,7 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `TELEGRAM_BOT_TOKEN_ANTIGRAVITY` | Antigravity | — | Bot token from @BotFather |
 | `TELEGRAM_ALLOWED_USER_IDS` | All | — | Comma-separated Telegram user IDs. Also accepts legacy `TELEGRAM_ALLOWED_USER_ID`. |
 | `CODEX_COMMAND` | Codex | `codex` | CLI binary path |
-| `ANTIGRAVITY_COMMAND` | Antigravity | `antigravity` | CLI binary path |
+| `ANTIGRAVITY_COMMAND` | Antigravity | `agy` | CLI binary path |
 | `CLAUDE_COMMAND` | Claude | `claude` | CLI binary path |
 | `CODEX_MODEL_PREFERENCE` | Codex | — | Comma-separated model list; first = default, rest = fallbacks |
 | `ANTIGRAVITY_MODEL_PREFERENCE` | Antigravity | — | Comma-separated model list; first = default, rest = fallbacks |

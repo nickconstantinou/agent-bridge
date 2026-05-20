@@ -81,7 +81,7 @@ const config: BridgeConfig = {
     },
     antigravity: {
       token: process.env.TELEGRAM_BOT_TOKEN_ANTIGRAVITY || process.env.TELEGRAM_BOT_TOKEN_GEMINI,
-      command: process.env.ANTIGRAVITY_COMMAND || process.env.GEMINI_COMMAND || "antigravity",
+      command: process.env.ANTIGRAVITY_COMMAND || process.env.GEMINI_COMMAND || "agy",
       modelPreference: parseModelPreference(process.env.ANTIGRAVITY_MODEL_PREFERENCE || process.env.GEMINI_MODEL_PREFERENCE),
     },
     claude: {
@@ -320,9 +320,7 @@ class BridgeBot {
       model,
       prompt,
       sessionId,
-      sessionMode: "resume",
-      executionMode: config.executionMode,
-      outputFormat: "json",
+      outputFormat: this.kind === "antigravity" ? undefined : "json",
       logFile,
     });
     try {
@@ -365,7 +363,7 @@ class BridgeBot {
             sessionId,
             sessionMode: "resume",
             executionMode: config.executionMode,
-            outputFormat: "json",
+            outputFormat: this.kind === "antigravity" ? undefined : "json",
             logFile: fallbackLogFile,
           });
           try {

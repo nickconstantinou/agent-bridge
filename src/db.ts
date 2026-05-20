@@ -23,7 +23,7 @@ export function openDb(dbPath: string): BridgeDb {
     CREATE TABLE IF NOT EXISTS bridge_state (
       chat_id               TEXT    PRIMARY KEY,
       codex_session_id      TEXT,
-      gemini_session_id     TEXT,
+      gemini_session_id     TEXT, -- Preserved for legacy session data and backward compatibility
       claude_session_id     TEXT,
       antigravity_session_id TEXT,
       active_execution_lock INTEGER NOT NULL DEFAULT 0,

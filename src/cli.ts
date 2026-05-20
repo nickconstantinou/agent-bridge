@@ -93,21 +93,6 @@ export function buildCliInvocation({
       args.push("--json");
     }
     args.push(prompt);
-  } else if (bot === "gemini") {
-    if (model) {
-      args.push("--model", model);
-    }
-    if (sessionId) {
-      if (sessionMode === "session-id") {
-        args.push("--session-id", sessionId);
-      } else {
-        args.push("--resume", sessionId);
-      }
-    }
-    if (executionMode === "trusted") {
-      args.push("--yolo");
-    }
-    args.push("--prompt", prompt);
   } else if (bot === "claude") {
     args.push("--print");
     if (model) args.push("--model", model);
@@ -138,7 +123,7 @@ export function validateBridgeConfig(config: any): { ok: boolean; errors: string
   }
 
   // Skip bot validation - each service validates its own bot in index.ts
-  // This allows gemini service to run without codex token and vice versa
+  // This allows antigravity service to run without codex token and vice versa
 
   return {
     ok: errors.length === 0,
@@ -172,16 +157,6 @@ export function parseCliResult({
 }): CliResult {
   if (bot === "codex") {
     return parseCodexResult(stdout);
-  } else if (bot === "gemini") {
-    // If output was JSON, use specific parser
-    if (stdout.trim().startsWith("{")) {
-      try {
-        return parseGeminiStreamJson(stdout);
-      } catch {
-        // fallthrough to text parser
-      }
-    }
-    return parseGeminiResult(stdout);
   } else if (bot === "claude") {
     return parseClaudeResult(stdout);
   } else if (bot === "antigravity") {
@@ -224,68 +199,6 @@ function parseCodexResult(stdout: string): CliResult {
   };
 }
 
-function parseGeminiResult(stdout: string): CliResult {
-  let sessionId: string | null = null;
-
-  const cleaned = stdout.replace(/\x1B\[[0-9;]*[mK]/g, ""); // strip ansi
-
-  const sessionMatch = cleaned.match(/\[session:([^\]]+)\]/);
-  if (sessionMatch) {
-    sessionId = sessionMatch[1];
-  }
-
-  // Strip thinking blocks: Gemini CLI appends [Thought: true] at the end of each thinking section.
-  // Take only content after the last such marker.
-  const THOUGHT_MARKER = "[Thought: true]";
-  const lastThoughtIdx = cleaned.lastIndexOf(THOUGHT_MARKER);
-  const afterThinking = lastThoughtIdx !== -1
-    ? cleaned.slice(lastThoughtIdx + THOUGHT_MARKER.length)
-    : cleaned;
-
-  // Strip CRITICAL INSTRUCTION header lines Gemini sometimes prepends.
-  const withoutCritical = afterThinking
-    .split("\n")
-    .filter(l => !/^CRITICAL INSTRUCTION \d+:/i.test(l.trim()))
-    .join("\n");
-
-  // Strip structured metadata footer (MEMORY_AVAILABLE, MCP_AVAILABLE, TOOL_USED,
-  // RESULT_SUMMARY, ERROR). These may appear inline (no newline before the key).
-  const FOOTER_RE = /\b(MEMORY_AVAILABLE|MCP_AVAILABLE|TOOL_USED|RESULT_SUMMARY|ERROR):\s/;
-  const footerIdx = withoutCritical.search(FOOTER_RE);
-  const withoutFooter = footerIdx !== -1 ? withoutCritical.slice(0, footerIdx).trimEnd() : withoutCritical;
-
-  const lines = withoutFooter.split("\n").filter(l => !l.includes("[session:"));
-  const text = lines.join("\n").trim();
-
-  return { text, sessionId };
-}
-
-function parseGeminiStreamJson(stdout: string): CliResult {
-  const lines = stdout.split("\n").map((line) => line.trim()).filter(Boolean);
-  let text = "";
-  let sessionId: string | null = null;
-
-  for (const line of lines) {
-    try {
-      const parsed = JSON.parse(line);
-      // Handle the specialized stream format from Gemini CLI
-      if (parsed.chunk) {
-        text += parsed.chunk;
-      }
-      if (parsed.sessionId) {
-        sessionId = parsed.sessionId;
-      }
-      // If it's a full result object
-      if (parsed.text && !parsed.chunk) {
-        text = parsed.text;
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  return { text: text.trim(), sessionId };
-}
 
 function parseClaudeResult(stdout: string): CliResult {
   const lines = stdout.split("\n").map(l => l.trim()).filter(Boolean);
@@ -308,6 +221,8 @@ function parseAntigravityResult(stdout: string, logContent?: string | null): Cli
                          logContent.match(/conversation=([a-f0-9-]{36})/);
     if (sessionMatch) {
       sessionId = sessionMatch[1];
+    } else {
+      console.warn("[antigravity] Failed to extract conversation ID from log content");
     }
   }
   return { text: stdout.trim(), sessionId };

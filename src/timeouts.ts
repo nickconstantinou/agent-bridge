@@ -31,7 +31,7 @@ export interface ResolvedTimeouts {
  * Resolve timeout values for a specific bot kind.
  *
  * Precedence (highest first):
- *   1. Per-CLI env var  — e.g. GEMINI_CLI_TIMEOUT_MS, GEMINI_CLI_IDLE_TIMEOUT_MS
+ *   1. Per-CLI env var  — e.g. ANTIGRAVITY_CLI_TIMEOUT_MS, ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS
  *   2. Global env var   — CLI_TIMEOUT_MS, CLI_IDLE_TIMEOUT_MS
  *   3. Built-in default — per-kind table above
  *

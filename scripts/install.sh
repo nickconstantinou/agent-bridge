@@ -97,7 +97,7 @@ prompt TELEGRAM_BOT_TOKEN_CODEX "Codex bot token"
 prompt TELEGRAM_BOT_TOKEN_ANTIGRAVITY "Antigravity bot token"
 prompt TELEGRAM_BOT_TOKEN_CLAUDE "Claude bot token (leave blank to skip)"
 prompt CODEX_COMMAND "Codex command" "$(command -v codex || true)"
-prompt ANTIGRAVITY_COMMAND "Antigravity command" "$(command -v antigravity || true)"
+prompt ANTIGRAVITY_COMMAND "Antigravity command" "$(command -v agy || true)"
 prompt CLAUDE_COMMAND "Claude command" "$(command -v claude || true)"
 prompt BRIDGE_EXECUTION_MODE "Execution mode (safe|trusted)" "trusted"
 
@@ -166,10 +166,10 @@ if [[ "${1:-}" != "--skip-cli-install" ]]; then
   if command -v npm >/dev/null 2>&1; then
     (cd "${REPO_DIR}" && npm install)
     ensure_cli codex @openai/codex
-    ensure_cli antigravity @google/antigravity-cli
+    ensure_cli agy @google/antigravity-cli
     ensure_cli claude @anthropic-ai/claude-code
     CODEX_COMMAND="${CODEX_COMMAND:-$(command -v codex || true)}"
-    ANTIGRAVITY_COMMAND="${ANTIGRAVITY_COMMAND:-$(command -v antigravity || true)}"
+    ANTIGRAVITY_COMMAND="${ANTIGRAVITY_COMMAND:-$(command -v agy || true)}"
     CLAUDE_COMMAND="${CLAUDE_COMMAND:-$(command -v claude || true)}"
     if [[ "${USER}" == "${TARGET_USER}" ]]; then
       (cd "${REPO_DIR}" && SHARED_MEMORY_HOME="${TARGET_HOME}" ./node_modules/.bin/tsx scripts/setup-shared-memory.ts)

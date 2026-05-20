@@ -28,8 +28,8 @@ if [[ "${1:-}" != "--skip-cli-install" ]]; then
     codex --help >/dev/null
   fi
 
-  if command -v antigravity >/dev/null 2>&1; then
-    antigravity --help >/dev/null
+  if command -v agy >/dev/null 2>&1; then
+    agy --help >/dev/null
   fi
 
   if command -v claude >/dev/null 2>&1; then

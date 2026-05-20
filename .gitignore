@@ -14,3 +14,7 @@ coverage/
 src/*.js
 src/*.js.map
 dist/
+
+.env.antigravity
+.data-antigravity/
+.antigravitycli/

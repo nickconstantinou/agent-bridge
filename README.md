@@ -227,4 +227,12 @@ All state lives in a single SQLite database (`bridge_state` table, WAL mode):
 | `$polling:codex` / `:antigravity` / `:claude` | last update_id | Telegram polling offset per bot |
 | `codex` / `antigravity` / `claude` (in `settings`) | model name | Per-bot model override (set via `/models`) |
 
-Session IDs are stored as columns (`codex_session_id`, `gemini_session_id`, `claude_session_id`) on the chat row. The migration adds `claude_session_id` automatically on first run.
+Session IDs are stored as columns (`codex_session_id`, `antigravity_session_id`, legacy `gemini_session_id`, `claude_session_id`) on the chat row. The migration adds `antigravity_session_id` and backfills it from legacy `gemini_session_id` automatically on first run.
+
+Antigravity session capture follows the same durable pattern as Codex, but Agy exposes the ID differently:
+
+1. First turn runs `agy [flags] --print <prompt>` with no `--conversation` flag. Agy requires `--print` immediately before the prompt because it consumes the prompt as its flag value.
+2. The bridge extracts the conversation UUID from Agy's explicit log output when available.
+3. Because `--log-file` is not always honored by current Agy builds, the bridge also checks `~/.gemini/antigravity-cli/log/*.log` for recent `Created conversation ...` / `Print mode: conversation=...` lines.
+4. If logs are not available, it falls back to `~/.gemini/antigravity-cli/cache/last_conversations.json` for the active working directory.
+5. Later turns resume explicitly with `agy --conversation <uuid> [flags] --print <prompt>`.

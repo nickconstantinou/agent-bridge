@@ -7,7 +7,7 @@
  */
 
 import { homedir } from "node:os";
-import { runCli, runCliAsync, parseCliResult, buildCliInvocation, validateBridgeConfig, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses, toUserMessage } from "./cli.js";
+import { runCli, runCliAsync, parseCliResult, buildCliInvocation, validateBridgeConfig, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses, toUserMessage, resolveAntigravityConversationId, extractAntigravityConversationId, readAntigravityLastConversation, readLatestAntigravityConversationFromLogs } from "./cli.js";
 import { openDb, BridgeDb } from "./db.js";
 import type { TelegramMessage, BridgeConfig } from "./types.js";
 
@@ -59,6 +59,6 @@ export function buildModelsText(kind: string, { db, config }: { db: BridgeDb; co
   return `[${kind} model settings]\n\nCurrent: ${current}\nAvailable: ${available}\n\nSelect a model below:`;
 }
 
-export { runCli, runCliAsync, parseCliResult, validateBridgeConfig, buildCliInvocation, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses, toUserMessage };
+export { runCli, runCliAsync, parseCliResult, validateBridgeConfig, buildCliInvocation, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses, toUserMessage, resolveAntigravityConversationId, extractAntigravityConversationId, readAntigravityLastConversation, readLatestAntigravityConversationFromLogs };
 export { openDb, BridgeDb };
 export { handleCommand, isBridgeCommand } from "./commands.js";

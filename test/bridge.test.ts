@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,6 +15,10 @@ import {
   validateBridgeConfig,
   buildModelKeyboard,
   buildModelsText,
+  extractAntigravityConversationId,
+  readAntigravityLastConversation,
+  readLatestAntigravityConversationFromLogs,
+  resolveAntigravityConversationId,
 } from "../src/bridge.js";
 import { openDb, BridgeDb } from "../src/db.js";
 import { runCli } from "../src/cli.js";
@@ -136,19 +140,19 @@ describe("agent bridge MVP", () => {
     expect(args).not.toContain("--output");
   });
 
-  it("creates fresh antigravity invocation with --print flag", () => {
+  it("creates fresh antigravity invocation with --print prompt after all flags", () => {
     const { command, args } = buildCliInvocation({
       bot: "antigravity",
       prompt: "hello",
       sessionId: null,
       command: "antigravity",
       model: "antigravity-pro",
+      executionMode: "trusted",
     });
     expect(command).toBe("antigravity");
-    expect(args).toContain("--print");
-    expect(args).toContain("--model");
-    expect(args[args.indexOf("--model") + 1]).toBe("antigravity-pro");
-    expect(args[args.length - 1]).toBe("hello");
+    expect(args).not.toContain("--model");
+    expect(args.slice(-2)).toEqual(["--print", "hello"]);
+    expect(args.indexOf("--dangerously-skip-permissions")).toBeLessThan(args.indexOf("--print"));
   });
 
   it("antigravity session invocation uses --conversation to continue an existing session", () => {
@@ -161,6 +165,8 @@ describe("agent bridge MVP", () => {
     });
     expect(args).toContain("--conversation");
     expect(args[args.indexOf("--conversation") + 1]).toBe("4229bce3-5009-429e-a3cb-d1bdaa8cfeed");
+    expect(args.indexOf("--conversation")).toBeLessThan(args.indexOf("--print"));
+    expect(args.slice(-2)).toEqual(["--print", "hello"]);
   });
 
   it("antigravity trusted execution mode adds --dangerously-skip-permissions", () => {
@@ -299,6 +305,38 @@ describe("agent bridge MVP", () => {
         logContent,
       }),
     ).toEqual({ text: "hello", sessionId: null });
+  });
+
+  it("extracts antigravity conversation IDs from canonical Agy log lines", () => {
+    expect(extractAntigravityConversationId("Created conversation 860cd239-3028-4ab6-9590-300532a72cca")).toBe("860cd239-3028-4ab6-9590-300532a72cca");
+    expect(extractAntigravityConversationId("Print mode: conversation=c107dfbd-181e-4cf0-a840-894662adee43, sending message")).toBe("c107dfbd-181e-4cf0-a840-894662adee43");
+  });
+
+  it("reads antigravity last conversation cache by cwd", () => {
+    const home = mkdtempSync(join(tmpdir(), "agy-home-"));
+    try {
+      const cacheDir = join(home, ".gemini", "antigravity-cli", "cache");
+      mkdirSync(cacheDir, { recursive: true });
+      writeFileSync(join(cacheDir, "last_conversations.json"), JSON.stringify({
+        "/repo": "c107dfbd-181e-4cf0-a840-894662adee43",
+      }));
+      expect(readAntigravityLastConversation({ cwd: "/repo", homeDir: home })).toBe("c107dfbd-181e-4cf0-a840-894662adee43");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to recent antigravity CLI logs for session resolution", () => {
+    const home = mkdtempSync(join(tmpdir(), "agy-home-"));
+    try {
+      const logDir = join(home, ".gemini", "antigravity-cli", "log");
+      mkdirSync(logDir, { recursive: true });
+      writeFileSync(join(logDir, "cli-test.log"), "Print mode: conversation=b3ba6842-e571-4fd3-9dac-ce613b2f35c6, sending message");
+      expect(readLatestAntigravityConversationFromLogs({ sinceMs: Date.now() - 1000, homeDir: home })).toBe("b3ba6842-e571-4fd3-9dac-ce613b2f35c6");
+      expect(resolveAntigravityConversationId({ cwd: "/missing", sinceMs: Date.now() - 1000, homeDir: home })).toBe("b3ba6842-e571-4fd3-9dac-ce613b2f35c6");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("validates bridge config", () => {

@@ -7,6 +7,9 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { CliOptions, CliResult, BotKind } from "./types.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 
@@ -101,12 +104,12 @@ export function buildCliInvocation({
     if (outputFormat === "json") args.push("--output-format", "json");
     args.push(prompt);
   } else if (bot === "antigravity") {
-    args.push("--print");
-    if (model) args.push("--model", model);
+    // Agy's --print flag takes the prompt as its value, so all other flags must come first.
+    // Current Agy builds do not expose a working --model CLI flag; model selection is managed by Agy itself.
     if (sessionId) args.push("--conversation", sessionId);
     if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
     if (logFile) args.push("--log-file", logFile);
-    args.push(prompt);
+    args.push("--print", prompt);
   }
 
   return { command, args };
@@ -214,18 +217,82 @@ function parseClaudeResult(stdout: string): CliResult {
   return { text: stdout.trim(), sessionId: null };
 }
 
-function parseAntigravityResult(stdout: string, logContent?: string | null): CliResult {
-  let sessionId: string | null = null;
-  if (logContent) {
-    const sessionMatch = logContent.match(/Created conversation ([a-f0-9-]{36})/) || 
-                         logContent.match(/conversation=([a-f0-9-]{36})/);
-    if (sessionMatch) {
-      sessionId = sessionMatch[1];
-    } else {
-      console.warn("[antigravity] Failed to extract conversation ID from log content");
-    }
+export function extractAntigravityConversationId(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const match = text.match(/Created conversation ([a-f0-9-]{36})/) ||
+    text.match(/Print mode: conversation=([a-f0-9-]{36})/) ||
+    text.match(/conversation=([a-f0-9-]{36})/);
+  return match?.[1] ?? null;
+}
+
+export function readAntigravityLastConversation({
+  cwd,
+  homeDir = homedir(),
+}: {
+  cwd: string;
+  homeDir?: string;
+}): string | null {
+  const cachePath = join(homeDir, ".gemini", "antigravity-cli", "cache", "last_conversations.json");
+  if (!existsSync(cachePath)) return null;
+
+  try {
+    const parsed = JSON.parse(readFileSync(cachePath, "utf8")) as Record<string, unknown>;
+    const value = parsed[cwd];
+    return typeof value === "string" && /^[a-f0-9-]{36}$/.test(value) ? value : null;
+  } catch {
+    return null;
   }
-  return { text: stdout.trim(), sessionId };
+}
+
+export function readLatestAntigravityConversationFromLogs({
+  sinceMs,
+  homeDir = homedir(),
+}: {
+  sinceMs: number;
+  homeDir?: string;
+}): string | null {
+  const logDir = join(homeDir, ".gemini", "antigravity-cli", "log");
+  if (!existsSync(logDir)) return null;
+
+  try {
+    const logFiles = readdirSync(logDir)
+      .filter((name) => name.endsWith(".log"))
+      .map((name) => {
+        const path = join(logDir, name);
+        return { path, mtimeMs: statSync(path).mtimeMs };
+      })
+      .filter((file) => file.mtimeMs >= sinceMs - 1000)
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+    for (const file of logFiles) {
+      const sessionId = extractAntigravityConversationId(readFileSync(file.path, "utf8"));
+      if (sessionId) return sessionId;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+export function resolveAntigravityConversationId({
+  cwd,
+  sinceMs,
+  explicitLogContent,
+  homeDir = homedir(),
+}: {
+  cwd: string;
+  sinceMs: number;
+  explicitLogContent?: string | null;
+  homeDir?: string;
+}): string | null {
+  return extractAntigravityConversationId(explicitLogContent) ??
+    readLatestAntigravityConversationFromLogs({ sinceMs, homeDir }) ??
+    readAntigravityLastConversation({ cwd, homeDir });
+}
+
+function parseAntigravityResult(stdout: string, logContent?: string | null): CliResult {
+  return { text: stdout.trim(), sessionId: extractAntigravityConversationId(logContent) };
 }
 
 export function toUserMessage(err: Error): string {

@@ -1,6 +1,6 @@
 # Agent Bridge — Architecture
 
-The **Agent Bridge** connects Telegram directly to AI CLI backends (Codex, Gemini, Claude Code) using long-polling, structured JSON parsing, and per-chat execution locking.
+The **Agent Bridge** connects Telegram directly to AI CLI backends (Codex, Antigravity, Claude Code) using long-polling, structured JSON parsing, and per-chat execution locking.
 
 ---
 
@@ -20,16 +20,16 @@ Telegram Bot Long-Polling
                    │
       ┌────────────┼────────────┐
       │            │            │
- Gemini Bot   Codex Bot   Claude Bot
- (gemini CLI) (codex CLI) (claude CLI)
- (systemd)    (systemd)   (systemd)
+ Antigravity Bot   Codex Bot   Claude Bot
+ (agy CLI)         (codex CLI) (claude CLI)
+ (systemd)         (systemd)   (systemd)
 ```
 
 Each bot is an **independent systemd service** sharing the same TypeScript source, distinguished only by `BRIDGE_ENV_FILE` pointing to their own `.env` file:
 
 | Service | Env | Data Dir |
 |---------|-----|----------|
-| `agent-bridge-gemini.service` | `.env.gemini` | `.data-gemini/` |
+| `agent-bridge-antigravity.service` | `.env.antigravity` | `.data-antigravity/` |
 | `agent-bridge-codex.service` | `.env.codex` | `.data-codex/` |
 | `agent-bridge-claude.service` | `.env.claude` | `.data-claude/` |
 
@@ -92,7 +92,8 @@ All state lives in a single SQLite database per service instance (`DB_PATH` env 
 CREATE TABLE bridge_state (
   chat_id               TEXT    PRIMARY KEY,
   codex_session_id      TEXT,
-  gemini_session_id     TEXT,
+  antigravity_session_id TEXT,
+  gemini_session_id      TEXT, -- legacy, backfilled into antigravity_session_id
   claude_session_id     TEXT,    -- added automatically by migration on first run
   active_execution_lock INTEGER NOT NULL DEFAULT 0,
   last_update_id        INTEGER NOT NULL DEFAULT 0
@@ -107,8 +108,8 @@ CREATE TABLE settings (
 | Row / key pattern | Purpose |
 |-------------------|---------|
 | `<chatId>` | Per-chat session IDs and execution lock |
-| `$polling:gemini` / `$polling:codex` / `$polling:claude` | Global polling offset per bot (sentinel rows) |
-| `gemini` / `codex` / `claude` (in `settings`) | Active model override set via `/models` |
+| `$polling:antigravity` / `$polling:codex` / `$polling:claude` | Global polling offset per bot (sentinel rows) |
+| `antigravity` / `codex` / `claude` (in `settings`) | Active model override set via `/models` |
 
 **BridgeDb API:**
 
@@ -197,12 +198,12 @@ db.unlock(chatKey);
 | Bot | Flags |
 |-----|-------|
 | **Codex** | `exec [resume <sessionId>]`, `--skip-git-repo-check`, `--model <m>`, `--json`, `--dangerously-bypass-approvals-and-sandbox` (trusted) |
-| **Gemini** | `--model <m>`, `--resume <sessionId>` or `--session-id <newId>`, `--yolo` (trusted), `--prompt <text>` |
+| **Antigravity** | `--conversation <sessionId>` for resumes, `--dangerously-skip-permissions` (trusted), `--log-file <path>`, `--print <prompt>` |
 | **Claude** | `--print`, `--model <m>`, `--resume <sessionId>`, `--dangerously-skip-permissions` (trusted), `--output-format json` |
 
 Session handling differs per bot:
 - **Codex / Claude** — pass `sessionId` directly; new sessions receive no session arg (the CLI creates one)
-- **Gemini** — new sessions receive a pre-generated UUID via `--session-id`; existing sessions use `--resume`
+- **Antigravity** — new sessions receive no conversation arg; existing sessions use `--conversation <uuid>`. Agy requires all flags before `--print <prompt>` because `--print` consumes the prompt as its value. Current Agy builds do not expose a working `--model` CLI flag, so the bridge does not pass model flags to Agy.
 
 ### Parse Phase (`parseCliResult`)
 
@@ -211,7 +212,7 @@ Session handling differs per bot:
 - `item.completed` / `response.completed` → `finalText`
 - `response.output_text.delta` → accumulates streaming chunks
 
-**Gemini** — strips ANSI codes, extracts `[session:…]` marker for `sessionId`, remainder is text. JSON Lines mode used when stdout begins with `{`.
+**Antigravity** — returns plain stdout as text and resolves the conversation UUID from Agy logs/cache: explicit `--log-file` content when present, then recent `~/.gemini/antigravity-cli/log/*.log` lines (`Created conversation ...` / `Print mode: conversation=...`), then `~/.gemini/antigravity-cli/cache/last_conversations.json` for the active working directory.
 
 **Claude** — parses the last JSON object in stdout:
 ```json
@@ -229,7 +230,7 @@ When a CLI exits non-zero, the error message includes `stderr || stdout.slice(-2
 export function isCapacityExhaustedError(err: Error): boolean {
   return msg.includes("MODEL_CAPACITY_EXHAUSTED") ||   // Codex
          msg.includes("No capacity available") ||
-         msg.includes("rateLimitExceeded") ||           // Gemini
+         msg.includes("rateLimitExceeded") ||           // Antigravity / Gemini APIs
          msg.includes("overloaded_error") ||            // Claude
          msg.includes("Overloaded");
 }
@@ -244,7 +245,7 @@ When triggered, `getNextFallbackModel(currentModel, modelPreference[])` picks th
 Configured via `*_MODEL_PREFERENCE` env var (comma-delimited):
 
 ```
-GEMINI_MODEL_PREFERENCE=auto-gemini-3,auto,flash
+ANTIGRAVITY_MODEL_PREFERENCE=gemini-3.5-flash-high,gemini-3.5-flash-medium,gemini-3.1-pro-high,gemini-3.1-pro-low  # display/fallback metadata only; Agy CLI currently owns actual model selection
 CODEX_MODEL_PREFERENCE=gpt-5.5,gpt-5.5-mini,gpt-5.4,gpt-5.4-mini
 CLAUDE_MODEL_PREFERENCE=claude-opus-4-7,claude-sonnet-4-6
 ```
@@ -337,13 +338,13 @@ agent-bridge/
 ├── docs/
 │   └── PRD.md             — Full product requirements document
 ├── systemd/
-│   ├── agent-bridge-gemini.service
+│   ├── agent-bridge-antigravity.service
 │   ├── agent-bridge-codex.service
 │   └── agent-bridge-claude.service
 ├── scripts/
 │   ├── install.sh          — First-time install (prompts for tokens, creates systemd units)
 │   └── install-deployment.sh — Update existing deployment (npm, CLI update, service reload)
-├── .env.gemini            — Live Gemini config (gitignored)
+├── .env.antigravity       — Live Antigravity config (gitignored)
 ├── .env.codex             — Live Codex config (gitignored)
 ├── .env.claude            — Live Claude config (gitignored)
 ├── .env.*.example         — Template env files
@@ -357,13 +358,13 @@ agent-bridge/
 | Variable | Bot | Purpose |
 |----------|-----|---------|
 | `TELEGRAM_BOT_TOKEN_CODEX` | Codex | Bot token from @BotFather |
-| `TELEGRAM_BOT_TOKEN_GEMINI` | Gemini | Bot token from @BotFather |
+| `TELEGRAM_BOT_TOKEN_ANTIGRAVITY` | Antigravity | Bot token from @BotFather |
 | `TELEGRAM_BOT_TOKEN_CLAUDE` | Claude | Bot token from @BotFather |
 | `TELEGRAM_ALLOWED_USER_IDS` | All | Comma-separated numeric Telegram user IDs. Legacy: `TELEGRAM_ALLOWED_USER_ID`. |
-| `BRIDGE_ENV_FILE` | Service | Path to `.env.codex` / `.env.gemini` / `.env.claude` |
-| `CODEX_COMMAND` / `GEMINI_COMMAND` / `CLAUDE_COMMAND` | Each | CLI binary path |
-| `CODEX_MODEL_PREFERENCE` / `GEMINI_MODEL_PREFERENCE` / `CLAUDE_MODEL_PREFERENCE` | Each | Comma-delimited model list; first = default, rest = fallbacks |
-| `CODEX_PROJECT_DIR` / `GEMINI_PROJECT_DIR` / `CLAUDE_PROJECT_DIR` | Each | Override CLI working directory for this bot |
+| `BRIDGE_ENV_FILE` | Service | Path to `.env.codex` / `.env.antigravity` / `.env.claude` |
+| `CODEX_COMMAND` / `ANTIGRAVITY_COMMAND` / `CLAUDE_COMMAND` | Each | CLI binary path |
+| `CODEX_MODEL_PREFERENCE` / `ANTIGRAVITY_MODEL_PREFERENCE` / `CLAUDE_MODEL_PREFERENCE` | Each | Comma-delimited model list; first = default, rest = fallbacks |
+| `CODEX_PROJECT_DIR` / `ANTIGRAVITY_PROJECT_DIR` / `CLAUDE_PROJECT_DIR` | Each | Override CLI working directory for this bot |
 | `BRIDGE_EXECUTION_MODE` | All | `safe` (approval prompts) / `trusted` (bypass) |
 | `BRIDGE_ASYNC_ENABLED` | All | `true` = streaming, `false` = sync (default: `true`) |
 | `CLI_TIMEOUT_MS` | All | Hard timeout per CLI execution (default: 300 000ms) |
@@ -381,7 +382,7 @@ agent-bridge/
 No lock files to clear. Just restart the service:
 
 ```bash
-sudo systemctl restart agent-bridge-gemini
+sudo systemctl restart agent-bridge-antigravity
 sudo systemctl restart agent-bridge-codex
 sudo systemctl restart agent-bridge-claude
 ```
@@ -391,8 +392,8 @@ The SQLite polling offset persists across restarts — no re-processing of old u
 ### Monitoring
 
 ```bash
-systemctl status agent-bridge-gemini agent-bridge-codex agent-bridge-claude
-journalctl -u agent-bridge-gemini -f
+systemctl status agent-bridge-antigravity agent-bridge-codex agent-bridge-claude
+journalctl -u agent-bridge-antigravity -f
 journalctl -u agent-bridge-codex -f
 journalctl -u agent-bridge-claude -f
 ```
@@ -404,7 +405,7 @@ Only one process per bot token is allowed to poll. If this appears, another inst
 ```bash
 ps aux | grep "tsx src/index.ts"
 kill -9 <pid>
-sudo systemctl start agent-bridge-claude   # or -gemini / -codex
+sudo systemctl start agent-bridge-claude   # or -antigravity / -codex
 ```
 
 ### Idle Timeout

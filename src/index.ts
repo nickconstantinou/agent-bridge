@@ -32,6 +32,7 @@ import {
   abortCliProcess,
   shutdownCliProcesses,
   toUserMessage,
+  resolveAntigravityConversationId,
   openDb,
   BridgeDb,
 } from "./bridge.js";
@@ -316,6 +317,8 @@ class BridgeBot {
       logFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
     }
 
+    const cwd = getCliWorkingDir(this.kind);
+    const startedAtMs = Date.now();
     const invocation = buildCliInvocation({
       bot: this.kind,
       command: this.config.command,
@@ -327,7 +330,7 @@ class BridgeBot {
       logFile,
     });
     try {
-      const cliResult = await runCliAsync(invocation.command, invocation.args, getCliWorkingDir(this.kind), {
+      const cliResult = await runCliAsync(invocation.command, invocation.args, cwd, {
         ...buildExecutionOptions(this.kind),
         onProgress,
         chatId: chatKey,
@@ -337,14 +340,17 @@ class BridgeBot {
       if (logFile) {
         try {
           logContent = readFileSync(logFile, "utf8");
-        } catch (err) {
-          console.warn(`[${this.kind}] Failed to read log file: ${err}`);
+        } catch {
+          // Agy writes canonical logs under ~/.gemini/antigravity-cli/log instead of this override path.
         } finally {
           try { rmSync(logFile); } catch {}
         }
       }
 
       const result = parseCliResult({ bot: this.kind, stdout: cliResult.text, logContent });
+      if (this.kind === "antigravity" && !result.sessionId) {
+        result.sessionId = resolveAntigravityConversationId({ cwd, sinceMs: startedAtMs, explicitLogContent: logContent });
+      }
       if (result?.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
       return result;
     } catch (error) {
@@ -370,7 +376,9 @@ class BridgeBot {
             logFile: fallbackLogFile,
           });
           try {
-            const cliResult = await runCliAsync(fallbackInvocation.command, fallbackInvocation.args, getCliWorkingDir(this.kind), {
+            const fallbackCwd = getCliWorkingDir(this.kind);
+            const fallbackStartedAtMs = Date.now();
+            const cliResult = await runCliAsync(fallbackInvocation.command, fallbackInvocation.args, fallbackCwd, {
               ...buildExecutionOptions(this.kind),
               onProgress,
               chatId: chatKey,
@@ -379,13 +387,16 @@ class BridgeBot {
             if (fallbackLogFile) {
               try {
                 fallbackLogContent = readFileSync(fallbackLogFile, "utf8");
-              } catch (err) {
-                console.warn(`[${this.kind}] Failed to read fallback log file: ${err}`);
+              } catch {
+                // Agy writes canonical logs under ~/.gemini/antigravity-cli/log instead of this override path.
               } finally {
                 try { rmSync(fallbackLogFile); } catch {}
               }
             }
             const result = parseCliResult({ bot: this.kind, stdout: cliResult.text, logContent: fallbackLogContent });
+            if (this.kind === "antigravity" && !result.sessionId) {
+              result.sessionId = resolveAntigravityConversationId({ cwd: fallbackCwd, sinceMs: fallbackStartedAtMs, explicitLogContent: fallbackLogContent });
+            }
             if (result?.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
             return {
               ...result,
@@ -413,6 +424,8 @@ class BridgeBot {
       logFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
     }
 
+    const cwd = getCliWorkingDir(this.kind);
+    const startedAtMs = Date.now();
     const invocation = buildCliInvocation({
       bot: this.kind,
       command: this.config.command,
@@ -427,7 +440,7 @@ class BridgeBot {
 
     try {
       await typingTracker.start();
-      const stdout = await runCli(invocation.command, invocation.args, getCliWorkingDir(this.kind), {
+      const stdout = await runCli(invocation.command, invocation.args, cwd, {
         ...buildExecutionOptions(this.kind),
         chatId: chatKey,
       });
@@ -436,14 +449,17 @@ class BridgeBot {
       if (logFile) {
         try {
           logContent = readFileSync(logFile, "utf8");
-        } catch (err) {
-          console.warn(`[${this.kind}] Failed to read log file: ${err}`);
+        } catch {
+          // Agy writes canonical logs under ~/.gemini/antigravity-cli/log instead of this override path.
         } finally {
           try { rmSync(logFile); } catch {}
         }
       }
 
       const result = parseCliResult({ bot: this.kind, stdout, logContent });
+      if (this.kind === "antigravity" && !result.sessionId) {
+        result.sessionId = resolveAntigravityConversationId({ cwd, sinceMs: startedAtMs, explicitLogContent: logContent });
+      }
       if (result.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
       return result;
     } catch (error) {
@@ -468,7 +484,9 @@ class BridgeBot {
             logFile: fallbackLogFile,
           });
           try {
-            const stdout = await runCli(fallbackInvocation.command, fallbackInvocation.args, getCliWorkingDir(this.kind), {
+            const fallbackCwd = getCliWorkingDir(this.kind);
+            const fallbackStartedAtMs = Date.now();
+            const stdout = await runCli(fallbackInvocation.command, fallbackInvocation.args, fallbackCwd, {
               ...buildExecutionOptions(this.kind),
               chatId: chatKey,
             });
@@ -476,13 +494,16 @@ class BridgeBot {
             if (fallbackLogFile) {
               try {
                 fallbackLogContent = readFileSync(fallbackLogFile, "utf8");
-              } catch (err) {
-                console.warn(`[${this.kind}] Failed to read fallback log file: ${err}`);
+              } catch {
+                // Agy writes canonical logs under ~/.gemini/antigravity-cli/log instead of this override path.
               } finally {
                 try { rmSync(fallbackLogFile); } catch {}
               }
             }
             const result = parseCliResult({ bot: this.kind, stdout, logContent: fallbackLogContent });
+            if (this.kind === "antigravity" && !result.sessionId) {
+              result.sessionId = resolveAntigravityConversationId({ cwd: fallbackCwd, sinceMs: fallbackStartedAtMs, explicitLogContent: fallbackLogContent });
+            }
             if (result.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
             return {
               ...result,

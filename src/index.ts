@@ -180,6 +180,7 @@ class BridgeBot {
         db.unlock(chatKey);
         this.abortedChats.add(chatKey);
       }
+      this.pendingQueues.delete(chatKey);
       await sendTelegramMessage({
         client: this.client,
         kind: this.kind,
@@ -216,6 +217,7 @@ class BridgeBot {
     }) : null;
     if (commandResponse) {
       if (commandResponse.kind === "message") {
+        if (commandText === "/reset") this.pendingQueues.delete(chatKey);
         await this.sendText(chatId, { text: commandResponse.text, message_thread_id: threadId });
         return;
       }

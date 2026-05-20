@@ -2,7 +2,7 @@
 
 ## 1. Concept & Vision
 
-**What it does:** Bridges Telegram messages to CLI-based AI coding agents (Codex, Gemini), enabling real-time conversational coding through a Telegram bot.
+**What it does:** Bridges Telegram messages to CLI-based AI coding agents (Codex, Antigravity/Gemini CLI, Claude Code), enabling real-time conversational coding through a Telegram bot.
 
 **Core experience:** A user sends a prompt via Telegram → the bridge spawns a CLI agent → responses stream back via real-time Telegram message editing.
 
@@ -40,8 +40,8 @@
          │                            │
          ▼                            ▼
 ┌─────────────────┐         ┌─────────────────────────┐
-│ Telegram API    │         │ CLI Backend             │
-│ (api.telegram)  │         │ (codex / gemini)        │
+│ Telegram API    │         │ CLI Backend                      │
+│ (api.telegram)  │         │ (codex / antigravity / claude)   │
 └─────────────────┘         └─────────────────────────┘
 ```
 
@@ -89,7 +89,8 @@ handleUpdate()
 | Bot | Resume flag |
 |-----|-------------|
 | Codex | `exec resume <sessionId>` |
-| Gemini | `--resume <sessionId>` |
+| Antigravity | `--resume <sessionId>` |
+| Claude | `--resume <sessionId>` |
 
 Sessions are stored per chat in SQLite and restored across service restarts. `/reset` clears the session.
 
@@ -101,16 +102,21 @@ Sessions are stored per chat in SQLite and restored across service restarts. `/r
 
 ### 4.4 Model Fallback
 
-On `MODEL_CAPACITY_EXHAUSTED` / `No capacity available` / `rateLimitExceeded`, the bridge retries with the next model in the preference chain. Configured via `CODEX_MODEL_PREFERENCE` / `GEMINI_MODEL_PREFERENCE` (comma-separated, priority order):
+On `MODEL_CAPACITY_EXHAUSTED` / `No capacity available` / `rateLimitExceeded`, the bridge retries with the next model in the preference chain. Configured via `CODEX_MODEL_PREFERENCE` / `ANTIGRAVITY_MODEL_PREFERENCE` / `CLAUDE_MODEL_PREFERENCE` (comma-separated, priority order):
 
-**Codex** (ChatGPT account auth):
+**Codex**:
 ```
-gpt-5.5 → gpt-5.4 → gpt-5.4-mini → (give up)
+gpt-5.5 → gpt-5.4-mini → gpt-5.4 → gpt-5.3-codex → gpt-5.2 → (give up)
 ```
 
-**Gemini**:
+**Antigravity**:
 ```
-gemini-3.1-pro-preview → gemini-3.1-flash-lite-preview → gemini-2.5-pro → gemini-2.5-flash-lite → (give up)
+gemini-3.5-flash-high → gemini-3.5-flash-medium → gemini-3.1-pro-high → gemini-3.1-pro-low → (give up)
+```
+
+**Claude**:
+```
+claude-sonnet-4-6 → claude-opus-4-7 → (give up)
 ```
 
 The response is prepended with a warning notice when a fallback is used.
@@ -136,14 +142,17 @@ Photos sent as an album share a `media_group_id`. `MediaGroupBuffer` collects me
 | Bot | Session flag | JSON output flag | Trusted flag |
 |-----|-------------|-----------------|-------------|
 | Codex | `exec resume <id>` | `--json` | `--dangerously-bypass-approvals-and-sandbox` |
-| Gemini | `--resume <id>` | `--prompt` (stream JSON) | `--yolo` |
+| Antigravity | `--resume <id>` | `--prompt` (stream JSON) | `--yolo` |
+| Claude | `--resume <id>` | `--output-format stream-json` | `--dangerously-skip-permissions` |
 
 ### Timeout Configuration
 
 | Setting | Default | Env variable |
 |--------|---------|-------------|
 | CLI hard timeout | 300s | `CLI_TIMEOUT_MS` |
-| Idle timeout | Disabled | — |
+| Idle timeout | 60s | `CLI_IDLE_TIMEOUT_MS` |
+| Telegram fetch timeout | 45s | `FETCH_TIMEOUT_MS` |
+| Poll interval | 1s | `POLL_INTERVAL_MS` |
 
 ---
 
@@ -153,9 +162,9 @@ Photos sent as an album share a `media_group_id`. `MediaGroupBuffer` collects me
 
 ```typescript
 interface BridgeConfig {
-  allowedUserId: string;
+  allowedUserIds: ReadonlySet<string>;
   serviceEnvFile: string | null;
-  serviceKind: "codex" | "gemini" | null;
+  serviceKind: "codex" | "antigravity" | "claude" | null;
   pollIntervalMs: number;
   executionMode: "safe" | "trusted";
   cliTimeoutMs: number;
@@ -163,7 +172,8 @@ interface BridgeConfig {
   dbPath: string;
   bots: {
     codex: BotConfig;
-    gemini: BotConfig;
+    antigravity: BotConfig;
+    claude: BotConfig;
   };
 }
 ```
@@ -196,10 +206,12 @@ src/
 ├── telegram.ts       — TelegramClient (HTTP), MediaGroupBuffer
 ├── messageDelivery.ts — sendTelegramMessage, sendMessageWithProgress, StreamingUpdater
 ├── render.ts         — Text splitting, MarkdownV2, Telegram entities
-├── bridge.ts         — Auth, session helpers, re-exports
+├── bridge.ts         — Auth, session helpers, working dir resolution
 ├── db.ts             — BridgeDb (SQLite via better-sqlite3)
 ├── types.ts          — TypeScript interfaces
-└── commands.ts       — /reset, /models (synchronous, returns string | null)
+├── commands.ts       — /reset, /models (synchronous, returns string | null)
+├── timeouts.ts       — Timeout resolution (per-bot prefix → global → default)
+└── agentMemory.ts    — agent-memory DB path resolution
 
 test/
 ├── cli.test.ts         — Process lifecycle, abort, fallback, timeouts
@@ -215,7 +227,8 @@ test/
 
 systemd/
 ├── agent-bridge-codex.service
-└── agent-bridge-gemini.service
+├── agent-bridge-antigravity.service
+└── agent-bridge-claude.service
 
 docs/
 └── PRD.md            — This file
@@ -227,14 +240,14 @@ docs/
 
 ### Authorization
 
-`TELEGRAM_ALLOWED_USER_ID` — only this Telegram user ID triggers executions. All other users are silently ignored.
+`TELEGRAM_ALLOWED_USER_IDS` — comma-separated list of Telegram user IDs permitted to trigger executions. All other senders are silently ignored. The legacy single-value `TELEGRAM_ALLOWED_USER_ID` is accepted as a fallback.
 
 ### Execution Modes
 
-| Mode | Codex flag | Gemini flag |
-|------|-----------|-------------|
-| `safe` | (none) | (none) |
-| `trusted` | `--dangerously-bypass-approvals-and-sandbox` | `--yolo` |
+| Mode | Codex flag | Antigravity flag | Claude flag |
+|------|-----------|-----------------|-------------|
+| `safe` | (none) | (none) | (none) |
+| `trusted` | `--dangerously-bypass-approvals-and-sandbox` | `--yolo` | `--dangerously-skip-permissions` |
 
 ---
 
@@ -242,16 +255,18 @@ docs/
 
 ### Systemd
 
-Two separate service files in `systemd/`. Each loads its own `.env` file via `BRIDGE_ENV_FILE`. Both share the same `tsx src/index.ts` entrypoint — bot selection is determined by which token is present in the env file.
+Three service files in `systemd/` (codex, antigravity, claude). Each loads its own env file via `BRIDGE_ENV_FILE`. All share the same `tsx src/index.ts` entrypoint — bot selection is determined by which token is present in the env file.
+
+The installer (`scripts/install.sh`) generates `.env.codex`, `.env.antigravity`, and `.env.claude` from the `.env.*.example` templates, substituting machine-specific values (home dir, binary paths, tokens) collected interactively.
 
 ### Database
 
-Each service instance should have its own `DB_PATH` to avoid SQLite lock contention.
+Each service instance has its own `DB_PATH` to avoid SQLite lock contention.
 
 ```
-.data/bridge.sqlite       # shared / dev
-.data-gemini/bridge.sqlite
 .data-codex/bridge.sqlite
+.data-antigravity/bridge.sqlite
+.data-claude/bridge.sqlite
 ```
 
 WAL mode is enabled on open for concurrent read access.
@@ -264,7 +279,7 @@ WAL mode is enabled on open for concurrent read access.
 |-------|----------|
 | CLI hard timeout | Kill process, error edit on placeholder |
 | CLI abort (`/stop`) | SIGKILL, resolve cleanly, bridge continues |
-| Gemini capacity exhausted | Retry with fallback model, prepend warning |
+| CLI capacity exhausted | Retry with fallback model from `*_MODEL_PREFERENCE`, prepend warning |
 | Telegram 429 | Auto-retry up to 2 times with `retry_after` delay |
 | "Message is not modified" | No-op (not a real error) |
 | Execution lock held | Reply "⏳ System is currently busy" |
@@ -274,7 +289,6 @@ WAL mode is enabled on open for concurrent read access.
 
 ## 11. Known Limitations
 
-- Single `allowedUserId` — no multi-user support
 - Sessions are CLI thread IDs, not full conversation history
 - Sync path (`BRIDGE_ASYNC_ENABLED=false`) available but not the default
 - `abortCliProcess` SIGKILLs the top-level process only (not the full process group)

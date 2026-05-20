@@ -27,21 +27,31 @@ Polls a Telegram bot for messages, routes them to the Codex, Antigravity, or Cla
 
 ## Setup
 
-User-scope setup (run one or more, depending on which bots you want):
+**Recommended — let the installer generate env files:**
+
+```bash
+npm run setup:shared-memory
+sudo bash scripts/install.sh
+```
+
+The installer prompts for bot tokens, user IDs, and paths, then writes `.env.codex`, `.env.antigravity`, and `.env.claude` from the example templates and installs the systemd services.
+
+**Manual setup** (dev / no-systemd):
 
 ```bash
 npm install
-cp .env.codex.example .env.codex    # Codex bot
-cp .env.antigravity.example .env.antigravity  # Antigravity bot
-cp .env.claude.example .env.claude  # Claude Code bot
+cp .env.codex.example .env.codex
+cp .env.antigravity.example .env.antigravity
+cp .env.claude.example .env.claude
 npm run setup:shared-memory
 ```
 
-Then fill in the relevant token(s) and user ID:
-- `TELEGRAM_BOT_TOKEN_CODEX` in `.env.codex`
-- `TELEGRAM_BOT_TOKEN_ANTIGRAVITY` in `.env.antigravity`
-- `TELEGRAM_BOT_TOKEN_CLAUDE` in `.env.claude`
-- `TELEGRAM_ALLOWED_USER_IDS` in each file
+Then fill in the relevant token(s) and paths in each file:
+- `TELEGRAM_BOT_TOKEN_*` — bot token from @BotFather
+- `TELEGRAM_ALLOWED_USER_IDS` — your Telegram numeric user ID
+- `BRIDGE_ROOT_DIR` / `BRIDGE_PROJECT_DIR` — absolute paths for this machine
+- `*_COMMAND` — absolute path to each CLI binary (use `which codex`, `which agy`, `which claude`)
+- `*_PROJECT_DIR` — working directory passed to the CLI (optional; defaults to `BRIDGE_PROJECT_DIR`)
 - Shared memory instructions are written to `~/AGENTS.md`, `~/ANTIGRAVITY.md`, and `~/CLAUDE.md`
 - `agent-memory` is installed as a shell wrapper in `~/.local/bin/agent-memory`
 
@@ -89,13 +99,16 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `CODEX_PROJECT_DIR` | Codex | — | Working dir for CLI execution (overrides `BRIDGE_PROJECT_DIR`) |
 | `ANTIGRAVITY_PROJECT_DIR` | Antigravity | — | Working dir for CLI execution (overrides `BRIDGE_PROJECT_DIR`) |
 | `CLAUDE_PROJECT_DIR` | Claude | — | Working dir for CLI execution (overrides `BRIDGE_PROJECT_DIR`) |
-| `DB_PATH` | All | `<project-dir>/.data/bridge.sqlite` | SQLite database path |
+| `DB_PATH` | All | `.data-<bot>/bridge.sqlite` | SQLite database path |
 | `CLI_TIMEOUT_MS` | All | `300000` | Hard execution timeout (ms) |
 | `CLI_IDLE_TIMEOUT_MS` | All | `60000` | Kill CLI after this many ms with no output |
 | `FETCH_TIMEOUT_MS` | All | `45000` | Telegram API fetch timeout (ms) |
+| `POLL_INTERVAL_MS` | All | `1000` | Telegram long-poll interval (ms) |
+| `AGENT_MEMORY_DB_PATH` | All | `~/.agent-bridge/shared-memory/agent-memory.sqlite` | Path to shared agent memory database |
 | `BRIDGE_ASYNC_ENABLED` | All | `true` | Enable streaming (disable for sync/plain mode) |
 | `BRIDGE_EXECUTION_MODE` | All | `safe` | `safe` or `trusted` (bypasses CLI approval prompts) |
-| `BRIDGE_PROJECT_DIR` | All | auto-detected | Repo path (used for default DB location) |
+| `BRIDGE_PROJECT_DIR` | All | auto-detected | Repo path (used as default CLI working dir and DB location) |
+| `BRIDGE_ROOT_DIR` | All | `$HOME` | Fallback working dir when no `*_PROJECT_DIR` is set |
 
 ## Group and multi-user usage
 

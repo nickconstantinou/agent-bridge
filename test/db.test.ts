@@ -14,28 +14,28 @@ afterEach(() => {
 describe("BridgeDb sessions", () => {
   it("returns null for an unknown chat", () => {
     expect(db.getSession("chat1", "codex")).toBeNull();
-    expect(db.getSession("chat1", "gemini")).toBeNull();
+    expect(db.getSession("chat1", "antigravity")).toBeNull();
   });
 
   it("persists and retrieves a session per bot", () => {
     db.setSession("chat1", "codex", "codex-session-abc");
-    db.setSession("chat1", "gemini", "gemini-session-xyz");
+    db.setSession("chat1", "antigravity", "antigravity-session-xyz");
     expect(db.getSession("chat1", "codex")).toBe("codex-session-abc");
-    expect(db.getSession("chat1", "gemini")).toBe("gemini-session-xyz");
+    expect(db.getSession("chat1", "antigravity")).toBe("antigravity-session-xyz");
   });
 
   it("updates an existing session without touching the other bot", () => {
     db.setSession("chat1", "codex", "v1");
-    db.setSession("chat1", "gemini", "g1");
+    db.setSession("chat1", "antigravity", "g1");
     db.setSession("chat1", "codex", "v2");
     expect(db.getSession("chat1", "codex")).toBe("v2");
-    expect(db.getSession("chat1", "gemini")).toBe("g1");
+    expect(db.getSession("chat1", "antigravity")).toBe("g1");
   });
 
   it("clears a session when set to null", () => {
-    db.setSession("chat1", "gemini", "s1");
-    db.setSession("chat1", "gemini", null);
-    expect(db.getSession("chat1", "gemini")).toBeNull();
+    db.setSession("chat1", "antigravity", "s1");
+    db.setSession("chat1", "antigravity", null);
+    expect(db.getSession("chat1", "antigravity")).toBeNull();
   });
 
   it("keeps sessions isolated per chat", () => {
@@ -71,14 +71,14 @@ describe("BridgeDb execution lock", () => {
 describe("BridgeDb polling offset", () => {
   it("returns 0 for an unknown bot", () => {
     expect(db.getLastUpdateId("codex")).toBe(0);
-    expect(db.getLastUpdateId("gemini")).toBe(0);
+    expect(db.getLastUpdateId("antigravity")).toBe(0);
   });
 
   it("stores and retrieves the offset per bot", () => {
     db.setLastUpdateId("codex", 1000);
-    db.setLastUpdateId("gemini", 2000);
+    db.setLastUpdateId("antigravity", 2000);
     expect(db.getLastUpdateId("codex")).toBe(1000);
-    expect(db.getLastUpdateId("gemini")).toBe(2000);
+    expect(db.getLastUpdateId("antigravity")).toBe(2000);
   });
 
   it("never decrements the offset (MAX semantics)", () => {
@@ -94,8 +94,8 @@ describe("BridgeDb settings", () => {
   });
 
   it("stores and retrieves a setting", () => {
-    db.setSetting("gemini", "gemini-2.5-flash-lite");
-    expect(db.getSetting("gemini")).toBe("gemini-2.5-flash-lite");
+    db.setSetting("antigravity", "antigravity-3.1-pro-preview");
+    expect(db.getSetting("antigravity")).toBe("antigravity-3.1-pro-preview");
   });
 
   it("overwrites an existing setting", () => {
@@ -131,18 +131,18 @@ describe("BridgeDb SQL guard", () => {
 
 describe("Per-topic session isolation", () => {
   it("composite chat:thread key isolates sessions between forum topics", () => {
-    db.setSession("100:10", "gemini", "s-topic-10");
-    db.setSession("100:20", "gemini", "s-topic-20");
-    expect(db.getSession("100:10", "gemini")).toBe("s-topic-10");
-    expect(db.getSession("100:20", "gemini")).toBe("s-topic-20");
+    db.setSession("100:10", "antigravity", "s-topic-10");
+    db.setSession("100:20", "antigravity", "s-topic-20");
+    expect(db.getSession("100:10", "antigravity")).toBe("s-topic-10");
+    expect(db.getSession("100:20", "antigravity")).toBe("s-topic-20");
   });
 
   it("resetting a topic session does not affect other topics", () => {
-    db.setSession("100:10", "gemini", "s-topic-10");
-    db.setSession("100:20", "gemini", "s-topic-20");
-    db.setSession("100:10", "gemini", null);
-    expect(db.getSession("100:10", "gemini")).toBeNull();
-    expect(db.getSession("100:20", "gemini")).toBe("s-topic-20");
+    db.setSession("100:10", "antigravity", "s-topic-10");
+    db.setSession("100:20", "antigravity", "s-topic-20");
+    db.setSession("100:10", "antigravity", null);
+    expect(db.getSession("100:10", "antigravity")).toBeNull();
+    expect(db.getSession("100:20", "antigravity")).toBe("s-topic-20");
   });
 
   it("per-user group key isolates sessions between users in the same group", () => {

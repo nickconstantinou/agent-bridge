@@ -28,8 +28,8 @@ if [[ "${1:-}" != "--skip-cli-install" ]]; then
     codex --help >/dev/null
   fi
 
-  if command -v gemini >/dev/null 2>&1; then
-    gemini --help >/dev/null
+  if command -v antigravity >/dev/null 2>&1; then
+    antigravity --help >/dev/null
   fi
 
   if command -v claude >/dev/null 2>&1; then
@@ -38,9 +38,9 @@ if [[ "${1:-}" != "--skip-cli-install" ]]; then
 fi
 
 install_unit agent-bridge-codex
-install_unit agent-bridge-gemini
+install_unit agent-bridge-antigravity
 
-UNITS_TO_ENABLE="agent-bridge-codex agent-bridge-gemini"
+UNITS_TO_ENABLE="agent-bridge-codex agent-bridge-antigravity"
 
 # Install claude unit only if its defaults file is present (created by install.sh)
 CLAUDE_DEFAULTS="/etc/default/agent-bridge-claude"

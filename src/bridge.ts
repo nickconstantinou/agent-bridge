@@ -1,3 +1,11 @@
+/**
+ * PURPOSE: Common helper and layout generation functions for Telegram interaction.
+ * INPUTS: DB client, configuration settings, and messages context.
+ * OUTPUTS: Working directories, layouts, message formatting and parsed targets.
+ * NEIGHBORS: src/index.ts, src/cli.ts, src/db.ts
+ * LOGIC: Provides interface checks, text extraction helpers, inline keyboard markup setups, and path resolves.
+ */
+
 import { homedir } from "node:os";
 import { runCli, runCliAsync, parseCliResult, buildCliInvocation, validateBridgeConfig, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses, toUserMessage } from "./cli.js";
 import { openDb, BridgeDb } from "./db.js";
@@ -7,9 +15,11 @@ export function getBridgeProjectDir(): string {
   return process.env.BRIDGE_PROJECT_DIR || `${homedir()}/.openclaw/workspace/projects/agent-bridge`;
 }
 
-export function getCliWorkingDir(bot?: "codex" | "gemini" | "claude"): string {
+export function getCliWorkingDir(bot?: "codex" | "antigravity" | "claude"): string {
   if (bot === "codex" && process.env.CODEX_PROJECT_DIR) return process.env.CODEX_PROJECT_DIR;
-  if (bot === "gemini" && process.env.GEMINI_PROJECT_DIR) return process.env.GEMINI_PROJECT_DIR;
+  if (bot === "antigravity" && (process.env.ANTIGRAVITY_PROJECT_DIR || process.env.GEMINI_PROJECT_DIR)) {
+    return process.env.ANTIGRAVITY_PROJECT_DIR || process.env.GEMINI_PROJECT_DIR!;
+  }
   if (bot === "claude" && process.env.CLAUDE_PROJECT_DIR) return process.env.CLAUDE_PROJECT_DIR;
   return process.env.BRIDGE_PROJECT_DIR || process.env.BRIDGE_ROOT_DIR || homedir();
 }
@@ -30,9 +40,10 @@ export function extractPromptText(message: TelegramMessage): string | null {
 }
 
 export function buildModelKeyboard(kind: string, modelPreference: string[], currentModel?: string | null): any {
-  const modelButtons = modelPreference.map((m) => [
-    { text: currentModel === m ? `✓ ${m}` : m, callback_data: `model:${kind}:${m}` },
-  ]);
+  const modelButtons = modelPreference.map((m) => {
+    const text = currentModel === m ? `✓ ${m}` : m;
+    return [{ text, callback_data: `model:${kind}:${m}` }];
+  });
   return {
     inline_keyboard: [
       ...modelButtons,
@@ -42,7 +53,7 @@ export function buildModelKeyboard(kind: string, modelPreference: string[], curr
 }
 
 export function buildModelsText(kind: string, { db, config }: { db: BridgeDb; config: BridgeConfig }): string {
-  const bot = config.bots[kind as "codex" | "gemini" | "claude"];
+  const bot = config.bots[kind as "codex" | "antigravity" | "claude"];
   const current = db.getSetting(kind) || bot.modelPreference[0] || "default";
   const available = bot.modelPreference.length > 0 ? bot.modelPreference.join(", ") : "none configured";
   return `[${kind} model settings]\n\nCurrent: ${current}\nAvailable: ${available}\n\nSelect a model below:`;

@@ -1,3 +1,11 @@
+/**
+ * PURPOSE: Telegram bot commands routing and utility generation (e.g. models selection and memory smoke tests).
+ * INPUTS: Chat messages and bot kind, configuration, and database instances.
+ * OUTPUTS: A CommandResult specifying messages to send or prompt execution overrides.
+ * NEIGHBORS: src/index.ts, src/bridge.ts, src/types.ts
+ * LOGIC: Normalizes user commands and routes "/start", "/reset", "/models", "/memory" to appropriate action structures.
+ */
+
 import type { BridgeConfig } from "./types.js";
 import type { BridgeDb } from "./db.js";
 import { buildModelKeyboard, buildModelsText } from "./bridge.js";
@@ -17,7 +25,7 @@ export function isBridgeCommand(text: string): boolean {
   return bridgeCommands.has(normalizeCommand(text));
 }
 
-function buildMemorySmokePrompt(kind: "codex" | "gemini" | "claude"): string {
+function buildMemorySmokePrompt(kind: "codex" | "antigravity" | "claude"): string {
   return [
     `Run a shared memory smoke test for the ${kind} bridge session.`,
     `Use the local agent-memory CLI from the shell if needed.`,
@@ -32,7 +40,7 @@ function buildMemorySmokePrompt(kind: "codex" | "gemini" | "claude"): string {
 }
 
 export function handleCommand(
-  kind: "codex" | "gemini" | "claude",
+  kind: "codex" | "antigravity" | "claude",
   prompt: string,
   {
     db,

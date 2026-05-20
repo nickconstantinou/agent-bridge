@@ -1,4 +1,12 @@
-export type BotKind = "codex" | "gemini" | "claude";
+/**
+ * PURPOSE: Types and configurations definitions for Telegram and CLI integrations.
+ * INPUTS: None.
+ * OUTPUTS: Type and interface exports.
+ * NEIGHBORS: src/cli.ts, src/db.ts, src/index.ts, src/bridge.ts
+ * LOGIC: Declares central data types representing telegram payload structures, configuration schemas, and CLI returns.
+ */
+
+export type BotKind = "codex" | "antigravity" | "claude";
 
 /**
  * Configuration for the Agent Bridge.
@@ -14,7 +22,7 @@ export interface BridgeConfig {
   dbPath: string;
   bots: {
     codex: BotConfig;
-    gemini: BotConfig;
+    antigravity: BotConfig;
     claude: BotConfig;
   };
 }

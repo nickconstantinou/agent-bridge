@@ -34,7 +34,7 @@ describe("agent memory instructions", () => {
 describe("verification", () => {
   it("accepts instruction blocks in all three files", () => {
     const block = renderAgentMemoryInstructionFile("", "claude", "/tmp/agent-memory.sqlite");
-    const result = verifySharedMemoryConfigs({ codex: block, gemini: block, claude: block });
+    const result = verifySharedMemoryConfigs({ codex: block, antigravity: block, claude: block });
     expect(result.ok).toBe(true);
   });
 });

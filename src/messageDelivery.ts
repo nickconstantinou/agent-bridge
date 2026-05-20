@@ -53,7 +53,7 @@ export async function sendTelegramMessage({
 }): Promise<void> {
   const chunks = splitTelegramText(String(body.text || ""));
   const { text: _ignored, ...rest } = body;
-  const isGemini = kind === "gemini";
+  const isGeminiOrAntigravity = kind === "gemini" || kind === "antigravity";
 
   for (let i = 0; i < chunks.length; i += 1) {
     const chunkText = chunks[i];
@@ -61,10 +61,10 @@ export async function sendTelegramMessage({
       chat_id: chatId,
       ...rest,
       text: chunkText,
-      parse_mode: isGemini ? undefined : "MarkdownV2",
+      parse_mode: isGeminiOrAntigravity ? undefined : "MarkdownV2",
     };
 
-    if (isGemini) {
+    if (isGeminiOrAntigravity) {
       const ep = toTelegramEntitiesText(chunkText);
       chunkBody.text = ep.text;
       if (ep.entities.length > 0) chunkBody.entities = ep.entities;

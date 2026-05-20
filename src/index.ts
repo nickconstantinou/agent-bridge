@@ -1,6 +1,16 @@
+/**
+ * PURPOSE: Telegram bot routing runner, media buffering, message queue orchestration, and execution dispatcher.
+ * INPUTS: Telegram message updates, media groups, callback queries, and CLI process outcomes.
+ * OUTPUTS: Dispatched CLI processes, active user session updates, Telegram replies, and typing indicators.
+ * NEIGHBORS: src/db.ts, src/cli.ts, src/telegram.ts, src/messageDelivery.js
+ * LOGIC: Hooks process events, polls Telegram API, queues incoming requests to prevent race conditions, executes shell wrappers with unique log buffers for session extraction, and manages fallback execution logic.
+ */
+
 import dotenv from "dotenv";
 import { randomUUID } from "node:crypto";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
+import { tmpdir } from "node:os";
+import { readFileSync, rmSync } from "node:fs";
 import {
   buildModelKeyboard,
   buildModelsText,
@@ -35,11 +45,12 @@ dotenv.config({
   override: false,
 });
 
-function getServiceKindFromEnvFile(envPath: string): "codex" | "gemini" | "claude" | null {
+function getServiceKindFromEnvFile(envPath: string): "codex" | "antigravity" | "claude" | null {
   if (!envPath) return null;
   const name = basename(envPath);
   if (name.includes("codex")) return "codex";
-  if (name.includes("gemini")) return "gemini";
+  if (name.includes("antigravity")) return "antigravity";
+  if (name.includes("gemini")) return "antigravity";
   if (name.includes("claude")) return "claude";
   return null;
 }
@@ -68,10 +79,10 @@ const config: BridgeConfig = {
       command: process.env.CODEX_COMMAND || "codex",
       modelPreference: parseModelPreference(process.env.CODEX_MODEL_PREFERENCE),
     },
-    gemini: {
-      token: process.env.TELEGRAM_BOT_TOKEN_GEMINI,
-      command: process.env.GEMINI_COMMAND || "gemini",
-      modelPreference: parseModelPreference(process.env.GEMINI_MODEL_PREFERENCE),
+    antigravity: {
+      token: process.env.TELEGRAM_BOT_TOKEN_ANTIGRAVITY || process.env.TELEGRAM_BOT_TOKEN_GEMINI,
+      command: process.env.ANTIGRAVITY_COMMAND || process.env.GEMINI_COMMAND || "antigravity",
+      modelPreference: parseModelPreference(process.env.ANTIGRAVITY_MODEL_PREFERENCE || process.env.GEMINI_MODEL_PREFERENCE),
     },
     claude: {
       token: process.env.TELEGRAM_BOT_TOKEN_CLAUDE,
@@ -219,7 +230,7 @@ class BridgeBot {
     }
 
     const sessionId = db.getSession(chatKey, this.kind);
-    const effectiveSessionId = this.kind === "gemini" && !sessionId ? randomUUID() : sessionId;
+    const effectiveSessionId = sessionId;
     const useAsync = config.asyncEnabled === true;
 
     if (!db.tryLock(chatKey)) {
@@ -297,15 +308,22 @@ class BridgeBot {
     const { message_thread_id: threadId } = body;
     const chatKey = String(chatId);
     const model = db.getSetting(this.kind) || this.config.modelPreference[0] || null;
+
+    let logFile: string | null = null;
+    if (this.kind === "antigravity") {
+      logFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
+    }
+
     const invocation = buildCliInvocation({
       bot: this.kind,
       command: this.config.command,
       model,
       prompt,
       sessionId,
-      sessionMode: this.kind === "gemini" && !db.getSession(chatKey, this.kind) ? "session-id" : "resume",
+      sessionMode: "resume",
       executionMode: config.executionMode,
       outputFormat: "json",
+      logFile,
     });
     try {
       const cliResult = await runCliAsync(invocation.command, invocation.args, getCliWorkingDir(this.kind), {
@@ -314,13 +332,31 @@ class BridgeBot {
         chatId: chatKey,
       });
 
-      const result = parseCliResult({ bot: this.kind, stdout: cliResult.text });
+      let logContent: string | null = null;
+      if (logFile) {
+        try {
+          logContent = readFileSync(logFile, "utf8");
+        } catch (err) {
+          console.warn(`[${this.kind}] Failed to read log file: ${err}`);
+        } finally {
+          try { rmSync(logFile); } catch {}
+        }
+      }
+
+      const result = parseCliResult({ bot: this.kind, stdout: cliResult.text, logContent });
       if (result?.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
       return result;
     } catch (error) {
+      if (logFile) {
+        try { rmSync(logFile); } catch {}
+      }
       if (isCapacityExhaustedError(error as Error) && this.config.modelPreference.length > 1) {
         const fallbackModel = getNextFallbackModel(model, this.config.modelPreference);
         if (fallbackModel) {
+          let fallbackLogFile: string | null = null;
+          if (this.kind === "antigravity") {
+            fallbackLogFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
+          }
           const fallbackInvocation = buildCliInvocation({
             bot: this.kind,
             command: this.config.command,
@@ -330,18 +366,36 @@ class BridgeBot {
             sessionMode: "resume",
             executionMode: config.executionMode,
             outputFormat: "json",
+            logFile: fallbackLogFile,
           });
-          const cliResult = await runCliAsync(fallbackInvocation.command, fallbackInvocation.args, getCliWorkingDir(this.kind), {
-            ...buildExecutionOptions(this.kind),
-            onProgress,
-            chatId: chatKey,
-          });
-          const result = parseCliResult({ bot: this.kind, stdout: cliResult.text });
-          if (result?.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
-          return {
-            ...result,
-            text: `⚠️ Fell back to ${fallbackModel} (${model || "default"} at capacity)\n\n${result.text}`,
-          };
+          try {
+            const cliResult = await runCliAsync(fallbackInvocation.command, fallbackInvocation.args, getCliWorkingDir(this.kind), {
+              ...buildExecutionOptions(this.kind),
+              onProgress,
+              chatId: chatKey,
+            });
+            let fallbackLogContent: string | null = null;
+            if (fallbackLogFile) {
+              try {
+                fallbackLogContent = readFileSync(fallbackLogFile, "utf8");
+              } catch (err) {
+                console.warn(`[${this.kind}] Failed to read fallback log file: ${err}`);
+              } finally {
+                try { rmSync(fallbackLogFile); } catch {}
+              }
+            }
+            const result = parseCliResult({ bot: this.kind, stdout: cliResult.text, logContent: fallbackLogContent });
+            if (result?.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
+            return {
+              ...result,
+              text: `⚠️ Fell back to ${fallbackModel} (${model || "default"} at capacity)\n\n${result.text}`,
+            };
+          } catch (fallbackError) {
+            if (fallbackLogFile) {
+              try { rmSync(fallbackLogFile); } catch {}
+            }
+            throw fallbackError;
+          }
         }
       }
       throw error;
@@ -352,14 +406,21 @@ class BridgeBot {
     const { message_thread_id: threadId } = body;
     const chatKey = String(chatId);
     const model = db.getSetting(this.kind) || this.config.modelPreference[0] || null;
+
+    let logFile: string | null = null;
+    if (this.kind === "antigravity") {
+      logFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
+    }
+
     const invocation = buildCliInvocation({
       bot: this.kind,
       command: this.config.command,
       model,
       prompt,
       sessionId,
-      sessionMode: this.kind === "gemini" && !db.getSession(chatKey, this.kind) ? "session-id" : "resume",
+      sessionMode: "resume",
       executionMode: config.executionMode,
+      logFile,
     });
     const typingTracker = createTypingTracker(this.client, chatId, this.kind, { message_thread_id: threadId });
 
@@ -369,13 +430,32 @@ class BridgeBot {
         ...buildExecutionOptions(this.kind),
         chatId: chatKey,
       });
-      const result = parseCliResult({ bot: this.kind, stdout });
+
+      let logContent: string | null = null;
+      if (logFile) {
+        try {
+          logContent = readFileSync(logFile, "utf8");
+        } catch (err) {
+          console.warn(`[${this.kind}] Failed to read log file: ${err}`);
+        } finally {
+          try { rmSync(logFile); } catch {}
+        }
+      }
+
+      const result = parseCliResult({ bot: this.kind, stdout, logContent });
       if (result.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
       return result;
     } catch (error) {
+      if (logFile) {
+        try { rmSync(logFile); } catch {}
+      }
       if (isCapacityExhaustedError(error as Error) && this.config.modelPreference.length > 1) {
         const fallbackModel = getNextFallbackModel(model, this.config.modelPreference);
         if (fallbackModel) {
+          let fallbackLogFile: string | null = null;
+          if (this.kind === "antigravity") {
+            fallbackLogFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
+          }
           const fallbackInvocation = buildCliInvocation({
             bot: this.kind,
             command: this.config.command,
@@ -384,17 +464,35 @@ class BridgeBot {
             sessionId,
             sessionMode: "resume",
             executionMode: config.executionMode,
+            logFile: fallbackLogFile,
           });
-          const stdout = await runCli(fallbackInvocation.command, fallbackInvocation.args, getCliWorkingDir(this.kind), {
-            ...buildExecutionOptions(this.kind),
-            chatId: chatKey,
-          });
-          const result = parseCliResult({ bot: this.kind, stdout });
-          if (result.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
-          return {
-            ...result,
-            text: `⚠️ Fell back to ${fallbackModel} (${model || "default"} at capacity)\n\n${result.text}`,
-          };
+          try {
+            const stdout = await runCli(fallbackInvocation.command, fallbackInvocation.args, getCliWorkingDir(this.kind), {
+              ...buildExecutionOptions(this.kind),
+              chatId: chatKey,
+            });
+            let fallbackLogContent: string | null = null;
+            if (fallbackLogFile) {
+              try {
+                fallbackLogContent = readFileSync(fallbackLogFile, "utf8");
+              } catch (err) {
+                console.warn(`[${this.kind}] Failed to read fallback log file: ${err}`);
+              } finally {
+                try { rmSync(fallbackLogFile); } catch {}
+              }
+            }
+            const result = parseCliResult({ bot: this.kind, stdout, logContent: fallbackLogContent });
+            if (result.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
+            return {
+              ...result,
+              text: `⚠️ Fell back to ${fallbackModel} (${model || "default"} at capacity)\n\n${result.text}`,
+            };
+          } catch (fallbackError) {
+            if (fallbackLogFile) {
+              try { rmSync(fallbackLogFile); } catch {}
+            }
+            throw fallbackError;
+          }
         }
       }
       throw error;
@@ -484,7 +582,7 @@ function sleep(ms: number) {
 
 console.log("[bridge] starting bots...");
 
-const bots = (Object.entries(config.bots) as [("codex" | "gemini" | "claude"), BotConfig][])
+const bots = (Object.entries(config.bots) as [("codex" | "antigravity" | "claude"), BotConfig][])
   .filter(([, bot]) => bot.token)
   .map(([kind, botConfig]) => new BridgeBot(kind, botConfig));
 

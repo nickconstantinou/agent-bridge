@@ -1,3 +1,11 @@
+/**
+ * PURPOSE: SQLite database storage interface and migration definitions for Agent Bridge state.
+ * INPUTS: Database file paths, chat IDs, bot types, and session tokens.
+ * OUTPUTS: Active session IDs, locks, update indices, and model overrides.
+ * NEIGHBORS: src/index.ts, src/bridge.ts
+ * LOGIC: Executes DDL schema checks, implements migrations for new columns, and exposes parameterized CRUD operations on the SQLite backend.
+ */
+
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
@@ -17,6 +25,7 @@ export function openDb(dbPath: string): BridgeDb {
       codex_session_id      TEXT,
       gemini_session_id     TEXT,
       claude_session_id     TEXT,
+      antigravity_session_id TEXT,
       active_execution_lock INTEGER NOT NULL DEFAULT 0,
       last_update_id        INTEGER NOT NULL DEFAULT 0
     );
@@ -28,6 +37,12 @@ export function openDb(dbPath: string): BridgeDb {
   try {
     raw.exec(`ALTER TABLE bridge_state ADD COLUMN claude_session_id TEXT`);
   } catch { /* column already exists in existing DBs */ }
+  try {
+    raw.exec(`ALTER TABLE bridge_state ADD COLUMN antigravity_session_id TEXT`);
+  } catch { /* column already exists in existing DBs */ }
+  try {
+    raw.exec(`UPDATE bridge_state SET antigravity_session_id = gemini_session_id WHERE antigravity_session_id IS NULL AND gemini_session_id IS NOT NULL`);
+  } catch { /* ignore migration failures */ }
   return new BridgeDb(raw);
 }
 
@@ -40,8 +55,8 @@ export class BridgeDb {
 
   // ── Session management ───────────────────────────────────────────────────
 
-  getSession(chatId: string, bot: "codex" | "gemini" | "claude"): string | null {
-    if (bot !== "codex" && bot !== "gemini" && bot !== "claude") throw new Error(`Invalid bot kind: ${bot}`);
+  getSession(chatId: string, bot: "codex" | "antigravity" | "claude"): string | null {
+    if (bot !== "codex" && bot !== "antigravity" && bot !== "claude") throw new Error(`Invalid bot kind: ${bot}`);
     const col = `${bot}_session_id`;
     const row = this.raw
       .prepare(`SELECT ${col} AS sid FROM bridge_state WHERE chat_id = ?`)
@@ -49,8 +64,8 @@ export class BridgeDb {
     return row?.sid ?? null;
   }
 
-  setSession(chatId: string, bot: "codex" | "gemini" | "claude", sessionId: string | null): void {
-    if (bot !== "codex" && bot !== "gemini" && bot !== "claude") throw new Error(`Invalid bot kind: ${bot}`);
+  setSession(chatId: string, bot: "codex" | "antigravity" | "claude", sessionId: string | null): void {
+    if (bot !== "codex" && bot !== "antigravity" && bot !== "claude") throw new Error(`Invalid bot kind: ${bot}`);
     const col = `${bot}_session_id`;
     this.raw
       .prepare(
@@ -85,14 +100,14 @@ export class BridgeDb {
 
   // ── Global polling offset (per bot kind) ────────────────────────────────
 
-  getLastUpdateId(bot: "codex" | "gemini" | "claude"): number {
+  getLastUpdateId(bot: "codex" | "antigravity" | "claude"): number {
     const row = this.raw
       .prepare(`SELECT last_update_id FROM bridge_state WHERE chat_id = ?`)
       .get(pollingKey(bot)) as { last_update_id: number } | undefined;
     return row?.last_update_id ?? 0;
   }
 
-  setLastUpdateId(bot: "codex" | "gemini" | "claude", updateId: number): void {
+  setLastUpdateId(bot: "codex" | "antigravity" | "claude", updateId: number): void {
     this.raw
       .prepare(
         `INSERT INTO bridge_state (chat_id, last_update_id) VALUES (?, ?)

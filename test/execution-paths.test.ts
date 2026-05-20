@@ -32,10 +32,10 @@ describe("Execution Path Selection - TDD", () => {
       
       // Still has both branches - will be unified next
       const hasCodex = cli.includes('if (bot === "codex")');
-      const hasGemini = cli.includes('if (bot === "gemini")');
+      const hasAntigravity = cli.includes('if (bot === "antigravity")');
       
       // Current: still has branches, but they should be unified
-      expect(hasGemini && hasCodex).toBe(true);  // Baseline
+      expect(hasAntigravity && hasCodex).toBe(true);  // Baseline
     });
   });
 
@@ -53,18 +53,18 @@ describe("Execution Path Selection - TDD", () => {
   });
 });
 describe("Idle Timeout Config", () => {
-  it("buildExecutionOptions returns per-kind timeouts (gemini idle default 240s)", async () => {
+  it("buildExecutionOptions returns per-kind timeouts (antigravity idle default 240s)", async () => {
     const { buildExecutionOptions } = await import("../src/cli.js");
-    const savedGemini = process.env.GEMINI_CLI_IDLE_TIMEOUT_MS;
+    const savedAntigravity = process.env.ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS;
     const savedGlobal = process.env.CLI_IDLE_TIMEOUT_MS;
-    delete process.env.GEMINI_CLI_IDLE_TIMEOUT_MS;
+    delete process.env.ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS;
     delete process.env.CLI_IDLE_TIMEOUT_MS;
     try {
-      const opts = buildExecutionOptions("gemini");
+      const opts = buildExecutionOptions("antigravity");
       expect(opts.idleTimeoutMs).toBe(240_000);
       expect(opts.timeoutMs).toBe(600_000);
     } finally {
-      if (savedGemini !== undefined) process.env.GEMINI_CLI_IDLE_TIMEOUT_MS = savedGemini;
+      if (savedAntigravity !== undefined) process.env.ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS = savedAntigravity;
       if (savedGlobal !== undefined) process.env.CLI_IDLE_TIMEOUT_MS = savedGlobal;
     }
   });

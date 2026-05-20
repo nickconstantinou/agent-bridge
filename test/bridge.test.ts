@@ -76,22 +76,22 @@ describe("agent bridge MVP", () => {
   it("uses the bot-specific project dir when BRIDGE_PROJECT_DIR is not enough", () => {
     const prevBridgeRoot = process.env.BRIDGE_ROOT_DIR;
     const prevCodexProjectDir = process.env.CODEX_PROJECT_DIR;
-    const prevGeminiProjectDir = process.env.GEMINI_PROJECT_DIR;
+    const prevAntigravityProjectDir = process.env.ANTIGRAVITY_PROJECT_DIR;
 
     const prevClaudeProjectDir = process.env.CLAUDE_PROJECT_DIR;
 
     process.env.BRIDGE_ROOT_DIR = "/tmp/bridge-root";
     process.env.CODEX_PROJECT_DIR = "/tmp/codex-repo";
-    process.env.GEMINI_PROJECT_DIR = "/tmp/gemini-repo";
+    process.env.ANTIGRAVITY_PROJECT_DIR = "/tmp/antigravity-repo";
     process.env.CLAUDE_PROJECT_DIR = "/tmp/claude-repo";
 
     expect(getCliWorkingDir("codex")).toBe("/tmp/codex-repo");
-    expect(getCliWorkingDir("gemini")).toBe("/tmp/gemini-repo");
+    expect(getCliWorkingDir("antigravity")).toBe("/tmp/antigravity-repo");
     expect(getCliWorkingDir("claude")).toBe("/tmp/claude-repo");
 
     if (prevBridgeRoot === undefined) delete process.env.BRIDGE_ROOT_DIR; else process.env.BRIDGE_ROOT_DIR = prevBridgeRoot;
     if (prevCodexProjectDir === undefined) delete process.env.CODEX_PROJECT_DIR; else process.env.CODEX_PROJECT_DIR = prevCodexProjectDir;
-    if (prevGeminiProjectDir === undefined) delete process.env.GEMINI_PROJECT_DIR; else process.env.GEMINI_PROJECT_DIR = prevGeminiProjectDir;
+    if (prevAntigravityProjectDir === undefined) delete process.env.ANTIGRAVITY_PROJECT_DIR; else process.env.ANTIGRAVITY_PROJECT_DIR = prevAntigravityProjectDir;
     if (prevClaudeProjectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = prevClaudeProjectDir;
   });
 
@@ -136,47 +136,43 @@ describe("agent bridge MVP", () => {
     expect(args).not.toContain("--output");
   });
 
-  it("creates fresh gemini invocation with --prompt flag for non-interactive mode", () => {
+  it("creates fresh antigravity invocation with --print flag", () => {
     const { command, args } = buildCliInvocation({
-      bot: "gemini",
+      bot: "antigravity",
       prompt: "hello",
       sessionId: null,
-      command: "gemini",
-      model: "gemini-pro",
+      command: "antigravity",
+      model: "antigravity-pro",
     });
-    expect(command).toBe("gemini");
-    const idx = args.indexOf("--prompt");
-    expect(idx).toBeGreaterThan(-1);
-    expect(args[idx + 1]).toBe("hello");
-    expect(args).not.toContain("--output");
+    expect(command).toBe("antigravity");
+    expect(args).toContain("--print");
+    expect(args).toContain("--model");
+    expect(args[args.indexOf("--model") + 1]).toBe("antigravity-pro");
+    expect(args[args.length - 1]).toBe("hello");
   });
 
-  it("gemini session invocation uses --resume to continue an existing session", () => {
+  it("antigravity session invocation uses --conversation to continue an existing session", () => {
     const { args } = buildCliInvocation({
-      bot: "gemini",
+      bot: "antigravity",
       prompt: "hello",
       sessionId: "4229bce3-5009-429e-a3cb-d1bdaa8cfeed",
-      command: "gemini",
+      command: "antigravity",
       model: null,
     });
-    const idx = args.indexOf("--resume");
-    expect(idx).toBeGreaterThan(-1);
-    expect(args[idx + 1]).toBe("4229bce3-5009-429e-a3cb-d1bdaa8cfeed");
-    expect(args).not.toContain("--session-id");
-    expect(args).not.toContain("--session");
+    expect(args).toContain("--conversation");
+    expect(args[args.indexOf("--conversation") + 1]).toBe("4229bce3-5009-429e-a3cb-d1bdaa8cfeed");
   });
 
-  it("gemini new session can use --session-id for stable resume", () => {
+  it("antigravity trusted execution mode adds --dangerously-skip-permissions", () => {
     const { args } = buildCliInvocation({
-      bot: "gemini",
+      bot: "antigravity",
       prompt: "hello",
-      sessionId: "4229bce3-5009-429e-a3cb-d1bdaa8cfeed",
-      sessionMode: "session-id",
-      command: "gemini",
+      sessionId: null,
+      command: "antigravity",
       model: null,
+      executionMode: "trusted",
     });
-    expect(args).toContain("--session-id");
-    expect(args).not.toContain("--resume");
+    expect(args).toContain("--dangerously-skip-permissions");
   });
 
   it("creates fresh claude invocation with --print flag", () => {
@@ -269,59 +265,40 @@ describe("agent bridge MVP", () => {
     });
   });
 
-  it("parses gemini output", () => {
+  it("parses antigravity output and extracts session ID from log content", () => {
+    const stdout = "hello from antigravity";
+    const logContent = "Created conversation 4229bce3-5009-429e-a3cb-d1bdaa8cfeed";
     expect(
       parseCliResult({
-        bot: "gemini",
-        stdout: "hi from gemini\n[session:session-123]",
+        bot: "antigravity",
+        stdout,
+        logContent,
       }),
-    ).toEqual({ text: "hi from gemini", sessionId: "session-123" });
+    ).toEqual({ text: "hello from antigravity", sessionId: "4229bce3-5009-429e-a3cb-d1bdaa8cfeed" });
   });
 
-  it("strips gemini thinking blocks from output", () => {
-    const stdout = [
-      "Executing Shared Memory Test I'm verifying the shared memory system.",
-      "[Thought: true]Conducting Smoke Test I'm now invoking search_knowledge.",
-      "[Thought: true]",
-      "The memory store contains 4 entities.",
-      "MCP_AVAILABLE: yes",
-      "TOOL_USED: search_knowledge",
-      "RESULT_SUMMARY: found 4 entities",
-      "ERROR: none",
-    ].join("\n");
-    const result = parseCliResult({ bot: "gemini", stdout });
-    expect(result.text).not.toContain("[Thought: true]");
-    expect(result.text).not.toContain("Executing Shared Memory Test");
-    expect(result.text).not.toContain("Conducting Smoke Test");
-    expect(result.text).toContain("The memory store contains 4 entities.");
-    expect(result.text).not.toContain("MCP_AVAILABLE");
-    expect(result.text).not.toContain("RESULT_SUMMARY");
+  it("parses antigravity output and extracts session ID using alternative pattern", () => {
+    const stdout = "hello";
+    const logContent = "some text\nconversation=019e1299-3d2c-7f11-8194-500feee6614e\nmore text";
+    expect(
+      parseCliResult({
+        bot: "antigravity",
+        stdout,
+        logContent,
+      }),
+    ).toEqual({ text: "hello", sessionId: "019e1299-3d2c-7f11-8194-500feee6614e" });
   });
 
-  it("strips CRITICAL INSTRUCTION headers and metadata footer from Gemini output", () => {
-    const stdout = [
-      "CRITICAL INSTRUCTION 1: Use specific tools where possible.",
-      "CRITICAL INSTRUCTION 2: Related tools: No tools needed.",
-      "",
-      "I ran the agent-memory recall tool. The memory database contains 0 memories.MEMORY_AVAILABLE: yes",
-      "TOOL_USED: default_api:run_shell_command",
-      "RESULT_SUMMARY: The agent-memory CLI returned zero results.",
-      "ERROR: none",
-    ].join("\n");
-    const result = parseCliResult({ bot: "gemini", stdout });
-    expect(result.text).not.toContain("CRITICAL INSTRUCTION");
-    expect(result.text).not.toContain("MEMORY_AVAILABLE");
-    expect(result.text).not.toContain("TOOL_USED");
-    expect(result.text).not.toContain("RESULT_SUMMARY");
-    expect(result.text).not.toContain("ERROR: none");
-    expect(result.text).toContain("I ran the agent-memory recall tool");
-  });
-
-  it("leaves gemini output unchanged when no thinking blocks or metadata present", () => {
-    const stdout = "The memory store has 4 entities.\n[session:abc]";
-    const result = parseCliResult({ bot: "gemini", stdout });
-    expect(result.text).toBe("The memory store has 4 entities.");
-    expect(result.sessionId).toBe("abc");
+  it("returns null sessionId for antigravity if logContent does not contain any ID", () => {
+    const stdout = "hello";
+    const logContent = "no conversation pattern here";
+    expect(
+      parseCliResult({
+        bot: "antigravity",
+        stdout,
+        logContent,
+      }),
+    ).toEqual({ text: "hello", sessionId: null });
   });
 
   it("validates bridge config", () => {
@@ -337,7 +314,7 @@ describe("agent bridge MVP", () => {
     const config = {
       bots: {
         codex: { modelPreference: ["gpt-4o"], command: "c", token: "t" },
-        gemini: { modelPreference: ["gemini-1.5-pro"], command: "g", token: "t" },
+        antigravity: { modelPreference: ["antigravity-3.1-pro-preview"], command: "g", token: "t" },
       },
     } as any as BridgeConfig;
 
@@ -347,31 +324,31 @@ describe("agent bridge MVP", () => {
     afterEach(() => { db.close(); });
 
     it("handles /reset to clear session for the chat", () => {
-      db.setSession("123", "gemini", "session-123");
-      const result = handleCommand("gemini", "/reset", { db, chatId: "123", config });
+      db.setSession("123", "antigravity", "session-123");
+      const result = handleCommand("antigravity", "/reset", { db, chatId: "123", config });
       expect(result?.kind).toBe("message");
-      expect(result && "text" in result ? result.text : "").toContain("gemini session reset");
-      expect(db.getSession("123", "gemini")).toBeNull();
+      expect(result && "text" in result ? result.text : "").toContain("antigravity session reset");
+      expect(db.getSession("123", "antigravity")).toBeNull();
     });
 
     it("only resets the session for the target chat, not others", () => {
-      db.setSession("123", "gemini", "s-123");
-      db.setSession("456", "gemini", "s-456");
-      handleCommand("gemini", "/reset", { db, chatId: "123", config });
-      expect(db.getSession("456", "gemini")).toBe("s-456");
+      db.setSession("123", "antigravity", "s-123");
+      db.setSession("456", "antigravity", "s-456");
+      handleCommand("antigravity", "/reset", { db, chatId: "123", config });
+      expect(db.getSession("456", "antigravity")).toBe("s-456");
     });
 
     it("handles /models returning keyboard_message with current model info", () => {
-      const result = handleCommand("gemini", "/models", { db, chatId: "123", config });
+      const result = handleCommand("antigravity", "/models", { db, chatId: "123", config });
       expect(result?.kind).toBe("keyboard_message");
-      expect(result && "text" in result ? result.text : "").toContain("gemini-1.5-pro");
+      expect(result && "text" in result ? result.text : "").toContain("antigravity-3.1-pro-preview");
       expect((result as any)?.reply_markup?.inline_keyboard).toBeDefined();
     });
 
     it("handles /start", () => {
-      const result = handleCommand("gemini", "/start", { db, chatId: "123", config });
+      const result = handleCommand("antigravity", "/start", { db, chatId: "123", config });
       expect(result?.kind).toBe("message");
-      expect(result && "text" in result ? result.text : "").toContain("gemini bridge ready");
+      expect(result && "text" in result ? result.text : "").toContain("antigravity bridge ready");
     });
 
     it("builds an executable memory smoke test command", () => {
@@ -432,7 +409,7 @@ describe("/models command returns keyboard_message", () => {
     dbPath: ":memory:",
     bots: {
       codex: { token: "t", command: "codex", modelPreference: prefs },
-      gemini: { token: "t", command: "gemini", modelPreference: [] },
+      antigravity: { token: "t", command: "antigravity", modelPreference: [] },
     },
   });
 

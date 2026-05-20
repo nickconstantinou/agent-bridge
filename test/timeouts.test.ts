@@ -25,9 +25,9 @@ describe("resolveTimeoutsForKind — built-in defaults", () => {
     expect(resolveTimeoutsForKind("codex").cliIdleTimeoutMs).toBe(90_000);
   });
 
-  it("gemini gets 240s idle timeout by default", () => {
-    setEnv({ GEMINI_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("gemini").cliIdleTimeoutMs).toBe(240_000);
+  it("antigravity gets 240s idle timeout by default", () => {
+    setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(240_000);
   });
 
   it("claude gets 180s idle timeout by default", () => {
@@ -36,45 +36,45 @@ describe("resolveTimeoutsForKind — built-in defaults", () => {
   });
 
   it("all kinds get 600s hard timeout by default", () => {
-    setEnv({ CODEX_CLI_TIMEOUT_MS: undefined, GEMINI_CLI_TIMEOUT_MS: undefined, CLAUDE_CLI_TIMEOUT_MS: undefined, CLI_TIMEOUT_MS: undefined });
+    setEnv({ CODEX_CLI_TIMEOUT_MS: undefined, ANTIGRAVITY_CLI_TIMEOUT_MS: undefined, CLAUDE_CLI_TIMEOUT_MS: undefined, CLI_TIMEOUT_MS: undefined });
     expect(resolveTimeoutsForKind("codex").cliTimeoutMs).toBe(600_000);
-    expect(resolveTimeoutsForKind("gemini").cliTimeoutMs).toBe(600_000);
+    expect(resolveTimeoutsForKind("antigravity").cliTimeoutMs).toBe(600_000);
     expect(resolveTimeoutsForKind("claude").cliTimeoutMs).toBe(600_000);
   });
 
   it("fetch timeout defaults to 45s", () => {
     setEnv({ TELEGRAM_FETCH_TIMEOUT_MS: undefined, FETCH_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("gemini").fetchTimeoutMs).toBe(45_000);
+    expect(resolveTimeoutsForKind("antigravity").fetchTimeoutMs).toBe(45_000);
   });
 });
 
 describe("resolveTimeoutsForKind — env precedence", () => {
   it("per-CLI env var overrides global env var", () => {
-    setEnv({ GEMINI_CLI_IDLE_TIMEOUT_MS: "99000", CLI_IDLE_TIMEOUT_MS: "55000" });
-    expect(resolveTimeoutsForKind("gemini").cliIdleTimeoutMs).toBe(99_000);
+    setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: "99000", CLI_IDLE_TIMEOUT_MS: "55000" });
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(99_000);
   });
 
   it("global env var overrides built-in default", () => {
-    setEnv({ GEMINI_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: "55000" });
-    expect(resolveTimeoutsForKind("gemini").cliIdleTimeoutMs).toBe(55_000);
+    setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: "55000" });
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(55_000);
   });
 
   it("per-CLI env var does not affect other kinds", () => {
-    setEnv({ GEMINI_CLI_IDLE_TIMEOUT_MS: "99000", CODEX_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
+    setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: "99000", CODEX_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
     expect(resolveTimeoutsForKind("codex").cliIdleTimeoutMs).toBe(90_000);
   });
 
   it("global CLI_TIMEOUT_MS applies to all kinds when no per-CLI override", () => {
-    setEnv({ CODEX_CLI_TIMEOUT_MS: undefined, GEMINI_CLI_TIMEOUT_MS: undefined, CLAUDE_CLI_TIMEOUT_MS: undefined, CLI_TIMEOUT_MS: "120000" });
+    setEnv({ CODEX_CLI_TIMEOUT_MS: undefined, ANTIGRAVITY_CLI_TIMEOUT_MS: undefined, CLAUDE_CLI_TIMEOUT_MS: undefined, CLI_TIMEOUT_MS: "120000" });
     expect(resolveTimeoutsForKind("codex").cliTimeoutMs).toBe(120_000);
-    expect(resolveTimeoutsForKind("gemini").cliTimeoutMs).toBe(120_000);
+    expect(resolveTimeoutsForKind("antigravity").cliTimeoutMs).toBe(120_000);
     expect(resolveTimeoutsForKind("claude").cliTimeoutMs).toBe(120_000);
   });
 
   it("per-CLI hard timeout overrides global for that kind only", () => {
-    setEnv({ CODEX_CLI_TIMEOUT_MS: "200000", GEMINI_CLI_TIMEOUT_MS: undefined, CLI_TIMEOUT_MS: "120000" });
+    setEnv({ CODEX_CLI_TIMEOUT_MS: "200000", ANTIGRAVITY_CLI_TIMEOUT_MS: undefined, CLI_TIMEOUT_MS: "120000" });
     expect(resolveTimeoutsForKind("codex").cliTimeoutMs).toBe(200_000);
-    expect(resolveTimeoutsForKind("gemini").cliTimeoutMs).toBe(120_000);
+    expect(resolveTimeoutsForKind("antigravity").cliTimeoutMs).toBe(120_000);
   });
 
   it("TELEGRAM_FETCH_TIMEOUT_MS overrides FETCH_TIMEOUT_MS", () => {
@@ -84,21 +84,21 @@ describe("resolveTimeoutsForKind — env precedence", () => {
 
   it("FETCH_TIMEOUT_MS is honoured when TELEGRAM_FETCH_TIMEOUT_MS is absent", () => {
     setEnv({ TELEGRAM_FETCH_TIMEOUT_MS: undefined, FETCH_TIMEOUT_MS: "60000" });
-    expect(resolveTimeoutsForKind("gemini").fetchTimeoutMs).toBe(60_000);
+    expect(resolveTimeoutsForKind("antigravity").fetchTimeoutMs).toBe(60_000);
   });
 
   it("ignores zero or non-numeric values and falls back", () => {
-    setEnv({ GEMINI_CLI_IDLE_TIMEOUT_MS: "0", CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("gemini").cliIdleTimeoutMs).toBe(240_000);
-    setEnv({ GEMINI_CLI_IDLE_TIMEOUT_MS: "not-a-number", CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("gemini").cliIdleTimeoutMs).toBe(240_000);
+    setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: "0", CLI_IDLE_TIMEOUT_MS: undefined });
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(240_000);
+    setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: "not-a-number", CLI_IDLE_TIMEOUT_MS: undefined });
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(240_000);
   });
 });
 
 describe("buildExecutionOptions", () => {
   it("returns per-kind timeouts from resolveTimeoutsForKind", () => {
-    setEnv({ GEMINI_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
-    const opts = buildExecutionOptions("gemini");
+    setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
+    const opts = buildExecutionOptions("antigravity");
     expect(opts.idleTimeoutMs).toBe(240_000);
     expect(opts.timeoutMs).toBe(600_000);
   });

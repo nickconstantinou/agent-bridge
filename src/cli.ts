@@ -1,3 +1,11 @@
+/**
+ * PURPOSE: Child process management, CLI invocation builder, and execution response parsers for different bot CLI kinds.
+ * INPUTS: Prompts, session IDs, model types, execution modes, and raw stdout/log file contents.
+ * OUTPUTS: Spawned subprocess lifecycles, structured CLI command definitions, and parsed agent text responses and session IDs.
+ * NEIGHBORS: src/index.ts, src/timeouts.ts
+ * LOGIC: Spawns platform-specific CLI shells, applies strict timeouts, processes stdout streams with regex to isolate message content, and parses logs for session IDs.
+ */
+
 import { spawn, type ChildProcess } from "node:child_process";
 import type { CliOptions, CliResult, BotKind } from "./types.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
@@ -54,6 +62,7 @@ export function buildCliInvocation({
   model,
   executionMode = "safe",
   outputFormat = null,
+  logFile = null,
 }: {
   bot: string;
   prompt: string;
@@ -63,6 +72,7 @@ export function buildCliInvocation({
   model: string | null;
   executionMode?: "safe" | "trusted";
   outputFormat?: "json" | null;
+  logFile?: string | null;
 }): { command: string; args: string[] } {
   const args = [];
 
@@ -105,6 +115,13 @@ export function buildCliInvocation({
     if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
     if (outputFormat === "json") args.push("--output-format", "json");
     args.push(prompt);
+  } else if (bot === "antigravity") {
+    args.push("--print");
+    if (model) args.push("--model", model);
+    if (sessionId) args.push("--conversation", sessionId);
+    if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
+    if (logFile) args.push("--log-file", logFile);
+    args.push(prompt);
   }
 
   return { command, args };
@@ -144,7 +161,15 @@ export function buildExecutionOptions(kind: BotKind): CliOptions {
 /**
  * Parses the CLI result.
  */
-export function parseCliResult({ bot, stdout }: { bot: string; stdout: string }): CliResult {
+export function parseCliResult({
+  bot,
+  stdout,
+  logContent = null,
+}: {
+  bot: string;
+  stdout: string;
+  logContent?: string | null;
+}): CliResult {
   if (bot === "codex") {
     return parseCodexResult(stdout);
   } else if (bot === "gemini") {
@@ -159,6 +184,8 @@ export function parseCliResult({ bot, stdout }: { bot: string; stdout: string })
     return parseGeminiResult(stdout);
   } else if (bot === "claude") {
     return parseClaudeResult(stdout);
+  } else if (bot === "antigravity") {
+    return parseAntigravityResult(stdout, logContent);
   }
   throw new Error(`Unknown bot type: ${bot}`);
 }
@@ -272,6 +299,18 @@ function parseClaudeResult(stdout: string): CliResult {
     } catch { /* not JSON */ }
   }
   return { text: stdout.trim(), sessionId: null };
+}
+
+function parseAntigravityResult(stdout: string, logContent?: string | null): CliResult {
+  let sessionId: string | null = null;
+  if (logContent) {
+    const sessionMatch = logContent.match(/Created conversation ([a-f0-9-]{36})/) || 
+                         logContent.match(/conversation=([a-f0-9-]{36})/);
+    if (sessionMatch) {
+      sessionId = sessionMatch[1];
+    }
+  }
+  return { text: stdout.trim(), sessionId };
 }
 
 export function toUserMessage(err: Error): string {

@@ -5,11 +5,11 @@ interface PerKindDefaults {
   cliIdleTimeoutMs: number;
 }
 
-// Per-CLI built-in defaults. Gemini thinks silently the longest; Codex streams frequently.
+// Per-CLI built-in defaults. Antigravity thinks silently the longest; Codex streams frequently.
 const DEFAULTS: Record<BotKind, PerKindDefaults> = {
-  codex:  { cliTimeoutMs: 600_000, cliIdleTimeoutMs:  90_000 },
-  gemini: { cliTimeoutMs: 600_000, cliIdleTimeoutMs: 240_000 },
-  claude: { cliTimeoutMs: 600_000, cliIdleTimeoutMs: 180_000 },
+  codex:       { cliTimeoutMs: 600_000, cliIdleTimeoutMs:  90_000 },
+  antigravity: { cliTimeoutMs: 600_000, cliIdleTimeoutMs: 240_000 },
+  claude:      { cliTimeoutMs: 600_000, cliIdleTimeoutMs: 180_000 },
 };
 
 const DEFAULT_FETCH_TIMEOUT_MS = 45_000;

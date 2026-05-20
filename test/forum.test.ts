@@ -50,7 +50,7 @@ describe("Forum Topic Routing", () => {
     const threadId = 789;
     const body = { text: "Hello forum", message_thread_id: threadId };
 
-    await sendTelegramMessage({ client, kind: "gemini", chatId, body });
+    await sendTelegramMessage({ client, kind: "antigravity", chatId, body });
 
     expect(client.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -69,7 +69,7 @@ describe("Forum Topic Routing", () => {
 
     await sendMessageWithProgress({
       client,
-      kind: "gemini",
+      kind: "antigravity",
       chatId,
       execution,
       body: { message_thread_id: threadId }

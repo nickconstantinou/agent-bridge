@@ -1,12 +1,12 @@
 [Unit]
-Description=Telegram bridge for Gemini
+Description=Telegram bridge for Antigravity
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=BRIDGE_USER
-EnvironmentFile=/etc/default/agent-bridge-gemini
+EnvironmentFile=/etc/default/agent-bridge-antigravity
 ExecStart=/usr/bin/env bash -lc 'cd "${BRIDGE_PROJECT_DIR:?}" && exec ./node_modules/.bin/tsx src/index.ts'
 Restart=always
 RestartSec=5

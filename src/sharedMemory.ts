@@ -1,3 +1,11 @@
+/**
+ * PURPOSE: Manages shared-memory instruction injection and verification for different agent interfaces.
+ * INPUTS: DB paths, markdown files, project routes, and existing file content.
+ * OUTPUTS: Modified instruction files content, script render outputs, and verification statuses.
+ * NEIGHBORS: src/index.ts, scripts/setup-shared-memory.ts
+ * LOGIC: Provides template builders for agent memory CLI configuration, checks for the presence of memory blocks, and formats instructions.
+ */
+
 import { isAbsolute } from "node:path";
 
 export interface VerifySharedMemoryResult {
@@ -30,8 +38,8 @@ export function renderAgentMemoryWrapperScript(input: { repoRoot: string }): str
   ].join("\n");
 }
 
-export function renderAgentMemoryInstructionFile(existingContent: string, agent: "codex" | "gemini" | "claude", dbPath: string): string {
-  const title = agent === "codex" ? "Codex" : agent === "gemini" ? "Gemini" : "Claude";
+export function renderAgentMemoryInstructionFile(existingContent: string, agent: "codex" | "antigravity" | "claude", dbPath: string): string {
+  const title = agent === "codex" ? "Codex" : agent === "antigravity" ? "Antigravity" : "Claude";
   const block = [
     blockStart,
     "## Persistent memory",
@@ -59,10 +67,10 @@ export function renderAgentMemoryInstructionFile(existingContent: string, agent:
   return `${existing}\n\n${block}\n`;
 }
 
-export function verifySharedMemoryConfigs(configs: { codex: string; gemini: string; claude: string }): VerifySharedMemoryResult {
+export function verifySharedMemoryConfigs(configs: { codex: string; antigravity: string; claude: string }): VerifySharedMemoryResult {
   const errors: string[] = [];
   if (!configs.codex.includes("agent-memory recall") || !configs.codex.includes("Do not rely on MCP for memory.")) errors.push("Codex instructions missing agent-memory block.");
-  if (!configs.gemini.includes("agent-memory recall") || !configs.gemini.includes("Do not rely on MCP for memory.")) errors.push("Gemini instructions missing agent-memory block.");
+  if (!configs.antigravity.includes("agent-memory recall") || !configs.antigravity.includes("Do not rely on MCP for memory.")) errors.push("Antigravity instructions missing agent-memory block.");
   if (!configs.claude.includes("agent-memory recall") || !configs.claude.includes("Do not rely on MCP for memory.")) errors.push("Claude instructions missing agent-memory block.");
   return { ok: errors.length === 0, errors };
 }

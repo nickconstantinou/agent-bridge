@@ -320,6 +320,7 @@ class BridgeBot {
       model,
       prompt,
       sessionId,
+      executionMode: config.executionMode,
       outputFormat: this.kind === "antigravity" ? undefined : "json",
       logFile,
     });

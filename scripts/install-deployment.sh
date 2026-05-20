@@ -28,6 +28,10 @@ if [[ "${1:-}" != "--skip-cli-install" ]]; then
     codex --help >/dev/null
   fi
 
+  if ! command -v agy >/dev/null 2>&1; then
+    echo "Installing agy..."
+    curl -fsSL https://antigravity.google/cli/install.sh | bash
+  fi
   if command -v agy >/dev/null 2>&1; then
     agy --help >/dev/null
   fi

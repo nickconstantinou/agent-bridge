@@ -43,6 +43,8 @@ export function openDb(dbPath: string): BridgeDb {
   try {
     raw.exec(`UPDATE bridge_state SET antigravity_session_id = gemini_session_id WHERE antigravity_session_id IS NULL AND gemini_session_id IS NOT NULL`);
   } catch { /* ignore migration failures */ }
+  // Clear any locks left held from a previous process that was killed mid-execution
+  raw.exec(`UPDATE bridge_state SET active_execution_lock = 0 WHERE active_execution_lock = 1`);
   return new BridgeDb(raw);
 }
 

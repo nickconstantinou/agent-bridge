@@ -7,6 +7,7 @@ DEFAULTS_DIR="/etc/default"
 NODE_MIN_MAJOR=22
 TARGET_USER="${SUDO_USER:-${USER}}"
 TARGET_HOME="$(getent passwd "${TARGET_USER}" | cut -d: -f6)"
+DEFAULT_AGENT_BRIDGE_SKILLS="red-green-refactor-tdd,requirements-to-acceptance,risk-based-test-strategy,release-readiness-review"
 
 cat <<'EOF'
 agent-bridge install
@@ -16,7 +17,7 @@ agent-bridge install
 - BRIDGE_ENV_FILE must point at the bot-specific env file
 - CODEX_PROJECT_DIR / ANTIGRAVITY_PROJECT_DIR / CLAUDE_PROJECT_DIR override the CLI cwd per bot
 - shared local memory is configured automatically for codex, antigravity, and claude
-- bundled shared skills may be installed into native CLI skill directories when selected
+- bundled shared skills are installed into native CLI skill directories by default
 EOF
 
 require_node() {
@@ -138,7 +139,7 @@ prompt CLAUDE_COMMAND      "Claude command"      "$(command -v claude 2>/dev/nul
 prompt CODEX_PROJECT_DIR       "Codex working directory (blank = BRIDGE_PROJECT_DIR)"       ""
 prompt ANTIGRAVITY_PROJECT_DIR "Antigravity working directory (blank = BRIDGE_PROJECT_DIR)" ""
 prompt CLAUDE_PROJECT_DIR      "Claude working directory (blank = BRIDGE_PROJECT_DIR)"      ""
-prompt AGENT_BRIDGE_SKILLS "Bundled skills to install (comma-separated, blank = skip)" ""
+prompt AGENT_BRIDGE_SKILLS "Bundled skills to install (comma-separated, none = skip)" "${DEFAULT_AGENT_BRIDGE_SKILLS}"
 prompt AGENT_BRIDGE_SKILL_LINK_MODE "Shared skill link mode (symlink|copy)" "symlink"
 prompt BRIDGE_EXECUTION_MODE "Execution mode (safe|trusted)" "trusted"
 prompt POLL_INTERVAL_MS      "Poll interval ms"               "1000"
@@ -152,9 +153,9 @@ ensure_var TELEGRAM_BOT_TOKEN_ANTIGRAVITY  "Antigravity bot token"
 ensure_var BRIDGE_EXECUTION_MODE     "Execution mode"
 
 install_shared_skills() {
-  local skills_csv="${AGENT_BRIDGE_SKILLS:-}"
+  local skills_csv="${AGENT_BRIDGE_SKILLS:-${DEFAULT_AGENT_BRIDGE_SKILLS}}"
   local link_mode="${AGENT_BRIDGE_SKILL_LINK_MODE:-symlink}"
-  if [[ -z "${skills_csv}" ]]; then
+  if [[ -z "${skills_csv}" || "${skills_csv}" == "none" || "${skills_csv}" == "skip" ]]; then
     return
   fi
   if [[ "${link_mode}" != "symlink" && "${link_mode}" != "copy" ]]; then
@@ -286,6 +287,6 @@ sudo systemctl enable --now ${UNITS_TO_ENABLE}
 echo "Installed and started: ${UNITS_TO_ENABLE}"
 echo "Defaults written to ${DEFAULTS_DIR}/"
 echo "Shared local memory configured for codex, antigravity, and claude"
-if [[ -n "${AGENT_BRIDGE_SKILLS:-}" ]]; then
+if [[ -n "${AGENT_BRIDGE_SKILLS:-}" && "${AGENT_BRIDGE_SKILLS}" != "none" && "${AGENT_BRIDGE_SKILLS}" != "skip" ]]; then
   echo "Shared skills installed: ${AGENT_BRIDGE_SKILLS}"
 fi

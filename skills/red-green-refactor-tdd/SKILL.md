@@ -1,6 +1,6 @@
 ---
 name: red-green-refactor-tdd
-description: Use for software development, refactoring, bug fixing, and behavior changes where work should follow red-green-refactor TDD: failing test first, smallest passing implementation, then cleanup with tests green.
+description: "Use for software development, refactoring, bug fixing, and behavior changes where work should follow red-green-refactor TDD: failing test first, smallest passing implementation, then cleanup with tests green."
 ---
 
 # Red Green Refactor TDD

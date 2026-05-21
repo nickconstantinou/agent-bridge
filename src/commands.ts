@@ -3,19 +3,20 @@
  * INPUTS: Chat messages and bot kind, configuration, and database instances.
  * OUTPUTS: A CommandResult specifying messages to send or prompt execution overrides.
  * NEIGHBORS: src/index.ts, src/bridge.ts, src/types.ts
- * LOGIC: Normalizes user commands and routes "/start", "/reset", "/models", "/memory" to appropriate action structures.
+ * LOGIC: Normalizes user commands and routes "/start", "/reset", "/models", "/skills", "/memory" to appropriate action structures.
  */
 
 import type { BridgeConfig } from "./types.js";
 import type { BridgeDb } from "./db.js";
 import { buildModelKeyboard, buildModelsText } from "./bridge.js";
+import { listLocalCatalog } from "./skills.js";
 
 export type CommandResult =
   | { kind: "message"; text: string }
   | { kind: "keyboard_message"; text: string; reply_markup: any }
   | { kind: "execute"; prompt: string };
 
-const bridgeCommands = new Set(["/start", "/reset", "/models", "/memory"]);
+const bridgeCommands = new Set(["/start", "/reset", "/models", "/skills", "/memory"]);
 
 function normalizeCommand(text: string): string {
   return String(text || "").trim().toLowerCase().replace(/@\S+$/, "");
@@ -36,6 +37,20 @@ function buildMemorySmokePrompt(kind: "codex" | "antigravity" | "claude"): strin
     `TOOL_USED: <tool-name-or-none>`,
     `RESULT_SUMMARY: <short summary>`,
     `ERROR: <none-or-short error>`,
+  ].join("\n");
+}
+
+function buildSkillsText(): string {
+  const skills = listLocalCatalog();
+  if (skills.length === 0) return "No bundled agent-bridge skills were found.";
+
+  return [
+    "Bundled agent-bridge skills:",
+    ...skills.map((skill) => `- ${skill.name} - ${skill.description}`),
+    "",
+    "Install or repair locally:",
+    "npm run skills -- install <skill-name>",
+    "npm run skills -- verify --fix",
   ].join("\n");
 }
 
@@ -72,6 +87,13 @@ export function handleCommand(
       kind: "keyboard_message",
       text: buildModelsText(kind, { db, config }),
       reply_markup: buildModelKeyboard(kind, bot.modelPreference, db.getSetting(kind)),
+    };
+  }
+
+  if (text === "/skills") {
+    return {
+      kind: "message",
+      text: buildSkillsText(),
     };
   }
 

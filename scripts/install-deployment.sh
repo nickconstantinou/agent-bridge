@@ -6,6 +6,7 @@ SYSTEMD_DIR="/etc/systemd/system"
 NODE_BIN="${NODE_BIN:-$(command -v node)}"
 TARGET_USER="${SUDO_USER:-$(whoami)}"
 TARGET_HOME="$(getent passwd "${TARGET_USER}" | cut -d: -f6)"
+DEFAULT_AGENT_BRIDGE_SKILLS="red-green-refactor-tdd,requirements-to-acceptance,risk-based-test-strategy,release-readiness-review"
 
 if [[ -z "${NODE_BIN}" ]]; then
   echo "node not found on PATH" >&2
@@ -21,9 +22,9 @@ install_unit() {
 }
 
 install_shared_skills() {
-  local skills_csv="${AGENT_BRIDGE_SKILLS:-}"
+  local skills_csv="${AGENT_BRIDGE_SKILLS:-${DEFAULT_AGENT_BRIDGE_SKILLS}}"
   local link_mode="${AGENT_BRIDGE_SKILL_LINK_MODE:-symlink}"
-  if [[ -z "${skills_csv}" ]]; then
+  if [[ -z "${skills_csv}" || "${skills_csv}" == "none" || "${skills_csv}" == "skip" ]]; then
     return
   fi
   if [[ -z "${TARGET_HOME}" ]]; then
@@ -71,7 +72,7 @@ if [[ "${1:-}" != "--skip-cli-install" ]]; then
   if command -v claude >/dev/null 2>&1; then
     claude --version >/dev/null
   fi
-elif [[ -n "${AGENT_BRIDGE_SKILLS:-}" ]]; then
+elif [[ -n "${AGENT_BRIDGE_SKILLS:-}" && "${AGENT_BRIDGE_SKILLS}" != "none" && "${AGENT_BRIDGE_SKILLS}" != "skip" ]]; then
   install_shared_skills
 fi
 
@@ -93,6 +94,6 @@ sudo systemctl enable --now ${UNITS_TO_ENABLE}
 
 echo "Installed and started: ${UNITS_TO_ENABLE}"
 echo "Node: ${NODE_BIN}"
-if [[ -n "${AGENT_BRIDGE_SKILLS:-}" ]]; then
-  echo "Shared skills installed for ${TARGET_USER}: ${AGENT_BRIDGE_SKILLS}"
+if [[ "${AGENT_BRIDGE_SKILLS:-${DEFAULT_AGENT_BRIDGE_SKILLS}}" != "none" && "${AGENT_BRIDGE_SKILLS:-${DEFAULT_AGENT_BRIDGE_SKILLS}}" != "skip" ]]; then
+  echo "Shared skills installed for ${TARGET_USER}: ${AGENT_BRIDGE_SKILLS:-${DEFAULT_AGENT_BRIDGE_SKILLS}}"
 fi

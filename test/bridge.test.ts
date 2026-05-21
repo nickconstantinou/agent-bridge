@@ -50,6 +50,7 @@ describe("agent bridge MVP", () => {
   it("recognizes supported bridge commands", () => {
     expect(isBridgeCommand("/start")).toBe(true);
     expect(isBridgeCommand("/models")).toBe(true);
+    expect(isBridgeCommand("/skills")).toBe(true);
     expect(isBridgeCommand("/memory")).toBe(true);
     expect(isBridgeCommand("hello")).toBe(false);
   });
@@ -58,6 +59,7 @@ describe("agent bridge MVP", () => {
     expect(isBridgeCommand("/start@mybot")).toBe(true);
     expect(isBridgeCommand("/reset@AnotherBot")).toBe(true);
     expect(isBridgeCommand("/models@somebot")).toBe(true);
+    expect(isBridgeCommand("/skills@somebot")).toBe(true);
     expect(isBridgeCommand("/unknown@mybot")).toBe(false);
   });
 
@@ -501,6 +503,14 @@ describe("agent bridge MVP", () => {
       const result = handleCommand("antigravity", "/start", { db, chatId: "123", config });
       expect(result?.kind).toBe("message");
       expect(result && "text" in result ? result.text : "").toContain("antigravity bridge ready");
+    });
+
+    it("lists bundled skills with install guidance", () => {
+      const result = handleCommand("codex", "/skills", { db, chatId: "123", config });
+      expect(result?.kind).toBe("message");
+      const text = result && "text" in result ? result.text : "";
+      expect(text).toContain("red-green-refactor-tdd");
+      expect(text).toContain("npm run skills -- install");
     });
 
     it("builds an executable memory smoke test command", () => {

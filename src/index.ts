@@ -126,6 +126,7 @@ class BridgeBot {
     await this.client.setMyCommands({
       commands: [
         { command: "models", description: "Switch model" },
+        { command: "skills", description: "List bundled skills" },
         { command: "reset",  description: "Clear current session" },
         { command: "stop",   description: "Abort running execution" },
         { command: "memory", description: "Run memory smoke test" },

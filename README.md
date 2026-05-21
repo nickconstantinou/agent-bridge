@@ -75,6 +75,7 @@ Important:
 |---------|--------|
 | `/reset` | Clear the current CLI session (start fresh) |
 | `/models` | Show and change the active model |
+| `/skills` | List bundled shared skills and install/repair commands |
 | `/memory` | Run a shared-memory CLI smoke test through the live CLI path |
 | `/stop` | Abort the currently running CLI process |
 | `/cancel` | Same as `/stop` |
@@ -175,6 +176,7 @@ Then they are projected into each CLI's native skills directory:
 ```
 
 Global instruction files are not modified by the skills installer.
+Fresh and deployment installs project all bundled skills into native CLI directories by default. Set `AGENT_BRIDGE_SKILLS=none` to skip this.
 
 Manage skills manually:
 
@@ -191,7 +193,7 @@ Native CLI entries are symlinks by default. Use copy mode if a CLI does not disc
 npm run skills -- install red-green-refactor-tdd --force --link-mode copy
 ```
 
-During installation, set a comma-separated list for non-interactive setup:
+During installation, override the default bundled set with a comma-separated list for non-interactive setup:
 
 ```bash
 AGENT_BRIDGE_SKILLS=red-green-refactor-tdd,risk-based-test-strategy sudo bash scripts/install.sh
@@ -201,7 +203,7 @@ Optional install variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AGENT_BRIDGE_SKILLS` | — | Comma-separated bundled skills to install during `install.sh` or `install-deployment.sh`. |
+| `AGENT_BRIDGE_SKILLS` | all bundled skills | Comma-separated bundled skills to install during `install.sh` or `install-deployment.sh`; use `none` to skip. |
 | `AGENT_BRIDGE_SKILL_LINK_MODE` | `symlink` | Native CLI projection mode: `symlink` or `copy`. |
 
 If verification reports stale symlinks or missing native entries, repair them with:

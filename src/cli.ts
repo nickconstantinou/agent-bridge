@@ -308,7 +308,13 @@ function parseAntigravityResult(stdout: string, logContent?: string | null): Cli
   const markerIndex = text.indexOf(ANTIGRAVITY_FINAL_RESPONSE_DELIMITER);
   if (markerIndex !== -1) {
     const lines = text.split(/\r?\n/);
-    const separatorIdx = lines.findIndex((line) => line.trim() === ANTIGRAVITY_FINAL_RESPONSE_DELIMITER);
+    let separatorIdx = -1;
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      if (lines[i].trim() === ANTIGRAVITY_FINAL_RESPONSE_DELIMITER) {
+        separatorIdx = i;
+        break;
+      }
+    }
     if (separatorIdx !== -1) {
       text = lines.slice(separatorIdx + 1).join("\n").trim();
       return { text, sessionId: extractAntigravityConversationId(logContent) };

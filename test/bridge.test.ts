@@ -345,15 +345,12 @@ describe("agent bridge MVP", () => {
     });
   });
 
-  it("parses antigravity output and keeps internal separators intact", () => {
+  it("parses antigravity output using the last final-answer separator", () => {
     const stdout = [
-      "I will start by checking the current permissions.",
-      "📊 I. SYSTEM HUD",
-      "STATE: 🟢 (IDLE)",
       "***",
-      "Here is a table:",
+      "Previous answer from resumed session.",
       "***",
-      "Row 1 | Row 2",
+      "Current answer from resumed session.",
     ].join("\n");
     expect(
       parseCliResult({
@@ -361,7 +358,7 @@ describe("agent bridge MVP", () => {
         stdout,
       }),
     ).toEqual({
-      text: "Here is a table:\n***\nRow 1 | Row 2",
+      text: "Current answer from resumed session.",
       sessionId: null,
     });
   });

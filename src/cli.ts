@@ -299,8 +299,20 @@ function parseAntigravityResult(stdout: string, logContent?: string | null): Cli
     const separatorIdx = lines.findIndex((line) => line.trim() === "***");
     if (separatorIdx !== -1) {
       text = lines.slice(separatorIdx + 1).join("\n").trim();
+      return { text, sessionId: extractAntigravityConversationId(logContent) };
     }
   }
+
+  // Fallback: Split on the "🧠 Memory Loaded:" boot signature
+  const memoryMarker = "🧠 Memory Loaded:";
+  const memoryIndex = text.indexOf(memoryMarker);
+  if (memoryIndex !== -1) {
+    const lineEndIndex = text.indexOf("\n", memoryIndex);
+    if (lineEndIndex !== -1) {
+      text = text.substring(lineEndIndex + 1).trim();
+    }
+  }
+
   return { text, sessionId: extractAntigravityConversationId(logContent) };
 }
 

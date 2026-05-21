@@ -349,6 +349,31 @@ describe("agent bridge MVP", () => {
     });
   });
 
+  it("parses antigravity output and strips thinking steps/HUD using the 🧠 Memory Loaded: separator", () => {
+    const stdout = [
+      "I am going to check the application directory to see if `.AGENTS.md` exists to follow the boot sequence protocol.",
+      "I will list the available permissions to find out which directories we can access.",
+      "I will list the contents of the allowed scratch directory to look for `.AGENTS.md`.",
+      "I will read `.AGENTS.md` to load long-term memory as required by PROTOCOL ZERO.",
+      "📊 I. SYSTEM HUD",
+      "STATE: 🟢 (IDLE)",
+      "CONTEXT: Chat",
+      "GATES: [Lint: ✅] | [Types: ✅] | [Security: ✅]",
+      "",
+      "🧠 Memory Loaded: 0 relevant constraints found.",
+      "",
+      "Hello.",
+    ].join("\n");
+    expect(
+      parseCliResult({
+        bot: "antigravity",
+        stdout,
+      }),
+    ).toEqual({
+      text: "Hello.",
+      sessionId: null,
+    });
+  });
 
   it("extracts antigravity conversation IDs from canonical Agy log lines", () => {
     expect(extractAntigravityConversationId("Created conversation 860cd239-3028-4ab6-9590-300532a72cca")).toBe("860cd239-3028-4ab6-9590-300532a72cca");

@@ -16,6 +16,7 @@ Polls a Telegram bot for messages, routes them to the Codex, Antigravity, or Cla
 - **Model fallback** — automatically retries with a smaller model on capacity exhaustion (all bots)
 - **Concurrency lock** — one execution per chat at a time (SQLite atomic lock, no race conditions)
 - **Shared memory CLI** — local `agent-memory` commands store and recall durable project facts in SQLite
+- **Shared skills installer** — optional SDLC skills can be installed across Codex, Antigravity, and Claude Code
 - **Rate limit handling** — automatic retry on Telegram 429 responses
 
 ## Requirements
@@ -149,6 +150,65 @@ This writes a shell wrapper to `~/.local/bin/agent-memory` and updates:
 The instructions tell each agent when to call `agent-memory recall`, `add`, `list`, `search`, `update`, and `delete`.
 
 The bridge runtime database remains separate from the shared memory database.
+
+## Shared skills
+
+`agent-bridge` also bundles reusable SDLC skills:
+
+- `requirements-to-acceptance` — turn vague requests into requirements, non-goals, acceptance criteria, and verification steps
+- `risk-based-test-strategy` — choose test depth based on blast radius and regression risk
+- `red-green-refactor-tdd` — use red-green-refactor TDD for features, bug fixes, behavior changes, and refactoring
+- `release-readiness-review` — check release, rollback, observability, docs, and post-release validation readiness
+
+Skills are stored once under:
+
+```bash
+~/.agents/skills/<skill-name>
+```
+
+Then they are projected into each CLI's native skills directory:
+
+```bash
+~/.codex/skills/<skill-name>
+~/.gemini/antigravity/skills/<skill-name>
+~/.claude/skills/<skill-name>
+```
+
+Global instruction files are not modified by the skills installer.
+
+Manage skills manually:
+
+```bash
+npm run skills -- list
+npm run skills -- install red-green-refactor-tdd
+npm run skills -- verify
+npm run skills -- uninstall red-green-refactor-tdd
+```
+
+Native CLI entries are symlinks by default. Use copy mode if a CLI does not discover symlinked skills correctly:
+
+```bash
+npm run skills -- install red-green-refactor-tdd --force --link-mode copy
+```
+
+During installation, set a comma-separated list for non-interactive setup:
+
+```bash
+AGENT_BRIDGE_SKILLS=red-green-refactor-tdd,risk-based-test-strategy sudo bash scripts/install.sh
+```
+
+Optional install variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `AGENT_BRIDGE_SKILLS` | — | Comma-separated bundled skills to install during `install.sh` or `install-deployment.sh`. |
+| `AGENT_BRIDGE_SKILL_LINK_MODE` | `symlink` | Native CLI projection mode: `symlink` or `copy`. |
+
+If verification reports stale symlinks or missing native entries, repair them with:
+
+```bash
+npm run skills -- verify --fix
+```
 
 ## Systemd deployment
 

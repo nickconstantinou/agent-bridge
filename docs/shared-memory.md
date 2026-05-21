@@ -41,3 +41,12 @@ cp ~/.agent-bridge/shared-memory/agent-memory.sqlite /backup/
 - Store durable project facts, bug fixes, decisions, and conventions.
 - Do not store secrets or transient chat noise.
 - MCP is optional, but not required for memory.
+
+## Shared skills are separate
+
+Shared skills use a different mechanism from shared memory.
+
+- Shared memory setup updates agent memory instruction blocks.
+- Shared skills do not update global instruction files.
+- Shared skills are discovered through native CLI skill directories such as `~/.codex/skills`, `~/.gemini/antigravity/skills`, and `~/.claude/skills`.
+- Installed skills are tracked in `~/.agents/.skill-lock.json` and stored under `~/.agents/skills`.

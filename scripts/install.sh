@@ -16,6 +16,7 @@ agent-bridge install
 - BRIDGE_ENV_FILE must point at the bot-specific env file
 - CODEX_PROJECT_DIR / ANTIGRAVITY_PROJECT_DIR / CLAUDE_PROJECT_DIR override the CLI cwd per bot
 - shared local memory is configured automatically for codex, antigravity, and claude
+- bundled shared skills may be installed into native CLI skill directories when selected
 EOF
 
 require_node() {
@@ -60,6 +61,7 @@ seed_from_env_file() {
               TELEGRAM_BOT_TOKEN_CODEX TELEGRAM_BOT_TOKEN_ANTIGRAVITY TELEGRAM_BOT_TOKEN_CLAUDE \
               CODEX_COMMAND ANTIGRAVITY_COMMAND CLAUDE_COMMAND \
               CODEX_PROJECT_DIR ANTIGRAVITY_PROJECT_DIR CLAUDE_PROJECT_DIR \
+              AGENT_BRIDGE_SKILLS AGENT_BRIDGE_SKILL_LINK_MODE \
               BRIDGE_EXECUTION_MODE POLL_INTERVAL_MS AGENT_MEMORY_DB_PATH; do
     value="$(env_file_get "${file}" "${key}")"
     if [[ -n "${value}" && -z "${!key:-}" ]]; then
@@ -136,6 +138,8 @@ prompt CLAUDE_COMMAND      "Claude command"      "$(command -v claude 2>/dev/nul
 prompt CODEX_PROJECT_DIR       "Codex working directory (blank = BRIDGE_PROJECT_DIR)"       ""
 prompt ANTIGRAVITY_PROJECT_DIR "Antigravity working directory (blank = BRIDGE_PROJECT_DIR)" ""
 prompt CLAUDE_PROJECT_DIR      "Claude working directory (blank = BRIDGE_PROJECT_DIR)"      ""
+prompt AGENT_BRIDGE_SKILLS "Bundled skills to install (comma-separated, blank = skip)" ""
+prompt AGENT_BRIDGE_SKILL_LINK_MODE "Shared skill link mode (symlink|copy)" "symlink"
 prompt BRIDGE_EXECUTION_MODE "Execution mode (safe|trusted)" "trusted"
 prompt POLL_INTERVAL_MS      "Poll interval ms"               "1000"
 prompt AGENT_MEMORY_DB_PATH  "Agent memory DB path (blank = default)" ""
@@ -146,6 +150,31 @@ ensure_var TELEGRAM_ALLOWED_USER_IDS "Telegram allowed user IDs"
 ensure_var TELEGRAM_BOT_TOKEN_CODEX        "Codex bot token"
 ensure_var TELEGRAM_BOT_TOKEN_ANTIGRAVITY  "Antigravity bot token"
 ensure_var BRIDGE_EXECUTION_MODE     "Execution mode"
+
+install_shared_skills() {
+  local skills_csv="${AGENT_BRIDGE_SKILLS:-}"
+  local link_mode="${AGENT_BRIDGE_SKILL_LINK_MODE:-symlink}"
+  if [[ -z "${skills_csv}" ]]; then
+    return
+  fi
+  if [[ "${link_mode}" != "symlink" && "${link_mode}" != "copy" ]]; then
+    echo "Invalid AGENT_BRIDGE_SKILL_LINK_MODE: ${link_mode}" >&2
+    exit 1
+  fi
+
+  IFS=',' read -r -a skills <<< "${skills_csv}"
+  for skill in "${skills[@]}"; do
+    skill="$(echo "${skill}" | xargs)"
+    [[ -n "${skill}" ]] || continue
+    echo "Installing shared skill: ${skill} (${link_mode})"
+    if [[ "${USER}" == "${TARGET_USER}" ]]; then
+      (cd "${REPO_DIR}" && SHARED_MEMORY_HOME="${TARGET_HOME}" ./node_modules/.bin/tsx scripts/skill-manager.ts install "${skill}" --force --link-mode "${link_mode}")
+    else
+      sudo -u "${TARGET_USER}" env HOME="${TARGET_HOME}" SHARED_MEMORY_HOME="${TARGET_HOME}" \
+        bash -c 'cd "$1" && ./node_modules/.bin/tsx scripts/skill-manager.ts install "$2" --force --link-mode "$3"' bash "${REPO_DIR}" "${skill}" "${link_mode}"
+    fi
+  done
+}
 
 mkdir -p "${DEFAULTS_DIR}"
 
@@ -193,7 +222,10 @@ if [[ "${1:-}" != "--skip-cli-install" ]]; then
       sudo -u "${TARGET_USER}" env HOME="${TARGET_HOME}" SHARED_MEMORY_HOME="${TARGET_HOME}" \
         bash -lc "cd \"${REPO_DIR}\" && ./node_modules/.bin/tsx scripts/setup-shared-memory.ts"
     fi
+    install_shared_skills
   fi
+elif [[ -n "${AGENT_BRIDGE_SKILLS:-}" ]]; then
+  install_shared_skills
 fi
 
 ensure_var CODEX_COMMAND       "Codex command"
@@ -254,3 +286,6 @@ sudo systemctl enable --now ${UNITS_TO_ENABLE}
 echo "Installed and started: ${UNITS_TO_ENABLE}"
 echo "Defaults written to ${DEFAULTS_DIR}/"
 echo "Shared local memory configured for codex, antigravity, and claude"
+if [[ -n "${AGENT_BRIDGE_SKILLS:-}" ]]; then
+  echo "Shared skills installed: ${AGENT_BRIDGE_SKILLS}"
+fi

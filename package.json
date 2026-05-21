@@ -9,6 +9,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "agent-memory": "tsx scripts/agent-memory.ts",
+    "skills": "tsx scripts/skill-manager.ts",
     "setup:shared-memory": "tsx scripts/setup-shared-memory.ts",
     "verify:shared-memory": "tsx scripts/setup-shared-memory.ts --verify"
   },

@@ -76,4 +76,17 @@ describe("Idle Timeout Config", () => {
     expect(installScript).toContain('SHARED_MEMORY_HOME="${TARGET_HOME}"');
     expect(installScript).toContain('sudo -u "${TARGET_USER}"');
   });
+
+  it("install scripts support non-interactive shared skill installation for the target home", async () => {
+    const fs = await import("fs");
+    const installScript = fs.readFileSync("scripts/install.sh", "utf-8");
+    const deploymentScript = fs.readFileSync("scripts/install-deployment.sh", "utf-8");
+
+    for (const script of [installScript, deploymentScript]) {
+      expect(script).toContain("AGENT_BRIDGE_SKILLS");
+      expect(script).toContain("AGENT_BRIDGE_SKILL_LINK_MODE");
+      expect(script).toContain("scripts/skill-manager.ts install");
+      expect(script).toContain('SHARED_MEMORY_HOME="${TARGET_HOME}"');
+    }
+  });
 });

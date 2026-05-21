@@ -1,0 +1,5 @@
+{
+  "name": "red-green-refactor-tdd",
+  "version": "1.0.0",
+  "description": "Makes red-green-refactor TDD the default workflow for features, bug fixes, behavior changes, and refactoring"
+}

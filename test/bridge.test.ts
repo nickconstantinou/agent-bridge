@@ -71,7 +71,7 @@ describe("agent bridge MVP", () => {
     });
     expect(command).toBe("codex");
     expect(args[0]).toBe("exec");
-    expect(args).toContain("hello");
+    expect(args.at(-1)).toContain("hello");
     expect(args).toContain("--skip-git-repo-check");
     expect(args).not.toContain("--thread");
     expect(args).not.toContain("--output");
@@ -123,7 +123,7 @@ describe("agent bridge MVP", () => {
     expect(args[0]).toBe("exec");
     expect(args[1]).toBe("resume");
     expect(args).toContain("019e1299-3d2c-7f11-8194-500feee6614e");
-    expect(args).toContain("hello again");
+    expect(args.at(-1)).toContain("hello again");
     expect(args).not.toContain("--thread");
   });
 
@@ -138,6 +138,22 @@ describe("agent bridge MVP", () => {
     });
     expect(args).toContain("--json");
     expect(args).not.toContain("--output");
+  });
+
+  it("wraps codex prompts with Telegram response style instructions", () => {
+    const { args } = buildCliInvocation({
+      bot: "codex",
+      prompt: "hello",
+      sessionId: null,
+      command: "codex",
+      model: null,
+    });
+
+    const printedPrompt = String(args.at(-1));
+    expect(printedPrompt).toContain("hello");
+    expect(printedPrompt).toContain("Telegram response style");
+    expect(printedPrompt).toContain("Use fenced code blocks");
+    expect(printedPrompt).toContain("Avoid tables");
   });
 
   it("creates fresh antigravity invocation with --print prompt after all flags", () => {
@@ -208,8 +224,24 @@ describe("agent bridge MVP", () => {
     });
     expect(command).toBe("claude");
     expect(args).toContain("--print");
-    expect(args[args.length - 1]).toBe("hello");
+    expect(args.at(-1)).toContain("hello");
     expect(args).not.toContain("--resume");
+  });
+
+  it("wraps claude prompts with Telegram response style instructions", () => {
+    const { args } = buildCliInvocation({
+      bot: "claude",
+      prompt: "hello",
+      sessionId: null,
+      command: "claude",
+      model: null,
+    });
+
+    const printedPrompt = String(args.at(-1));
+    expect(printedPrompt).toContain("hello");
+    expect(printedPrompt).toContain("Telegram response style");
+    expect(printedPrompt).toContain("Use fenced code blocks");
+    expect(printedPrompt).toContain("Avoid tables");
   });
 
   it("creates resume claude invocation with --resume flag", () => {

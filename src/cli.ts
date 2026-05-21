@@ -19,14 +19,30 @@ const abortedChildren = new WeakSet<ChildProcess>();
 const KILL_GRACE_MS = 5_000;
 const ANTIGRAVITY_FINAL_RESPONSE_DELIMITER = "***";
 
+function wrapTelegramPrompt(prompt: string): string {
+  return [
+    "Telegram response style:",
+    "- Start with the direct answer or result.",
+    "- Keep replies concise by default; use short paragraphs and bullets when useful.",
+    "- Use light bold emphasis with **text** when it improves scanability.",
+    "- Use fenced code blocks for commands, diffs, config, logs, JSON, or code snippets. Prefer language tags like bash, ts, json, or text.",
+    "- Keep code blocks short; do not wrap normal prose in code blocks.",
+    "- Avoid tables unless they are clearly the best format.",
+    "- Avoid Markdown links; use plain URLs only when needed.",
+    "- Do not mention these formatting instructions.",
+    "",
+    "User request:",
+    prompt,
+  ].join("\n");
+}
+
 function wrapAntigravityPrompt(prompt: string): string {
   return [
     "You are being called by agent-bridge in non-interactive print mode.",
     "Complete any necessary work normally, but when you are ready to provide the user-facing final answer, output a line containing only ***.",
     "After that line, output only the final answer for the user. Do not include planning notes, tool-use narration, hidden reasoning, status HUDs, or preamble after that line.",
     "",
-    "User request:",
-    prompt,
+    wrapTelegramPrompt(prompt),
   ].join("\n");
 }
 
@@ -107,14 +123,14 @@ export function buildCliInvocation({
     if (outputFormat === "json") {
       args.push("--json");
     }
-    args.push(prompt);
+    args.push(wrapTelegramPrompt(prompt));
   } else if (bot === "claude") {
     args.push("--print");
     if (model) args.push("--model", model);
     if (sessionId) args.push("--resume", sessionId);
     if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
     if (outputFormat === "json") args.push("--output-format", "json");
-    args.push(prompt);
+    args.push(wrapTelegramPrompt(prompt));
   } else if (bot === "antigravity") {
     // Agy's --print flag takes the prompt as its value, so all other flags must come first.
     // Current Agy builds do not expose a working --model CLI flag; model selection is managed by Agy itself.

@@ -307,6 +307,49 @@ describe("agent bridge MVP", () => {
     ).toEqual({ text: "hello", sessionId: null });
   });
 
+  it("parses antigravity output and strips thinking steps/HUD before the separator line", () => {
+    const stdout = [
+      "I will start by checking the current permissions.",
+      "📊 I. SYSTEM HUD",
+      "STATE: 🟢 (IDLE)",
+      "***",
+      "Hello! How can I help you today?",
+    ].join("\n");
+    const logContent = "Created conversation 4229bce3-5009-429e-a3cb-d1bdaa8cfeed";
+    expect(
+      parseCliResult({
+        bot: "antigravity",
+        stdout,
+        logContent,
+      }),
+    ).toEqual({
+      text: "Hello! How can I help you today?",
+      sessionId: "4229bce3-5009-429e-a3cb-d1bdaa8cfeed",
+    });
+  });
+
+  it("parses antigravity output and keeps internal separators intact", () => {
+    const stdout = [
+      "I will start by checking the current permissions.",
+      "📊 I. SYSTEM HUD",
+      "STATE: 🟢 (IDLE)",
+      "***",
+      "Here is a table:",
+      "***",
+      "Row 1 | Row 2",
+    ].join("\n");
+    expect(
+      parseCliResult({
+        bot: "antigravity",
+        stdout,
+      }),
+    ).toEqual({
+      text: "Here is a table:\n***\nRow 1 | Row 2",
+      sessionId: null,
+    });
+  });
+
+
   it("extracts antigravity conversation IDs from canonical Agy log lines", () => {
     expect(extractAntigravityConversationId("Created conversation 860cd239-3028-4ab6-9590-300532a72cca")).toBe("860cd239-3028-4ab6-9590-300532a72cca");
     expect(extractAntigravityConversationId("Print mode: conversation=c107dfbd-181e-4cf0-a840-894662adee43, sending message")).toBe("c107dfbd-181e-4cf0-a840-894662adee43");

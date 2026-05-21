@@ -292,7 +292,16 @@ export function resolveAntigravityConversationId({
 }
 
 function parseAntigravityResult(stdout: string, logContent?: string | null): CliResult {
-  return { text: stdout.trim(), sessionId: extractAntigravityConversationId(logContent) };
+  let text = stdout.trim();
+  const markerIndex = text.indexOf("***");
+  if (markerIndex !== -1) {
+    const lines = text.split(/\r?\n/);
+    const separatorIdx = lines.findIndex((line) => line.trim() === "***");
+    if (separatorIdx !== -1) {
+      text = lines.slice(separatorIdx + 1).join("\n").trim();
+    }
+  }
+  return { text, sessionId: extractAntigravityConversationId(logContent) };
 }
 
 export function toUserMessage(err: Error): string {

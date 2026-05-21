@@ -151,8 +151,24 @@ describe("agent bridge MVP", () => {
     });
     expect(command).toBe("antigravity");
     expect(args).not.toContain("--model");
-    expect(args.slice(-2)).toEqual(["--print", "hello"]);
+    expect(args.at(-2)).toBe("--print");
+    expect(String(args.at(-1))).toContain("hello");
     expect(args.indexOf("--dangerously-skip-permissions")).toBeLessThan(args.indexOf("--print"));
+  });
+
+  it("wraps antigravity prompts with a final-response delimiter instruction", () => {
+    const { args } = buildCliInvocation({
+      bot: "antigravity",
+      prompt: "hello",
+      sessionId: null,
+      command: "antigravity",
+      model: null,
+    });
+
+    const printedPrompt = String(args.at(-1));
+    expect(printedPrompt).toContain("hello");
+    expect(printedPrompt).toContain("line containing only ***");
+    expect(printedPrompt).toContain("after that line");
   });
 
   it("antigravity session invocation uses --conversation to continue an existing session", () => {
@@ -166,7 +182,8 @@ describe("agent bridge MVP", () => {
     expect(args).toContain("--conversation");
     expect(args[args.indexOf("--conversation") + 1]).toBe("4229bce3-5009-429e-a3cb-d1bdaa8cfeed");
     expect(args.indexOf("--conversation")).toBeLessThan(args.indexOf("--print"));
-    expect(args.slice(-2)).toEqual(["--print", "hello"]);
+    expect(args.at(-2)).toBe("--print");
+    expect(String(args.at(-1))).toContain("hello");
   });
 
   it("antigravity trusted execution mode adds --dangerously-skip-permissions", () => {
@@ -601,4 +618,3 @@ describe("model selection confirmation", () => {
     expect(src).toMatch(/sendText[\s\S]{0,100}Model set to/s);
   });
 });
-

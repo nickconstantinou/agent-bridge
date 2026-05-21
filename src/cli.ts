@@ -17,6 +17,18 @@ const activeProcesses = new Map<number | string, ChildProcess>();
 const abortedChildren = new WeakSet<ChildProcess>();
 
 const KILL_GRACE_MS = 5_000;
+const ANTIGRAVITY_FINAL_RESPONSE_DELIMITER = "***";
+
+function wrapAntigravityPrompt(prompt: string): string {
+  return [
+    "You are being called by agent-bridge in non-interactive print mode.",
+    "Complete any necessary work normally, but when you are ready to provide the user-facing final answer, output a line containing only ***.",
+    "After that line, output only the final answer for the user. Do not include planning notes, tool-use narration, hidden reasoning, status HUDs, or preamble after that line.",
+    "",
+    "User request:",
+    prompt,
+  ].join("\n");
+}
 
 function killWithGrace(child: ChildProcess, graceMs: number = KILL_GRACE_MS): void {
   try { child.kill("SIGTERM"); } catch { /* ignore */ }
@@ -109,7 +121,7 @@ export function buildCliInvocation({
     if (sessionId) args.push("--conversation", sessionId);
     if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
     if (logFile) args.push("--log-file", logFile);
-    args.push("--print", prompt);
+    args.push("--print", wrapAntigravityPrompt(prompt));
   }
 
   return { command, args };
@@ -293,10 +305,10 @@ export function resolveAntigravityConversationId({
 
 function parseAntigravityResult(stdout: string, logContent?: string | null): CliResult {
   let text = stdout.trim();
-  const markerIndex = text.indexOf("***");
+  const markerIndex = text.indexOf(ANTIGRAVITY_FINAL_RESPONSE_DELIMITER);
   if (markerIndex !== -1) {
     const lines = text.split(/\r?\n/);
-    const separatorIdx = lines.findIndex((line) => line.trim() === "***");
+    const separatorIdx = lines.findIndex((line) => line.trim() === ANTIGRAVITY_FINAL_RESPONSE_DELIMITER);
     if (separatorIdx !== -1) {
       text = lines.slice(separatorIdx + 1).join("\n").trim();
       return { text, sessionId: extractAntigravityConversationId(logContent) };

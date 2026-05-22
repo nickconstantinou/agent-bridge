@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { escapeTelegramMarkdownV2 } from "../src/render.js";
+import { escapeTelegramMarkdownV2, toTelegramEntitiesText } from "../src/render.js";
 
 describe("escapeTelegramMarkdownV2", () => {
   it("escapes reserved characters in plain text", () => {
@@ -32,5 +32,19 @@ describe("escapeTelegramMarkdownV2", () => {
 
     // Multiple orphaned
     expect(escapeTelegramMarkdownV2("*bold* and _italic and *bold")).toBe("*bold* and \\_italic and \\*bold");
+  });
+});
+
+describe("toTelegramEntitiesText", () => {
+  it("uses Telegram pre language metadata instead of showing the fence language", () => {
+    const result = toTelegramEntitiesText("```ts\nconst x = 1;\n```");
+    expect(result.text).toBe("const x = 1;\n");
+    expect(result.entities).toEqual([{ type: "pre", offset: 0, length: 13, language: "ts" }]);
+  });
+
+  it("renders unlabeled fenced code blocks without language metadata", () => {
+    const result = toTelegramEntitiesText("```\nconst x = 1;\n```");
+    expect(result.text).toBe("const x = 1;\n");
+    expect(result.entities).toEqual([{ type: "pre", offset: 0, length: 13 }]);
   });
 });

@@ -133,9 +133,15 @@ export function toTelegramEntitiesText(text: string): { text: string; entities: 
         const end = value.indexOf("```", i + 3);
         if (end > i + 3) {
           const start = output.join("").length;
-          const inner = value.slice(i + 3, end).replace(/^\n/, "");
+          let inner = value.slice(i + 3, end).replace(/^\n/, "");
+          let language: string | undefined;
+          const languageMatch = inner.match(/^([A-Za-z0-9_+.-]{1,32})\n/);
+          if (languageMatch) {
+            language = languageMatch[1];
+            inner = inner.slice(languageMatch[0].length);
+          }
           output.push(inner);
-          entities.push({ type: "pre", offset: start, length: inner.length });
+          entities.push(language ? { type: "pre", offset: start, length: inner.length, language } : { type: "pre", offset: start, length: inner.length });
           i = end + 3;
           continue;
         }

@@ -202,8 +202,8 @@ describe("sendTelegramMessage rendering", () => {
 
     expect(client.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
       chat_id: 123,
-      text: "text\nhello\n",
-      entities: [{ type: "pre", offset: 0, length: 11 }],
+      text: "hello\n",
+      entities: [{ type: "pre", offset: 0, length: 6, language: "text" }],
     }));
     expect(client.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ parse_mode: "MarkdownV2" }));
   });

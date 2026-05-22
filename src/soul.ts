@@ -14,7 +14,7 @@ export type SoulMode = "summary" | "full" | "off";
 
 const DEFAULT_SUMMARY_MAX_CHARS = 4_000;
 const DEFAULT_FULL_MAX_CHARS = 12_000;
-const SECTION_MAX_CHARS = 320;
+const MIN_SECTION_MAX_CHARS = 320;
 
 const SECTION_ORDER = [
   "Identity",
@@ -67,12 +67,17 @@ export function renderSoulContract(context: string | null): string | null {
 function renderSummary(markdown: string): string {
   const sections = parseSections(markdown);
   const lines: string[] = [];
+  const presentSections = SECTION_ORDER.filter((name) => sections.has(name));
+  const sectionMaxChars = Math.max(
+    MIN_SECTION_MAX_CHARS,
+    Math.floor((DEFAULT_SUMMARY_MAX_CHARS - 400) / Math.max(1, presentSections.length)),
+  );
 
   for (const name of SECTION_ORDER) {
     const content = sections.get(name);
     if (!content) continue;
     lines.push(`## ${name}`);
-    lines.push(capText(content, SECTION_MAX_CHARS));
+    lines.push(capText(content, sectionMaxChars));
     lines.push("");
   }
 

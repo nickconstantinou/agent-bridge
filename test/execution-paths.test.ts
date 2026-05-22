@@ -55,17 +55,23 @@ describe("Execution Path Selection - TDD", () => {
 describe("Idle Timeout Config", () => {
   it("buildExecutionOptions returns per-kind timeouts (antigravity idle default 240s)", async () => {
     const { buildExecutionOptions } = await import("../src/cli.js");
-    const savedAntigravity = process.env.ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS;
-    const savedGlobal = process.env.CLI_IDLE_TIMEOUT_MS;
+    const savedAntigravityIdle = process.env.ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS;
+    const savedGlobalIdle = process.env.CLI_IDLE_TIMEOUT_MS;
+    const savedAntigravityHard = process.env.ANTIGRAVITY_CLI_TIMEOUT_MS;
+    const savedGlobalHard = process.env.CLI_TIMEOUT_MS;
     delete process.env.ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS;
     delete process.env.CLI_IDLE_TIMEOUT_MS;
+    delete process.env.ANTIGRAVITY_CLI_TIMEOUT_MS;
+    delete process.env.CLI_TIMEOUT_MS;
     try {
       const opts = buildExecutionOptions("antigravity");
       expect(opts.idleTimeoutMs).toBe(240_000);
       expect(opts.timeoutMs).toBe(600_000);
     } finally {
-      if (savedAntigravity !== undefined) process.env.ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS = savedAntigravity;
-      if (savedGlobal !== undefined) process.env.CLI_IDLE_TIMEOUT_MS = savedGlobal;
+      if (savedAntigravityIdle !== undefined) process.env.ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS = savedAntigravityIdle;
+      if (savedGlobalIdle !== undefined) process.env.CLI_IDLE_TIMEOUT_MS = savedGlobalIdle;
+      if (savedAntigravityHard !== undefined) process.env.ANTIGRAVITY_CLI_TIMEOUT_MS = savedAntigravityHard;
+      if (savedGlobalHard !== undefined) process.env.CLI_TIMEOUT_MS = savedGlobalHard;
     }
   });
 

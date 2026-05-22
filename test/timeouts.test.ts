@@ -97,7 +97,12 @@ describe("resolveTimeoutsForKind — env precedence", () => {
 
 describe("buildExecutionOptions", () => {
   it("returns per-kind timeouts from resolveTimeoutsForKind", () => {
-    setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
+    setEnv({
+      ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: undefined,
+      CLI_IDLE_TIMEOUT_MS: undefined,
+      ANTIGRAVITY_CLI_TIMEOUT_MS: undefined,
+      CLI_TIMEOUT_MS: undefined,
+    });
     const opts = buildExecutionOptions("antigravity");
     expect(opts.idleTimeoutMs).toBe(240_000);
     expect(opts.timeoutMs).toBe(600_000);

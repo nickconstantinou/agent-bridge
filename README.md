@@ -108,6 +108,8 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `FETCH_TIMEOUT_MS` | All | `45000` | Telegram API fetch timeout (ms) |
 | `POLL_INTERVAL_MS` | All | `1000` | Telegram long-poll interval (ms) |
 | `AGENT_MEMORY_DB_PATH` | All | `~/.agent-bridge/shared-memory/agent-memory.sqlite` | Path to shared agent memory database |
+| `AGENT_BRIDGE_SOUL_PATH` | All | `$BRIDGE_ROOT_DIR/.openclaw/workspace/SOUL.md` | Optional SOUL.md persona contract injected into each CLI prompt |
+| `AGENT_BRIDGE_SOUL_MODE` | All | `summary` | `summary`, `full`, or `off` persona injection mode |
 | `BRIDGE_ASYNC_ENABLED` | All | `true` | Enable streaming (disable for sync/plain mode) |
 | `BRIDGE_EXECUTION_MODE` | All | `safe` | `safe` or `trusted` (bypasses CLI approval prompts) |
 | `BRIDGE_PROJECT_DIR` | All | auto-detected | Repo path (used as default CLI working dir and DB location) |

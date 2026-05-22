@@ -12,12 +12,21 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CliOptions, CliResult, BotKind } from "./types.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
+import { renderSoulContract } from "./soul.js";
 
 const activeProcesses = new Map<number | string, ChildProcess>();
 const abortedChildren = new WeakSet<ChildProcess>();
 
 const KILL_GRACE_MS = 5_000;
 const ANTIGRAVITY_FINAL_RESPONSE_DELIMITER = "***";
+
+function wrapPromptContext(prompt: string, soulContext: string | null = null): string {
+  const soulContract = renderSoulContract(soulContext);
+  return [
+    ...(soulContract ? [soulContract, ""] : []),
+    wrapTelegramPrompt(prompt),
+  ].join("\n");
+}
 
 function wrapTelegramPrompt(prompt: string): string {
   return [
@@ -36,13 +45,13 @@ function wrapTelegramPrompt(prompt: string): string {
   ].join("\n");
 }
 
-function wrapAntigravityPrompt(prompt: string): string {
+function wrapAntigravityPrompt(prompt: string, soulContext: string | null = null): string {
   return [
     "You are being called by agent-bridge in non-interactive print mode.",
     "Complete any necessary work normally, but when you are ready to provide the user-facing final answer, output a line containing only ***.",
     "After that line, output only the final answer for the user. Do not include planning notes, tool-use narration, hidden reasoning, status HUDs, or preamble after that line.",
     "",
-    wrapTelegramPrompt(prompt),
+    wrapPromptContext(prompt, soulContext),
   ].join("\n");
 }
 
@@ -94,6 +103,7 @@ export function buildCliInvocation({
   executionMode = "safe",
   outputFormat = null,
   logFile = null,
+  soulContext = null,
 }: {
   bot: string;
   prompt: string;
@@ -104,6 +114,7 @@ export function buildCliInvocation({
   executionMode?: "safe" | "trusted";
   outputFormat?: "json" | null;
   logFile?: string | null;
+  soulContext?: string | null;
 }): { command: string; args: string[] } {
   const args = [];
 
@@ -123,21 +134,21 @@ export function buildCliInvocation({
     if (outputFormat === "json") {
       args.push("--json");
     }
-    args.push(wrapTelegramPrompt(prompt));
+    args.push(wrapPromptContext(prompt, soulContext));
   } else if (bot === "claude") {
     args.push("--print");
     if (model) args.push("--model", model);
     if (sessionId) args.push("--resume", sessionId);
     if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
     if (outputFormat === "json") args.push("--output-format", "json");
-    args.push(wrapTelegramPrompt(prompt));
+    args.push(wrapPromptContext(prompt, soulContext));
   } else if (bot === "antigravity") {
     // Agy's --print flag takes the prompt as its value, so all other flags must come first.
     // Current Agy builds do not expose a working --model CLI flag; model selection is managed by Agy itself.
     if (sessionId) args.push("--conversation", sessionId);
     if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
     if (logFile) args.push("--log-file", logFile);
-    args.push("--print", wrapAntigravityPrompt(prompt));
+    args.push("--print", wrapAntigravityPrompt(prompt, soulContext));
   }
 
   return { command, args };

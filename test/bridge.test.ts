@@ -158,6 +158,24 @@ describe("agent bridge MVP", () => {
     expect(printedPrompt).toContain("Avoid tables");
   });
 
+  it("includes SOUL.md context in wrapped prompts when provided", () => {
+    const { args } = buildCliInvocation({
+      bot: "codex",
+      prompt: "hello",
+      sessionId: null,
+      command: "codex",
+      model: null,
+      soulContext: "Identity: Chas\nValues: clarity before cleverness",
+    });
+
+    const printedPrompt = String(args.at(-1));
+    expect(printedPrompt).toContain("Soul contract:");
+    expect(printedPrompt).toContain("Identity: Chas");
+    expect(printedPrompt).toContain("Values: clarity before cleverness");
+    expect(printedPrompt).toContain("Telegram response style:");
+    expect(printedPrompt).toContain("User request:");
+  });
+
   it("creates fresh antigravity invocation with --print prompt after all flags", () => {
     const { command, args } = buildCliInvocation({
       bot: "antigravity",
@@ -187,6 +205,22 @@ describe("agent bridge MVP", () => {
     expect(printedPrompt).toContain("hello");
     expect(printedPrompt).toContain("line containing only ***");
     expect(printedPrompt).toContain("after that line");
+  });
+
+  it("keeps antigravity delimiter outside SOUL.md and Telegram style context", () => {
+    const { args } = buildCliInvocation({
+      bot: "antigravity",
+      prompt: "hello",
+      sessionId: null,
+      command: "antigravity",
+      model: null,
+      soulContext: "Identity: Chas",
+    });
+
+    const printedPrompt = String(args.at(-1));
+    expect(printedPrompt.indexOf("line containing only ***")).toBeLessThan(printedPrompt.indexOf("Soul contract:"));
+    expect(printedPrompt.indexOf("Soul contract:")).toBeLessThan(printedPrompt.indexOf("Telegram response style:"));
+    expect(printedPrompt.indexOf("Telegram response style:")).toBeLessThan(printedPrompt.indexOf("User request:"));
   });
 
   it("antigravity session invocation uses --conversation to continue an existing session", () => {

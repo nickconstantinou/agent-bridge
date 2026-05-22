@@ -40,6 +40,7 @@ import { TelegramClient, MediaGroupBuffer } from "./telegram.js";
 import { sendTelegramMessage, sendMessageWithProgress } from "./messageDelivery.js";
 import type { BridgeConfig, BotConfig, BotKind, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult } from "./types.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
+import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env",
@@ -97,6 +98,12 @@ const validation = validateBridgeConfig(config);
 if (!validation.ok) {
   throw new Error(`Invalid bridge config:\n- ${validation.errors.join("\n- ")}`);
 }
+
+const soulContext = loadSoulContext({
+  mode: normalizeSoulMode(process.env.AGENT_BRIDGE_SOUL_MODE),
+  path: process.env.AGENT_BRIDGE_SOUL_PATH || defaultSoulPath(process.env.BRIDGE_ROOT_DIR),
+});
+if (soulContext) console.log(`[bridge] loaded SOUL.md context (${soulContext.length} chars)`);
 
 const db = openDb(config.dbPath);
 
@@ -329,6 +336,7 @@ class BridgeBot {
       executionMode: config.executionMode,
       outputFormat: this.kind === "antigravity" ? undefined : "json",
       logFile,
+      soulContext,
     });
     try {
       const cliResult = await runCliAsync(invocation.command, invocation.args, cwd, {
@@ -375,6 +383,7 @@ class BridgeBot {
             executionMode: config.executionMode,
             outputFormat: this.kind === "antigravity" ? undefined : "json",
             logFile: fallbackLogFile,
+            soulContext,
           });
           try {
             const fallbackCwd = getCliWorkingDir(this.kind);
@@ -436,6 +445,7 @@ class BridgeBot {
       sessionMode: "resume",
       executionMode: config.executionMode,
       logFile,
+      soulContext,
     });
     const typingTracker = createTypingTracker(this.client, chatId, this.kind, { message_thread_id: threadId });
 
@@ -483,6 +493,7 @@ class BridgeBot {
             sessionMode: "resume",
             executionMode: config.executionMode,
             logFile: fallbackLogFile,
+            soulContext,
           });
           try {
             const fallbackCwd = getCliWorkingDir(this.kind);

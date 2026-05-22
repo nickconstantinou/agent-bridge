@@ -14,7 +14,7 @@ export type SoulMode = "summary" | "full" | "off";
 
 const DEFAULT_SUMMARY_MAX_CHARS = 4_000;
 const DEFAULT_FULL_MAX_CHARS = 12_000;
-const SECTION_MAX_CHARS = 480;
+const SECTION_MAX_CHARS = 320;
 
 const SECTION_ORDER = [
   "Identity",
@@ -99,7 +99,7 @@ function parseSections(markdown: string): Map<SoulSectionName, string> {
   };
 
   for (const line of lines) {
-    const match = line.match(/^#{2,6}\s+(.+?)\s*$/);
+    const match = line.match(/^##\s+(.+?)\s*$/);
     if (match) {
       flush();
       current = aliases.get(normalizeHeading(match[1])) ?? null;

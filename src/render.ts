@@ -1,5 +1,17 @@
+/**
+ * Convert common model-emitted pseudo-fences to Telegram-compatible Markdown fences.
+ * Codex sometimes emits code blocks wrapped with triple single quotes. Telegram does
+ * not render those as code, so normalize only line-start/line-end fence markers and
+ * leave ordinary apostrophes in prose untouched.
+ */
+export function normalizeTelegramCodeFences(text: string): string {
+  return String(text || "")
+    .replace(/^'''([A-Za-z0-9_-]*)\s*$/gm, (_match, language: string) => `\`\`\`${language || ""}`)
+    .replace(/^'''\s*$/gm, "```");
+}
+
 export function splitTelegramText(text: string, limit = 3500): string[] {
-  const value = String(text || "");
+  const value = normalizeTelegramCodeFences(text);
   if (value.length <= limit) return [value];
 
   const chunks: string[] = [];

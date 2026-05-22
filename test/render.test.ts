@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { escapeTelegramMarkdownV2 } from "../src/render.js";
+import { escapeTelegramMarkdownV2, normalizeTelegramCodeFences, splitTelegramText, toTelegramEntitiesText } from "../src/render.js";
 
 describe("escapeTelegramMarkdownV2", () => {
   it("escapes reserved characters in plain text", () => {
@@ -32,5 +32,28 @@ describe("escapeTelegramMarkdownV2", () => {
 
     // Multiple orphaned
     expect(escapeTelegramMarkdownV2("*bold* and _italic and *bold")).toBe("*bold* and \\_italic and \\*bold");
+  });
+});
+
+describe("normalizeTelegramCodeFences", () => {
+  it("converts standalone triple single-quote fences to triple backticks", () => {
+    const input = "Here is code:\n'''bash\necho hi\n'''";
+    expect(normalizeTelegramCodeFences(input)).toBe("Here is code:\n```bash\necho hi\n```");
+  });
+
+  it("does not rewrite apostrophes inside prose", () => {
+    const input = "That's Nick's bridge, and it isn't broken.";
+    expect(normalizeTelegramCodeFences(input)).toBe(input);
+  });
+
+  it("lets entity rendering treat normalized fences as pre blocks", () => {
+    const result = toTelegramEntitiesText(normalizeTelegramCodeFences("'''\nconst x = 1;\n'''"));
+    expect(result.text).toBe("const x = 1;\n");
+    expect(result.entities).toEqual([{ type: "pre", offset: 0, length: 13 }]);
+  });
+
+  it("lets chunk splitting see normalized code fences", () => {
+    const chunks = splitTelegramText(normalizeTelegramCodeFences("'''\nhello\n'''"), 20);
+    expect(chunks.join("\n")).toContain("```");
   });
 });

@@ -1,4 +1,4 @@
-import { splitTelegramText, escapeTelegramMarkdownV2, normalizeTelegramCodeFences, toTelegramEntitiesText } from "./render.js";
+import { splitTelegramText, escapeTelegramMarkdownV2, toTelegramEntitiesText } from "./render.js";
 import { toUserMessage } from "./cli.js";
 import type { TelegramClient } from "./telegram.js";
 import type { CliResult } from "./types.js";
@@ -51,8 +51,7 @@ export async function sendTelegramMessage({
   chatId: number;
   body: any;
 }): Promise<void> {
-  const normalizedText = normalizeTelegramCodeFences(String(body.text || ""));
-  const chunks = splitTelegramText(normalizedText);
+  const chunks = splitTelegramText(String(body.text || ""));
   const { text: _ignored, ...rest } = body;
   const isGeminiOrAntigravity = kind === "gemini" || kind === "antigravity";
 

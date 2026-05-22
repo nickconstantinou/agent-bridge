@@ -361,7 +361,27 @@ function parseAntigravityResult(stdout: string, logContent?: string | null): Cli
   return { text, sessionId: extractAntigravityConversationId(logContent) };
 }
 
+function extractUpstreamCliError(raw: string): string | null {
+  let turnFailed: string | null = null;
+  let genericError: string | null = null;
+  for (const line of raw.split(/\r?\n/)) {
+    const start = line.indexOf("{");
+    if (start === -1) continue;
+    try {
+      const obj = JSON.parse(line.slice(start));
+      if (obj?.type === "turn.failed" && typeof obj?.error?.message === "string") {
+        turnFailed = obj.error.message;
+      } else if (obj?.type === "error" && typeof obj?.message === "string") {
+        genericError = obj.message;
+      }
+    } catch { /* not JSON, skip */ }
+  }
+  return turnFailed ?? genericError;
+}
+
 export function toUserMessage(err: Error): string {
+  const upstream = extractUpstreamCliError(err.message);
+  if (upstream) return upstream.trim();
   return err.message.split(":")[0].trim();
 }
 

@@ -37,6 +37,7 @@ import {
   BridgeDb,
 } from "./bridge.js";
 import { TelegramClient, MediaGroupBuffer } from "./telegram.js";
+import { createPollErrorState, planPollError, notePollSuccess } from "./polling.js";
 import { sendTelegramMessage, sendMessageWithProgress } from "./messageDelivery.js";
 import type { BridgeConfig, BotConfig, BotKind, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult } from "./types.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
@@ -143,6 +144,9 @@ class BridgeBot {
     let offset = db.getLastUpdateId(this.kind) + 1;
     console.log(`[${this.kind}] bot online (offset: ${offset})`);
 
+    const pollErrState = createPollErrorState();
+    const defaultErrorSleepMs = Math.max(config.pollIntervalMs, 5000);
+
     for (;;) {
       try {
         const updates = await this.client.getUpdates({
@@ -150,6 +154,10 @@ class BridgeBot {
           timeout: 30,
           allowed_updates: ["message", "callback_query"],
         });
+
+        if (notePollSuccess(pollErrState)) {
+          console.log(`[${this.kind}] polling recovered`);
+        }
 
         for (const update of (updates.result as any) ?? []) {
           const updateId: number = update.update_id;
@@ -163,8 +171,13 @@ class BridgeBot {
         }
 
       } catch (error) {
-        console.error(`[${this.kind}] polling failed`, error);
-        await sleep(Math.max(config.pollIntervalMs, 5000));
+        const plan = planPollError(error, pollErrState, defaultErrorSleepMs);
+        if (plan.logKind === "warn-once") {
+          console.warn(`[${this.kind}] ${plan.message}`);
+        } else if (plan.logKind === "error-stack") {
+          console.error(`[${this.kind}] ${plan.message}`, error);
+        }
+        await sleep(plan.sleepMs);
       }
     }
   }

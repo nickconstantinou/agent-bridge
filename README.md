@@ -51,7 +51,7 @@ npm run setup:shared-memory
 Then fill in the relevant token(s) and paths in each file:
 - `TELEGRAM_BOT_TOKEN_*` — bot token from @BotFather
 - `TELEGRAM_ALLOWED_USER_IDS` — your Telegram numeric user ID
-- `BRIDGE_ROOT_DIR` / `BRIDGE_PROJECT_DIR` — absolute paths for this machine
+- `BRIDGE_ROOT_DIR` / `BRIDGE_PROJECT_DIR` — deployment paths supplied by environment or installer
 - `*_COMMAND` — absolute path to each CLI binary (use `which codex`, `which agy`, `which claude`)
 - `*_PROJECT_DIR` — working directory passed to the CLI (optional; defaults to `BRIDGE_PROJECT_DIR`)
 - Shared memory instructions are written to `~/AGENTS.md`, `~/ANTIGRAVITY.md`, and `~/CLAUDE.md`
@@ -108,11 +108,11 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `FETCH_TIMEOUT_MS` | All | `45000` | Telegram API fetch timeout (ms) |
 | `POLL_INTERVAL_MS` | All | `1000` | Telegram long-poll interval (ms) |
 | `AGENT_MEMORY_DB_PATH` | All | `~/.agent-bridge/shared-memory/agent-memory.sqlite` | Path to shared agent memory database |
-| `AGENT_BRIDGE_SOUL_PATH` | All | `$BRIDGE_ROOT_DIR/.openclaw/workspace/SOUL.md` | Optional SOUL.md persona contract injected into each CLI prompt |
+| `AGENT_BRIDGE_SOUL_PATH` | All | `$BRIDGE_PROJECT_DIR/SOUL.md` | Optional SOUL.md persona contract injected into each CLI prompt |
 | `AGENT_BRIDGE_SOUL_MODE` | All | `summary` | `summary`, `full`, or `off` persona injection mode |
 | `BRIDGE_ASYNC_ENABLED` | All | `true` | Enable streaming (disable for sync/plain mode) |
 | `BRIDGE_EXECUTION_MODE` | All | `safe` | `safe` or `trusted` (bypasses CLI approval prompts) |
-| `BRIDGE_PROJECT_DIR` | All | auto-detected | Repo path (used as default CLI working dir and DB location) |
+| `BRIDGE_PROJECT_DIR` | All | current working directory | Repo path (used as default CLI working dir and DB location) |
 | `BRIDGE_ROOT_DIR` | All | `$HOME` | Fallback working dir when no `*_PROJECT_DIR` is set |
 
 ## Group and multi-user usage

@@ -101,6 +101,15 @@ describe("agent bridge MVP", () => {
     if (prevClaudeProjectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = prevClaudeProjectDir;
   });
 
+  it("defaults the bridge project dir to the current working directory", () => {
+    const prevBridgeProjectDir = process.env.BRIDGE_PROJECT_DIR;
+    delete process.env.BRIDGE_PROJECT_DIR;
+
+    expect(getBridgeProjectDir()).toBe(process.cwd());
+
+    if (prevBridgeProjectDir === undefined) delete process.env.BRIDGE_PROJECT_DIR; else process.env.BRIDGE_PROJECT_DIR = prevBridgeProjectDir;
+  });
+
   it("creates trusted codex invocation only when explicitly requested", () => {
     expect(
       buildCliInvocation({

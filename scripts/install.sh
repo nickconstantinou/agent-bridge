@@ -63,7 +63,8 @@ seed_from_env_file() {
               CODEX_COMMAND ANTIGRAVITY_COMMAND CLAUDE_COMMAND \
               CODEX_PROJECT_DIR ANTIGRAVITY_PROJECT_DIR CLAUDE_PROJECT_DIR \
               AGENT_BRIDGE_SKILLS AGENT_BRIDGE_SKILL_LINK_MODE \
-              BRIDGE_EXECUTION_MODE POLL_INTERVAL_MS AGENT_MEMORY_DB_PATH; do
+              BRIDGE_EXECUTION_MODE POLL_INTERVAL_MS AGENT_MEMORY_DB_PATH \
+              AGENT_BRIDGE_SOUL_PATH AGENT_BRIDGE_SOUL_MODE; do
     value="$(env_file_get "${file}" "${key}")"
     if [[ -n "${value}" && -z "${!key:-}" ]]; then
       export "${key}=${value}"
@@ -263,6 +264,8 @@ _write_systemd_defaults() {
     echo "BRIDGE_ASYNC_ENABLED=true"
     echo "POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-1000}"
     [[ -n "${AGENT_MEMORY_DB_PATH:-}" ]] && echo "AGENT_MEMORY_DB_PATH=${AGENT_MEMORY_DB_PATH}"
+    [[ -n "${AGENT_BRIDGE_SOUL_PATH:-}" ]] && echo "AGENT_BRIDGE_SOUL_PATH=${AGENT_BRIDGE_SOUL_PATH}"
+    [[ -n "${AGENT_BRIDGE_SOUL_MODE:-}" ]] && echo "AGENT_BRIDGE_SOUL_MODE=${AGENT_BRIDGE_SOUL_MODE}"
   } | sudo tee "${dest}" > /dev/null
 }
 

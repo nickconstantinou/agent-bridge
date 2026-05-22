@@ -33,6 +33,10 @@ Each bot is an **independent systemd service** sharing the same TypeScript sourc
 | `agent-bridge-codex.service` | `.env.codex` | `.data-codex/` |
 | `agent-bridge-claude.service` | `.env.claude` | `.data-claude/` |
 
+## Path Portability Rule
+
+All future path-related changes must be machine agnostic. Prefer explicit environment variables first, then repo-relative or process-cwd defaults. Do not hardcode user names, home directories, deployment host paths, or local workspace layouts into source, tests, docs, or generated service defaults. Examples should use placeholders such as `/path/to/agent-bridge` unless they are describing an actual required Linux convention like `/etc/default`.
+
 ## Shared Memory
 
 The bridge now uses a local shell-callable `agent-memory` CLI backed by SQLite.
@@ -372,6 +376,8 @@ agent-bridge/
 | `FETCH_TIMEOUT_MS` | All | Telegram API fetch timeout (default: 45 000ms) |
 | `DB_PATH` | Each | Path to SQLite database (default: `<project-dir>/.data/bridge.sqlite`) |
 | `BRIDGE_PROJECT_DIR` | All | Repo path (used for default `DB_PATH`) |
+| `AGENT_BRIDGE_SOUL_PATH` | All | Optional persona contract path (default: `<project-dir>/SOUL.md`) |
+| `AGENT_BRIDGE_SOUL_MODE` | All | `summary`, `full`, or `off` (default: `summary`) |
 
 ---
 

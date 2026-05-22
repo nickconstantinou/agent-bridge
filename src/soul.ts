@@ -7,7 +7,6 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 
 export type SoulMode = "summary" | "full" | "off";
@@ -30,8 +29,8 @@ const SECTION_ORDER = [
 
 type SoulSectionName = (typeof SECTION_ORDER)[number];
 
-export function defaultSoulPath(rootDir: string = process.env.BRIDGE_ROOT_DIR || homedir()): string {
-  return join(rootDir, ".openclaw", "workspace", "SOUL.md");
+export function defaultSoulPath(projectDir: string = process.env.BRIDGE_PROJECT_DIR || process.cwd()): string {
+  return join(projectDir, "SOUL.md");
 }
 
 export function normalizeSoulMode(raw: string | undefined): SoulMode {

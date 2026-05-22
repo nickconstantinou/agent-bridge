@@ -102,7 +102,7 @@ if (!validation.ok) {
 
 const soulContext = loadSoulContext({
   mode: normalizeSoulMode(process.env.AGENT_BRIDGE_SOUL_MODE),
-  path: process.env.AGENT_BRIDGE_SOUL_PATH || defaultSoulPath(process.env.BRIDGE_ROOT_DIR),
+  path: process.env.AGENT_BRIDGE_SOUL_PATH || defaultSoulPath(getBridgeProjectDir()),
 });
 if (soulContext) console.log(`[bridge] loaded SOUL.md context (${soulContext.length} chars)`);
 

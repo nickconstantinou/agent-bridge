@@ -6,13 +6,12 @@
  * LOGIC: Provides interface checks, text extraction helpers, inline keyboard markup setups, and path resolves.
  */
 
-import { homedir } from "node:os";
 import { runCli, runCliAsync, parseCliResult, buildCliInvocation, validateBridgeConfig, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses, toUserMessage, resolveAntigravityConversationId, extractAntigravityConversationId, readAntigravityLastConversation, readLatestAntigravityConversationFromLogs } from "./cli.js";
 import { openDb, BridgeDb } from "./db.js";
 import type { TelegramMessage, BridgeConfig } from "./types.js";
 
 export function getBridgeProjectDir(): string {
-  return process.env.BRIDGE_PROJECT_DIR || `${homedir()}/.openclaw/workspace/projects/agent-bridge`;
+  return process.env.BRIDGE_PROJECT_DIR || process.cwd();
 }
 
 export function getCliWorkingDir(bot?: "codex" | "antigravity" | "claude"): string {
@@ -21,7 +20,7 @@ export function getCliWorkingDir(bot?: "codex" | "antigravity" | "claude"): stri
     return process.env.ANTIGRAVITY_PROJECT_DIR || process.env.GEMINI_PROJECT_DIR!;
   }
   if (bot === "claude" && process.env.CLAUDE_PROJECT_DIR) return process.env.CLAUDE_PROJECT_DIR;
-  return process.env.BRIDGE_PROJECT_DIR || process.env.BRIDGE_ROOT_DIR || homedir();
+  return process.env.BRIDGE_PROJECT_DIR || process.env.BRIDGE_ROOT_DIR || process.cwd();
 }
 
 export function isAuthorizedMessage(message: TelegramMessage, allowedUserIds: ReadonlySet<string>): boolean {

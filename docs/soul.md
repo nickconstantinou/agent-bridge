@@ -161,7 +161,7 @@ The bridge should rebuild this prompt every turn. That means after `/reset`, the
 ## Suggested configuration
 
 ```bash
-AGENT_BRIDGE_SOUL_PATH=/home/openclaw/.openclaw/workspace/SOUL.md
+AGENT_BRIDGE_SOUL_PATH=/path/to/agent-bridge/SOUL.md
 AGENT_BRIDGE_SOUL_MODE=summary   # summary | full | off
 ```
 

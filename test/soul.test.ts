@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadSoulContext, renderSoulContract } from "../src/soul.js";
+import { defaultSoulPath, loadSoulContext, renderSoulContract } from "../src/soul.js";
 
 const tempDirs: string[] = [];
 
@@ -19,6 +19,10 @@ afterEach(() => {
 });
 
 describe("SOUL.md runtime context", () => {
+  it("resolves the default SOUL.md path from the bridge project directory", () => {
+    expect(defaultSoulPath("agent-bridge")).toBe(join("agent-bridge", "SOUL.md"));
+  });
+
   it("returns null when mode is off or the file is missing", () => {
     expect(loadSoulContext({ mode: "off", path: "/does/not/exist" })).toBeNull();
     expect(loadSoulContext({ mode: "summary", path: "/does/not/exist" })).toBeNull();

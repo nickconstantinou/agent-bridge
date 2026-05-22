@@ -1,4 +1,4 @@
-import { splitTelegramText, escapeTelegramMarkdownV2, toTelegramEntitiesText } from "./render.js";
+import { splitTelegramText, toTelegramEntitiesText } from "./render.js";
 import { toUserMessage } from "./cli.js";
 import type { TelegramClient } from "./telegram.js";
 import type { CliResult } from "./types.js";
@@ -53,7 +53,6 @@ export async function sendTelegramMessage({
 }): Promise<void> {
   const chunks = splitTelegramText(String(body.text || ""));
   const { text: _ignored, ...rest } = body;
-  const isGeminiOrAntigravity = kind === "gemini" || kind === "antigravity";
 
   for (let i = 0; i < chunks.length; i += 1) {
     const chunkText = chunks[i];
@@ -61,33 +60,13 @@ export async function sendTelegramMessage({
       chat_id: chatId,
       ...rest,
       text: chunkText,
-      parse_mode: isGeminiOrAntigravity ? undefined : "MarkdownV2",
     };
 
-    if (isGeminiOrAntigravity) {
-      const ep = toTelegramEntitiesText(chunkText);
-      chunkBody.text = ep.text;
-      if (ep.entities.length > 0) chunkBody.entities = ep.entities;
-      delete chunkBody.parse_mode;
-      await client.sendMessage(chunkBody);
-      continue;
-    }
-
     if (i > 0) delete chunkBody.reply_markup;
-
-    try {
-      await client.sendMessage(chunkBody);
-    } catch (error: any) {
-      try {
-        console.warn(`[${kind}] Raw MarkdownV2 failed, trying escaped`, error.message);
-        await client.sendMessage({ ...chunkBody, text: escapeTelegramMarkdownV2(chunks[i]) });
-      } catch (escapeError: any) {
-        console.warn(`[${kind}] Escaped MarkdownV2 failed, falling back to plain text`, escapeError.message);
-        const plainBody = { ...chunkBody, text: chunks[i] };
-        delete plainBody.parse_mode;
-        await client.sendMessage(plainBody);
-      }
-    }
+    const ep = toTelegramEntitiesText(chunkText);
+    chunkBody.text = ep.text;
+    if (ep.entities.length > 0) chunkBody.entities = ep.entities;
+    await client.sendMessage(chunkBody);
   }
 }
 

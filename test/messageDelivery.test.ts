@@ -189,6 +189,26 @@ describe("sendMessageWithProgress", () => {
   });
 });
 
+describe("sendTelegramMessage rendering", () => {
+  it("renders Codex fenced code blocks with Telegram pre entities instead of visible backticks", async () => {
+    const client = createMockClient();
+
+    await sendTelegramMessage({
+      client,
+      kind: "codex",
+      chatId: 123,
+      body: { text: "```text\nhello\n```" },
+    });
+
+    expect(client.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: 123,
+      text: "text\nhello\n",
+      entities: [{ type: "pre", offset: 0, length: 11 }],
+    }));
+    expect(client.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ parse_mode: "MarkdownV2" }));
+  });
+});
+
 describe("dead code removed from messageDelivery.ts", () => {
   it("usePlaceholder, StreamingUpdater, and activeStreams are not present", () => {
     const src = readFileSync("src/messageDelivery.ts", "utf-8");

@@ -17,6 +17,7 @@ Polls a Telegram bot for messages, routes them to the Codex, Antigravity, or Cla
 - **Concurrency lock** — one execution per chat at a time (SQLite atomic lock, no race conditions)
 - **Shared memory CLI** — local `agent-memory` commands store and recall durable project facts in SQLite
 - **Shared skills installer** — optional SDLC skills can be installed across Codex, Antigravity, and Claude Code
+- **SOUL.md design** — proposed bridge-level persona contract for consistent voice, values, boundaries, and workflow across agents
 - **Rate limit handling** — automatic retry on Telegram 429 responses
 
 ## Requirements
@@ -211,6 +212,26 @@ If verification reports stale symlinks or missing native entries, repair them wi
 ```bash
 npm run skills -- verify --fix
 ```
+
+## SOUL.md design
+
+`SOUL.md` is the proposed bridge-level persona contract for all CLI-backed agents.
+
+It should be runtime-injected by the bridge on every turn, including the first prompt after `/reset`, rather than written into `AGENTS.md`, `ANTIGRAVITY.md`, or `CLAUDE.md`.
+
+The intended schema has 9 sections:
+
+1. Identity — who the agent is, not just what it does
+2. Values — decision-making when rules do not cover the case
+3. Communication Style — tone, length, and formality
+4. Expertise — specific tools and domains
+5. Boundaries — rules that hold under pressure
+6. Workflow — step-by-step process for tasks
+7. Tool Usage — when and how to use tools
+8. Memory Policy — what persists and what gets wiped
+9. Example Interactions — concrete examples of good behaviour
+
+See [`docs/soul.md`](docs/soul.md) for the full design, runtime injection order, reset behaviour, and suggested configuration.
 
 ## Systemd deployment
 

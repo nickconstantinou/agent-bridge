@@ -53,7 +53,7 @@ describe("Execution Path Selection - TDD", () => {
   });
 });
 describe("Idle Timeout Config", () => {
-  it("buildExecutionOptions returns per-kind timeouts (antigravity idle default 240s)", async () => {
+  it("buildExecutionOptions returns per-kind timeouts (antigravity idle default 480s)", async () => {
     const { buildExecutionOptions } = await import("../src/cli.js");
     const savedAntigravityIdle = process.env.ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS;
     const savedGlobalIdle = process.env.CLI_IDLE_TIMEOUT_MS;
@@ -65,7 +65,7 @@ describe("Idle Timeout Config", () => {
     delete process.env.CLI_TIMEOUT_MS;
     try {
       const opts = buildExecutionOptions("antigravity");
-      expect(opts.idleTimeoutMs).toBe(240_000);
+      expect(opts.idleTimeoutMs).toBe(480_000);
       expect(opts.timeoutMs).toBe(600_000);
     } finally {
       if (savedAntigravityIdle !== undefined) process.env.ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS = savedAntigravityIdle;

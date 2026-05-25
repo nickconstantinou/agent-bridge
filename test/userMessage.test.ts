@@ -26,6 +26,14 @@ describe("toUserMessage — Codex JSONL extraction", () => {
   });
 });
 
+describe("toUserMessage — Claude JSON extraction", () => {
+  it("surfaces the rate limit message from is_error: true result payloads", () => {
+    const stdout = '{"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"You\'ve hit your limit · resets 2:40am (Europe/London)"}';
+    const err = new Error(`CLI exited with code 1: ${stdout}`);
+    expect(toUserMessage(err)).toBe("You've hit your limit · resets 2:40am (Europe/London)");
+  });
+});
+
 describe("toUserMessage — plain errors", () => {
   it("keeps the existing behavior for non-JSON errors", () => {
     const err = new Error("CLI hard timeout after 600000ms");

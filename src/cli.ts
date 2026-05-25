@@ -364,6 +364,7 @@ function parseAntigravityResult(stdout: string, logContent?: string | null): Cli
 function extractUpstreamCliError(raw: string): string | null {
   let turnFailed: string | null = null;
   let genericError: string | null = null;
+  let claudeError: string | null = null;
   for (const line of raw.split(/\r?\n/)) {
     const start = line.indexOf("{");
     if (start === -1) continue;
@@ -373,10 +374,12 @@ function extractUpstreamCliError(raw: string): string | null {
         turnFailed = obj.error.message;
       } else if (obj?.type === "error" && typeof obj?.message === "string") {
         genericError = obj.message;
+      } else if (obj?.type === "result" && obj?.is_error === true && typeof obj?.result === "string") {
+        claudeError = obj.result;
       }
     } catch { /* not JSON, skip */ }
   }
-  return turnFailed ?? genericError;
+  return turnFailed ?? genericError ?? claudeError;
 }
 
 export function toUserMessage(err: Error): string {

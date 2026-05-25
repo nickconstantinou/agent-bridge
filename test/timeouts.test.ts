@@ -25,9 +25,9 @@ describe("resolveTimeoutsForKind — built-in defaults", () => {
     expect(resolveTimeoutsForKind("codex").cliIdleTimeoutMs).toBe(90_000);
   });
 
-  it("antigravity gets 240s idle timeout by default", () => {
+  it("antigravity gets 480s idle timeout by default", () => {
     setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(240_000);
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(480_000);
   });
 
   it("claude gets 180s idle timeout by default", () => {
@@ -89,9 +89,9 @@ describe("resolveTimeoutsForKind — env precedence", () => {
 
   it("ignores zero or non-numeric values and falls back", () => {
     setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: "0", CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(240_000);
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(480_000);
     setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: "not-a-number", CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(240_000);
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(480_000);
   });
 });
 
@@ -104,7 +104,7 @@ describe("buildExecutionOptions", () => {
       CLI_TIMEOUT_MS: undefined,
     });
     const opts = buildExecutionOptions("antigravity");
-    expect(opts.idleTimeoutMs).toBe(240_000);
+    expect(opts.idleTimeoutMs).toBe(480_000);
     expect(opts.timeoutMs).toBe(600_000);
   });
 

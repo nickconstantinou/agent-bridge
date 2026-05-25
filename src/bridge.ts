@@ -60,4 +60,4 @@ export function buildModelsText(kind: string, { db, config }: { db: BridgeDb; co
 
 export { runCli, runCliAsync, parseCliResult, validateBridgeConfig, buildCliInvocation, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses, toUserMessage, resolveAntigravityConversationId, extractAntigravityConversationId, readAntigravityLastConversation, readLatestAntigravityConversationFromLogs };
 export { openDb, BridgeDb };
-export { handleCommand, isBridgeCommand } from "./commands.js";
+export { buildTelegramCommands, handleCommand, isBridgeCommand } from "./commands.js";

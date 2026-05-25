@@ -14,6 +14,7 @@ import { readFileSync, rmSync } from "node:fs";
 import {
   buildModelKeyboard,
   buildModelsText,
+  buildTelegramCommands,
   extractPromptText,
   extractThreadId,
   getCliWorkingDir,
@@ -36,6 +37,7 @@ import {
   openDb,
   BridgeDb,
 } from "./bridge.js";
+import { getCodexUsageText } from "./codexUsage.js";
 import { TelegramClient, MediaGroupBuffer } from "./telegram.js";
 import { createPollErrorState, planPollError, notePollSuccess } from "./polling.js";
 import { sendTelegramMessage, sendMessageWithProgress } from "./messageDelivery.js";
@@ -132,13 +134,7 @@ class BridgeBot {
 
   async run(): Promise<void> {
     await this.client.setMyCommands({
-      commands: [
-        { command: "models", description: "Switch model" },
-        { command: "skills", description: "List bundled skills" },
-        { command: "reset",  description: "Clear current session" },
-        { command: "stop",   description: "Abort running execution" },
-        { command: "memory", description: "Run memory smoke test" },
-      ],
+      commands: buildTelegramCommands(this.kind),
     }).catch((err) => console.warn(`[${this.kind}] setMyCommands failed`, err));
 
     let offset = db.getLastUpdateId(this.kind) + 1;
@@ -249,6 +245,16 @@ class BridgeBot {
           reply_markup: commandResponse.reply_markup,
           message_thread_id: threadId,
         });
+        return;
+      }
+      if (commandResponse.kind === "codex_usage") {
+        try {
+          const text = await getCodexUsageText();
+          await this.sendText(chatId, { text, message_thread_id: threadId });
+        } catch (error) {
+          const userText = toUserMessage(error instanceof Error ? error : new Error(String(error)));
+          await this.sendText(chatId, { text: `Error: ${userText}`, message_thread_id: threadId });
+        }
         return;
       }
     }

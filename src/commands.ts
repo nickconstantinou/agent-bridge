@@ -14,9 +14,10 @@ import { listLocalCatalog } from "./skills.js";
 export type CommandResult =
   | { kind: "message"; text: string }
   | { kind: "keyboard_message"; text: string; reply_markup: any }
-  | { kind: "execute"; prompt: string };
+  | { kind: "execute"; prompt: string }
+  | { kind: "codex_usage" };
 
-const bridgeCommands = new Set(["/start", "/reset", "/models", "/skills", "/memory"]);
+const bridgeCommands = new Set(["/start", "/reset", "/models", "/skills", "/memory", "/usage"]);
 
 function normalizeCommand(text: string): string {
   return String(text || "").trim().toLowerCase().replace(/@\S+$/, "");
@@ -104,5 +105,31 @@ export function handleCommand(
     };
   }
 
+  if (text === "/usage") {
+    if (kind !== "codex") {
+      return {
+        kind: "message",
+        text: "/usage is only available on the Codex bridge.",
+      };
+    }
+    return { kind: "codex_usage" };
+  }
+
   return null;
+}
+
+export function buildTelegramCommands(kind: "codex" | "antigravity" | "claude"): Array<{ command: string; description: string }> {
+  const commands = [
+    { command: "models", description: "Switch model" },
+    { command: "skills", description: "List bundled skills" },
+    { command: "reset",  description: "Clear current session" },
+    { command: "stop",   description: "Abort running execution" },
+    { command: "memory", description: "Run memory smoke test" },
+  ];
+
+  if (kind === "codex") {
+    commands.push({ command: "usage", description: "Show Codex plan usage" });
+  }
+
+  return commands;
 }

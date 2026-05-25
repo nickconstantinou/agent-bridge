@@ -15,6 +15,7 @@ import {
   validateBridgeConfig,
   buildModelKeyboard,
   buildModelsText,
+  buildTelegramCommands,
   extractAntigravityConversationId,
   readAntigravityLastConversation,
   readLatestAntigravityConversationFromLogs,
@@ -52,6 +53,7 @@ describe("agent bridge MVP", () => {
     expect(isBridgeCommand("/models")).toBe(true);
     expect(isBridgeCommand("/skills")).toBe(true);
     expect(isBridgeCommand("/memory")).toBe(true);
+    expect(isBridgeCommand("/usage")).toBe(true);
     expect(isBridgeCommand("hello")).toBe(false);
   });
 
@@ -60,6 +62,7 @@ describe("agent bridge MVP", () => {
     expect(isBridgeCommand("/reset@AnotherBot")).toBe(true);
     expect(isBridgeCommand("/models@somebot")).toBe(true);
     expect(isBridgeCommand("/skills@somebot")).toBe(true);
+    expect(isBridgeCommand("/usage@somebot")).toBe(true);
     expect(isBridgeCommand("/unknown@mybot")).toBe(false);
   });
 
@@ -562,6 +565,17 @@ describe("agent bridge MVP", () => {
       expect(result && "prompt" in result ? result.prompt : "").toContain("agent-memory recall");
       expect(result && "prompt" in result ? result.prompt : "").toContain("MEMORY_AVAILABLE: yes|no");
     });
+
+    it("builds a Codex usage command for /usage", () => {
+      const result = handleCommand("codex", "/usage", { db, chatId: "123", config });
+      expect(result?.kind).toBe("codex_usage");
+    });
+
+    it("keeps /usage Codex-only", () => {
+      const result = handleCommand("claude", "/usage", { db, chatId: "123", config });
+      expect(result?.kind).toBe("message");
+      expect(result && "text" in result ? result.text : "").toContain("only available on the Codex bridge");
+    });
   });
 });
 
@@ -653,6 +667,17 @@ describe("handleMessages sends reply_markup for /models", () => {
     const src = readFileSync("src/index.ts", "utf-8");
     expect(src).toMatch(/keyboard_message/);
     expect(src).toMatch(/reply_markup.*commandResponse/s);
+  });
+});
+
+describe("Telegram command menu", () => {
+  it("adds /usage to the Codex menu only", () => {
+    expect(buildTelegramCommands("codex")).toContainEqual({
+      command: "usage",
+      description: "Show Codex plan usage",
+    });
+    expect(buildTelegramCommands("antigravity").some((command: any) => command.command === "usage")).toBe(false);
+    expect(buildTelegramCommands("claude").some((command: any) => command.command === "usage")).toBe(false);
   });
 });
 

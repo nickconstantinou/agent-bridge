@@ -121,6 +121,8 @@ claude-sonnet-4-6 → claude-opus-4-7 → (give up)
 
 The response is prepended with a warning notice when a fallback is used.
 
+> **Antigravity note**: Agy does not accept a `--model` CLI flag. Model selection (including fallback) is applied by writing the chosen model name into `~/.gemini/antigravity-cli/settings.json` before the process is spawned. Resetting to default removes the `model` key so Agy falls back to its own default.
+
 ### 4.5 Concurrency Lock & Message Queue
 
 `db.tryLock(chatId)` is an atomic SQLite `UPDATE … WHERE active_execution_lock = 0` — only one execution per chat at a time. Lock is released in a `finally` block which also calls `drainQueue(chatKey)`.
@@ -142,7 +144,7 @@ Photos sent as an album share a `media_group_id`. `MediaGroupBuffer` collects me
 | Bot | Session flag | JSON output flag | Trusted flag |
 |-----|-------------|-----------------|-------------|
 | Codex | `exec resume <id>` | `--json` | `--dangerously-bypass-approvals-and-sandbox` |
-| Antigravity | `--resume <id>` | `--prompt` (stream JSON) | `--yolo` |
+| Antigravity | `--conversation <id>` | n/a (stdout parsed directly) | `--dangerously-skip-permissions` |
 | Claude | `--resume <id>` | `--output-format stream-json` | `--dangerously-skip-permissions` |
 
 ### Timeout Configuration
@@ -292,3 +294,4 @@ WAL mode is enabled on open for concurrent read access.
 - Sessions are CLI thread IDs, not full conversation history
 - Sync path (`BRIDGE_ASYNC_ENABLED=false`) available but not the default
 - `abortCliProcess` SIGKILLs the top-level process only (not the full process group)
+- Antigravity model switching is applied by mutating `~/.gemini/antigravity-cli/settings.json`; concurrent interactive Agy sessions (if any) would see the same setting

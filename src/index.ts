@@ -34,6 +34,7 @@ import {
   shutdownCliProcesses,
   toUserMessage,
   resolveAntigravityConversationId,
+  setAntigravityModel,
   openDb,
   BridgeDb,
 } from "./bridge.js";
@@ -346,6 +347,7 @@ class BridgeBot {
 
     const cwd = getCliWorkingDir(this.kind);
     const startedAtMs = Date.now();
+    if (this.kind === "antigravity") setAntigravityModel(model);
     const invocation = buildCliInvocation({
       bot: this.kind,
       command: this.config.command,
@@ -392,6 +394,7 @@ class BridgeBot {
           if (this.kind === "antigravity") {
             fallbackLogFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
           }
+          if (this.kind === "antigravity") setAntigravityModel(fallbackModel);
           const fallbackInvocation = buildCliInvocation({
             bot: this.kind,
             command: this.config.command,
@@ -455,6 +458,7 @@ class BridgeBot {
 
     const cwd = getCliWorkingDir(this.kind);
     const startedAtMs = Date.now();
+    if (this.kind === "antigravity") setAntigravityModel(model);
     const invocation = buildCliInvocation({
       bot: this.kind,
       command: this.config.command,
@@ -503,6 +507,7 @@ class BridgeBot {
           if (this.kind === "antigravity") {
             fallbackLogFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
           }
+          if (this.kind === "antigravity") setAntigravityModel(fallbackModel);
           const fallbackInvocation = buildCliInvocation({
             bot: this.kind,
             command: this.config.command,
@@ -569,6 +574,7 @@ class BridgeBot {
 
     if (value === "reset") {
       db.setSetting(this.kind, null);
+      if (this.kind === "antigravity") setAntigravityModel(null);
       await this.client.answerCallbackQuery({
         callback_query_id: callbackQuery.id,
         text: `${this.kind} reset to default`,
@@ -583,6 +589,7 @@ class BridgeBot {
     }
 
     db.setSetting(this.kind, value);
+    if (this.kind === "antigravity") setAntigravityModel(value);
     await this.client.answerCallbackQuery({ callback_query_id: callbackQuery.id });
     await this.client.editMessageText({
       chat_id: chatId,

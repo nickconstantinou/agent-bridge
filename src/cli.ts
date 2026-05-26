@@ -7,7 +7,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CliOptions, CliResult, BotKind } from "./types.js";
@@ -144,7 +144,8 @@ export function buildCliInvocation({
     args.push(wrapPromptContext(prompt, soulContext));
   } else if (bot === "antigravity") {
     // Agy's --print flag takes the prompt as its value, so all other flags must come first.
-    // Current Agy builds do not expose a working --model CLI flag; model selection is managed by Agy itself.
+    // Agy does not expose a --model CLI flag; model selection is applied by writing to
+    // ~/.gemini/antigravity-cli/settings.json before spawning (see setAntigravityModel).
     if (sessionId) args.push("--conversation", sessionId);
     if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
     if (logFile) args.push("--log-file", logFile);
@@ -262,6 +263,32 @@ export function extractAntigravityConversationId(text: string | null | undefined
     text.match(/Print mode: conversation=([a-f0-9-]{36})/) ||
     text.match(/conversation=([a-f0-9-]{36})/);
   return match?.[1] ?? null;
+}
+
+/**
+ * Writes the selected model into ~/.gemini/antigravity-cli/settings.json so that
+ * the next Agy invocation picks it up. Pass null to remove the override and let
+ * Agy fall back to its own default.
+ */
+export function setAntigravityModel(
+  model: string | null,
+  homeDir: string = homedir(),
+): void {
+  const settingsPath = join(homeDir, ".gemini", "antigravity-cli", "settings.json");
+  let settings: Record<string, unknown> = {};
+  if (existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
+    } catch {
+      // If the file is malformed, start fresh.
+    }
+  }
+  if (model === null) {
+    delete settings["model"];
+  } else {
+    settings["model"] = model;
+  }
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
 }
 
 export function readAntigravityLastConversation({

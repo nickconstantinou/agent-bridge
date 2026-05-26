@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
-import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel } from "../src/cli.js";
+import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult } from "../src/cli.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -215,5 +215,25 @@ describe("antigravity model mapping and settings override", () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("throws error when Antigravity returns empty response", () => {
+    expect(() => parseCliResult({ bot: "antigravity", stdout: "" })).toThrow("empty response");
+    expect(() => parseCliResult({ bot: "antigravity", stdout: "   " })).toThrow("empty response");
+  });
+
+  it("extracts RESOURCE_EXHAUSTED log errors and identifies capacity exhaustion", () => {
+    const logErr = "E0526 15:21:41.395478 3605783 log.go:398] agent executor error: RESOURCE_EXHAUSTED (code 429): Individual quota reached.";
+    
+    let caught: any;
+    try {
+      parseCliResult({ bot: "antigravity", stdout: "", logContent: logErr });
+    } catch (err: any) {
+      caught = err;
+    }
+    
+    expect(caught).toBeDefined();
+    expect(caught.message).toContain("RESOURCE_EXHAUSTED");
+    expect(isCapacityExhaustedError(caught)).toBe(true);
   });
 });

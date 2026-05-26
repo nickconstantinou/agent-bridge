@@ -409,7 +409,28 @@ export function resolveAntigravityConversationId({
     readAntigravityLastConversation({ cwd, homeDir });
 }
 
+function extractAntigravityError(logContent: string | null | undefined): Error | null {
+  if (!logContent) return null;
+  const lines = logContent.split(/\r?\n/);
+  for (const line of lines) {
+    if (line.includes("agent executor error:")) {
+      const idx = line.indexOf("agent executor error:");
+      return new Error(line.substring(idx).trim());
+    }
+    if (line.includes("error executing cascade step:")) {
+      const idx = line.indexOf("error executing cascade step:");
+      return new Error(line.substring(idx).trim());
+    }
+  }
+  return null;
+}
+
 function parseAntigravityResult(stdout: string, logContent?: string | null): CliResult {
+  const logErr = extractAntigravityError(logContent);
+  if (logErr) {
+    throw logErr;
+  }
+
   let text = stdout.trim();
   const markerIndex = text.indexOf(ANTIGRAVITY_FINAL_RESPONSE_DELIMITER);
   if (markerIndex !== -1) {
@@ -423,6 +444,9 @@ function parseAntigravityResult(stdout: string, logContent?: string | null): Cli
     }
     if (separatorIdx !== -1) {
       text = lines.slice(separatorIdx + 1).join("\n").trim();
+      if (!text) {
+        throw new Error("Agy execution returned empty response");
+      }
       return { text, sessionId: extractAntigravityConversationId(logContent) };
     }
   }
@@ -435,6 +459,10 @@ function parseAntigravityResult(stdout: string, logContent?: string | null): Cli
     if (lineEndIndex !== -1) {
       text = text.substring(lineEndIndex + 1).trim();
     }
+  }
+
+  if (!text) {
+    throw new Error("Agy execution returned empty response");
   }
 
   return { text, sessionId: extractAntigravityConversationId(logContent) };
@@ -474,7 +502,10 @@ export function isCapacityExhaustedError(err: Error): boolean {
     msg.includes("No capacity available") ||
     msg.includes("rateLimitExceeded") ||
     msg.includes("overloaded_error") ||
-    msg.includes("Overloaded")
+    msg.includes("Overloaded") ||
+    msg.includes("RESOURCE_EXHAUSTED") ||
+    msg.includes("quota reached") ||
+    msg.includes("quota exceeded")
   );
 }
 

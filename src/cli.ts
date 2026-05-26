@@ -409,6 +409,19 @@ export function resolveAntigravityConversationId({
     readAntigravityLastConversation({ cwd, homeDir });
 }
 
+function deduplicateErrorString(text: string): string {
+  const parts = text.split(":").map(p => p.trim()).filter(Boolean);
+  const seen = new Set<string>();
+  const uniqueParts: string[] = [];
+  for (const part of parts) {
+    if (!seen.has(part)) {
+      seen.add(part);
+      uniqueParts.push(part);
+    }
+  }
+  return uniqueParts.join(": ");
+}
+
 function extractAntigravityError(logContent: string | null | undefined): Error | null {
   if (!logContent) return null;
   const lines = logContent.split(/\r?\n/);
@@ -416,12 +429,14 @@ function extractAntigravityError(logContent: string | null | undefined): Error |
     if (line.includes("agent executor error:")) {
       const idx = line.indexOf("agent executor error:");
       const rawMsg = line.substring(idx).trim();
-      return new Error(JSON.stringify({ type: "error", message: rawMsg }));
+      const cleanMsg = deduplicateErrorString(rawMsg);
+      return new Error(JSON.stringify({ type: "error", message: cleanMsg }));
     }
     if (line.includes("error executing cascade step:")) {
       const idx = line.indexOf("error executing cascade step:");
       const rawMsg = line.substring(idx).trim();
-      return new Error(JSON.stringify({ type: "error", message: rawMsg }));
+      const cleanMsg = deduplicateErrorString(rawMsg);
+      return new Error(JSON.stringify({ type: "error", message: cleanMsg }));
     }
   }
   return null;

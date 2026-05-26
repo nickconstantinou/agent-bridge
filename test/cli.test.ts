@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
-import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult } from "../src/cli.js";
+import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage } from "../src/cli.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -222,8 +222,8 @@ describe("antigravity model mapping and settings override", () => {
     expect(() => parseCliResult({ bot: "antigravity", stdout: "   " })).toThrow("empty response");
   });
 
-  it("extracts RESOURCE_EXHAUSTED log errors and identifies capacity exhaustion", () => {
-    const logErr = "E0526 15:21:41.395478 3605783 log.go:398] agent executor error: RESOURCE_EXHAUSTED (code 429): Individual quota reached.";
+  it("extracts RESOURCE_EXHAUSTED log errors, de-duplicates them, and identifies capacity exhaustion", () => {
+    const logErr = "E0526 15:21:41.395478 3605783 log.go:398] agent executor error: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 4h.: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 4h.";
     
     let caught: any;
     try {
@@ -233,7 +233,10 @@ describe("antigravity model mapping and settings override", () => {
     }
     
     expect(caught).toBeDefined();
-    expect(caught.message).toContain("RESOURCE_EXHAUSTED");
     expect(isCapacityExhaustedError(caught)).toBe(true);
+    
+    // Test that toUserMessage outputs the clean, de-duplicated message
+    const userMsg = toUserMessage(caught);
+    expect(userMsg).toBe("agent executor error: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 4h.");
   });
 });

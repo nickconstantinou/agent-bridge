@@ -34,6 +34,19 @@ describe("toUserMessage — Claude JSON extraction", () => {
   });
 });
 
+describe("toUserMessage — Antigravity JSON error extraction", () => {
+  it("surfaces the error message from Agy log errors", () => {
+    const innerMsg = "agent executor error: RESOURCE_EXHAUSTED (code 429): Individual quota reached.";
+    const err = new Error(JSON.stringify({ type: "error", message: innerMsg }));
+    expect(toUserMessage(err)).toBe(innerMsg);
+  });
+
+  it("surfaces empty response errors", () => {
+    const err = new Error(JSON.stringify({ type: "error", message: "Agy execution returned empty response" }));
+    expect(toUserMessage(err)).toBe("Agy execution returned empty response");
+  });
+});
+
 describe("toUserMessage — plain errors", () => {
   it("keeps the existing behavior for non-JSON errors", () => {
     const err = new Error("CLI hard timeout after 600000ms");

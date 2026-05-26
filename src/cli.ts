@@ -415,11 +415,13 @@ function extractAntigravityError(logContent: string | null | undefined): Error |
   for (const line of lines) {
     if (line.includes("agent executor error:")) {
       const idx = line.indexOf("agent executor error:");
-      return new Error(line.substring(idx).trim());
+      const rawMsg = line.substring(idx).trim();
+      return new Error(JSON.stringify({ type: "error", message: rawMsg }));
     }
     if (line.includes("error executing cascade step:")) {
       const idx = line.indexOf("error executing cascade step:");
-      return new Error(line.substring(idx).trim());
+      const rawMsg = line.substring(idx).trim();
+      return new Error(JSON.stringify({ type: "error", message: rawMsg }));
     }
   }
   return null;
@@ -445,7 +447,7 @@ function parseAntigravityResult(stdout: string, logContent?: string | null): Cli
     if (separatorIdx !== -1) {
       text = lines.slice(separatorIdx + 1).join("\n").trim();
       if (!text) {
-        throw new Error("Agy execution returned empty response");
+        throw new Error(JSON.stringify({ type: "error", message: "Agy execution returned empty response" }));
       }
       return { text, sessionId: extractAntigravityConversationId(logContent) };
     }
@@ -462,7 +464,7 @@ function parseAntigravityResult(stdout: string, logContent?: string | null): Cli
   }
 
   if (!text) {
-    throw new Error("Agy execution returned empty response");
+    throw new Error(JSON.stringify({ type: "error", message: "Agy execution returned empty response" }));
   }
 
   return { text, sessionId: extractAntigravityConversationId(logContent) };

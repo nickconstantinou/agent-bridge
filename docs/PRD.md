@@ -286,6 +286,7 @@ WAL mode is enabled on open for concurrent read access.
 | "Message is not modified" | No-op (not a real error) |
 | Execution lock held | Reply "⏳ System is currently busy" |
 | Parse error | Return raw stdout as text |
+| Agy execution error | Scans `--log-file` for errors (e.g. `RESOURCE_EXHAUSTED`), throws JSON payload to trigger fallback, and de-duplicates colon-separated segments |
 
 ---
 

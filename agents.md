@@ -216,7 +216,7 @@ Session handling differs per bot:
 - `item.completed` / `response.completed` → `finalText`
 - `response.output_text.delta` → accumulates streaming chunks
 
-**Antigravity** — returns plain stdout as text and resolves the conversation UUID from Agy logs/cache: explicit `--log-file` content when present, then recent `~/.gemini/antigravity-cli/log/*.log` lines (`Created conversation ...` / `Print mode: conversation=...`), then `~/.gemini/antigravity-cli/cache/last_conversations.json` for the active working directory.
+**Antigravity** — returns plain stdout as text and resolves the conversation UUID from Agy logs/cache (explicit `--log-file` content when present, then recent `~/.gemini/antigravity-cli/log/*.log` files, then `~/.gemini/antigravity-cli/cache/last_conversations.json`). Additionally, the parser scans log contents for critical failures (e.g. `agent executor error:` or `error executing cascade step:`). If errors are found or the stdout response is empty, it throws a JSON-wrapped error message to trigger the model fallback mechanism. Extracted error texts are automatically de-duplicated to remove redundant colon-separated segments before display.
 
 **Claude** — parses the last JSON object in stdout:
 ```json

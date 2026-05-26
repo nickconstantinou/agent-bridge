@@ -7,9 +7,9 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import type { CliOptions, CliResult, BotKind } from "./types.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { renderSoulContract } from "./soul.js";
@@ -265,6 +265,57 @@ export function extractAntigravityConversationId(text: string | null | undefined
   return match?.[1] ?? null;
 }
 
+export function toAntigravityModelLabel(model: string): string {
+  const map: Record<string, string> = {
+    "gemini-3.5-flash-high": "Gemini 3.5 Flash (High)",
+    "gemini-3.5-flash-medium": "Gemini 3.5 Flash (Medium)",
+    "gemini-3.1-pro-high": "Gemini 3.1 Pro (High)",
+    "gemini-3.1-pro-low": "Gemini 3.1 Pro (Low)",
+    "claude-4.6-sonnet-thinking": "Claude Sonnet 4.6 (Thinking)",
+    "claude-4.6-opus-thinking": "Claude Opus 4.6 (Thinking)",
+  };
+
+  const normalized = model.trim().toLowerCase();
+  if (map[normalized]) {
+    return map[normalized];
+  }
+
+  // If the model string is already formatted as a display name (e.g. has uppercase letters and spaces/parentheses), leave it as-is
+  if (/[A-Z]/.test(model) && (/\s/.test(model) || /\(/.test(model))) {
+    return model;
+  }
+
+  // General fallback formatting logic for unrecognized slug patterns
+  const parts = normalized.split("-");
+  if (parts.length > 0) {
+    const brand = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+    const rest = parts.slice(1);
+    const words: string[] = [];
+    const suffixes: string[] = [];
+
+    for (const part of rest) {
+      if (["high", "medium", "low", "thinking"].includes(part)) {
+        suffixes.push(part.charAt(0).toUpperCase() + part.slice(1));
+      } else if (["pro", "flash", "sonnet", "opus"].includes(part)) {
+        words.push(part.charAt(0).toUpperCase() + part.slice(1));
+      } else {
+        words.push(part);
+      }
+    }
+
+    let label = brand;
+    if (words.length > 0) {
+      label += " " + words.join(" ");
+    }
+    if (suffixes.length > 0) {
+      label += " (" + suffixes.join(" ") + ")";
+    }
+    return label;
+  }
+
+  return model;
+}
+
 /**
  * Writes the selected model into ~/.gemini/antigravity-cli/settings.json so that
  * the next Agy invocation picks it up. Pass null to remove the override and let
@@ -286,8 +337,9 @@ export function setAntigravityModel(
   if (model === null) {
     delete settings["model"];
   } else {
-    settings["model"] = model;
+    settings["model"] = toAntigravityModelLabel(model);
   }
+  mkdirSync(dirname(settingsPath), { recursive: true });
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n", "utf8");
 }
 

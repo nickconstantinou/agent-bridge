@@ -121,7 +121,7 @@ claude-sonnet-4-6 → claude-opus-4-7 → (give up)
 
 The response is prepended with a warning notice when a fallback is used.
 
-> **Antigravity note**: Agy does not accept a `--model` CLI flag. Model selection (including fallback) is applied by writing the chosen model name into `~/.gemini/antigravity-cli/settings.json` before the process is spawned. Resetting to default removes the `model` key so Agy falls back to its own default.
+> **Antigravity note**: Agy does not accept a `--model` CLI flag. Model selection (including fallback) is applied by mapping the chosen model ID (e.g. `gemini-3.5-flash-high`) to its display label (e.g. `Gemini 3.5 Flash (High)`) and writing that value into `~/.gemini/antigravity-cli/settings.json` before the process is spawned. Resetting to default removes the `model` key so Agy falls back to its own default.
 
 ### 4.5 Concurrency Lock & Message Queue
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
-import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel } from "../src/cli.js";
+import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel } from "../src/cli.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -171,5 +171,49 @@ describe("dead code removed from cli.ts", () => {
   it("parseGeminiAcpResult is not present", () => {
     const src = readFileSync("src/cli.ts", "utf-8");
     expect(src).not.toContain("parseGeminiAcpResult");
+  });
+});
+
+describe("antigravity model mapping and settings override", () => {
+  it("maps model IDs to Agy display names", () => {
+    expect(toAntigravityModelLabel("gemini-3.5-flash-high")).toBe("Gemini 3.5 Flash (High)");
+    expect(toAntigravityModelLabel("gemini-3.5-flash-medium")).toBe("Gemini 3.5 Flash (Medium)");
+    expect(toAntigravityModelLabel("gemini-3.1-pro-high")).toBe("Gemini 3.1 Pro (High)");
+    expect(toAntigravityModelLabel("gemini-3.1-pro-low")).toBe("Gemini 3.1 Pro (Low)");
+    expect(toAntigravityModelLabel("claude-4.6-sonnet-thinking")).toBe("Claude Sonnet 4.6 (Thinking)");
+    expect(toAntigravityModelLabel("claude-4.6-opus-thinking")).toBe("Claude Opus 4.6 (Thinking)");
+  });
+
+  it("handles unrecognized slugs gracefully using backup formatter", () => {
+    expect(toAntigravityModelLabel("gemini-4.0-pro-high")).toBe("Gemini 4.0 Pro (High)");
+    expect(toAntigravityModelLabel("claude-5.0-sonnet-thinking")).toBe("Claude 5.0 Sonnet (Thinking)");
+  });
+
+  it("leaves already-formatted display labels alone", () => {
+    expect(toAntigravityModelLabel("Gemini 3.5 Flash (High)")).toBe("Gemini 3.5 Flash (High)");
+    expect(toAntigravityModelLabel("Claude Sonnet 4.6 (Thinking)")).toBe("Claude Sonnet 4.6 (Thinking)");
+  });
+
+  it("writes mapped model names to settings.json using setAntigravityModel", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "agy-settings-test-"));
+    try {
+      // 1. Initial write to new settings
+      setAntigravityModel("gemini-3.5-flash-high", tempDir);
+      const settingsPath = join(tempDir, ".gemini", "antigravity-cli", "settings.json");
+      let data = JSON.parse(readFileSync(settingsPath, "utf8"));
+      expect(data.model).toBe("Gemini 3.5 Flash (High)");
+
+      // 2. Overwrite with another model
+      setAntigravityModel("claude-4.6-opus-thinking", tempDir);
+      data = JSON.parse(readFileSync(settingsPath, "utf8"));
+      expect(data.model).toBe("Claude Opus 4.6 (Thinking)");
+
+      // 3. Reset (pass null) deletes the model key
+      setAntigravityModel(null, tempDir);
+      data = JSON.parse(readFileSync(settingsPath, "utf8"));
+      expect(data.model).toBeUndefined();
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

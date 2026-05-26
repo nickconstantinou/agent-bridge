@@ -207,7 +207,7 @@ db.unlock(chatKey);
 
 Session handling differs per bot:
 - **Codex / Claude** — pass `sessionId` directly; new sessions receive no session arg (the CLI creates one)
-- **Antigravity** — new sessions receive no conversation arg; existing sessions use `--conversation <uuid>`. Agy requires all flags before `--print <prompt>` because `--print` consumes the prompt as its value. Current Agy builds do not expose a working `--model` CLI flag, so the bridge does not pass model flags to Agy.
+- **Antigravity** — new sessions receive no conversation arg; existing sessions use `--conversation <uuid>`. Agy requires all flags before `--print <prompt>` because `--print` consumes the prompt as its value. Agy does not accept a `--model` CLI flag; instead, model selection is applied by mapping the chosen model ID to its display label (e.g. `gemini-3.5-flash-high` to `Gemini 3.5 Flash (High)`) and writing it to `~/.gemini/antigravity-cli/settings.json` before execution.
 
 ### Parse Phase (`parseCliResult`)
 
@@ -249,7 +249,7 @@ When triggered, `getNextFallbackModel(currentModel, modelPreference[])` picks th
 Configured via `*_MODEL_PREFERENCE` env var (comma-delimited):
 
 ```
-ANTIGRAVITY_MODEL_PREFERENCE=gemini-3.5-flash-high,gemini-3.5-flash-medium,gemini-3.1-pro-high,gemini-3.1-pro-low  # display/fallback metadata only; Agy CLI currently owns actual model selection
+ANTIGRAVITY_MODEL_PREFERENCE=gemini-3.5-flash-high,gemini-3.5-flash-medium,gemini-3.1-pro-high,gemini-3.1-pro-low  # mapped to display labels for settings.json overrides
 CODEX_MODEL_PREFERENCE=gpt-5.5,gpt-5.5-mini,gpt-5.4,gpt-5.4-mini
 CLAUDE_MODEL_PREFERENCE=claude-opus-4-7,claude-sonnet-4-6
 ```

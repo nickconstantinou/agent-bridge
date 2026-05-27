@@ -20,9 +20,9 @@ afterEach(() => {
 });
 
 describe("resolveTimeoutsForKind — built-in defaults", () => {
-  it("codex gets 90s idle timeout by default", () => {
+  it("codex gets 240s idle timeout by default", () => {
     setEnv({ CODEX_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("codex").cliIdleTimeoutMs).toBe(90_000);
+    expect(resolveTimeoutsForKind("codex").cliIdleTimeoutMs).toBe(240_000);
   });
 
   it("antigravity gets 480s idle timeout by default", () => {
@@ -61,7 +61,7 @@ describe("resolveTimeoutsForKind — env precedence", () => {
 
   it("per-CLI env var does not affect other kinds", () => {
     setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: "99000", CODEX_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("codex").cliIdleTimeoutMs).toBe(90_000);
+    expect(resolveTimeoutsForKind("codex").cliIdleTimeoutMs).toBe(240_000);
   });
 
   it("global CLI_TIMEOUT_MS applies to all kinds when no per-CLI override", () => {

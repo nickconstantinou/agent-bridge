@@ -5,10 +5,11 @@ interface PerKindDefaults {
   cliIdleTimeoutMs: number;
 }
 
-// Per-CLI built-in defaults. Antigravity thinks silently the longest; Codex streams frequently.
-// Antigravity idle raised to 480s: agy emits no stdout during inference, only at completion.
+// Per-CLI built-in defaults.
+// Antigravity idle: 480s — agy emits nothing during inference, only at completion.
+// Codex idle: raised to 240s — gpt-5.5 has a long silent inference phase before first output.
 const DEFAULTS: Record<BotKind, PerKindDefaults> = {
-  codex:       { cliTimeoutMs: 600_000, cliIdleTimeoutMs:  90_000 },
+  codex:       { cliTimeoutMs: 600_000, cliIdleTimeoutMs: 240_000 },
   antigravity: { cliTimeoutMs: 600_000, cliIdleTimeoutMs: 480_000 },
   claude:      { cliTimeoutMs: 600_000, cliIdleTimeoutMs: 180_000 },
 };

@@ -100,7 +100,10 @@ CREATE TABLE bridge_state (
   gemini_session_id      TEXT, -- legacy, backfilled into antigravity_session_id
   claude_session_id     TEXT,    -- added automatically by migration on first run
   active_execution_lock INTEGER NOT NULL DEFAULT 0,
-  last_update_id        INTEGER NOT NULL DEFAULT 0
+  last_update_id        INTEGER NOT NULL DEFAULT 0,
+  codex_consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  claude_consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  antigravity_consecutive_failures INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE settings (
@@ -126,6 +129,8 @@ db.getLastUpdateId(bot)               // → number
 db.setLastUpdateId(bot, updateId)     // MAX semantics
 db.getSetting(kind)                   // → string | null (model override)
 db.setSetting(kind, value)
+db.incrementFailures(chatId, bot)     // → number (increments failure counter)
+db.resetFailures(chatId, bot)         // resets failure counter to 0
 ```
 
 ---
@@ -157,23 +162,34 @@ executePrompt() → runCli() → stdout → parseCliResult() → sendTelegramMes
 - Supports MarkdownV2 with automatic fallback to escaped, then plain text
 
 Both paths:
-- Use `idleTimeoutMs` from config (default 60 000ms; kills CLI after that many ms with no output)
+- Use hard timeout `cliTimeoutMs` (Codex defaults to 1 800 000ms / 30m; others default to 600 000ms / 10m)
+- Use `cliIdleTimeoutMs` (Codex defaults to 240 000ms; Antigravity defaults to 480 000ms; Claude defaults to 180 000ms)
 - Support model fallback on capacity exhaustion for any bot with multiple models configured
 - Pass `chatId` to `runCli`/`runCliAsync` for the process registry
 
 ---
 
-## Kill Switch (`/stop`, `/cancel`)
+## Kill Switch (`/stop`, `/cancel`, `/reset`)
 
 Intercepted in `handleUpdate` **before** `db.tryLock()`, so it works even when a lock is held:
 
-```typescript
-abortCliProcess(chatKey)  // SIGKILL child, marks it in WeakSet
-db.unlock(chatKey)        // release any held lock
-sendTelegramMessage(...)  // "🛑 Execution aborted by user."
-```
+- For `/stop` or `/cancel`:
+  ```typescript
+  abortCliProcess(chatKey)  // SIGKILL child, marks it in WeakSet
+  db.unlock(chatKey)        // release any held lock
+  sendTelegramMessage(...)  // "🛑 Execution aborted by user."
+  ```
+- For `/reset`:
+  Aborts any active child process, releases the atomic lock, and clears the pending updates queue.
 
 `runCli`/`runCliAsync` close handlers detect the `WeakSet` mark and resolve cleanly instead of rejecting, so the bridge continues polling normally.
+
+## Session Failure Circuit Breaker
+
+To prevent bots from getting stuck in an infinite resumption loop of a broken session (due to timeouts or process signal failures):
+- The bridge increments the failure counter for the bot and chat when a run fails with a timeout or signal-killed error.
+- If consecutive failures reach **2**, the bot's session ID is cleared (set to `null`) to trigger a fresh session on the next prompt.
+- Any successful prompt execution resets the failure counter back to **0**.
 
 ---
 
@@ -371,8 +387,8 @@ agent-bridge/
 | `CODEX_PROJECT_DIR` / `ANTIGRAVITY_PROJECT_DIR` / `CLAUDE_PROJECT_DIR` | Each | Override CLI working directory for this bot |
 | `BRIDGE_EXECUTION_MODE` | All | `safe` (approval prompts) / `trusted` (bypass) |
 | `BRIDGE_ASYNC_ENABLED` | All | `true` = streaming, `false` = sync (default: `true`) |
-| `CLI_TIMEOUT_MS` | All | Hard timeout per CLI execution (default: 300 000ms) |
-| `CLI_IDLE_TIMEOUT_MS` | All | Kill CLI after this many ms with no stdout output (default: 60 000ms) |
+| `CLI_TIMEOUT_MS` | All | Hard timeout per CLI execution (default: 1 800 000ms for Codex; 600 000ms for others) |
+| `CLI_IDLE_TIMEOUT_MS` | All | Kill CLI after this many ms with no stdout output (default: 240 000ms Codex; 480 000ms Antigravity; 180 000ms Claude) |
 | `FETCH_TIMEOUT_MS` | All | Telegram API fetch timeout (default: 45 000ms) |
 | `DB_PATH` | Each | Path to SQLite database (default: `<project-dir>/.data/bridge.sqlite`) |
 | `BRIDGE_PROJECT_DIR` | All | Repo path (used for default `DB_PATH`) |

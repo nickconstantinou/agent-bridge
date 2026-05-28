@@ -103,8 +103,8 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `ANTIGRAVITY_PROJECT_DIR` | Antigravity | — | Working dir for CLI execution (overrides `BRIDGE_PROJECT_DIR`) |
 | `CLAUDE_PROJECT_DIR` | Claude | — | Working dir for CLI execution (overrides `BRIDGE_PROJECT_DIR`) |
 | `DB_PATH` | All | `.data-<bot>/bridge.sqlite` | SQLite database path |
-| `CLI_TIMEOUT_MS` | All | `300000` | Hard execution timeout (ms) |
-| `CLI_IDLE_TIMEOUT_MS` | All | `60000` | Kill CLI after this many ms with no output |
+| `CLI_TIMEOUT_MS` | All | Codex: `1800000` (30m); others: `600000` (10m) | Hard execution timeout (ms) |
+| `CLI_IDLE_TIMEOUT_MS` | All | Codex: `240000`; Antigravity: `480000`; Claude: `180000` | Kill CLI after this many ms with no output |
 | `FETCH_TIMEOUT_MS` | All | `45000` | Telegram API fetch timeout (ms) |
 | `POLL_INTERVAL_MS` | All | `1000` | Telegram long-poll interval (ms) |
 | `AGENT_MEMORY_DB_PATH` | All | `~/.agent-bridge/shared-memory/agent-memory.sqlite` | Path to shared agent memory database |

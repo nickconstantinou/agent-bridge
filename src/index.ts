@@ -236,7 +236,11 @@ class BridgeBot {
     }) : null;
     if (commandResponse) {
       if (commandResponse.kind === "message") {
-        if (commandText === "/reset") this.pendingQueues.delete(chatKey);
+        if (commandText === "/reset") {
+          this.pendingQueues.delete(chatKey);
+          abortCliProcess(chatKey);
+          db.unlock(chatKey);
+        }
         await this.sendText(chatId, { text: commandResponse.text, message_thread_id: threadId });
         return;
       }
@@ -382,6 +386,7 @@ class BridgeBot {
         result.sessionId = resolveAntigravityConversationId({ cwd, sinceMs: startedAtMs, explicitLogContent: logContent });
       }
       if (result?.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
+      db.resetFailures(chatKey, this.kind);
       return result;
     } catch (error) {
       if (logFile) {
@@ -430,6 +435,7 @@ class BridgeBot {
               result.sessionId = resolveAntigravityConversationId({ cwd: fallbackCwd, sinceMs: fallbackStartedAtMs, explicitLogContent: fallbackLogContent });
             }
             if (result?.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
+            db.resetFailures(chatKey, this.kind);
             return {
               ...result,
               text: `⚠️ Fell back to ${fallbackModel} (${model || "default"} at capacity)\n\n${result.text}`,
@@ -440,6 +446,16 @@ class BridgeBot {
             }
             throw fallbackError;
           }
+        }
+      }
+      // Circuit breaker: clear the session after repeated timeout/signal failures so
+      // the next request starts a fresh session instead of re-resuming a broken one.
+      if (/timeout|killed by signal/i.test((error as Error).message ?? "")) {
+        const failures = db.incrementFailures(chatKey, this.kind);
+        if (failures >= 2) {
+          console.warn(`[${this.kind}] clearing session after ${failures} consecutive failures for ${chatKey}`);
+          db.setSession(chatKey, this.kind, null);
+          db.resetFailures(chatKey, this.kind);
         }
       }
       throw error;
@@ -495,6 +511,7 @@ class BridgeBot {
         result.sessionId = resolveAntigravityConversationId({ cwd, sinceMs: startedAtMs, explicitLogContent: logContent });
       }
       if (result.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
+      db.resetFailures(chatKey, this.kind);
       return result;
     } catch (error) {
       if (logFile) {
@@ -541,6 +558,7 @@ class BridgeBot {
               result.sessionId = resolveAntigravityConversationId({ cwd: fallbackCwd, sinceMs: fallbackStartedAtMs, explicitLogContent: fallbackLogContent });
             }
             if (result.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
+            db.resetFailures(chatKey, this.kind);
             return {
               ...result,
               text: `⚠️ Fell back to ${fallbackModel} (${model || "default"} at capacity)\n\n${result.text}`,
@@ -551,6 +569,16 @@ class BridgeBot {
             }
             throw fallbackError;
           }
+        }
+      }
+      // Circuit breaker: clear the session after repeated timeout/signal failures so
+      // the next request starts a fresh session instead of re-resuming a broken one.
+      if (/timeout|killed by signal/i.test((error as Error).message ?? "")) {
+        const failures = db.incrementFailures(chatKey, this.kind);
+        if (failures >= 2) {
+          console.warn(`[${this.kind}] clearing session after ${failures} consecutive failures for ${chatKey}`);
+          db.setSession(chatKey, this.kind, null);
+          db.resetFailures(chatKey, this.kind);
         }
       }
       throw error;

@@ -43,6 +43,15 @@ export function openDb(dbPath: string): BridgeDb {
   try {
     raw.exec(`UPDATE bridge_state SET antigravity_session_id = gemini_session_id WHERE antigravity_session_id IS NULL AND gemini_session_id IS NOT NULL`);
   } catch { /* ignore migration failures */ }
+  try {
+    raw.exec(`ALTER TABLE bridge_state ADD COLUMN codex_consecutive_failures INTEGER NOT NULL DEFAULT 0`);
+  } catch { /* column already exists */ }
+  try {
+    raw.exec(`ALTER TABLE bridge_state ADD COLUMN claude_consecutive_failures INTEGER NOT NULL DEFAULT 0`);
+  } catch { /* column already exists */ }
+  try {
+    raw.exec(`ALTER TABLE bridge_state ADD COLUMN antigravity_consecutive_failures INTEGER NOT NULL DEFAULT 0`);
+  } catch { /* column already exists */ }
   // Clear any locks left held from a previous process that was killed mid-execution
   raw.exec(`UPDATE bridge_state SET active_execution_lock = 0 WHERE active_execution_lock = 1`);
   return new BridgeDb(raw);
@@ -126,6 +135,29 @@ export class BridgeDb {
       .prepare(`SELECT value FROM settings WHERE key = ?`)
       .get(key) as { value: string | null } | undefined;
     return row?.value ?? null;
+  }
+
+  // ── Session failure circuit breaker ─────────────────────────────────────
+
+  incrementFailures(chatId: string, bot: "codex" | "antigravity" | "claude"): number {
+    const col = `${bot}_consecutive_failures`;
+    this.raw
+      .prepare(
+        `INSERT INTO bridge_state (chat_id, ${col}) VALUES (?, 1)
+         ON CONFLICT (chat_id) DO UPDATE SET ${col} = ${col} + 1`
+      )
+      .run(chatId);
+    const row = this.raw
+      .prepare(`SELECT ${col} AS n FROM bridge_state WHERE chat_id = ?`)
+      .get(chatId) as { n: number } | undefined;
+    return row?.n ?? 1;
+  }
+
+  resetFailures(chatId: string, bot: "codex" | "antigravity" | "claude"): void {
+    const col = `${bot}_consecutive_failures`;
+    this.raw
+      .prepare(`UPDATE bridge_state SET ${col} = 0 WHERE chat_id = ?`)
+      .run(chatId);
   }
 
   setSetting(key: string, value: string | null): void {

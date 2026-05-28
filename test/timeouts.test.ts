@@ -35,9 +35,13 @@ describe("resolveTimeoutsForKind — built-in defaults", () => {
     expect(resolveTimeoutsForKind("claude").cliIdleTimeoutMs).toBe(180_000);
   });
 
-  it("all kinds get 600s hard timeout by default", () => {
-    setEnv({ CODEX_CLI_TIMEOUT_MS: undefined, ANTIGRAVITY_CLI_TIMEOUT_MS: undefined, CLAUDE_CLI_TIMEOUT_MS: undefined, CLI_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("codex").cliTimeoutMs).toBe(600_000);
+  it("codex gets 1800s hard timeout by default", () => {
+    setEnv({ CODEX_CLI_TIMEOUT_MS: undefined, CLI_TIMEOUT_MS: undefined });
+    expect(resolveTimeoutsForKind("codex").cliTimeoutMs).toBe(1_800_000);
+  });
+
+  it("antigravity and claude get 600s hard timeout by default", () => {
+    setEnv({ ANTIGRAVITY_CLI_TIMEOUT_MS: undefined, CLAUDE_CLI_TIMEOUT_MS: undefined, CLI_TIMEOUT_MS: undefined });
     expect(resolveTimeoutsForKind("antigravity").cliTimeoutMs).toBe(600_000);
     expect(resolveTimeoutsForKind("claude").cliTimeoutMs).toBe(600_000);
   });

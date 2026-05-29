@@ -6,13 +6,12 @@ interface PerKindDefaults {
 }
 
 // Per-CLI built-in defaults.
-// Antigravity idle: 480s — agy emits nothing during inference, only at completion.
-// Codex idle: raised to 240s — gpt-5.5 has a long silent inference phase before first output.
-// Codex hard: raised to 1800s — gpt-5.5 complex tasks can legitimately take >10 min.
+// Idle timeout: 20 mins — allow extended silence during long inference.
+// Hard timeout: 30 mins — maximum before forcing kill.
 const DEFAULTS: Record<BotKind, PerKindDefaults> = {
-  codex:       { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 240_000 },
-  antigravity: { cliTimeoutMs: 600_000,   cliIdleTimeoutMs: 480_000 },
-  claude:      { cliTimeoutMs: 600_000,   cliIdleTimeoutMs: 180_000 },
+  codex:       { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 1_200_000 },
+  antigravity: { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 1_200_000 },
+  claude:      { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 1_200_000 },
 };
 
 const DEFAULT_FETCH_TIMEOUT_MS = 45_000;

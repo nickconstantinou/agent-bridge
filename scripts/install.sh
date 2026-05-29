@@ -9,6 +9,16 @@ TARGET_USER="${SUDO_USER:-${USER}}"
 TARGET_HOME="$(getent passwd "${TARGET_USER}" | cut -d: -f6)"
 DEFAULT_AGENT_BRIDGE_SKILLS="red-green-refactor-tdd,requirements-to-acceptance,risk-based-test-strategy,release-readiness-review"
 
+# Parse flags
+NON_INTERACTIVE=0
+SKIP_CLI_INSTALL=0
+for _arg in "$@"; do
+  case "${_arg}" in
+    --non-interactive) NON_INTERACTIVE=1 ;;
+    --skip-cli-install) SKIP_CLI_INSTALL=1 ;;
+  esac
+done
+
 cat <<'EOF'
 agent-bridge install
 - codex service reads: .env.codex
@@ -111,6 +121,11 @@ prompt() {
   if [[ -n "${current}" ]]; then
     return
   fi
+  if [[ "${NON_INTERACTIVE}" == "1" ]]; then
+    # Use default silently, or leave empty (required vars will be caught by ensure_var)
+    export "${var}=${default}"
+    return
+  fi
   if [[ -n "${default}" ]]; then
     read -r -p "${label} [${default}]: " current || true
     current="${current:-$default}"
@@ -123,7 +138,10 @@ prompt() {
 ensure_var() {
   local var="$1" label="$2"
   if [[ -z "${!var:-}" ]]; then
-    echo "Missing required value: ${label}" >&2
+    echo "Error: Missing required value for ${label}." >&2
+    if [[ "${NON_INTERACTIVE}" == "1" ]]; then
+      echo "  Set it via the environment before calling install.sh --non-interactive." >&2
+    fi
     exit 1
   fi
 }
@@ -188,13 +206,19 @@ install_unit() {
   sudo chmod 0644 "${SYSTEMD_DIR}/${name}.service"
 }
 
-ensure_npm_cli() {
-  local binary="$1" package="$2"
+# Returns the path to a binary: prefers global PATH, then local node_modules/.bin
+resolve_binary() {
+  local binary="$1"
   if command -v "${binary}" >/dev/null 2>&1; then
+    command -v "${binary}"
     return
   fi
-  echo "Installing ${binary} via npm (${package})"
-  npm install -g "${package}"
+  local local_bin="${REPO_DIR}/node_modules/.bin/${binary}"
+  if [[ -x "${local_bin}" ]]; then
+    echo "${local_bin}"
+    return
+  fi
+  echo ""
 }
 
 ensure_agy_cli() {
@@ -209,15 +233,15 @@ ensure_agy_cli() {
 require_node
 ensure_target_user
 
-if [[ "${1:-}" != "--skip-cli-install" ]]; then
+if [[ "${SKIP_CLI_INSTALL}" != "1" ]]; then
   if command -v npm >/dev/null 2>&1; then
+    # npm install pulls codex and claude-code into ./node_modules as local deps
     (cd "${REPO_DIR}" && npm install)
-    ensure_npm_cli codex @openai/codex
     ensure_agy_cli
-    ensure_npm_cli claude @anthropic-ai/claude-code
-    CODEX_COMMAND="${CODEX_COMMAND:-$(command -v codex  2>/dev/null || true)}"
-    ANTIGRAVITY_COMMAND="${ANTIGRAVITY_COMMAND:-$(command -v agy    2>/dev/null || true)}"
-    CLAUDE_COMMAND="${CLAUDE_COMMAND:-$(command -v claude 2>/dev/null || true)}"
+    # Resolve CLI binary paths: global path first, then local node_modules/.bin
+    CODEX_COMMAND="${CODEX_COMMAND:-$(resolve_binary codex)}"
+    ANTIGRAVITY_COMMAND="${ANTIGRAVITY_COMMAND:-$(resolve_binary agy)}"
+    CLAUDE_COMMAND="${CLAUDE_COMMAND:-$(resolve_binary claude)}"
     if [[ "${USER}" == "${TARGET_USER}" ]]; then
       (cd "${REPO_DIR}" && SHARED_MEMORY_HOME="${TARGET_HOME}" ./node_modules/.bin/tsx scripts/setup-shared-memory.ts)
     else

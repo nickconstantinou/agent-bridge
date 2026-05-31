@@ -290,6 +290,8 @@ export function toAntigravityModelLabel(model: string): string {
     "gemini-3.1-pro-low": "Gemini 3.1 Pro (Low)",
     "claude-4.6-sonnet-thinking": "Claude Sonnet 4.6 (Thinking)",
     "claude-4.6-opus-thinking": "Claude Opus 4.6 (Thinking)",
+    "claude-opus-4-7": "Claude Opus 4.7",
+    "claude-opus-4-8": "Claude Opus 4.8",
   };
 
   const normalized = model.trim().toLowerCase();

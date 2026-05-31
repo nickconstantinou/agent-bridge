@@ -10,6 +10,7 @@ EnvironmentFile=/etc/default/agent-bridge-antigravity
 ExecStart=/usr/bin/env bash -lc 'cd "${BRIDGE_PROJECT_DIR:?}" && exec ./node_modules/.bin/tsx src/index.ts'
 Restart=always
 RestartSec=5
+KillMode=control-group
 Environment=NODE_ENV=production
 
 [Install]

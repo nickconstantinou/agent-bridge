@@ -15,6 +15,9 @@ Polls a Telegram bot for messages, routes them to the Codex, Antigravity, or Cla
 - **Media group batching** — aggregates multi-photo messages into a single agent prompt
 - **Model fallback** — automatically retries with a smaller model on capacity exhaustion (all bots)
 - **Concurrency lock** — one execution per chat at a time (SQLite atomic lock, no race conditions)
+- **Circuit breaker** — auto-clears a corrupt or stale session after 2 consecutive timeout/signal failures
+- **Session TTL** — sessions older than 7 days are automatically cleared on startup to prevent stale resume loops
+- **Orphan cleanup** — kills any leftover CLI processes from a previous bridge instance before starting
 - **Shared memory CLI** — local `agent-memory` commands store and recall durable project facts in SQLite
 - **Shared skills installer** — optional SDLC skills can be installed across Codex, Antigravity, and Claude Code
 - **SOUL.md design** — proposed bridge-level persona contract for consistent voice, values, boundaries, and workflow across agents
@@ -103,8 +106,8 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `ANTIGRAVITY_PROJECT_DIR` | Antigravity | — | Working dir for CLI execution (overrides `BRIDGE_PROJECT_DIR`) |
 | `CLAUDE_PROJECT_DIR` | Claude | — | Working dir for CLI execution (overrides `BRIDGE_PROJECT_DIR`) |
 | `DB_PATH` | All | `.data-<bot>/bridge.sqlite` | SQLite database path |
-| `CLI_TIMEOUT_MS` | All | Codex: `1800000` (30m); others: `600000` (10m) | Hard execution timeout (ms) |
-| `CLI_IDLE_TIMEOUT_MS` | All | Codex: `240000`; Antigravity: `480000`; Claude: `180000` | Kill CLI after this many ms with no output |
+| `CLI_TIMEOUT_MS` | All | `1800000` (30m) | Hard execution timeout (ms) |
+| `CLI_IDLE_TIMEOUT_MS` | All | `1200000` (20m) | Kill CLI after this many ms with no output |
 | `FETCH_TIMEOUT_MS` | All | `45000` | Telegram API fetch timeout (ms) |
 | `POLL_INTERVAL_MS` | All | `1000` | Telegram long-poll interval (ms) |
 | `AGENT_MEMORY_DB_PATH` | All | `~/.agent-bridge/shared-memory/agent-memory.sqlite` | Path to shared agent memory database |

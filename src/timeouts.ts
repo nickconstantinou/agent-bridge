@@ -6,8 +6,9 @@ interface PerKindDefaults {
 }
 
 // Per-CLI built-in defaults.
-// Idle timeout: 20 mins — allow extended silence during long inference.
-// Hard timeout: 30 mins — maximum before forcing kill.
+// All kinds: 30m hard timeout, 20m idle timeout.
+// Idle timeout guards silent hangs; 20m is generous enough for long inference phases
+// (gpt-5.5, agy) while still recovering from genuine stalls within a reasonable window.
 const DEFAULTS: Record<BotKind, PerKindDefaults> = {
   codex:       { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 1_200_000 },
   antigravity: { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 1_200_000 },

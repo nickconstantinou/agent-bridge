@@ -52,8 +52,27 @@ export function openDb(dbPath: string): BridgeDb {
   try {
     raw.exec(`ALTER TABLE bridge_state ADD COLUMN antigravity_consecutive_failures INTEGER NOT NULL DEFAULT 0`);
   } catch { /* column already exists */ }
+  try {
+    raw.exec(`ALTER TABLE bridge_state ADD COLUMN codex_session_created_at TEXT`);
+  } catch { /* column already exists */ }
+  try {
+    raw.exec(`ALTER TABLE bridge_state ADD COLUMN antigravity_session_created_at TEXT`);
+  } catch { /* column already exists */ }
+  try {
+    raw.exec(`ALTER TABLE bridge_state ADD COLUMN claude_session_created_at TEXT`);
+  } catch { /* column already exists */ }
   // Clear any locks left held from a previous process that was killed mid-execution
   raw.exec(`UPDATE bridge_state SET active_execution_lock = 0 WHERE active_execution_lock = 1`);
+  // Expire sessions older than 7 days — prevents a stale/corrupt session from
+  // being resumed indefinitely after a long gap without a /reset
+  for (const bot of ["codex", "antigravity", "claude"] as const) {
+    raw.exec(
+      `UPDATE bridge_state
+       SET ${bot}_session_id = NULL, ${bot}_session_created_at = NULL
+       WHERE ${bot}_session_created_at IS NOT NULL
+         AND ${bot}_session_created_at < datetime('now', '-7 days')`
+    );
+  }
   return new BridgeDb(raw);
 }
 
@@ -78,12 +97,19 @@ export class BridgeDb {
   setSession(chatId: string, bot: "codex" | "antigravity" | "claude", sessionId: string | null): void {
     if (bot !== "codex" && bot !== "antigravity" && bot !== "claude") throw new Error(`Invalid bot kind: ${bot}`);
     const col = `${bot}_session_id`;
+    const tsCol = `${bot}_session_created_at`;
+    // Record when a new session is first stored; clear timestamp when session is cleared
+    const ts = sessionId !== null ? new Date().toISOString() : null;
     this.raw
       .prepare(
-        `INSERT INTO bridge_state (chat_id, ${col}) VALUES (?, ?)
-         ON CONFLICT (chat_id) DO UPDATE SET ${col} = excluded.${col}`
+        `INSERT INTO bridge_state (chat_id, ${col}, ${tsCol}) VALUES (?, ?, ?)
+         ON CONFLICT (chat_id) DO UPDATE SET ${col} = excluded.${col}, ${tsCol} = CASE
+           WHEN excluded.${col} IS NULL THEN NULL
+           WHEN ${col} IS NULL OR ${col} != excluded.${col} THEN excluded.${tsCol}
+           ELSE ${tsCol}
+         END`
       )
-      .run(chatId, sessionId);
+      .run(chatId, sessionId, ts);
   }
 
   // ── Per-chat execution lock ──────────────────────────────────────────────

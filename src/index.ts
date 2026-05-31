@@ -7,6 +7,7 @@
  */
 
 import dotenv from "dotenv";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -668,7 +669,33 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Kill any orphaned CLI processes left over from a previous bridge instance.
+// KillMode=control-group handles this on clean restarts, but guards against
+// cases where the service was force-killed or restarted without systemd.
+function killOrphanedCli(kind: BotKind, command: string): void {
+  // Match only processes that the bridge itself spawns; patterns are specific
+  // enough to avoid collateral damage to other user processes.
+  const patterns: Partial<Record<BotKind, string>> = {
+    codex:       `${command} exec`,
+    antigravity: `${command} --dangerously-skip-permissions`,
+    claude:      `${command} --print`,
+  };
+  const pattern = patterns[kind];
+  if (!pattern) return;
+  try {
+    execFileSync("pkill", ["-f", pattern], { stdio: "ignore" });
+    console.log(`[${kind}] killed orphaned CLI processes matching: ${pattern}`);
+  } catch {
+    // pkill exits 1 when no processes matched — normal on a clean start
+  }
+}
+
 console.log("[bridge] starting bots...");
+
+// Cleanup before starting so stale processes cannot interfere with fresh locks
+for (const [kind, botConfig] of Object.entries(config.bots) as [BotKind, BotConfig][]) {
+  if (botConfig.token) killOrphanedCli(kind, botConfig.command);
+}
 
 const bots = (Object.entries(config.bots) as [("codex" | "antigravity" | "claude"), BotConfig][])
   .filter(([, bot]) => bot.token)

@@ -272,6 +272,9 @@ describe("agent bridge MVP", () => {
     });
     expect(command).toBe("claude");
     expect(args).toContain("--print");
+    expect(args).toContain("--settings");
+    const settings = JSON.parse(String(args[args.indexOf("--settings") + 1]));
+    expect(settings.enabledPlugins["telegram@claude-plugins-official"]).toBe(false);
     expect(args.at(-1)).toContain("hello");
     expect(args).not.toContain("--resume");
   });

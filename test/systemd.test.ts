@@ -13,4 +13,13 @@ describe("systemd templates", () => {
     expect(codex).toContain('cd "${BRIDGE_PROJECT_DIR:?}" && exec ./node_modules/.bin/tsx src/index.ts');
     expect(antigravity).toContain('cd "${BRIDGE_PROJECT_DIR:?}" && exec ./node_modules/.bin/tsx src/index.ts');
   });
+
+  it("all service templates include KillMode=control-group", () => {
+    const codex = readFileSync(new URL("../systemd/agent-bridge-codex.service", import.meta.url), "utf8");
+    const antigravity = readFileSync(new URL("../systemd/agent-bridge-antigravity.service", import.meta.url), "utf8");
+    const claude = readFileSync(new URL("../systemd/agent-bridge-claude.service", import.meta.url), "utf8");
+    expect(codex).toContain("KillMode=control-group");
+    expect(antigravity).toContain("KillMode=control-group");
+    expect(claude).toContain("KillMode=control-group");
+  });
 });

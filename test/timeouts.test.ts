@@ -20,30 +20,18 @@ afterEach(() => {
 });
 
 describe("resolveTimeoutsForKind — built-in defaults", () => {
-  it("codex gets 240s idle timeout by default", () => {
-    setEnv({ CODEX_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("codex").cliIdleTimeoutMs).toBe(240_000);
+  it("all kinds get 1200s idle timeout by default", () => {
+    setEnv({ CODEX_CLI_IDLE_TIMEOUT_MS: undefined, ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: undefined, CLAUDE_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
+    expect(resolveTimeoutsForKind("codex").cliIdleTimeoutMs).toBe(1_200_000);
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(1_200_000);
+    expect(resolveTimeoutsForKind("claude").cliIdleTimeoutMs).toBe(1_200_000);
   });
 
-  it("antigravity gets 480s idle timeout by default", () => {
-    setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(480_000);
-  });
-
-  it("claude gets 180s idle timeout by default", () => {
-    setEnv({ CLAUDE_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("claude").cliIdleTimeoutMs).toBe(180_000);
-  });
-
-  it("codex gets 1800s hard timeout by default", () => {
-    setEnv({ CODEX_CLI_TIMEOUT_MS: undefined, CLI_TIMEOUT_MS: undefined });
+  it("all kinds get 1800s hard timeout by default", () => {
+    setEnv({ CODEX_CLI_TIMEOUT_MS: undefined, ANTIGRAVITY_CLI_TIMEOUT_MS: undefined, CLAUDE_CLI_TIMEOUT_MS: undefined, CLI_TIMEOUT_MS: undefined });
     expect(resolveTimeoutsForKind("codex").cliTimeoutMs).toBe(1_800_000);
-  });
-
-  it("antigravity and claude get 600s hard timeout by default", () => {
-    setEnv({ ANTIGRAVITY_CLI_TIMEOUT_MS: undefined, CLAUDE_CLI_TIMEOUT_MS: undefined, CLI_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("antigravity").cliTimeoutMs).toBe(600_000);
-    expect(resolveTimeoutsForKind("claude").cliTimeoutMs).toBe(600_000);
+    expect(resolveTimeoutsForKind("antigravity").cliTimeoutMs).toBe(1_800_000);
+    expect(resolveTimeoutsForKind("claude").cliTimeoutMs).toBe(1_800_000);
   });
 
   it("fetch timeout defaults to 45s", () => {
@@ -65,7 +53,7 @@ describe("resolveTimeoutsForKind — env precedence", () => {
 
   it("per-CLI env var does not affect other kinds", () => {
     setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: "99000", CODEX_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("codex").cliIdleTimeoutMs).toBe(240_000);
+    expect(resolveTimeoutsForKind("codex").cliIdleTimeoutMs).toBe(1_200_000);
   });
 
   it("global CLI_TIMEOUT_MS applies to all kinds when no per-CLI override", () => {
@@ -93,9 +81,9 @@ describe("resolveTimeoutsForKind — env precedence", () => {
 
   it("ignores zero or non-numeric values and falls back", () => {
     setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: "0", CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(480_000);
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(1_200_000);
     setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: "not-a-number", CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(480_000);
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(1_200_000);
   });
 });
 
@@ -108,8 +96,8 @@ describe("buildExecutionOptions", () => {
       CLI_TIMEOUT_MS: undefined,
     });
     const opts = buildExecutionOptions("antigravity");
-    expect(opts.idleTimeoutMs).toBe(480_000);
-    expect(opts.timeoutMs).toBe(600_000);
+    expect(opts.idleTimeoutMs).toBe(1_200_000);
+    expect(opts.timeoutMs).toBe(1_800_000);
   });
 
   it("reflects env overrides at call time", () => {

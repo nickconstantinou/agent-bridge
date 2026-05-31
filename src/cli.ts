@@ -137,6 +137,8 @@ export function buildCliInvocation({
     args.push(wrapPromptContext(prompt, soulContext));
   } else if (bot === "claude") {
     args.push("--print");
+    const pluginSettings = buildClaudeExcludedPluginSettings();
+    if (pluginSettings) args.push("--settings", pluginSettings);
     if (model) args.push("--model", model);
     if (sessionId) args.push("--resume", sessionId);
     if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
@@ -153,6 +155,21 @@ export function buildCliInvocation({
   }
 
   return { command, args };
+}
+
+const DEFAULT_CLAUDE_EXCLUDED_PLUGINS = ["telegram@claude-plugins-official"];
+
+export function buildClaudeExcludedPluginSettings(env: NodeJS.ProcessEnv = process.env): string | null {
+  const raw = env.CLAUDE_EXCLUDED_PLUGINS;
+  const plugins = raw === undefined
+    ? DEFAULT_CLAUDE_EXCLUDED_PLUGINS
+    : raw.split(",").map((plugin) => plugin.trim()).filter(Boolean);
+
+  if (!plugins.length) return null;
+
+  return JSON.stringify({
+    enabledPlugins: Object.fromEntries(plugins.map((plugin) => [plugin, false])),
+  });
 }
 
 /**

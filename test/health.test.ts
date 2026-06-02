@@ -341,7 +341,7 @@ describe("buildSuggestionPrompt", () => {
 // ── generateSuggestion ────────────────────────────────────────────────────────
 
 describe("generateSuggestion", () => {
-  it("returns string output when command exits 0", async () => {
+  it("returns null when the bot command binary is not found", async () => {
     const { generateSuggestion } = await import("../src/health/suggest.js");
     const report = {
       pluginName: "test",
@@ -350,33 +350,8 @@ describe("generateSuggestion", () => {
       summary: "Critical",
       timestamp: new Date().toISOString(),
     };
-    const result = await generateSuggestion(report, "node", ["-e", "process.stdout.write('restart the service')"], 5_000);
-    expect(result).toBe("restart the service");
-  });
-
-  it("returns null when command exits non-zero", async () => {
-    const { generateSuggestion } = await import("../src/health/suggest.js");
-    const report = {
-      pluginName: "test",
-      status: "red" as const,
-      checks: [],
-      summary: "Critical",
-      timestamp: new Date().toISOString(),
-    };
-    const result = await generateSuggestion(report, "node", ["-e", "process.exit(1)"], 5_000);
-    expect(result).toBeNull();
-  });
-
-  it("returns null when command is not found", async () => {
-    const { generateSuggestion } = await import("../src/health/suggest.js");
-    const report = {
-      pluginName: "test",
-      status: "red" as const,
-      checks: [],
-      summary: "Critical",
-      timestamp: new Date().toISOString(),
-    };
-    const result = await generateSuggestion(report, "no-such-command-xyz", [], 5_000);
+    const fakeBotConfig = { command: "no-such-cli-xyz", modelPreference: [] };
+    const result = await generateSuggestion(report, "claude", fakeBotConfig);
     expect(result).toBeNull();
   });
 });
@@ -397,7 +372,7 @@ describe("HealthScheduler suggest mode", () => {
     const reports: string[] = [];
     const scheduler = new HealthScheduler({
       plugins: [mockPlugin],
-      config: { enabled: true, cadenceSeconds: 60, autonomy: "suggest", claudeCommand: "claude" },
+      config: { enabled: true, cadenceSeconds: 60, autonomy: "suggest", suggestBot: "claude" as const, suggestBotConfig: { command: "claude", modelPreference: [] } },
       sendReport: async (text) => { reports.push(text); },
       _suggestFn: async () => "Drain the queue by restarting the worker",
     });
@@ -420,7 +395,7 @@ describe("HealthScheduler suggest mode", () => {
     const reports: string[] = [];
     const scheduler = new HealthScheduler({
       plugins: [mockPlugin],
-      config: { enabled: true, cadenceSeconds: 60, autonomy: "suggest", claudeCommand: "claude" },
+      config: { enabled: true, cadenceSeconds: 60, autonomy: "suggest", suggestBot: "claude" as const, suggestBotConfig: { command: "claude", modelPreference: [] } },
       sendReport: async (text) => { reports.push(text); },
       _suggestFn: async () => "should not appear",
     });

@@ -1,12 +1,13 @@
 import type { HealthPlugin, HealthConfig, HealthReport } from "./types.js";
+import type { BotKind } from "../types.js";
 import { formatReport } from "./reporter.js";
 import { generateSuggestion } from "./suggest.js";
 
 type SuggestFn = (
   report: HealthReport,
-  command: string,
-  args: string[],
-  timeoutMs: number,
+  bot: BotKind,
+  botConfig: { command: string; modelPreference: string[] },
+  executionMode: "safe" | "trusted",
 ) => Promise<string | null>;
 
 export class HealthScheduler {
@@ -49,16 +50,13 @@ export class HealthScheduler {
     const report = await plugin.check();
     await this.sendReport(formatReport(report));
 
-    if (
-      this.config.autonomy !== "report" &&
-      report.status !== "green" &&
-      this.config.claudeCommand
-    ) {
+    const { autonomy, suggestBot, suggestBotConfig, executionMode } = this.config;
+    if (autonomy !== "report" && report.status !== "green" && suggestBot && suggestBotConfig) {
       const suggestion = await this.suggestFn(
         report,
-        this.config.claudeCommand,
-        this.config.claudeArgs ?? ["--print"],
-        120_000,
+        suggestBot,
+        suggestBotConfig,
+        executionMode ?? "safe",
       );
       if (suggestion) {
         await this.sendReport(`💡 *Suggested actions:*\n\n${suggestion}`);

@@ -27,6 +27,7 @@ export interface HealthConfig {
   cadenceSeconds: number;
   autonomy: AutonomyLevel;
   reportChatId?: string;
-  claudeCommand?: string;
-  claudeArgs?: string[];
+  suggestBot?: "codex" | "antigravity" | "claude";
+  suggestBotConfig?: { command: string; modelPreference: string[] };
+  executionMode?: "safe" | "trusted";
 }

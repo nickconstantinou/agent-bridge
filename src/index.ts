@@ -728,12 +728,14 @@ if (process.env.HEALTH_CONTENT_CRAWLER_ENABLED === "1") {
   console.log(`[health] content-crawler plugin enabled: ${script}`);
 }
 
+const healthSuggestBotKind = (process.env.HEALTH_SUGGEST_BOT || "claude") as "codex" | "antigravity" | "claude";
 const healthConfig: HealthConfig = {
   enabled: healthEnabled,
   cadenceSeconds: healthCadence,
   autonomy: healthAutonomy,
-  claudeCommand: healthAutonomy !== "report" ? (config.bots.claude.command || undefined) : undefined,
-  claudeArgs: ["--print"],
+  suggestBot: healthAutonomy !== "report" ? healthSuggestBotKind : undefined,
+  suggestBotConfig: healthAutonomy !== "report" ? config.bots[healthSuggestBotKind] : undefined,
+  executionMode: config.executionMode,
 };
 
 const sendHealthReport = async (text: string): Promise<void> => {

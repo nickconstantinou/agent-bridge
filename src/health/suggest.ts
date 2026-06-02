@@ -1,7 +1,8 @@
-import { spawn } from "node:child_process";
+import { buildCliInvocation, runCli, parseCliResult } from "../cli.js";
 import type { HealthReport } from "./types.js";
+import type { BotKind } from "../types.js";
 
-const DEFAULT_TIMEOUT_MS = 120_000;
+const SUGGEST_TIMEOUT_MS = 120_000;
 
 export function buildSuggestionPrompt(report: HealthReport): string {
   const failing = report.checks.filter(c => c.status !== "green");
@@ -19,33 +20,28 @@ export function buildSuggestionPrompt(report: HealthReport): string {
 
 export async function generateSuggestion(
   report: HealthReport,
-  claudeCommand: string,
-  claudeArgs: string[] = ["--print"],
-  timeoutMs = DEFAULT_TIMEOUT_MS,
+  bot: BotKind,
+  botConfig: { command: string; modelPreference: string[] },
+  executionMode: "safe" | "trusted" = "safe",
 ): Promise<string | null> {
   const prompt = buildSuggestionPrompt(report);
-  const args = [...claudeArgs, prompt];
-
-  return new Promise((resolve) => {
-    let proc: ReturnType<typeof spawn>;
-    try {
-      proc = spawn(claudeCommand, args, { stdio: ["ignore", "pipe", "pipe"] });
-    } catch {
-      resolve(null);
-      return;
-    }
-
-    const chunks: Buffer[] = [];
-    const killTimer = setTimeout(() => { try { proc.kill(); } catch {} }, timeoutMs);
-
-    proc.stdout?.on("data", (d: Buffer) => chunks.push(d));
-    proc.on("close", (code) => {
-      clearTimeout(killTimer);
-      resolve(code === 0 ? Buffer.concat(chunks).toString("utf8").trim() : null);
-    });
-    proc.on("error", () => {
-      clearTimeout(killTimer);
-      resolve(null);
-    });
+  const invocation = buildCliInvocation({
+    bot,
+    command: botConfig.command,
+    model: botConfig.modelPreference[0] ?? null,
+    prompt,
+    sessionId: null,
+    executionMode,
+    outputFormat: bot !== "antigravity" ? "json" : null,
   });
+  try {
+    const stdout = await runCli(invocation.command, invocation.args, process.cwd(), {
+      timeoutMs: SUGGEST_TIMEOUT_MS,
+      chatId: "health-monitor",
+    });
+    const result = parseCliResult({ bot, stdout, logContent: null });
+    return result.text.trim() || null;
+  } catch {
+    return null;
+  }
 }

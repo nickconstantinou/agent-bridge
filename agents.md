@@ -344,7 +344,7 @@ handleUpdate(update)
 ```
 agent-bridge/
 ├── src/
-│   ├── index.ts           — Entry: BridgeBot class, polling loop, DI
+│   ├── index.ts           — Entry: BridgeBot class, polling loop, DI, health scheduler wiring
 │   ├── bridge.ts          — Auth, session helpers, re-exports from cli/db
 │   ├── cli.ts             — runCli/runCliAsync, buildCliInvocation, parseCliResult,
 │   │                        abortCliProcess, isCapacityExhaustedError, getNextFallbackModel
@@ -353,7 +353,14 @@ agent-bridge/
 │   ├── messageDelivery.ts — sendTelegramMessage, sendMessageWithProgress, StreamingUpdater
 │   ├── render.ts          — splitTelegramText, escapeTelegramMarkdownV2, toTelegramEntitiesText
 │   ├── commands.ts        — handleCommand(): /reset, /models, /start
-│   └── types.ts           — All shared interfaces (BridgeConfig, BotConfig, CliOptions, …)
+│   ├── types.ts           — All shared interfaces (BridgeConfig, BotConfig, CliOptions, …)
+│   └── health/
+│       ├── types.ts       — HealthPlugin, HealthReport, CheckResult, HealthConfig, AutonomyLevel
+│       ├── reporter.ts    — formatReport(): renders HealthReport as Telegram-friendly text
+│       ├── scheduler.ts   — HealthScheduler: setInterval-based plugin runner
+│       └── plugins/
+│           ├── self.ts    — SelfPlugin: DB file existence + read liveness
+│           └── external.ts — ExternalPlugin: spawns a command, parses stdout as HealthReport JSON
 ├── test/                  — Vitest test suite
 ├── docs/
 │   └── PRD.md             — Full product requirements document
@@ -394,6 +401,106 @@ agent-bridge/
 | `BRIDGE_PROJECT_DIR` | All | Repo path (used for default `DB_PATH`) |
 | `AGENT_BRIDGE_SOUL_PATH` | All | Optional persona contract path (default: `<project-dir>/SOUL.md`) |
 | `AGENT_BRIDGE_SOUL_MODE` | All | `summary`, `full`, or `off` (default: `summary`) |
+| `HEALTH_MONITOR_ENABLED` | All | `false` to disable health monitoring (default: `true`) |
+| `HEALTH_MONITOR_CADENCE_SECONDS` | All | Seconds between health check runs (default: `3600`) |
+| `HEALTH_MONITOR_AUTONOMY` | All | `report` / `suggest` / `auto` (default: `report`) |
+| `HEALTH_MONITOR_CHAT_ID` | All | Telegram chat ID for health reports; if unset, logs to stdout |
+| `HEALTH_CONTENT_CRAWLER_ENABLED` | All | `1` to enable the content-crawler external plugin (default: `0`) |
+| `HEALTH_CONTENT_CRAWLER_SCRIPT` | All | Path to content-crawler health check script |
+
+---
+
+## Health Monitoring Plugin System
+
+A `HealthScheduler` starts alongside the bots and calls each registered `HealthPlugin.check()` at the configured cadence. Results are formatted with emoji status indicators and sent via the first active bot's Telegram client to `HEALTH_MONITOR_CHAT_ID`.
+
+### Plugin interface
+
+```typescript
+interface HealthPlugin {
+  name: string;
+  check(): Promise<HealthReport>;
+}
+
+interface HealthReport {
+  pluginName: string;
+  status: "green" | "amber" | "red";
+  checks: CheckResult[];
+  summary: string;
+  timestamp: string;
+}
+
+interface CheckResult {
+  name: string;
+  status: "green" | "amber" | "red";
+  message: string;
+  value?: string | number;
+}
+```
+
+### Built-in plugins
+
+**`SelfPlugin`** — always registered. Checks DB file existence and runs a read query as a liveness probe.
+
+**`ExternalPlugin`** — wraps any shell command. Spawns the command with `spawnSync`, expects exit 0 and a `HealthReport` JSON on stdout. Returns a synthetic red report on non-zero exit or invalid JSON.
+
+### Adding a plugin
+
+Register a second `ExternalPlugin` in `src/index.ts`:
+
+```typescript
+healthPlugins.push(new ExternalPlugin({
+  name: "my-system",
+  command: "python3",
+  args: ["/path/to/my_health.py"],
+  timeoutMs: 30_000,
+}));
+```
+
+The external script must exit 0 and print a valid `HealthReport` JSON to stdout.
+
+**Minimal script template:**
+
+```python
+#!/usr/bin/env python3
+import json
+from datetime import datetime
+
+def check_my_thing():
+    # return {"name": "...", "status": "green"|"amber"|"red", "message": "..."}
+    return {"name": "ping", "status": "green", "message": "ok"}
+
+checks = [check_my_thing()]
+worst = "red" if any(c["status"] == "red" for c in checks) else \
+        "amber" if any(c["status"] == "amber" for c in checks) else "green"
+
+print(json.dumps({
+    "pluginName": "my-system",
+    "status": worst,
+    "checks": checks,
+    "summary": "All good" if worst == "green" else "Issues detected",
+    "timestamp": datetime.now().isoformat(),
+}))
+```
+
+### Content-crawler POC
+
+`~/content-crawler/scripts/health_check.py` is the reference implementation. Enable it with:
+
+```bash
+HEALTH_CONTENT_CRAWLER_ENABLED=1
+HEALTH_MONITOR_CHAT_ID=<your-chat-id>
+```
+
+Checks it performs:
+
+| Check | Amber threshold | Red threshold |
+|-------|----------------|---------------|
+| `queue-depth` | 100 pending items | 500 pending items |
+| `failed-items` | 5 failed items | 20 failed items |
+| `stale-workers` | — | Any item in `processing` > 30 min |
+| `signal-feed` | Feed file older than 6 h | File missing |
+| `disk-space` | < 2 GB free | < 0.5 GB free |
 
 ---
 

@@ -22,10 +22,11 @@ Polls a Telegram bot for messages, routes them to the Codex, Antigravity, or Cla
 - **Shared skills installer** — optional SDLC skills can be installed across Codex, Antigravity, and Claude Code
 - **SOUL.md design** — proposed bridge-level persona contract for consistent voice, values, boundaries, and workflow across agents
 - **Rate limit handling** — automatic retry on Telegram 429 responses
+- **Health monitoring** — plugin-based scheduler that runs health checks at a configurable interval and sends formatted reports to a Telegram chat; extensible to any external system via a one-file JSON script
 
 ## Requirements
 
-- Node 22+
+- Node 24+
 - One or more of `codex`, `agy`, `claude` CLI on `$PATH`
 - `npm` on `$PATH`
 - One Telegram bot per CLI backend, created via [@BotFather](https://t.me/BotFather)
@@ -40,6 +41,8 @@ sudo bash scripts/install.sh
 ```
 
 The installer prompts for bot tokens, user IDs, and paths, then writes `.env.codex`, `.env.antigravity`, and `.env.claude` from the example templates and installs the systemd services.
+
+The installer records the absolute Node binary path as `NODE_BIN` in each systemd defaults file and the service templates run `tsx` through that binary. This avoids systemd falling back to an older ambient `node` on the login shell path.
 
 **Manual setup** (dev / no-systemd):
 
@@ -71,6 +74,7 @@ Important:
 - Each service reads its own env file (`.env.codex`, `.env.antigravity`, `.env.claude`)
 - `BRIDGE_ENV_FILE` must point at the bot-specific env file
 - `BRIDGE_PROJECT_DIR` should point at the agent-bridge repo
+- `NODE_BIN` must point at Node 24+ for systemd deployments
 - `CODEX_PROJECT_DIR` / `ANTIGRAVITY_PROJECT_DIR` / `CLAUDE_PROJECT_DIR` may override the CLI working dir per bot
 
 ## Commands
@@ -218,6 +222,109 @@ If verification reports stale symlinks or missing native entries, repair them wi
 npm run skills -- verify --fix
 ```
 
+## Health monitoring
+
+The bridge runs a built-in `HealthScheduler` that polls plugins at a configurable cadence and sends formatted status reports to a Telegram chat.
+
+### Built-in plugins
+
+| Plugin | What it checks |
+|--------|----------------|
+| `SelfPlugin` | DB file accessibility, DB read liveness |
+| `ExternalPlugin` | Spawns any shell command and parses its stdout as a `HealthReport` JSON |
+
+`SelfPlugin` is always active. `ExternalPlugin` wraps any system you want to monitor.
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HEALTH_MONITOR_ENABLED` | `true` | Set to `false` to disable all health checks |
+| `HEALTH_MONITOR_CADENCE_SECONDS` | `3600` | How often to run each plugin (seconds) |
+| `HEALTH_MONITOR_AUTONOMY` | `report` | `report` — send formatted text; `suggest` / `auto` reserved for future agentic triage |
+| `HEALTH_MONITOR_CHAT_ID` | — | Telegram chat ID to receive reports; if unset, reports are logged to stdout only |
+| `HEALTH_CONTENT_CRAWLER_ENABLED` | `0` | Set to `1` to enable the content-crawler external plugin |
+| `HEALTH_CONTENT_CRAWLER_SCRIPT` | `~/content-crawler/scripts/health_check.py` | Override the script path |
+
+### Report format
+
+```
+✅ *content-crawler* — GREEN
+_All systems nominal_
+
+✅ queue-depth: 12 items queued/pending (12)
+✅ failed-items: 0 failed items (0)
+✅ stale-workers: 0 items stuck in processing > 30m (0)
+✅ signal-feed: signal-feed.json updated 0.2h ago (0.17)
+✅ disk-space: 189.3 GB free (189.34)
+
+_2026-06-02T12:18:17.150628_
+```
+
+### Adding your own health check script
+
+Any script that exits 0 and prints a JSON `HealthReport` to stdout can plug in via `ExternalPlugin`. The shape:
+
+```json
+{
+  "pluginName": "my-system",
+  "status": "green",
+  "checks": [
+    { "name": "db-connection", "status": "green", "message": "connected", "value": 12 }
+  ],
+  "summary": "All systems nominal",
+  "timestamp": "2026-06-02T12:00:00.000Z"
+}
+```
+
+`status` and each check's `status` must be `"green"`, `"amber"`, or `"red"`.
+
+**Python example** (save anywhere, pass path via env var):
+
+```python
+#!/usr/bin/env python3
+import json
+from datetime import datetime
+
+def check_something():
+    # your logic here
+    return {"name": "my-check", "status": "green", "message": "ok"}
+
+checks = [check_something()]
+worst = "red" if any(c["status"] == "red" for c in checks) else \
+        "amber" if any(c["status"] == "amber" for c in checks) else "green"
+
+print(json.dumps({
+    "pluginName": "my-system",
+    "status": worst,
+    "checks": checks,
+    "summary": "All good" if worst == "green" else "Issues detected",
+    "timestamp": datetime.now().isoformat(),
+}))
+```
+
+Wire it in via env:
+
+```bash
+HEALTH_CONTENT_CRAWLER_ENABLED=1
+HEALTH_CONTENT_CRAWLER_SCRIPT=/path/to/my_health.py
+HEALTH_MONITOR_CHAT_ID=123456789
+HEALTH_MONITOR_CADENCE_SECONDS=3600
+```
+
+Or register a second plugin directly in `src/index.ts`:
+
+```typescript
+healthPlugins.push(new ExternalPlugin({
+  name: "my-system",
+  command: "python3",
+  args: ["/path/to/my_health.py"],
+  timeoutMs: 30_000,
+}));
+```
+
+The content-crawler POC (`scripts/health_check.py` in `~/content-crawler`) checks queue depth, failed items, stale workers, signal-feed freshness, and disk space.
+
 ## SOUL.md design
 
 `SOUL.md` is the proposed bridge-level persona contract for all CLI-backed agents.
@@ -241,6 +348,8 @@ See [`docs/soul.md`](docs/soul.md) for the full design, runtime injection order,
 ## Systemd deployment
 
 `sudo` is only required for the systemd install step. The installer prompts for each bot token and skips services whose token is left blank.
+
+Systemd deployments require Node 24+. The current motivation is operational as well as compatibility related: direct Codex usage checks against ChatGPT's Codex usage endpoint returned Cloudflare HTML 403 responses under Node 20 on this host, while the same token and headers returned JSON under Node 24.
 
 ```bash
 npm run setup:shared-memory
@@ -269,6 +378,12 @@ To update an existing deployment (updates npm packages, Claude Code CLI, and res
 
 ```bash
 sudo bash scripts/install-deployment.sh
+```
+
+For nvm-based hosts, run deployment from a shell where Node 24 is active, or pass `NODE_BIN` explicitly:
+
+```bash
+NODE_BIN="$HOME/.nvm/versions/node/v24.15.0/bin/node" sudo -E bash scripts/install-deployment.sh
 ```
 
 ## Development
@@ -326,4 +441,3 @@ Antigravity session capture follows the same durable pattern as Codex, but Agy e
 5. Later turns resume explicitly with `agy --conversation <uuid> [flags] --print <prompt>`.
 
 **Antigravity model switching**: Agy does not expose a `--model` CLI flag. The bridge applies model selection (including capacity fallbacks) by writing the chosen model name into `~/.gemini/antigravity-cli/settings.json` before spawning the process. Resetting to the default (via `/models → Reset to Default`) removes the `model` key from that file so Agy falls back to its own default. The selected model is also persisted in the bridge's SQLite `settings` table so it survives service restarts.
-

@@ -1,0 +1,30 @@
+export type HealthStatus = "green" | "amber" | "red";
+
+export interface CheckResult {
+  name: string;
+  status: HealthStatus;
+  message: string;
+  value?: string | number;
+}
+
+export interface HealthReport {
+  pluginName: string;
+  status: HealthStatus;
+  checks: CheckResult[];
+  summary: string;
+  timestamp: string;
+}
+
+export type AutonomyLevel = "report" | "suggest" | "auto";
+
+export interface HealthPlugin {
+  name: string;
+  check(): Promise<HealthReport>;
+}
+
+export interface HealthConfig {
+  enabled: boolean;
+  cadenceSeconds: number;
+  autonomy: AutonomyLevel;
+  reportChatId?: string;
+}

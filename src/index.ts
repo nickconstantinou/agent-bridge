@@ -46,6 +46,10 @@ import { sendTelegramMessage, sendMessageWithProgress } from "./messageDelivery.
 import type { BridgeConfig, BotConfig, BotKind, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult } from "./types.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
+import { HealthScheduler } from "./health/scheduler.js";
+import { SelfPlugin } from "./health/plugins/self.js";
+import { ExternalPlugin } from "./health/plugins/external.js";
+import type { HealthPlugin, HealthConfig } from "./health/types.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env",
@@ -701,8 +705,59 @@ const bots = (Object.entries(config.bots) as [("codex" | "antigravity" | "claude
   .filter(([, bot]) => bot.token)
   .map(([kind, botConfig]) => new BridgeBot(kind, botConfig));
 
+// ── Health monitoring ──────────────────────────────────────────────────────
+const healthEnabled = process.env.HEALTH_MONITOR_ENABLED !== "false";
+const healthChatId = process.env.HEALTH_MONITOR_CHAT_ID
+  ? Number(process.env.HEALTH_MONITOR_CHAT_ID)
+  : null;
+const healthCadence = Number(process.env.HEALTH_MONITOR_CADENCE_SECONDS || 3600);
+const healthAutonomy = (process.env.HEALTH_MONITOR_AUTONOMY as "report" | "suggest" | "auto") || "report";
+
+const healthPlugins: HealthPlugin[] = [new SelfPlugin(db, config.dbPath)];
+
+if (process.env.HEALTH_CONTENT_CRAWLER_ENABLED === "1") {
+  const script = process.env.HEALTH_CONTENT_CRAWLER_SCRIPT
+    || `${process.env.HOME}/content-crawler/scripts/health_check.py`;
+  const python = `${process.env.HOME}/content-crawler/venv/bin/python3`;
+  healthPlugins.push(new ExternalPlugin({
+    name: "content-crawler",
+    command: python,
+    args: [script],
+    timeoutMs: 30_000,
+  }));
+  console.log(`[health] content-crawler plugin enabled: ${script}`);
+}
+
+const healthConfig: HealthConfig = {
+  enabled: healthEnabled,
+  cadenceSeconds: healthCadence,
+  autonomy: healthAutonomy,
+};
+
+const sendHealthReport = async (text: string): Promise<void> => {
+  if (!healthChatId) {
+    console.log(`[health] report (no HEALTH_MONITOR_CHAT_ID configured):\n${text}`);
+    return;
+  }
+  const bot = bots[0];
+  if (!bot) return;
+  await bot.sendText(healthChatId, { text });
+};
+
+const healthScheduler = new HealthScheduler({
+  plugins: healthPlugins,
+  config: healthConfig,
+  sendReport: sendHealthReport,
+});
+
+if (healthEnabled) {
+  healthScheduler.start();
+  console.log(`[health] scheduler started — cadence ${healthCadence}s, autonomy=${healthAutonomy}, plugins: ${healthPlugins.map(p => p.name).join(", ")}`);
+}
+
 const shutdown = (signal: string) => {
   console.log(`[bridge] ${signal} received, shutting down...`);
+  healthScheduler.stop();
   shutdownCliProcesses();
   db.close();
   process.exit(0);

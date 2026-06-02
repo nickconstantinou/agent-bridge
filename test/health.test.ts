@@ -286,3 +286,187 @@ describe("HealthScheduler", () => {
     scheduler.stop();
   });
 });
+
+// ── buildSuggestionPrompt ─────────────────────────────────────────────────────
+
+describe("buildSuggestionPrompt", () => {
+  it("includes plugin name and summary", async () => {
+    const { buildSuggestionPrompt } = await import("../src/health/suggest.js");
+    const report = {
+      pluginName: "content-crawler",
+      status: "amber" as const,
+      checks: [{ name: "queue-depth", status: "amber" as const, message: "381 items" }],
+      summary: "Warning: queue-depth",
+      timestamp: new Date().toISOString(),
+    };
+    const prompt = buildSuggestionPrompt(report);
+    expect(prompt).toContain("content-crawler");
+    expect(prompt).toContain("Warning: queue-depth");
+  });
+
+  it("includes failing check names and messages", async () => {
+    const { buildSuggestionPrompt } = await import("../src/health/suggest.js");
+    const report = {
+      pluginName: "test",
+      status: "red" as const,
+      checks: [
+        { name: "queue-depth", status: "red" as const, message: "600 items" },
+        { name: "failed-items", status: "green" as const, message: "0 failed" },
+      ],
+      summary: "Critical: queue-depth",
+      timestamp: new Date().toISOString(),
+    };
+    const prompt = buildSuggestionPrompt(report);
+    expect(prompt).toContain("queue-depth");
+    expect(prompt).toContain("600 items");
+  });
+
+  it("excludes green checks", async () => {
+    const { buildSuggestionPrompt } = await import("../src/health/suggest.js");
+    const report = {
+      pluginName: "test",
+      status: "amber" as const,
+      checks: [
+        { name: "disk-space", status: "amber" as const, message: "1.5 GB free" },
+        { name: "queue-depth", status: "green" as const, message: "5 items" },
+      ],
+      summary: "Warning: disk-space",
+      timestamp: new Date().toISOString(),
+    };
+    const prompt = buildSuggestionPrompt(report);
+    expect(prompt).not.toContain("5 items");
+  });
+});
+
+// ── generateSuggestion ────────────────────────────────────────────────────────
+
+describe("generateSuggestion", () => {
+  it("returns string output when command exits 0", async () => {
+    const { generateSuggestion } = await import("../src/health/suggest.js");
+    const report = {
+      pluginName: "test",
+      status: "red" as const,
+      checks: [{ name: "db-file", status: "red" as const, message: "not found" }],
+      summary: "Critical",
+      timestamp: new Date().toISOString(),
+    };
+    const result = await generateSuggestion(report, "node", ["-e", "process.stdout.write('restart the service')"], 5_000);
+    expect(result).toBe("restart the service");
+  });
+
+  it("returns null when command exits non-zero", async () => {
+    const { generateSuggestion } = await import("../src/health/suggest.js");
+    const report = {
+      pluginName: "test",
+      status: "red" as const,
+      checks: [],
+      summary: "Critical",
+      timestamp: new Date().toISOString(),
+    };
+    const result = await generateSuggestion(report, "node", ["-e", "process.exit(1)"], 5_000);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when command is not found", async () => {
+    const { generateSuggestion } = await import("../src/health/suggest.js");
+    const report = {
+      pluginName: "test",
+      status: "red" as const,
+      checks: [],
+      summary: "Critical",
+      timestamp: new Date().toISOString(),
+    };
+    const result = await generateSuggestion(report, "no-such-command-xyz", [], 5_000);
+    expect(result).toBeNull();
+  });
+});
+
+// ── HealthScheduler — suggest mode (runPlugin called directly) ────────────────
+
+describe("HealthScheduler suggest mode", () => {
+  it("sends a second suggestion message for amber report when autonomy=suggest", async () => {
+    const { HealthScheduler } = await import("../src/health/scheduler.js");
+    const mockReport = {
+      pluginName: "content-crawler",
+      status: "amber" as const,
+      checks: [{ name: "queue-depth", status: "amber" as const, message: "381 items" }],
+      summary: "Warning: queue-depth",
+      timestamp: new Date().toISOString(),
+    };
+    const mockPlugin = { name: "content-crawler", check: vi.fn().mockResolvedValue(mockReport) };
+    const reports: string[] = [];
+    const scheduler = new HealthScheduler({
+      plugins: [mockPlugin],
+      config: { enabled: true, cadenceSeconds: 60, autonomy: "suggest", claudeCommand: "claude" },
+      sendReport: async (text) => { reports.push(text); },
+      _suggestFn: async () => "Drain the queue by restarting the worker",
+    });
+    await scheduler.runPlugin(mockPlugin);
+    expect(reports).toHaveLength(2);
+    expect(reports[1]).toContain("Suggested actions");
+    expect(reports[1]).toContain("Drain the queue");
+  });
+
+  it("does NOT send suggestion for green report in suggest mode", async () => {
+    const { HealthScheduler } = await import("../src/health/scheduler.js");
+    const mockReport = {
+      pluginName: "test",
+      status: "green" as const,
+      checks: [],
+      summary: "All good",
+      timestamp: new Date().toISOString(),
+    };
+    const mockPlugin = { name: "test", check: vi.fn().mockResolvedValue(mockReport) };
+    const reports: string[] = [];
+    const scheduler = new HealthScheduler({
+      plugins: [mockPlugin],
+      config: { enabled: true, cadenceSeconds: 60, autonomy: "suggest", claudeCommand: "claude" },
+      sendReport: async (text) => { reports.push(text); },
+      _suggestFn: async () => "should not appear",
+    });
+    await scheduler.runPlugin(mockPlugin);
+    expect(reports).toHaveLength(1);
+  });
+
+  it("does NOT send suggestion when autonomy=report even for red", async () => {
+    const { HealthScheduler } = await import("../src/health/scheduler.js");
+    const mockReport = {
+      pluginName: "test",
+      status: "red" as const,
+      checks: [{ name: "db-file", status: "red" as const, message: "missing" }],
+      summary: "Critical",
+      timestamp: new Date().toISOString(),
+    };
+    const mockPlugin = { name: "test", check: vi.fn().mockResolvedValue(mockReport) };
+    const reports: string[] = [];
+    const scheduler = new HealthScheduler({
+      plugins: [mockPlugin],
+      config: { enabled: true, cadenceSeconds: 60, autonomy: "report" },
+      sendReport: async (text) => { reports.push(text); },
+      _suggestFn: async () => "should not appear",
+    });
+    await scheduler.runPlugin(mockPlugin);
+    expect(reports).toHaveLength(1);
+  });
+
+  it("does NOT send suggestion when claudeCommand is not configured", async () => {
+    const { HealthScheduler } = await import("../src/health/scheduler.js");
+    const mockReport = {
+      pluginName: "test",
+      status: "red" as const,
+      checks: [],
+      summary: "Critical",
+      timestamp: new Date().toISOString(),
+    };
+    const mockPlugin = { name: "test", check: vi.fn().mockResolvedValue(mockReport) };
+    const reports: string[] = [];
+    const scheduler = new HealthScheduler({
+      plugins: [mockPlugin],
+      config: { enabled: true, cadenceSeconds: 60, autonomy: "suggest" },
+      sendReport: async (text) => { reports.push(text); },
+      _suggestFn: async () => "should not appear",
+    });
+    await scheduler.runPlugin(mockPlugin);
+    expect(reports).toHaveLength(1);
+  });
+});

@@ -27,4 +27,6 @@ export interface HealthConfig {
   cadenceSeconds: number;
   autonomy: AutonomyLevel;
   reportChatId?: string;
+  claudeCommand?: string;
+  claudeArgs?: string[];
 }

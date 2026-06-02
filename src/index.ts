@@ -732,6 +732,8 @@ const healthConfig: HealthConfig = {
   enabled: healthEnabled,
   cadenceSeconds: healthCadence,
   autonomy: healthAutonomy,
+  claudeCommand: healthAutonomy !== "report" ? (config.bots.claude.command || undefined) : undefined,
+  claudeArgs: ["--print"],
 };
 
 const sendHealthReport = async (text: string): Promise<void> => {

@@ -4,7 +4,8 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SYSTEMD_DIR="/etc/systemd/system"
 DEFAULTS_DIR="/etc/default"
-NODE_MIN_MAJOR=22
+NODE_MIN_MAJOR=24
+NODE_BIN="${NODE_BIN:-$(command -v node 2>/dev/null || true)}"
 TARGET_USER="${SUDO_USER:-${USER}}"
 TARGET_HOME="$(getent passwd "${TARGET_USER}" | cut -d: -f6)"
 DEFAULT_AGENT_BRIDGE_SKILLS="red-green-refactor-tdd,requirements-to-acceptance,risk-based-test-strategy,release-readiness-review"
@@ -21,23 +22,24 @@ done
 
 cat <<'EOF'
 agent-bridge install
-- codex service reads: .env.codex
-- antigravity service reads: .env.antigravity
-- claude service reads: .env.claude  (optional — skipped if no token provided)
-- BRIDGE_ENV_FILE must point at the bot-specific env file
+- shared config reads: /etc/default/agent-bridge-shared  (paths, health monitoring, allowed users)
+- codex service reads: /etc/default/agent-bridge-codex   (token, command, DB path)
+- antigravity service reads: /etc/default/agent-bridge-antigravity
+- claude service reads: /etc/default/agent-bridge-claude  (optional — skipped if no token provided)
+- bot-specific file overrides shared file when the same key appears in both
 - CODEX_PROJECT_DIR / ANTIGRAVITY_PROJECT_DIR / CLAUDE_PROJECT_DIR override the CLI cwd per bot
 - shared local memory is configured automatically for codex, antigravity, and claude
 - bundled shared skills are installed into native CLI skill directories by default
 EOF
 
 require_node() {
-  if ! command -v node >/dev/null 2>&1; then
+  if [[ -z "${NODE_BIN}" || ! -x "${NODE_BIN}" ]]; then
     echo "Node.js ${NODE_MIN_MAJOR}+ is required." >&2
     exit 1
   fi
 
   local version major
-  version="$(node -p 'process.versions.node')"
+  version="$("${NODE_BIN}" -p 'process.versions.node')"
   major="${version%%.*}"
   if (( major < NODE_MIN_MAJOR )); then
     echo "Node.js ${NODE_MIN_MAJOR}+ is required. Found ${version}." >&2
@@ -73,8 +75,11 @@ seed_from_env_file() {
               CODEX_COMMAND ANTIGRAVITY_COMMAND CLAUDE_COMMAND \
               CODEX_PROJECT_DIR ANTIGRAVITY_PROJECT_DIR CLAUDE_PROJECT_DIR \
               AGENT_BRIDGE_SKILLS AGENT_BRIDGE_SKILL_LINK_MODE \
-              BRIDGE_EXECUTION_MODE POLL_INTERVAL_MS AGENT_MEMORY_DB_PATH \
-              AGENT_BRIDGE_SOUL_PATH AGENT_BRIDGE_SOUL_MODE; do
+              BRIDGE_EXECUTION_MODE POLL_INTERVAL_MS FETCH_TIMEOUT_MS \
+              AGENT_MEMORY_DB_PATH AGENT_BRIDGE_SOUL_PATH AGENT_BRIDGE_SOUL_MODE \
+              HEALTH_MONITOR_ENABLED HEALTH_MONITOR_CADENCE_SECONDS HEALTH_MONITOR_AUTONOMY \
+              HEALTH_MONITOR_CHAT_ID HEALTH_SUGGEST_BOT \
+              HEALTH_CONTENT_CRAWLER_ENABLED HEALTH_CONTENT_CRAWLER_SCRIPT; do
     value="$(env_file_get "${file}" "${key}")"
     if [[ -n "${value}" && -z "${!key:-}" ]]; then
       export "${key}=${value}"
@@ -111,6 +116,7 @@ write_env_file() {
   echo "  wrote ${target}"
 }
 
+seed_from_env_file "${REPO_DIR}/.env.shared"
 seed_from_env_file "${REPO_DIR}/.env.codex"
 seed_from_env_file "${REPO_DIR}/.env.antigravity"
 seed_from_env_file "${REPO_DIR}/.env.claude"
@@ -163,6 +169,11 @@ prompt AGENT_BRIDGE_SKILL_LINK_MODE "Shared skill link mode (symlink|copy)" "sym
 prompt BRIDGE_EXECUTION_MODE "Execution mode (safe|trusted)" "trusted"
 prompt POLL_INTERVAL_MS      "Poll interval ms"               "1000"
 prompt AGENT_MEMORY_DB_PATH  "Agent memory DB path (blank = default)" ""
+prompt HEALTH_MONITOR_ENABLED         "Enable health monitoring (true|false)"   "false"
+prompt HEALTH_MONITOR_CADENCE_SECONDS "Health check cadence (seconds)"           "3600"
+prompt HEALTH_MONITOR_AUTONOMY        "Health autonomy (report|suggest|auto)"    "report"
+prompt HEALTH_MONITOR_CHAT_ID         "Telegram chat ID for health reports (blank = skip)" ""
+prompt HEALTH_SUGGEST_BOT             "Bot to use for suggestions (claude|antigravity|codex)" "claude"
 
 ensure_var BRIDGE_ROOT_DIR           "Bridge root directory"
 ensure_var BRIDGE_PROJECT_DIR        "Bridge project directory"
@@ -188,10 +199,10 @@ install_shared_skills() {
     [[ -n "${skill}" ]] || continue
     echo "Installing shared skill: ${skill} (${link_mode})"
     if [[ "${USER}" == "${TARGET_USER}" ]]; then
-      (cd "${REPO_DIR}" && SHARED_MEMORY_HOME="${TARGET_HOME}" ./node_modules/.bin/tsx scripts/skill-manager.ts install "${skill}" --force --link-mode "${link_mode}")
+      (cd "${REPO_DIR}" && SHARED_MEMORY_HOME="${TARGET_HOME}" "${NODE_BIN}" ./node_modules/tsx/dist/cli.mjs scripts/skill-manager.ts install "${skill}" --force --link-mode "${link_mode}")
     else
-      sudo -u "${TARGET_USER}" env HOME="${TARGET_HOME}" SHARED_MEMORY_HOME="${TARGET_HOME}" \
-        bash -c 'cd "$1" && ./node_modules/.bin/tsx scripts/skill-manager.ts install "$2" --force --link-mode "$3"' bash "${REPO_DIR}" "${skill}" "${link_mode}"
+      sudo -u "${TARGET_USER}" env HOME="${TARGET_HOME}" SHARED_MEMORY_HOME="${TARGET_HOME}" NODE_BIN="${NODE_BIN}" \
+        bash -c 'cd "$1" && "$NODE_BIN" ./node_modules/tsx/dist/cli.mjs scripts/skill-manager.ts install "$2" --force --link-mode "$3"' bash "${REPO_DIR}" "${skill}" "${link_mode}"
     fi
   done
 }
@@ -243,10 +254,10 @@ if [[ "${SKIP_CLI_INSTALL}" != "1" ]]; then
     ANTIGRAVITY_COMMAND="${ANTIGRAVITY_COMMAND:-$(resolve_binary agy)}"
     CLAUDE_COMMAND="${CLAUDE_COMMAND:-$(resolve_binary claude)}"
     if [[ "${USER}" == "${TARGET_USER}" ]]; then
-      (cd "${REPO_DIR}" && SHARED_MEMORY_HOME="${TARGET_HOME}" ./node_modules/.bin/tsx scripts/setup-shared-memory.ts)
+      (cd "${REPO_DIR}" && SHARED_MEMORY_HOME="${TARGET_HOME}" "${NODE_BIN}" ./node_modules/tsx/dist/cli.mjs scripts/setup-shared-memory.ts)
     else
-      sudo -u "${TARGET_USER}" env HOME="${TARGET_HOME}" SHARED_MEMORY_HOME="${TARGET_HOME}" \
-        bash -lc "cd \"${REPO_DIR}\" && ./node_modules/.bin/tsx scripts/setup-shared-memory.ts"
+      sudo -u "${TARGET_USER}" env HOME="${TARGET_HOME}" SHARED_MEMORY_HOME="${TARGET_HOME}" NODE_BIN="${NODE_BIN}" \
+        bash -lc "cd \"${REPO_DIR}\" && \"${NODE_BIN}\" ./node_modules/tsx/dist/cli.mjs scripts/setup-shared-memory.ts"
     fi
     install_shared_skills
   fi
@@ -262,13 +273,40 @@ fi
 
 # Write local .env.* files from examples (machine-specific values substituted in)
 echo "Writing local env files..."
-write_env_file "${REPO_DIR}/.env.codex.example"      "${REPO_DIR}/.env.codex"
+write_env_file "${REPO_DIR}/.env.shared.example"      "${REPO_DIR}/.env.shared"
+write_env_file "${REPO_DIR}/.env.codex.example"       "${REPO_DIR}/.env.codex"
 write_env_file "${REPO_DIR}/.env.antigravity.example" "${REPO_DIR}/.env.antigravity"
 if [[ -n "${TELEGRAM_BOT_TOKEN_CLAUDE:-}" ]]; then
-  write_env_file "${REPO_DIR}/.env.claude.example"   "${REPO_DIR}/.env.claude"
+  write_env_file "${REPO_DIR}/.env.claude.example"    "${REPO_DIR}/.env.claude"
 fi
 
-# Write systemd defaults (include all vars so services are self-contained)
+# Write shared defaults loaded by all services
+_write_shared_defaults() {
+  local dest="${DEFAULTS_DIR}/agent-bridge-shared"
+  {
+    echo "BRIDGE_ROOT_DIR=${BRIDGE_ROOT_DIR}"
+    echo "BRIDGE_PROJECT_DIR=${BRIDGE_PROJECT_DIR}"
+    echo "NODE_BIN=${NODE_BIN}"
+    echo "TELEGRAM_ALLOWED_USER_IDS=${TELEGRAM_ALLOWED_USER_IDS}"
+    echo "BRIDGE_EXECUTION_MODE=${BRIDGE_EXECUTION_MODE}"
+    echo "BRIDGE_ASYNC_ENABLED=true"
+    echo "POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-1000}"
+    echo "FETCH_TIMEOUT_MS=${FETCH_TIMEOUT_MS:-45000}"
+    [[ -n "${AGENT_MEMORY_DB_PATH:-}" ]] && echo "AGENT_MEMORY_DB_PATH=${AGENT_MEMORY_DB_PATH}"
+    [[ -n "${AGENT_BRIDGE_SOUL_PATH:-}" ]]  && echo "AGENT_BRIDGE_SOUL_PATH=${AGENT_BRIDGE_SOUL_PATH}"
+    [[ -n "${AGENT_BRIDGE_SOUL_MODE:-}" ]]  && echo "AGENT_BRIDGE_SOUL_MODE=${AGENT_BRIDGE_SOUL_MODE}"
+    echo "HEALTH_MONITOR_ENABLED=${HEALTH_MONITOR_ENABLED:-false}"
+    echo "HEALTH_MONITOR_CADENCE_SECONDS=${HEALTH_MONITOR_CADENCE_SECONDS:-3600}"
+    echo "HEALTH_MONITOR_AUTONOMY=${HEALTH_MONITOR_AUTONOMY:-report}"
+    [[ -n "${HEALTH_MONITOR_CHAT_ID:-}" ]]          && echo "HEALTH_MONITOR_CHAT_ID=${HEALTH_MONITOR_CHAT_ID}"
+    [[ -n "${HEALTH_SUGGEST_BOT:-}" ]]               && echo "HEALTH_SUGGEST_BOT=${HEALTH_SUGGEST_BOT}"
+    echo "HEALTH_CONTENT_CRAWLER_ENABLED=${HEALTH_CONTENT_CRAWLER_ENABLED:-0}"
+    [[ -n "${HEALTH_CONTENT_CRAWLER_SCRIPT:-}" ]]   && echo "HEALTH_CONTENT_CRAWLER_SCRIPT=${HEALTH_CONTENT_CRAWLER_SCRIPT}"
+  } | sudo tee "${dest}" > /dev/null
+  echo "  wrote ${dest}"
+}
+
+# Write bot-specific defaults (token, command, DB path — shared vars come from agent-bridge-shared)
 _write_systemd_defaults() {
   local bot="$1"
   local token_var="$2"
@@ -277,22 +315,15 @@ _write_systemd_defaults() {
   local dest="${DEFAULTS_DIR}/agent-bridge-${bot}"
 
   {
-    echo "BRIDGE_ROOT_DIR=${BRIDGE_ROOT_DIR}"
-    echo "BRIDGE_PROJECT_DIR=${BRIDGE_PROJECT_DIR}"
     echo "BRIDGE_ENV_FILE=${dest}"
     echo "${token_var}=${!token_var:-}"
-    echo "TELEGRAM_ALLOWED_USER_IDS=${TELEGRAM_ALLOWED_USER_IDS}"
     echo "${cmd_var}=${!cmd_var:-}"
     [[ -n "${!proj_var:-}" ]] && echo "${proj_var}=${!proj_var}"
-    echo "BRIDGE_EXECUTION_MODE=${BRIDGE_EXECUTION_MODE}"
-    echo "BRIDGE_ASYNC_ENABLED=true"
-    echo "POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-1000}"
-    [[ -n "${AGENT_MEMORY_DB_PATH:-}" ]] && echo "AGENT_MEMORY_DB_PATH=${AGENT_MEMORY_DB_PATH}"
-    [[ -n "${AGENT_BRIDGE_SOUL_PATH:-}" ]] && echo "AGENT_BRIDGE_SOUL_PATH=${AGENT_BRIDGE_SOUL_PATH}"
-    [[ -n "${AGENT_BRIDGE_SOUL_MODE:-}" ]] && echo "AGENT_BRIDGE_SOUL_MODE=${AGENT_BRIDGE_SOUL_MODE}"
   } | sudo tee "${dest}" > /dev/null
+  echo "  wrote ${dest}"
 }
 
+_write_shared_defaults
 _write_systemd_defaults codex       TELEGRAM_BOT_TOKEN_CODEX       CODEX_COMMAND       CODEX_PROJECT_DIR
 _write_systemd_defaults antigravity TELEGRAM_BOT_TOKEN_ANTIGRAVITY ANTIGRAVITY_COMMAND ANTIGRAVITY_PROJECT_DIR
 

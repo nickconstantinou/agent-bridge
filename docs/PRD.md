@@ -257,9 +257,9 @@ docs/
 
 ### Systemd
 
-Three service files in `systemd/` (codex, antigravity, claude). Each loads its own env file via `BRIDGE_ENV_FILE`. All share the same `tsx src/index.ts` entrypoint — bot selection is determined by which token is present in the env file.
+Three service files in `systemd/` (codex, antigravity, claude). Each loads its own env file via `BRIDGE_ENV_FILE`. All share the same `tsx src/index.ts` entrypoint through the `NODE_BIN` configured in the systemd defaults file — bot selection is determined by which token is present in the env file. `NODE_BIN` must point at Node 24+.
 
-The installer (`scripts/install.sh`) generates `.env.codex`, `.env.antigravity`, and `.env.claude` from the `.env.*.example` templates, substituting machine-specific values (home dir, binary paths, tokens) collected interactively.
+The installer (`scripts/install.sh`) requires Node 24+, generates `.env.codex`, `.env.antigravity`, and `.env.claude` from the `.env.*.example` templates, and writes machine-specific values (home dir, Node binary path, CLI binary paths, tokens) to the service defaults. Existing deployments can be refreshed with `scripts/install-deployment.sh`, which also requires Node 24+ and updates `NODE_BIN` in `/etc/default/agent-bridge-*`.
 
 ### Database
 

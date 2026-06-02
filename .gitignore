@@ -17,4 +17,5 @@ dist/
 
 .env.antigravity
 .data-antigravity/
+.env.shared
 .antigravitycli/

@@ -4,6 +4,7 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SYSTEMD_DIR="/etc/systemd/system"
 NODE_BIN="${NODE_BIN:-$(command -v node)}"
+NODE_MIN_MAJOR=24
 TARGET_USER="${SUDO_USER:-$(whoami)}"
 TARGET_HOME="$(getent passwd "${TARGET_USER}" | cut -d: -f6)"
 DEFAULT_AGENT_BRIDGE_SKILLS="red-green-refactor-tdd,requirements-to-acceptance,risk-based-test-strategy,release-readiness-review"
@@ -12,6 +13,21 @@ if [[ -z "${NODE_BIN}" ]]; then
   echo "node not found on PATH" >&2
   exit 1
 fi
+
+require_node() {
+  if [[ -z "${NODE_BIN}" || ! -x "${NODE_BIN}" ]]; then
+    echo "Node.js ${NODE_MIN_MAJOR}+ is required." >&2
+    exit 1
+  fi
+
+  local version major
+  version="$("${NODE_BIN}" -p 'process.versions.node')"
+  major="${version%%.*}"
+  if (( major < NODE_MIN_MAJOR )); then
+    echo "Node.js ${NODE_MIN_MAJOR}+ is required. Found ${version}." >&2
+    exit 1
+  fi
+}
 
 install_unit() {
   local name="$1"
@@ -42,12 +58,22 @@ install_shared_skills() {
     [[ -n "${skill}" ]] || continue
     echo "Installing shared skill: ${skill} (${link_mode})"
     if [[ "${USER}" == "${TARGET_USER}" ]]; then
-      (cd "${REPO_DIR}" && SHARED_MEMORY_HOME="${TARGET_HOME}" ./node_modules/.bin/tsx scripts/skill-manager.ts install "${skill}" --force --link-mode "${link_mode}")
+      (cd "${REPO_DIR}" && SHARED_MEMORY_HOME="${TARGET_HOME}" "${NODE_BIN}" ./node_modules/tsx/dist/cli.mjs scripts/skill-manager.ts install "${skill}" --force --link-mode "${link_mode}")
     else
-      sudo -u "${TARGET_USER}" env HOME="${TARGET_HOME}" SHARED_MEMORY_HOME="${TARGET_HOME}" \
-        bash -c 'cd "$1" && ./node_modules/.bin/tsx scripts/skill-manager.ts install "$2" --force --link-mode "$3"' bash "${REPO_DIR}" "${skill}" "${link_mode}"
+      sudo -u "${TARGET_USER}" env HOME="${TARGET_HOME}" SHARED_MEMORY_HOME="${TARGET_HOME}" NODE_BIN="${NODE_BIN}" \
+        bash -c 'cd "$1" && "$NODE_BIN" ./node_modules/tsx/dist/cli.mjs scripts/skill-manager.ts install "$2" --force --link-mode "$3"' bash "${REPO_DIR}" "${skill}" "${link_mode}"
     fi
   done
+}
+
+require_node
+
+run_as_target_user() {
+  if [[ "${USER}" == "${TARGET_USER}" ]]; then
+    "$@"
+  else
+    sudo -u "${TARGET_USER}" env HOME="${TARGET_HOME}" PATH="${PATH}" "$@"
+  fi
 }
 
 if [[ "${1:-}" != "--skip-cli-install" ]]; then
@@ -58,19 +84,19 @@ if [[ "${1:-}" != "--skip-cli-install" ]]; then
   fi
 
   if command -v codex >/dev/null 2>&1; then
-    codex --help >/dev/null
+    run_as_target_user codex --help >/dev/null
   fi
 
   if ! command -v agy >/dev/null 2>&1; then
     echo "Installing agy..."
-    curl -fsSL https://antigravity.google/cli/install.sh | bash
+    run_as_target_user bash -c 'curl -fsSL https://antigravity.google/cli/install.sh | bash'
   fi
   if command -v agy >/dev/null 2>&1; then
-    agy --help >/dev/null
+    run_as_target_user agy --help >/dev/null
   fi
 
   if command -v claude >/dev/null 2>&1; then
-    claude --version >/dev/null
+    run_as_target_user claude --version >/dev/null
   fi
 elif [[ -n "${AGENT_BRIDGE_SKILLS:-}" && "${AGENT_BRIDGE_SKILLS}" != "none" && "${AGENT_BRIDGE_SKILLS}" != "skip" ]]; then
   install_shared_skills
@@ -79,12 +105,28 @@ fi
 install_unit agent-bridge-codex
 install_unit agent-bridge-antigravity
 
+ensure_node_default() {
+  local file="$1"
+  if [[ ! -f "${file}" ]]; then
+    return
+  fi
+  if grep -q '^NODE_BIN=' "${file}"; then
+    sudo sed -i "s|^NODE_BIN=.*|NODE_BIN=${NODE_BIN}|" "${file}"
+  else
+    printf '\nNODE_BIN=%s\n' "${NODE_BIN}" | sudo tee -a "${file}" > /dev/null
+  fi
+}
+
+ensure_node_default /etc/default/agent-bridge-codex
+ensure_node_default /etc/default/agent-bridge-antigravity
+
 UNITS_TO_ENABLE="agent-bridge-codex agent-bridge-antigravity"
 
 # Install claude unit only if its defaults file is present (created by install.sh)
 CLAUDE_DEFAULTS="/etc/default/agent-bridge-claude"
 if [[ -f "${CLAUDE_DEFAULTS}" ]]; then
   install_unit agent-bridge-claude
+  ensure_node_default "${CLAUDE_DEFAULTS}"
   UNITS_TO_ENABLE="${UNITS_TO_ENABLE} agent-bridge-claude"
 fi
 

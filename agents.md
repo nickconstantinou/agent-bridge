@@ -403,8 +403,9 @@ agent-bridge/
 | `AGENT_BRIDGE_SOUL_MODE` | All | `summary`, `full`, or `off` (default: `summary`) |
 | `HEALTH_MONITOR_ENABLED` | All | `false` to disable health monitoring (default: `true`) |
 | `HEALTH_MONITOR_CADENCE_SECONDS` | All | Seconds between health check runs (default: `3600`) |
-| `HEALTH_MONITOR_AUTONOMY` | All | `report` / `suggest` / `auto` (default: `report`) |
+| `HEALTH_MONITOR_AUTONOMY` | All | `report` — report only; `suggest` — also spawns a CLI for diagnosis (default: `report`) |
 | `HEALTH_MONITOR_CHAT_ID` | All | Telegram chat ID for health reports; if unset, logs to stdout |
+| `HEALTH_SUGGEST_BOT` | All | CLI to use for suggest mode: `codex`, `antigravity`, `claude` (default: `claude`) |
 | `HEALTH_CONTENT_CRAWLER_ENABLED` | All | `1` to enable the content-crawler external plugin (default: `0`) |
 | `HEALTH_CONTENT_CRAWLER_SCRIPT` | All | Path to content-crawler health check script |
 
@@ -444,6 +445,22 @@ interface CheckResult {
 
 **`ExternalPlugin`** — wraps any shell command. Spawns the command with `spawnSync`, expects exit 0 and a `HealthReport` JSON on stdout. Returns a synthetic red report on non-zero exit or invalid JSON.
 
+### Suggest mode
+
+When `HEALTH_MONITOR_AUTONOMY=suggest` and a report returns amber or red, `runPlugin()` calls `generateSuggestion()` and sends the result as a follow-up Telegram message.
+
+`generateSuggestion` routes through `buildCliInvocation → runCli → parseCliResult` — **the same execution path used for real user messages**. Auth, permissions flags, model selection, and output parsing are all handled identically. The bot used is configured by `HEALTH_SUGGEST_BOT` (default: `claude`).
+
+```typescript
+// src/health/scheduler.ts — dependency-injectable for testing
+constructor(options: {
+  ...
+  _suggestFn?: SuggestFn;  // inject a mock in tests; defaults to generateSuggestion
+})
+```
+
+The prompt sent to the CLI includes only non-green failing checks with their messages. The CLI's full response is forwarded to Telegram as-is.
+
 ### Adding a plugin
 
 Register a second `ExternalPlugin` in `src/index.ts`:
@@ -467,7 +484,6 @@ import json
 from datetime import datetime
 
 def check_my_thing():
-    # return {"name": "...", "status": "green"|"amber"|"red", "message": "..."}
     return {"name": "ping", "status": "green", "message": "ok"}
 
 checks = [check_my_thing()]

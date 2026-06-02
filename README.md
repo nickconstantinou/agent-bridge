@@ -241,10 +241,32 @@ The bridge runs a built-in `HealthScheduler` that polls plugins at a configurabl
 |----------|---------|-------------|
 | `HEALTH_MONITOR_ENABLED` | `true` | Set to `false` to disable all health checks |
 | `HEALTH_MONITOR_CADENCE_SECONDS` | `3600` | How often to run each plugin (seconds) |
-| `HEALTH_MONITOR_AUTONOMY` | `report` | `report` — send formatted text; `suggest` / `auto` reserved for future agentic triage |
+| `HEALTH_MONITOR_AUTONOMY` | `report` | `report` — formatted report only; `suggest` — also spawns a CLI to diagnose and propose fixes |
 | `HEALTH_MONITOR_CHAT_ID` | — | Telegram chat ID to receive reports; if unset, reports are logged to stdout only |
+| `HEALTH_SUGGEST_BOT` | `claude` | Which installed CLI diagnoses amber/red reports: `codex`, `antigravity`, or `claude` |
 | `HEALTH_CONTENT_CRAWLER_ENABLED` | `0` | Set to `1` to enable the content-crawler external plugin |
 | `HEALTH_CONTENT_CRAWLER_SCRIPT` | `~/content-crawler/scripts/health_check.py` | Override the script path |
+
+### Suggest mode
+
+When `HEALTH_MONITOR_AUTONOMY=suggest` the bridge sends a second message for every amber or red report. It routes the failing checks through the CLI configured in `HEALTH_SUGGEST_BOT` using the **same auth path as normal user messages** (`buildCliInvocation → runCli → parseCliResult`). The response appears as:
+
+```
+💡 *Suggested actions:*
+
+The queue backlog (381 items) is normal throughput lag, not a fault.
+Workers are healthy and draining. No action needed unless the backlog
+grows beyond 500 or items start failing.
+```
+
+To enable suggest mode, add to your `.env` file:
+
+```bash
+HEALTH_MONITOR_AUTONOMY=suggest
+HEALTH_SUGGEST_BOT=claude          # or codex / antigravity
+HEALTH_MONITOR_CHAT_ID=<your-telegram-user-id>
+HEALTH_CONTENT_CRAWLER_ENABLED=1
+```
 
 ### Report format
 

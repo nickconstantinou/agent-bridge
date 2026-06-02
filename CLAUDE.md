@@ -35,3 +35,18 @@ agent-memory add --type decision --scope project --text "<concise memory>"
 
 Do not save secrets, API keys, passwords, transient logs, or private personal information.
 Do not rely on MCP for memory.
+
+---
+
+# Health Monitoring System
+
+A `HealthScheduler` runs alongside the bots and fires registered `HealthPlugin` instances on a `setInterval`. Key facts for working on this codebase:
+
+- **`src/health/`** — types, reporter, scheduler, suggest, plugins/self, plugins/external
+- **`SelfPlugin`** — always registered; checks DB file + read liveness
+- **`ExternalPlugin`** — spawns any shell command, parses stdout as `HealthReport` JSON; `spawnSync` with 30s timeout
+- **`generateSuggestion`** (suggest mode) — routes through `buildCliInvocation → runCli → parseCliResult`, same path as real user messages. Bot selected by `HEALTH_SUGGEST_BOT` env var.
+- **`_suggestFn` injection** — `HealthScheduler` constructor accepts `_suggestFn` to replace `generateSuggestion` in tests, avoiding real CLI spawning under fake timers
+- **Content-crawler POC** — `~/content-crawler/scripts/health_check.py`; checks queue depth, failed items, stale workers, signal-feed age, disk space; enabled via `HEALTH_CONTENT_CRAWLER_ENABLED=1`
+
+When modifying the health module, keep `_suggestFn` injectable — do not inline `generateSuggestion` in the scheduler.

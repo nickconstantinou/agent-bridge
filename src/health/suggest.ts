@@ -2,7 +2,7 @@ import { buildCliInvocation, runCli, parseCliResult } from "../cli.js";
 import type { HealthReport } from "./types.js";
 import type { BotKind } from "../types.js";
 
-const SUGGEST_TIMEOUT_MS = 120_000;
+const SUGGEST_TIMEOUT_MS = 600_000;
 
 export function buildSuggestionPrompt(report: HealthReport): string {
   const failing = report.checks.filter(c => c.status !== "green");

@@ -16,6 +16,7 @@ export class HealthScheduler {
   private suggestFn: SuggestFn;
   private onRawReport?: (report: HealthReport) => Promise<void>;
   private timers: NodeJS.Timeout[] = [];
+  private inFlight = new Set<string>();
 
   constructor(options: {
     plugins: HealthPlugin[];
@@ -49,20 +50,29 @@ export class HealthScheduler {
   }
 
   async runPlugin(plugin: HealthPlugin): Promise<void> {
-    const report = await plugin.check();
-
-    if (this.onRawReport) {
-      await this.onRawReport(report);
+    if (this.inFlight.has(plugin.name)) {
+      console.warn(`[health] plugin ${plugin.name} run skipped: previous run still in flight`);
+      return;
     }
+    this.inFlight.add(plugin.name);
+    try {
+      const report = await plugin.check();
 
-    await this.sendReport(formatReport(report));
-
-    const { autonomy, suggestBot, suggestBotConfig } = this.config;
-    if (autonomy !== "report" && report.status !== "green" && suggestBot && suggestBotConfig) {
-      const suggestion = await this.suggestFn(report, suggestBot, suggestBotConfig);
-      if (suggestion) {
-        await this.sendReport(`💡 *Suggested actions:*\n\n${suggestion}`);
+      if (this.onRawReport) {
+        await this.onRawReport(report);
       }
+
+      await this.sendReport(formatReport(report));
+
+      const { autonomy, suggestBot, suggestBotConfig } = this.config;
+      if (autonomy !== "report" && report.status !== "green" && suggestBot && suggestBotConfig) {
+        const suggestion = await this.suggestFn(report, suggestBot, suggestBotConfig);
+        if (suggestion) {
+          await this.sendReport(`💡 *Suggested actions:*\n\n${suggestion}`);
+        }
+      }
+    } finally {
+      this.inFlight.delete(plugin.name);
     }
   }
 }

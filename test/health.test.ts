@@ -183,6 +183,75 @@ describe("SelfPlugin", () => {
   });
 });
 
+// ── ServerPlugin ──────────────────────────────────────────────────────────────
+
+describe("ServerPlugin", () => {
+  it("reports stats successfully", async () => {
+    const { ServerPlugin } = await import("../src/health/plugins/server.js");
+    const plugin = new ServerPlugin();
+    const report = await plugin.check();
+    expect(report.pluginName).toBe("server");
+    expect(["green", "amber", "red"]).toContain(report.status);
+    
+    const cpuCheck = report.checks.find(c => c.name === "cpu-load");
+    expect(cpuCheck).toBeDefined();
+    expect(["green", "amber", "red"]).toContain(cpuCheck?.status);
+    expect(typeof cpuCheck?.value).toBe("number");
+
+    const memCheck = report.checks.find(c => c.name === "memory-usage");
+    expect(memCheck).toBeDefined();
+    expect(["green", "amber", "red"]).toContain(memCheck?.status);
+    expect(typeof memCheck?.value).toBe("number");
+
+    const swapCheck = report.checks.find(c => c.name === "swap-usage");
+    expect(swapCheck).toBeDefined();
+    expect(["green", "amber", "red"]).toContain(swapCheck?.status);
+
+    const zombieCheck = report.checks.find(c => c.name === "zombies");
+    expect(zombieCheck).toBeDefined();
+    expect(["green", "amber", "red"]).toContain(zombieCheck?.status);
+    expect(typeof zombieCheck?.value).toBe("number");
+
+    const uptimeCheck = report.checks.find(c => c.name === "uptime");
+    expect(uptimeCheck).toBeDefined();
+    expect(uptimeCheck?.status).toBe("green");
+    expect(typeof uptimeCheck?.value).toBe("number");
+
+    const firewallCheck = report.checks.find(c => c.name === "firewall");
+    expect(firewallCheck).toBeDefined();
+    expect(["green", "amber"]).toContain(firewallCheck?.status);
+
+    const sshKeyCheck = report.checks.find(c => c.name === "ssh-key-perms");
+    expect(sshKeyCheck).toBeDefined();
+    expect(["green", "amber", "red"]).toContain(sshKeyCheck?.status);
+
+    const envFileCheck = report.checks.find(c => c.name === "env-file-perms");
+    expect(envFileCheck).toBeDefined();
+    expect(["green", "amber"]).toContain(envFileCheck?.status);
+  });
+
+  it("supports configurable CPU load thresholds", async () => {
+    const { ServerPlugin } = await import("../src/health/plugins/server.js");
+    
+    // Set custom multipliers/thresholds that force it to be flagged
+    process.env.HEALTH_CPU_LOAD_AMBER_MULTIPLIER = "0.001";
+    process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER = "0.002";
+
+    try {
+      const plugin = new ServerPlugin();
+      const report = await plugin.check();
+      const cpuCheck = report.checks.find(c => c.name === "cpu-load");
+      expect(["amber", "red"]).toContain(cpuCheck?.status);
+      if (cpuCheck?.status !== "green" && process.platform === "linux") {
+        expect(cpuCheck?.message).toContain("Top CPU processes");
+      }
+    } finally {
+      delete process.env.HEALTH_CPU_LOAD_AMBER_MULTIPLIER;
+      delete process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER;
+    }
+  });
+});
+
 // ── HealthScheduler ───────────────────────────────────────────────────────────
 
 describe("HealthScheduler", () => {
@@ -431,6 +500,30 @@ describe("generateSuggestion", () => {
     const result = await generateSuggestion(report, "claude", fakeBotConfig);
     expect(result).toBeNull();
   });
+
+  it("returns null when the bot returns an error-shaped response", async () => {
+    const { generateSuggestion } = await import("../src/health/suggest.js");
+    const report = {
+      pluginName: "test",
+      status: "red" as const,
+      checks: [],
+      summary: "Critical",
+      timestamp: new Date().toISOString(),
+    };
+    // Mock runCli/parseCliResult behavior by testing with a command that outputs an error/timeout string
+    const { runCli } = await import("../src/cli.js");
+    const originalRunCli = runCli;
+    try {
+      // Mock runCli to return an error string in stdout
+      const mockRunCli = vi.fn().mockResolvedValue(JSON.stringify({ result: "Error: timed out waiting for response" }));
+      vi.spyOn(await import("../src/cli.js"), "runCli").mockImplementation(mockRunCli);
+      
+      const result = await generateSuggestion(report, "claude", { command: "claude", modelPreference: [] });
+      expect(result).toBeNull();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
 });
 
 // ── HealthScheduler — suggest mode (runPlugin called directly) ────────────────
@@ -519,6 +612,50 @@ describe("HealthScheduler suggest mode", () => {
       _suggestFn: async () => "should not appear",
     });
     await scheduler.runPlugin(mockPlugin);
+  });
+
+  it("skips running a plugin if a previous run is still in flight", async () => {
+    const { HealthScheduler } = await import("../src/health/scheduler.js");
+    const mockReport = {
+      pluginName: "test",
+      status: "green" as const,
+      checks: [],
+      summary: "All good",
+      timestamp: new Date().toISOString(),
+    };
+    
+    let resolveCheck: (value: typeof mockReport) => void = () => {};
+    const checkPromise = new Promise<typeof mockReport>((resolve) => {
+      resolveCheck = resolve;
+    });
+
+    const mockPlugin = {
+      name: "test",
+      check: vi.fn().mockReturnValue(checkPromise),
+    };
+    
+    const reports: string[] = [];
+    const scheduler = new HealthScheduler({
+      plugins: [mockPlugin],
+      config: { enabled: true, cadenceSeconds: 60, autonomy: "report" },
+      sendReport: async (text) => { reports.push(text); },
+    });
+
+    // Start first run - it should remain in flight
+    const run1 = scheduler.runPlugin(mockPlugin);
+    
+    // Start second run - it should skip
+    const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await scheduler.runPlugin(mockPlugin);
+    
+    expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining("run skipped: previous run still in flight"));
+    expect(mockPlugin.check).toHaveBeenCalledTimes(1); // Only called once
+    
+    // Resolve the first check
+    resolveCheck(mockReport);
+    await run1;
+    
     expect(reports).toHaveLength(1);
+    consoleWarnSpy.mockRestore();
   });
 });

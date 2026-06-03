@@ -1,0 +1,258 @@
+import os from "node:os";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
+import { execSync } from "node:child_process";
+import type { HealthPlugin, HealthReport, CheckResult } from "../types.js";
+
+export class ServerPlugin implements HealthPlugin {
+  readonly name = "server";
+
+  async check(): Promise<HealthReport> {
+    const checks: CheckResult[] = [];
+
+    // ── Performance Checks ───────────────────────────────────────────────────
+
+    // 1. CPU Load Average (1-minute)
+    const cpus = os.cpus().length || 1;
+    const loadAvg = os.loadavg();
+    const load1m = loadAvg[0] ?? 0;
+    
+    const amberMultiplier = process.env.HEALTH_CPU_LOAD_AMBER_MULTIPLIER
+      ? Number(process.env.HEALTH_CPU_LOAD_AMBER_MULTIPLIER)
+      : 1.0;
+    const redMultiplier = process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER
+      ? Number(process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER)
+      : 1.5;
+
+    const amberThreshold = process.env.HEALTH_CPU_LOAD_AMBER_THRESHOLD
+      ? Number(process.env.HEALTH_CPU_LOAD_AMBER_THRESHOLD)
+      : cpus * amberMultiplier;
+    const redThreshold = process.env.HEALTH_CPU_LOAD_RED_THRESHOLD
+      ? Number(process.env.HEALTH_CPU_LOAD_RED_THRESHOLD)
+      : cpus * redMultiplier;
+
+    let loadStatus: "green" | "amber" | "red" = "green";
+    if (load1m >= redThreshold) {
+      loadStatus = "red";
+    } else if (load1m >= amberThreshold) {
+      loadStatus = "amber";
+    }
+    
+    let topProcessesMsg = "";
+    if (loadStatus !== "green" && os.platform() === "linux") {
+      try {
+        const topOutput = execSync("ps -eo pid,pcpu,comm --sort=-pcpu | head -n 4", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+        topProcessesMsg = `\nTop CPU processes:\n${topOutput}`;
+      } catch {
+        // ignore
+      }
+    }
+
+    checks.push({
+      name: "cpu-load",
+      status: loadStatus,
+      message: `1-min load average: ${load1m.toFixed(2)} (${cpus} CPUs)${topProcessesMsg}`,
+      value: Number(load1m.toFixed(2)),
+    });
+
+    // 2. Memory (RAM) Usage
+    const totalMem = os.totalmem();
+    const freeMem = os.freemem();
+    const usedMem = totalMem - freeMem;
+    const memPct = (usedMem / totalMem) * 100;
+    
+    let memStatus: "green" | "amber" | "red" = "green";
+    if (memPct >= 95) {
+      memStatus = "red";
+    } else if (memPct >= 80) {
+      memStatus = "amber";
+    }
+
+    const usedGB = (usedMem / 1024 / 1024 / 1024).toFixed(1);
+    const totalGB = (totalMem / 1024 / 1024 / 1024).toFixed(1);
+    
+    checks.push({
+      name: "memory-usage",
+      status: memStatus,
+      message: `Memory usage: ${memPct.toFixed(1)}% (${usedGB} GB of ${totalGB} GB used)`,
+      value: Number(memPct.toFixed(1)),
+    });
+
+    // 3. Swap Usage
+    let swapStatus: "green" | "amber" | "red" = "green";
+    let swapMsg = "Swap disabled";
+    let swapPct: number | undefined = undefined;
+    try {
+      if (existsSync("/proc/meminfo")) {
+        const content = readFileSync("/proc/meminfo", "utf8");
+        const totalMatch = content.match(/^SwapTotal:\s+(\d+)\s+kB/m);
+        const freeMatch = content.match(/^SwapFree:\s+(\d+)\s+kB/m);
+        if (totalMatch && freeMatch) {
+          const total = Number(totalMatch[1]);
+          const free = Number(freeMatch[1]);
+          if (total > 0) {
+            const used = total - free;
+            swapPct = (used / total) * 100;
+            const usedMB = (used / 1024).toFixed(0);
+            const totalMB = (total / 1024).toFixed(0);
+            swapMsg = `Swap usage: ${swapPct.toFixed(1)}% (${usedMB} MB of ${totalMB} MB used)`;
+            if (swapPct >= 95) {
+              swapStatus = "red";
+            } else if (swapPct >= 80) {
+              swapStatus = "amber";
+            }
+          }
+        }
+      }
+    } catch (err) {
+      swapStatus = "amber";
+      swapMsg = `Failed to check swap: ${(err as Error).message}`;
+    }
+    checks.push({
+      name: "swap-usage",
+      status: swapStatus,
+      message: swapMsg,
+      value: swapPct !== undefined ? Number(swapPct.toFixed(1)) : undefined,
+    });
+
+    // 4. Zombie Processes
+    let zombieStatus: "green" | "amber" | "red" = "green";
+    let zombieMsg = "No zombie processes detected";
+    let zombieCount = 0;
+    try {
+      const output = execSync("ps -eo state", { stdio: ["ignore", "pipe", "ignore"] }).toString();
+      zombieCount = (output.match(/Z/g) || []).length;
+      if (zombieCount > 0) {
+        zombieMsg = `${zombieCount} zombie process(es) detected`;
+        if (zombieCount >= 5) {
+          zombieStatus = "red";
+        } else {
+          zombieStatus = "amber";
+        }
+      }
+    } catch {
+      // Fallback if ps command fails
+    }
+    checks.push({
+      name: "zombies",
+      status: zombieStatus,
+      message: zombieMsg,
+      value: zombieCount,
+    });
+
+    // 5. System Uptime
+    const uptimeSec = os.uptime();
+    const uptimeDays = Math.floor(uptimeSec / 86400);
+    const uptimeHours = Math.floor((uptimeSec % 86400) / 3600);
+    const uptimeMsg = uptimeDays > 0 
+      ? `${uptimeDays}d ${uptimeHours}h`
+      : `${uptimeHours}h`;
+
+    checks.push({
+      name: "uptime",
+      status: "green",
+      message: `System uptime: ${uptimeMsg}`,
+      value: uptimeSec,
+    });
+
+    // ── Security Checks ──────────────────────────────────────────────────────
+
+    // 6. Firewall (UFW) Status
+    let ufwStatus: "green" | "amber" = "green";
+    let ufwMsg = "UFW firewall is active";
+    try {
+      const output = execSync("systemctl is-active ufw", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+      if (output !== "active") {
+        ufwStatus = "amber";
+        ufwMsg = `UFW firewall is inactive (status: ${output})`;
+      }
+    } catch {
+      ufwStatus = "amber";
+      ufwMsg = "UFW firewall service check failed or inactive";
+    }
+    checks.push({
+      name: "firewall",
+      status: ufwStatus,
+      message: ufwMsg,
+    });
+
+    // 7. SSH Private Key Permissions
+    const sshDir = join(os.homedir(), ".ssh");
+    let sshStatus: "green" | "amber" | "red" = "green";
+    let sshMsg = "SSH key file permissions secure";
+    if (existsSync(sshDir)) {
+      try {
+        const files = readdirSync(sshDir);
+        const unsafeFiles: string[] = [];
+        for (const file of files) {
+          if ((file.startsWith("id_") || file === "identity") && !file.endsWith(".pub")) {
+            const filePath = join(sshDir, file);
+            const stat = statSync(filePath);
+            const mode = stat.mode & 0o777;
+            // Mode should not have any group (0o070) or world (0o007) permissions (0o077 mask)
+            if ((mode & 0o077) !== 0) {
+              unsafeFiles.push(`${file} (0${mode.toString(8)})`);
+            }
+          }
+        }
+        if (unsafeFiles.length > 0) {
+          sshStatus = "red";
+          sshMsg = `Unsafe SSH private key permissions: ${unsafeFiles.join(", ")}`;
+        }
+      } catch (err) {
+        sshStatus = "amber";
+        sshMsg = `Failed to check SSH key permissions: ${(err as Error).message}`;
+      }
+    }
+    checks.push({
+      name: "ssh-key-perms",
+      status: sshStatus,
+      message: sshMsg,
+    });
+
+    // 8. Local Environment File Permissions
+    const projectDir = process.cwd();
+    let envStatus: "green" | "amber" = "green";
+    let envMsg = "Environment file permissions secure";
+    try {
+      const files = readdirSync(projectDir);
+      const unsafeEnvFiles: string[] = [];
+      for (const file of files) {
+        if (file.startsWith(".env") && !file.endsWith(".example") && file !== ".env.defaults") {
+          const filePath = join(projectDir, file);
+          const stat = statSync(filePath);
+          const mode = stat.mode & 0o777;
+          // Mode should not have any group or world access (0o077 mask)
+          if ((mode & 0o077) !== 0) {
+            unsafeEnvFiles.push(`${file} (0${mode.toString(8)})`);
+          }
+        }
+      }
+      if (unsafeEnvFiles.length > 0) {
+        envStatus = "amber";
+        envMsg = `Loose permissions on environment files: ${unsafeEnvFiles.join(", ")}`;
+      }
+    } catch {
+      // Skip if cannot check project directory
+    }
+    checks.push({
+      name: "env-file-perms",
+      status: envStatus,
+      message: envMsg,
+    });
+
+    // ── Overall Status ───────────────────────────────────────────────────────
+
+    const worst = checks.some(c => c.status === "red") ? "red"
+                : checks.some(c => c.status === "amber") ? "amber"
+                : "green";
+
+    return {
+      pluginName: this.name,
+      status: worst,
+      checks,
+      summary: worst === "green" ? "Server stats and security policies nominal" : "Server resource or security policy warning",
+      timestamp: new Date().toISOString(),
+    };
+  }
+}

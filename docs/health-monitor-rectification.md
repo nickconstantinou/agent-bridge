@@ -56,10 +56,10 @@ Telegram Markdown italics use `_text_`; a summary containing `_` will corrupt th
 
 ## Re-enable Checklist
 
-- [ ] Fix `ExternalPlugin` to use async spawn (issue 1)
-- [ ] Filter error-string responses in `generateSuggestion` (issue 2)
-- [ ] Add in-flight guard to `HealthScheduler` (issue 3)
-- [ ] Guard plugin registration behind `healthEnabled` in `index.ts` (issue 4)
-- [ ] Shorten/focus the suggestion prompt so agy completes within ~90s (issue 5)
-- [ ] Set `HEALTH_MONITOR_ENABLED=true` in `.env.shared` and restart Claude bridge
+- [x] Fix `ExternalPlugin` to use async spawn (issue 1)
+- [x] Filter error-string responses in `generateSuggestion` (issue 2)
+- [x] Add in-flight guard to `HealthScheduler` (issue 3)
+- [x] Guard plugin registration behind `healthEnabled` in `index.ts` (issue 4)
+- [x] Shorten/focus the suggestion prompt so agy completes within ~90s (issue 5)
+- [x] Set `HEALTH_MONITOR_ENABLED=true` in `.env.shared` and restart Claude bridge
 - [ ] Monitor first two cycles manually before leaving unattended

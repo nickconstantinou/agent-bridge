@@ -40,14 +40,15 @@ Do not rely on MCP for memory.
 
 # Health Monitoring System
 
-**Currently disabled** — `HEALTH_MONITOR_ENABLED=false` in `.env.shared`. Do not re-enable without working through `docs/health-monitor-rectification.md` first.
+**Active** — enabled via `HEALTH_MONITOR_ENABLED=true` in `.env.shared` or `.env.health`.
 
 A `HealthScheduler` runs alongside the bots and fires registered `HealthPlugin` instances on a `setInterval`. Key facts for working on this codebase:
 
-- **`src/health/`** — types, reporter, scheduler, suggest, plugins/self, plugins/external
+- **`src/health/`** — types, reporter, scheduler, suggest, plugins/self, plugins/server, plugins/external
 - **`SelfPlugin`** — always registered; checks DB file + read liveness
-- **`ExternalPlugin`** — spawns any shell command, parses stdout as `HealthReport` JSON; **known bug: uses `spawnSync` with 30s timeout — blocks the Node.js event loop**
-- **`generateSuggestion`** (suggest mode) — routes through `buildCliInvocation → runCli → parseCliResult`, same path as real user messages. Bot selected by `HEALTH_SUGGEST_BOT` env var. **Known bug: returns CLI error strings verbatim if the CLI outputs them to stdout**
+- **`ServerPlugin`** — checks CPU load, RAM/Swap, zombie processes, system uptime, and security posture (UFW status, SSH key permissions, environment file permissions)
+- **`ExternalPlugin`** — spawns any shell command asynchronously with a timeout, parses stdout as `HealthReport` JSON
+- **`generateSuggestion`** (suggest mode) — routes through `buildCliInvocation → runCli → parseCliResult`, same path as real user messages. Bot selected by `HEALTH_SUGGEST_BOT` env var. Filters error-shaped responses.
 - **`_suggestFn` injection** — `HealthScheduler` constructor accepts `_suggestFn` to replace `generateSuggestion` in tests, avoiding real CLI spawning under fake timers
 - **Content-crawler POC** — `~/content-crawler/scripts/health_check.py`; checks queue depth, failed items, stale workers, signal-feed age, disk space; enabled via `HEALTH_CONTENT_CRAWLER_ENABLED=1`
 

@@ -13,11 +13,12 @@ import { HealthScheduler } from "./health/scheduler.js";
 import { HealthBridgeBot } from "./health/bot.js";
 import { SelfPlugin } from "./health/plugins/self.js";
 import { ExternalPlugin } from "./health/plugins/external.js";
+import { ServerPlugin } from "./health/plugins/server.js";
 import { parseHealthEnabled, parseCadenceSeconds } from "./health/config.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
 import { createPollErrorState, planPollError, notePollSuccess } from "./polling.js";
 import { buildCliInvocation, runCli, parseCliResult } from "./cli.js";
-import { BridgeDb } from "./db.js";
+import { BridgeDb, openDb } from "./db.js";
 import type { BotKind } from "./types.js";
 import type { HealthPlugin } from "./health/types.js";
 
@@ -60,10 +61,8 @@ const cliBotConfig = {
 const dbPath = process.env.HEALTH_DB_PATH || ".data-health/health.sqlite";
 
 // ── Infrastructure ───────────────────────────────────────────────────────────
-mkdirSync(dirname(dbPath), { recursive: true });
-const rawDb = new Database(dbPath);
-rawDb.pragma("journal_mode = WAL");
-const bridgeDb = new BridgeDb(rawDb);
+const bridgeDb = openDb(dbPath);
+const rawDb = bridgeDb.raw;
 const client = new TelegramClient(token, fetch);
 
 const sendText = async (text: string): Promise<void> => {
@@ -88,12 +87,17 @@ const healthBot = new HealthBridgeBot({
 // ── Health plugins ───────────────────────────────────────────────────────────
 const plugins: HealthPlugin[] = [new SelfPlugin(bridgeDb, dbPath)];
 
+if (process.env.HEALTH_SERVER_MONITOR_ENABLED !== "0") {
+  plugins.push(new ServerPlugin());
+  if (healthEnabled) console.log("[health-bot] server plugin enabled");
+}
+
 if (process.env.HEALTH_CONTENT_CRAWLER_ENABLED === "1") {
   const script = process.env.HEALTH_CONTENT_CRAWLER_SCRIPT
     || `${process.env.HOME}/content-crawler/scripts/health_check.py`;
   const python = `${process.env.HOME}/content-crawler/venv/bin/python3`;
   plugins.push(new ExternalPlugin({ name: "content-crawler", command: python, args: [script], timeoutMs: 30_000 }));
-  console.log(`[health-bot] content-crawler plugin enabled: ${script}`);
+  if (healthEnabled) console.log(`[health-bot] content-crawler plugin enabled: ${script}`);
 }
 
 // ── Scheduler ────────────────────────────────────────────────────────────────
@@ -130,7 +134,7 @@ async function processMessage(text: string, fromUserId: number): Promise<void> {
     await sendText("Checking health...");
     for (const plugin of plugins) {
       const report = await plugin.check();
-      await healthBot.handleReport(report);
+      await healthBot.handleReport(report, { force: true });
     }
     return;
   }
@@ -204,6 +208,13 @@ async function poll(): Promise<void> {
 
 // ── Start ────────────────────────────────────────────────────────────────────
 console.log("[health-bot] starting...");
+
+await client.setMyCommands({
+  commands: [
+    { command: "health", description: "Run health checks immediately" },
+    { command: "status", description: "Show last health report and suggestions" },
+  ],
+}).catch((err) => console.warn(`[health-bot] setMyCommands failed`, err));
 
 if (healthEnabled) {
   scheduler.start();

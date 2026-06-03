@@ -362,6 +362,7 @@ agent-bridge/
 │       ├── scheduler.ts   — HealthScheduler: setInterval-based plugin runner
 │       └── plugins/
 │           ├── self.ts    — SelfPlugin: DB file existence + read liveness
+│           ├── server.ts  — ServerPlugin: CPU load, memory, swap, zombie, and systemd/perm checks
 │           └── external.ts — ExternalPlugin: spawns a command, parses stdout as HealthReport JSON
 ├── test/                  — Vitest test suite
 ├── docs/
@@ -410,6 +411,11 @@ agent-bridge/
 | `HEALTH_MONITOR_AUTONOMY` | All | `report` — report only; `suggest` — also spawns a CLI for diagnosis (default: `report`) |
 | `HEALTH_MONITOR_CHAT_ID` | All | Telegram chat ID for health reports; if unset, logs to stdout |
 | `HEALTH_SUGGEST_BOT` | All | CLI to use for suggest mode: `codex`, `antigravity`, `claude` (default: `claude`) |
+| `HEALTH_SERVER_MONITOR_ENABLED` | All | `1` to enable the built-in server resource monitor plugin (default: `1`) |
+| `HEALTH_CPU_LOAD_AMBER_MULTIPLIER` | All | Threshold multiplier for CPU load warning (default: `1.0`) |
+| `HEALTH_CPU_LOAD_RED_MULTIPLIER` | All | Threshold multiplier for CPU load critical (default: `1.5`) |
+| `HEALTH_CPU_LOAD_AMBER_THRESHOLD` | All | Override for absolute CPU load warning threshold |
+| `HEALTH_CPU_LOAD_RED_THRESHOLD` | All | Override for absolute CPU load critical threshold |
 | `HEALTH_CONTENT_CRAWLER_ENABLED` | All | `1` to enable the content-crawler external plugin (default: `0`) |
 | `HEALTH_CONTENT_CRAWLER_SCRIPT` | All | Path to content-crawler health check script |
 
@@ -447,7 +453,9 @@ interface CheckResult {
 
 **`SelfPlugin`** — always registered. Checks DB file existence and runs a read query as a liveness probe.
 
-**`ExternalPlugin`** — wraps any shell command. Spawns the command with `spawnSync`, expects exit 0 and a `HealthReport` JSON on stdout. Returns a synthetic red report on non-zero exit or invalid JSON.
+**`ServerPlugin`** — always registered. Checks CPU load, RAM/Swap usage, zombie processes, system uptime, and security posture (UFW status, SSH private key permissions, and project directory `.env` file permissions).
+
+**`ExternalPlugin`** — wraps any shell command. Spawns the command asynchronously with a timeout, expects exit 0 and a `HealthReport` JSON on stdout. Returns a synthetic red report on failure or invalid JSON.
 
 ### Current status
 

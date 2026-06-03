@@ -77,7 +77,7 @@ export function openDb(dbPath: string): BridgeDb {
 }
 
 export class BridgeDb {
-  private readonly raw: Database.Database;
+  readonly raw: Database.Database;
 
   constructor(raw: Database.Database) {
     this.raw = raw;

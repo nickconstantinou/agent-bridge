@@ -94,7 +94,7 @@ describe("HealthBridgeBot", () => {
     expect(sent).toHaveLength(1);
   });
 
-  it("does not send suggestion for green report", async () => {
+  it("does not send report or suggestion for green report by default", async () => {
     const { HealthBridgeBot } = await import("../src/health/bot.js");
     const sent: string[] = [];
     const bot = new HealthBridgeBot({
@@ -115,7 +115,32 @@ describe("HealthBridgeBot", () => {
       timestamp: new Date().toISOString(),
     };
     await bot.handleReport(report);
+    expect(sent).toHaveLength(0);
+  });
+
+  it("sends green report when force is true", async () => {
+    const { HealthBridgeBot } = await import("../src/health/bot.js");
+    const sent: string[] = [];
+    const bot = new HealthBridgeBot({
+      db,
+      chatId: 12345,
+      sessionTtlSeconds: 1800,
+      autonomy: "suggest",
+      cliBot: "claude",
+      cliBotConfig: { command: "claude", modelPreference: [] },
+      _sendText: async (text) => { sent.push(text); },
+      _suggestFn: async () => "should not appear",
+    });
+    const report = {
+      pluginName: "test",
+      status: "green" as const,
+      checks: [],
+      summary: "All good",
+      timestamp: new Date().toISOString(),
+    };
+    await bot.handleReport(report, { force: true });
     expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("test");
   });
 
   it("stores report and suggestion in context store", async () => {

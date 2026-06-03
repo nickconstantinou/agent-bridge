@@ -46,7 +46,11 @@ export async function generateSuggestion(
       timeoutMs: SUGGEST_TIMEOUT_MS,
     });
     const result = parseCliResult({ bot, stdout, logContent: null });
-    return result.text.trim() || null;
+    const text = result.text.trim();
+    if (/^(error:|timed out|execution error)/i.test(text)) {
+      return null;
+    }
+    return text || null;
   } catch {
     return null;
   }

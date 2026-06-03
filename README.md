@@ -231,9 +231,10 @@ The bridge runs a built-in `HealthScheduler` that polls plugins at a configurabl
 | Plugin | What it checks |
 |--------|----------------|
 | `SelfPlugin` | DB file accessibility, DB read liveness |
+| `ServerPlugin` | System resource metrics (CPU load, RAM, swap, zombies, uptime) and security policies (UFW status, SSH key permissions, local environment file permissions) |
 | `ExternalPlugin` | Spawns any shell command and parses its stdout as a `HealthReport` JSON |
 
-`SelfPlugin` is always active. `ExternalPlugin` wraps any system you want to monitor.
+`SelfPlugin` and `ServerPlugin` are active by default. `ExternalPlugin` wraps any system you want to monitor.
 
 ### Configuration
 
@@ -244,6 +245,11 @@ The bridge runs a built-in `HealthScheduler` that polls plugins at a configurabl
 | `HEALTH_MONITOR_AUTONOMY` | `report` | `report` — formatted report only; `suggest` — also spawns a CLI to diagnose and propose fixes |
 | `HEALTH_MONITOR_CHAT_ID` | — | Telegram chat ID to receive reports; if unset, reports are logged to stdout only |
 | `HEALTH_SUGGEST_BOT` | `claude` | Which installed CLI diagnoses amber/red reports: `codex`, `antigravity`, or `claude` |
+| `HEALTH_SERVER_MONITOR_ENABLED` | `1` | Set to `0` to disable the built-in server resource monitor plugin |
+| `HEALTH_CPU_LOAD_AMBER_MULTIPLIER` | `1.0` | Threshold multiplier for CPU load warning (e.g. `1.0` * CPU count) |
+| `HEALTH_CPU_LOAD_RED_MULTIPLIER` | `1.5` | Threshold multiplier for CPU load critical (e.g. `1.5` * CPU count) |
+| `HEALTH_CPU_LOAD_AMBER_THRESHOLD` | — | Override to set absolute CPU load warning threshold |
+| `HEALTH_CPU_LOAD_RED_THRESHOLD` | — | Override to set absolute CPU load critical threshold |
 | `HEALTH_CONTENT_CRAWLER_ENABLED` | `0` | Set to `1` to enable the content-crawler external plugin |
 | `HEALTH_CONTENT_CRAWLER_SCRIPT` | `~/content-crawler/scripts/health_check.py` | Override the script path |
 

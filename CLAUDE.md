@@ -50,6 +50,7 @@ A `HealthScheduler` runs alongside the bots and fires registered `HealthPlugin` 
 - **`ExternalPlugin`** — spawns any shell command asynchronously with a timeout, parses stdout as `HealthReport` JSON
 - **`generateSuggestion`** (suggest mode) — routes through `buildCliInvocation → runCli → parseCliResult`, same path as real user messages. Bot selected by `HEALTH_SUGGEST_BOT` env var. Filters error-shaped responses.
 - **`_suggestFn` injection** — `HealthScheduler` constructor accepts `_suggestFn` to replace `generateSuggestion` in tests, avoiding real CLI spawning under fake timers
+- **`silenceOnGreen`** — `HealthConfig.silenceOnGreen?: boolean` suppresses `sendReport` calls when `report.status === "green"`. The `HealthBridgeBot.handleReport` path already silences green by default; this flag brings scheduler-direct callers into line.
 - **Content-crawler POC** — `~/content-crawler/scripts/health_check.py`; checks queue depth, failed items, stale workers, signal-feed age, disk space; enabled via `HEALTH_CONTENT_CRAWLER_ENABLED=1`
 
 When modifying the health module, keep `_suggestFn` injectable — do not inline `generateSuggestion` in the scheduler.

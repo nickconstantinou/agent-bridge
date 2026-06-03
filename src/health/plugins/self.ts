@@ -24,13 +24,49 @@ export class SelfPlugin implements HealthPlugin {
 
     if (dbExists) {
       try {
-        // Use an existing read operation as a liveness check
         this.db.getLastUpdateId("codex");
         checks.push({ name: "db-read", status: "green", message: "DB read OK" });
       } catch (e) {
         checks.push({ name: "db-read", status: "red", message: `DB error: ${(e as Error).message}` });
       }
     }
+
+    // Process memory (RSS)
+    const rssMB = Math.round(process.memoryUsage().rss / 1024 / 1024);
+    let memStatus: "green" | "amber" | "red" = "green";
+    if (rssMB >= 1024) {
+      memStatus = "red";
+    } else if (rssMB >= 512) {
+      memStatus = "amber";
+    }
+    checks.push({
+      name: "process-memory",
+      status: memStatus,
+      message: `Bridge RSS: ${rssMB} MB`,
+      value: rssMB,
+    });
+
+    // Circuit breaker state
+    let cbStatus: "green" | "amber" | "red" = "green";
+    let cbMessage = "No consecutive failures";
+    try {
+      const failures = this.db.getMaxConsecutiveFailures();
+      if (failures.length > 0) {
+        const tripped = failures.filter(f => f.count >= 2);
+        const warned = failures.filter(f => f.count === 1);
+        if (tripped.length > 0) {
+          cbStatus = "red";
+          cbMessage = `Circuit breaker tripped: ${tripped.map(f => `${f.bot}(${f.count})`).join(", ")}`;
+        } else if (warned.length > 0) {
+          cbStatus = "amber";
+          cbMessage = `1 failure recorded: ${warned.map(f => f.bot).join(", ")}`;
+        }
+      }
+    } catch {
+      cbStatus = "amber";
+      cbMessage = "Could not read circuit breaker state";
+    }
+    checks.push({ name: "circuit-breaker", status: cbStatus, message: cbMessage });
 
     const worst = checks.some(c => c.status === "red") ? "red"
                 : checks.some(c => c.status === "amber") ? "amber"

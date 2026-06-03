@@ -181,6 +181,61 @@ describe("SelfPlugin", () => {
       try { rmSync(dbPath); } catch {}
     }
   });
+
+  it("includes process-memory check with numeric MB value", async () => {
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const { openDb } = await import("../src/db.js");
+    const dbPath = join(tmpdir(), `health-test-self-${Date.now()}.sqlite`);
+    const db = openDb(dbPath);
+    try {
+      const plugin = new SelfPlugin(db, dbPath);
+      const report = await plugin.check();
+      const memCheck = report.checks.find(c => c.name === "process-memory");
+      expect(memCheck).toBeDefined();
+      expect(["green", "amber", "red"]).toContain(memCheck?.status);
+      expect(typeof memCheck?.value).toBe("number");
+      expect((memCheck?.value as number) > 0).toBe(true);
+    } finally {
+      db.close();
+      try { rmSync(dbPath); } catch {}
+    }
+  });
+
+  it("reports green circuit-breaker when no consecutive failures recorded", async () => {
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const { openDb } = await import("../src/db.js");
+    const dbPath = join(tmpdir(), `health-test-self-${Date.now()}.sqlite`);
+    const db = openDb(dbPath);
+    try {
+      const plugin = new SelfPlugin(db, dbPath);
+      const report = await plugin.check();
+      const cbCheck = report.checks.find(c => c.name === "circuit-breaker");
+      expect(cbCheck).toBeDefined();
+      expect(cbCheck?.status).toBe("green");
+    } finally {
+      db.close();
+      try { rmSync(dbPath); } catch {}
+    }
+  });
+
+  it("reports red circuit-breaker when a bot has 2+ consecutive failures", async () => {
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const { openDb } = await import("../src/db.js");
+    const dbPath = join(tmpdir(), `health-test-self-${Date.now()}.sqlite`);
+    const db = openDb(dbPath);
+    try {
+      db.incrementFailures("test-chat", "codex");
+      db.incrementFailures("test-chat", "codex");
+      const plugin = new SelfPlugin(db, dbPath);
+      const report = await plugin.check();
+      const cbCheck = report.checks.find(c => c.name === "circuit-breaker");
+      expect(cbCheck?.status).toBe("red");
+      expect(cbCheck?.message).toContain("codex");
+    } finally {
+      db.close();
+      try { rmSync(dbPath); } catch {}
+    }
+  });
 });
 
 // ── ServerPlugin ──────────────────────────────────────────────────────────────
@@ -228,6 +283,16 @@ describe("ServerPlugin", () => {
     const envFileCheck = report.checks.find(c => c.name === "env-file-perms");
     expect(envFileCheck).toBeDefined();
     expect(["green", "amber"]).toContain(envFileCheck?.status);
+
+    const diskCheck = report.checks.find(c => c.name === "disk-space");
+    expect(diskCheck).toBeDefined();
+    expect(["green", "amber", "red"]).toContain(diskCheck?.status);
+    expect(typeof diskCheck?.value).toBe("number");
+    expect((diskCheck?.value as number) > 0).toBe(true);
+
+    const failedSvcCheck = report.checks.find(c => c.name === "failed-services");
+    expect(failedSvcCheck).toBeDefined();
+    expect(["green", "amber", "red"]).toContain(failedSvcCheck?.status);
   });
 
   it("supports configurable CPU load thresholds", async () => {

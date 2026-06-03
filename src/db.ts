@@ -186,6 +186,23 @@ export class BridgeDb {
       .run(chatId);
   }
 
+  getMaxConsecutiveFailures(): { bot: string; count: number }[] {
+    const row = this.raw
+      .prepare(
+        `SELECT MAX(codex_consecutive_failures) AS codex,
+                MAX(claude_consecutive_failures) AS claude,
+                MAX(antigravity_consecutive_failures) AS antigravity
+         FROM bridge_state`
+      )
+      .get() as { codex: number; claude: number; antigravity: number } | undefined;
+    if (!row) return [];
+    const results: { bot: string; count: number }[] = [];
+    if (row.codex > 0) results.push({ bot: "codex", count: row.codex });
+    if (row.claude > 0) results.push({ bot: "claude", count: row.claude });
+    if (row.antigravity > 0) results.push({ bot: "antigravity", count: row.antigravity });
+    return results;
+  }
+
   setSetting(key: string, value: string | null): void {
     this.raw
       .prepare(

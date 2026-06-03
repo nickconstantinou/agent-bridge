@@ -1,5 +1,5 @@
 import os from "node:os";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, statfsSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 import type { HealthPlugin, HealthReport, CheckResult } from "../types.js";
@@ -240,6 +240,48 @@ export class ServerPlugin implements HealthPlugin {
       status: envStatus,
       message: envMsg,
     });
+
+    // 9. Disk Space (root filesystem)
+    let diskStatus: "green" | "amber" | "red" = "green";
+    let diskMsg = "Disk space OK";
+    let diskFreeGB: number | undefined;
+    try {
+      const stats = statfsSync("/");
+      const freeBytes = stats.bfree * stats.bsize;
+      diskFreeGB = Math.round((freeBytes / (1024 ** 3)) * 10) / 10;
+      if (diskFreeGB < 0.5) {
+        diskStatus = "red";
+        diskMsg = `Only ${diskFreeGB} GB free on /`;
+      } else if (diskFreeGB < 2) {
+        diskStatus = "amber";
+        diskMsg = `${diskFreeGB} GB free on / (low)`;
+      } else {
+        diskMsg = `${diskFreeGB} GB free on /`;
+      }
+    } catch (err) {
+      diskStatus = "amber";
+      diskMsg = `Disk check failed: ${(err as Error).message}`;
+    }
+    checks.push({ name: "disk-space", status: diskStatus, message: diskMsg, value: diskFreeGB });
+
+    // 10. Failed Systemd Services
+    let svcStatus: "green" | "amber" | "red" = "green";
+    let svcMsg = "No failed services";
+    try {
+      const output = execSync(
+        "systemctl list-units --state=failed --no-legend --plain 2>/dev/null || true",
+        { stdio: ["ignore", "pipe", "ignore"], timeout: 5000 }
+      ).toString().trim();
+      const failedUnits = output ? output.split("\n").map(l => l.trim().split(/\s+/)[0]).filter(Boolean) : [];
+      if (failedUnits.length > 0) {
+        svcStatus = failedUnits.length >= 3 ? "red" : "amber";
+        svcMsg = `${failedUnits.length} failed unit(s): ${failedUnits.slice(0, 3).join(", ")}`;
+      }
+    } catch {
+      svcStatus = "amber";
+      svcMsg = "Could not query systemd service state";
+    }
+    checks.push({ name: "failed-services", status: svcStatus, message: svcMsg });
 
     // ── Overall Status ───────────────────────────────────────────────────────
 

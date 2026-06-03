@@ -434,6 +434,21 @@ describe("buildSuggestionPrompt", () => {
     expect(prompt).toContain("600 items");
   });
 
+  it("asks for numbered remediation options ordered by likelihood", async () => {
+    const { buildSuggestionPrompt } = await import("../src/health/suggest.js");
+    const report = {
+      pluginName: "test",
+      status: "red" as const,
+      checks: [{ name: "stale-workers", status: "red" as const, message: "no activity for 2h" }],
+      summary: "Critical: stale-workers",
+      timestamp: new Date().toISOString(),
+    };
+    const prompt = buildSuggestionPrompt(report);
+    expect(prompt).toMatch(/numbered|number/i);
+    expect(prompt).toMatch(/option|remediat/i);
+    expect(prompt).toMatch(/order|priorit|likelihood/i);
+  });
+
   it("excludes green checks", async () => {
     const { buildSuggestionPrompt } = await import("../src/health/suggest.js");
     const report = {

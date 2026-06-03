@@ -14,7 +14,10 @@ export function buildSuggestionPrompt(report: HealthReport): string {
     "Failing checks:",
     lines || "- (none individually flagged)",
     "",
-    "What are the most likely causes and the exact commands or steps to resolve each issue? Be concise.",
+    "List 2–4 numbered remediation options, ordered by likelihood. For each:",
+    "1. One-line description of what it fixes",
+    "2. Exact shell command or steps to apply it",
+    "Keep each option brief. No preamble.",
   ].join("\n");
 }
 

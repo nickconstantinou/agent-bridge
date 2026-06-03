@@ -62,7 +62,9 @@ export class HealthScheduler {
         await this.onRawReport(report);
       }
 
-      await this.sendReport(formatReport(report));
+      if (!this.config.silenceOnGreen || report.status !== "green") {
+        await this.sendReport(formatReport(report));
+      }
 
       const { autonomy, suggestBot, suggestBotConfig } = this.config;
       if (autonomy !== "report" && report.status !== "green" && suggestBot && suggestBotConfig) {

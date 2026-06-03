@@ -354,6 +354,50 @@ describe("HealthScheduler", () => {
     expect(reports[0]).toContain("All systems green");
     scheduler.stop();
   });
+
+  it("does not send green report to Telegram when silenceOnGreen is true", async () => {
+    const { HealthScheduler } = await import("../src/health/scheduler.js");
+    const greenPlugin = {
+      name: "test",
+      check: async () => ({
+        pluginName: "test",
+        status: "green" as const,
+        checks: [],
+        summary: "All good",
+        timestamp: new Date().toISOString(),
+      }),
+    };
+    const reports: string[] = [];
+    const scheduler = new HealthScheduler({
+      plugins: [greenPlugin],
+      config: { enabled: true, cadenceSeconds: 60, autonomy: "report", silenceOnGreen: true },
+      sendReport: async (text) => { reports.push(text); },
+    });
+    await scheduler.runPlugin(greenPlugin);
+    expect(reports).toHaveLength(0);
+  });
+
+  it("still sends amber report when silenceOnGreen is true", async () => {
+    const { HealthScheduler } = await import("../src/health/scheduler.js");
+    const amberPlugin = {
+      name: "test",
+      check: async () => ({
+        pluginName: "test",
+        status: "amber" as const,
+        checks: [],
+        summary: "Warning",
+        timestamp: new Date().toISOString(),
+      }),
+    };
+    const reports: string[] = [];
+    const scheduler = new HealthScheduler({
+      plugins: [amberPlugin],
+      config: { enabled: true, cadenceSeconds: 60, autonomy: "report", silenceOnGreen: true },
+      sendReport: async (text) => { reports.push(text); },
+    });
+    await scheduler.runPlugin(amberPlugin);
+    expect(reports).toHaveLength(1);
+  });
 });
 
 // ── buildSuggestionPrompt ─────────────────────────────────────────────────────

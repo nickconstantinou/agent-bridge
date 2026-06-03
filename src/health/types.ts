@@ -26,6 +26,7 @@ export interface HealthConfig {
   enabled: boolean;
   cadenceSeconds: number;
   autonomy: AutonomyLevel;
+  silenceOnGreen?: boolean;
   reportChatId?: string;
   suggestBot?: "codex" | "antigravity" | "claude";
   suggestBotConfig?: { command: string; modelPreference: string[] };

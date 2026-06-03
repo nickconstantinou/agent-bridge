@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { TelegramClient } from "../src/telegram.js";
 
 describe("TelegramClient", () => {
@@ -87,5 +90,171 @@ describe("TelegramClient", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toContain("/sendChatAction");
     expect(calls[0].options).toEqual({ chat_id: 1, action: "typing" });
+  });
+
+  // Step 1: download methods
+
+  it("getFilePath calls GET /getFile?file_id and returns file_path", async () => {
+    const calls: string[] = [];
+    const fakeFetch = (async (url: string) => {
+      calls.push(url);
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, result: { file_path: "photos/file_0.jpg" } }),
+      };
+    }) as any;
+
+    const client = new TelegramClient("mytoken", fakeFetch);
+    const filePath = await client.getFilePath("abc123");
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBe("https://api.telegram.org/botmytoken/getFile?file_id=abc123");
+    expect(filePath).toBe("photos/file_0.jpg");
+  });
+
+  it("getFilePath throws on non-2xx response", async () => {
+    const fakeFetch = (async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({ ok: false, description: "Bad Request: file not found" }),
+    })) as any;
+
+    const client = new TelegramClient("mytoken", fakeFetch);
+    await expect(client.getFilePath("badid")).rejects.toThrow(/400/);
+  });
+
+  it("downloadFile fetches file bytes and writes them to destPath", async () => {
+    const fileBytes = Buffer.from("PNG_BYTES_HERE");
+    const fakeFetch = (async (url: string) => {
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => fileBytes.buffer.slice(fileBytes.byteOffset, fileBytes.byteOffset + fileBytes.byteLength),
+      };
+    }) as any;
+
+    const client = new TelegramClient("mytoken", fakeFetch);
+    const dir = await mkdtemp(join(tmpdir(), "bridge-test-"));
+    const destPath = join(dir, "out.jpg");
+    try {
+      await client.downloadFile("photos/file_0.jpg", destPath);
+      const written = await readFile(destPath);
+      expect(written).toEqual(fileBytes);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("downloadFile calls the correct Telegram file URL", async () => {
+    const calls: string[] = [];
+    const fakeFetch = (async (url: string) => {
+      calls.push(url);
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => new ArrayBuffer(0),
+      };
+    }) as any;
+
+    const client = new TelegramClient("mytoken", fakeFetch);
+    const dir = await mkdtemp(join(tmpdir(), "bridge-test-"));
+    const destPath = join(dir, "out.jpg");
+    try {
+      await client.downloadFile("photos/file_0.jpg", destPath);
+      expect(calls[0]).toBe("https://api.telegram.org/file/botmytoken/photos/file_0.jpg");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("downloadFile throws on non-2xx response", async () => {
+    const fakeFetch = (async () => ({
+      ok: false,
+      status: 404,
+    })) as any;
+
+    const client = new TelegramClient("mytoken", fakeFetch);
+    await expect(client.downloadFile("bad/path.jpg", "/tmp/x.jpg")).rejects.toThrow(/404/);
+  });
+
+  // Step 6: sendDocument / sendPhoto
+
+  it("sendDocument makes a multipart POST to /sendDocument", async () => {
+    const calls: { url: string; body: FormData }[] = [];
+    const fakeFetch = (async (url: string, opts: any) => {
+      calls.push({ url, body: opts.body });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, result: { message_id: 99 } }),
+      };
+    }) as any;
+
+    const dir = await mkdtemp(join(tmpdir(), "bridge-test-"));
+    const filePath = join(dir, "report.pdf");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(filePath, "PDF content");
+    try {
+      const client = new TelegramClient("mytoken", fakeFetch);
+      await client.sendDocument(42, filePath, "Here is your report");
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toContain("/sendDocument");
+      const fd = calls[0].body as FormData;
+      expect(fd.get("chat_id")).toBe("42");
+      expect(fd.get("caption")).toBe("Here is your report");
+      expect(fd.get("document")).toBeTruthy();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("sendPhoto makes a multipart POST to /sendPhoto", async () => {
+    const calls: { url: string; body: FormData }[] = [];
+    const fakeFetch = (async (url: string, opts: any) => {
+      calls.push({ url, body: opts.body });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, result: { message_id: 100 } }),
+      };
+    }) as any;
+
+    const dir = await mkdtemp(join(tmpdir(), "bridge-test-"));
+    const filePath = join(dir, "chart.png");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(filePath, Buffer.from([137, 80, 78, 71])); // PNG magic bytes
+    try {
+      const client = new TelegramClient("mytoken", fakeFetch);
+      await client.sendPhoto(42, filePath);
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].url).toContain("/sendPhoto");
+      const fd = calls[0].body as FormData;
+      expect(fd.get("chat_id")).toBe("42");
+      expect(fd.get("photo")).toBeTruthy();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("sendDocument throws on non-2xx response", async () => {
+    const fakeFetch = (async () => ({
+      ok: false,
+      status: 400,
+      json: async () => ({ ok: false, description: "Bad Request" }),
+    })) as any;
+
+    const dir = await mkdtemp(join(tmpdir(), "bridge-test-"));
+    const filePath = join(dir, "x.pdf");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(filePath, "data");
+    try {
+      const client = new TelegramClient("mytoken", fakeFetch);
+      await expect(client.sendDocument(1, filePath)).rejects.toThrow(/400/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

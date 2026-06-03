@@ -1,4 +1,9 @@
+import { readFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
+import { basename } from "node:path";
 import type { TelegramMessage } from "./types.js";
+
+const TELEGRAM_FILE_BASE_URL = "https://api.telegram.org/file/bot";
 
 export interface TelegramResponse<T> {
   ok: boolean;
@@ -94,6 +99,78 @@ export class TelegramClient {
 
   async setMyCommands(body: any): Promise<TelegramResponse<boolean>> {
     return this.call("setMyCommands", body);
+  }
+
+  async getFilePath(fileId: string): Promise<string> {
+    const url = `${this.baseUrl}/getFile?file_id=${encodeURIComponent(fileId)}`;
+    const ac = new AbortController();
+    const fetchTimer = setTimeout(() => ac.abort(), this.fetchTimeoutMs);
+    let response: Response;
+    try {
+      response = await this.fetch(url, { signal: ac.signal } as any);
+    } finally {
+      clearTimeout(fetchTimer);
+    }
+    if (!response.ok) {
+      throw new Error(`Telegram getFile HTTP ${response.status}`);
+    }
+    const data = await response.json() as any;
+    return data.result.file_path as string;
+  }
+
+  async downloadFile(filePath: string, destPath: string): Promise<void> {
+    const url = `${TELEGRAM_FILE_BASE_URL}${this.token}/${filePath}`;
+    const ac = new AbortController();
+    const fetchTimer = setTimeout(() => ac.abort(), this.fetchTimeoutMs);
+    let response: Response;
+    try {
+      response = await this.fetch(url, { signal: ac.signal } as any);
+    } finally {
+      clearTimeout(fetchTimer);
+    }
+    if (!response.ok) {
+      throw new Error(`Telegram downloadFile HTTP ${response.status}`);
+    }
+    const buffer = await response.arrayBuffer();
+    await writeFile(destPath, Buffer.from(buffer));
+  }
+
+  private async sendFile(
+    endpoint: string,
+    fieldName: string,
+    chatId: number,
+    filePath: string,
+    caption?: string,
+  ): Promise<void> {
+    const fileBytes = readFileSync(filePath);
+    const blob = new Blob([fileBytes]);
+    const fd = new FormData();
+    fd.set("chat_id", String(chatId));
+    fd.set(fieldName, blob, basename(filePath));
+    if (caption) fd.set("caption", caption);
+
+    const url = `${this.baseUrl}/${endpoint}`;
+    const ac = new AbortController();
+    const fetchTimer = setTimeout(() => ac.abort(), this.fetchTimeoutMs);
+    let response: Response;
+    try {
+      response = await this.fetch(url, { method: "POST", body: fd, signal: ac.signal } as any);
+    } finally {
+      clearTimeout(fetchTimer);
+    }
+    if (!response.ok) {
+      const data = await response.json().catch(() => null) as any;
+      const detail = data?.description ? `: ${data.description}` : "";
+      throw new Error(`Telegram ${endpoint} HTTP ${response.status}${detail}`);
+    }
+  }
+
+  async sendDocument(chatId: number, filePath: string, caption?: string): Promise<void> {
+    return this.sendFile("sendDocument", "document", chatId, filePath, caption);
+  }
+
+  async sendPhoto(chatId: number, filePath: string, caption?: string): Promise<void> {
+    return this.sendFile("sendPhoto", "photo", chatId, filePath, caption);
   }
 
 }

@@ -11,7 +11,7 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync, unlinkSync } from "node:fs";
 import {
   buildModelKeyboard,
   buildModelsText,
@@ -41,6 +41,9 @@ import {
 } from "./bridge.js";
 import { getCodexUsageText } from "./codexUsage.js";
 import { TelegramClient, MediaGroupBuffer } from "./telegram.js";
+import { downloadTelegramAttachment } from "./fileDownload.js";
+import { prepareOutputDir, uploadOutputFiles } from "./fileOutput.js";
+import { parseClaudeStreamJsonOutput } from "./claudeStreamJson.js";
 import { createPollErrorState, planPollError, notePollSuccess } from "./polling.js";
 import { sendTelegramMessage, sendMessageWithProgress } from "./messageDelivery.js";
 import type { BridgeConfig, BotConfig, BotKind, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult } from "./types.js";
@@ -219,7 +222,10 @@ class BridgeBot {
     const threadId = extractThreadId(messages);
     const rawText = (primaryMessage.text || primaryMessage.caption || "").trim();
     const commandText = isBridgeCommand(rawText) ? rawText : null;
-    const prompt = commandText ? null : extractPromptText(primaryMessage);
+    // For attachment-only messages (photo/document with no text), synthesize a generic prompt
+    const hasAttachment = !!(primaryMessage.photo?.length || primaryMessage.document);
+    const rawPrompt = commandText ? null : extractPromptText(primaryMessage);
+    const prompt = commandText ? null : (rawPrompt || (hasAttachment ? "Describe the attached file." : null));
     if (!commandText && !prompt) return;
 
     const chatId = primaryMessage.chat.id;
@@ -265,6 +271,19 @@ class BridgeBot {
       }
     }
 
+    // Download attachment if present
+    const uploadDir = join(tmpdir(), `bridge-uploads-${chatId}`);
+    let attachmentLocalPath: string | null = null;
+    if (hasAttachment && !commandText) {
+      try {
+        const info = await downloadTelegramAttachment(this.client, primaryMessage, uploadDir);
+        attachmentLocalPath = info?.localPath ?? null;
+      } catch (err) {
+        console.error(`[${this.kind}] attachment download failed`, err);
+      }
+    }
+    const attachments: string[] = attachmentLocalPath ? [attachmentLocalPath] : [];
+
     const sessionId = db.getSession(chatKey, this.kind);
     const effectiveSessionId = sessionId;
     const useAsync = config.asyncEnabled === true;
@@ -272,6 +291,7 @@ class BridgeBot {
     if (!db.tryLock(chatKey)) {
       const queue = this.pendingQueues.get(chatKey) ?? [];
       if (queue.length >= MAX_QUEUE_DEPTH) {
+        if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
         await this.sendText(chatId, {
           text: `⏳ Queue is full (max ${MAX_QUEUE_DEPTH}). Please wait.`,
           message_thread_id: threadId,
@@ -280,6 +300,7 @@ class BridgeBot {
       }
       queue.push({ prompt: commandResponse?.kind === "execute" ? commandResponse.prompt : prompt!, chatId, threadId, chatKey, chatType: primaryMessage.chat.type, userId });
       this.pendingQueues.set(chatKey, queue);
+      if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
       await this.sendText(chatId, {
         text: `⏳ Queued (position ${queue.length} of ${MAX_QUEUE_DEPTH}). Will process shortly.`,
         message_thread_id: threadId,
@@ -296,10 +317,10 @@ class BridgeBot {
           body: { message_thread_id: threadId },
           isAborted: () => this.abortedChats.has(chatKey),
           execution: (onProgress: (text: string) => void) =>
-            this.executePromptAsync(commandResponse?.kind === "execute" ? commandResponse.prompt : prompt!, effectiveSessionId, chatId, { message_thread_id: threadId }, onProgress),
+            this.executePromptAsync(commandResponse?.kind === "execute" ? commandResponse.prompt : prompt!, effectiveSessionId, chatId, { message_thread_id: threadId }, onProgress, attachments),
         });
       } else {
-        const result = await this.executePrompt(commandResponse?.kind === "execute" ? commandResponse.prompt : prompt!, effectiveSessionId, chatId, { message_thread_id: threadId });
+        const result = await this.executePrompt(commandResponse?.kind === "execute" ? commandResponse.prompt : prompt!, effectiveSessionId, chatId, { message_thread_id: threadId }, attachments);
         await this.sendText(chatId, { text: result.text, message_thread_id: threadId });
       }
     } catch (error) {
@@ -312,6 +333,7 @@ class BridgeBot {
         body: { text: `Error: ${userText}`, message_thread_id: threadId },
       });
     } finally {
+      if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
       db.unlock(chatKey);
       this.drainQueue(chatKey);
     }
@@ -340,7 +362,7 @@ class BridgeBot {
     });
   }
 
-  async executePromptAsync(prompt: string, sessionId: string | null, chatId: number, body: any = {}, onProgress = (_text: string) => {}): Promise<CliResult> {
+  async executePromptAsync(prompt: string, sessionId: string | null, chatId: number, body: any = {}, onProgress = (_text: string) => {}, attachments: string[] = []): Promise<CliResult> {
     const { message_thread_id: threadId } = body;
     const chatKey = String(chatId);
     const model = db.getSetting(this.kind) || this.config.modelPreference[0] || null;
@@ -350,6 +372,7 @@ class BridgeBot {
       logFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
     }
 
+    const outDir = await prepareOutputDir(chatId);
     const cwd = getCliWorkingDir(this.kind);
     const startedAtMs = Date.now();
     if (this.kind === "antigravity") setAntigravityModel(model);
@@ -363,12 +386,16 @@ class BridgeBot {
       outputFormat: this.kind === "antigravity" ? undefined : "json",
       logFile,
       soulContext,
+      attachments,
+      outputDir: outDir,
     });
+    const isStreamJson = !!invocation.stdin;
     try {
       const cliResult = await runCliAsync(invocation.command, invocation.args, cwd, {
         ...buildExecutionOptions(this.kind),
         onProgress,
         chatId: chatKey,
+        stdin: invocation.stdin,
       });
 
       let logContent: string | null = null;
@@ -382,17 +409,27 @@ class BridgeBot {
         }
       }
 
-      const result = parseCliResult({ bot: this.kind, stdout: cliResult.text, logContent });
+      let result: CliResult;
+      if (isStreamJson) {
+        const parsed = parseClaudeStreamJsonOutput(cliResult.text);
+        result = parsed ?? { text: cliResult.text.trim(), sessionId: null };
+      } else {
+        result = parseCliResult({ bot: this.kind, stdout: cliResult.text, logContent });
+      }
       if (this.kind === "antigravity" && !result.sessionId) {
         result.sessionId = resolveAntigravityConversationId({ cwd, sinceMs: startedAtMs, explicitLogContent: logContent });
       }
       if (result?.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
       db.resetFailures(chatKey, this.kind);
+      await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
+        console.error(`[${this.kind}] output file upload failed`, err)
+      );
       return result;
     } catch (error) {
       if (logFile) {
         try { rmSync(logFile); } catch {}
       }
+      await uploadOutputFiles(outDir, chatId, this.client).catch(() => {});
       if (isCapacityExhaustedError(error as Error) && this.config.modelPreference.length > 1) {
         const fallbackModel = getNextFallbackModel(model, this.config.modelPreference);
         if (fallbackModel) {
@@ -463,7 +500,7 @@ class BridgeBot {
     }
   }
 
-  async executePrompt(prompt: string, sessionId: string | null, chatId: number, body: any = {}): Promise<CliResult> {
+  async executePrompt(prompt: string, sessionId: string | null, chatId: number, body: any = {}, attachments: string[] = []): Promise<CliResult> {
     const { message_thread_id: threadId } = body;
     const chatKey = String(chatId);
     const model = db.getSetting(this.kind) || this.config.modelPreference[0] || null;
@@ -473,6 +510,7 @@ class BridgeBot {
       logFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
     }
 
+    const outDir = await prepareOutputDir(chatId);
     const cwd = getCliWorkingDir(this.kind);
     const startedAtMs = Date.now();
     if (this.kind === "antigravity") setAntigravityModel(model);
@@ -486,7 +524,10 @@ class BridgeBot {
       executionMode: config.executionMode,
       logFile,
       soulContext,
+      attachments,
+      outputDir: outDir,
     });
+    const isStreamJson = !!invocation.stdin;
     const typingTracker = createTypingTracker(this.client, chatId, this.kind, { message_thread_id: threadId });
 
     try {
@@ -494,6 +535,7 @@ class BridgeBot {
       const stdout = await runCli(invocation.command, invocation.args, cwd, {
         ...buildExecutionOptions(this.kind),
         chatId: chatKey,
+        stdin: invocation.stdin,
       });
 
       let logContent: string | null = null;
@@ -507,17 +549,27 @@ class BridgeBot {
         }
       }
 
-      const result = parseCliResult({ bot: this.kind, stdout, logContent });
+      let result: CliResult;
+      if (isStreamJson) {
+        const parsed = parseClaudeStreamJsonOutput(stdout);
+        result = parsed ?? { text: stdout.trim(), sessionId: null };
+      } else {
+        result = parseCliResult({ bot: this.kind, stdout, logContent });
+      }
       if (this.kind === "antigravity" && !result.sessionId) {
         result.sessionId = resolveAntigravityConversationId({ cwd, sinceMs: startedAtMs, explicitLogContent: logContent });
       }
       if (result.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
       db.resetFailures(chatKey, this.kind);
+      await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
+        console.error(`[${this.kind}] output file upload failed`, err)
+      );
       return result;
     } catch (error) {
       if (logFile) {
         try { rmSync(logFile); } catch {}
       }
+      await uploadOutputFiles(outDir, chatId, this.client).catch(() => {});
       if (isCapacityExhaustedError(error as Error) && this.config.modelPreference.length > 1) {
         const fallbackModel = getNextFallbackModel(model, this.config.modelPreference);
         if (fallbackModel) {

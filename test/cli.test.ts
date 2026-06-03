@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
-import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage } from "../src/cli.js";
+import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage, buildCliInvocation } from "../src/cli.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -238,5 +238,107 @@ describe("antigravity model mapping and settings override", () => {
     // Test that toUserMessage outputs the clean, de-duplicated message
     const userMsg = toUserMessage(caught);
     expect(userMsg).toBe("agent executor error: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 4h.");
+  });
+});
+
+// Steps 3, 4, 5, 8 — attachment + outputDir support in buildCliInvocation
+
+describe("buildCliInvocation — attachment injection", () => {
+  const base = { prompt: "hello", sessionId: null, command: "agy", model: null };
+
+  it("agy: appends attachment annotation lines to prompt for each file", () => {
+    const { args } = buildCliInvocation({
+      ...base,
+      bot: "antigravity",
+      attachments: ["/tmp/x.jpg", "/tmp/y.png"],
+    });
+    const prompt = args[args.length - 1];
+    expect(prompt).toContain("[Attached file saved at: /tmp/x.jpg]");
+    expect(prompt).toContain("[Attached file saved at: /tmp/y.png]");
+  });
+
+  it("agy: no annotation when attachments is empty", () => {
+    const { args } = buildCliInvocation({
+      ...base,
+      bot: "antigravity",
+      attachments: [],
+    });
+    const prompt = args[args.length - 1];
+    expect(prompt).not.toContain("[Attached file saved at:");
+  });
+
+  it("codex: adds -i flag per attachment before prompt on new session", () => {
+    const { args } = buildCliInvocation({
+      ...base,
+      bot: "codex",
+      command: "codex",
+      attachments: ["/tmp/a.png", "/tmp/b.png"],
+    });
+    expect(args).toContain("-i");
+    const iIdx1 = args.indexOf("-i");
+    expect(args[iIdx1 + 1]).toBe("/tmp/a.png");
+    const iIdx2 = args.indexOf("-i", iIdx1 + 1);
+    expect(args[iIdx2 + 1]).toBe("/tmp/b.png");
+  });
+
+  it("codex: no -i flags when attachments is empty", () => {
+    const { args } = buildCliInvocation({
+      ...base,
+      bot: "codex",
+      command: "codex",
+      attachments: [],
+    });
+    expect(args).not.toContain("-i");
+  });
+
+  it("codex: drops attachments and does not add -i when sessionId is set (resume path)", () => {
+    const { args } = buildCliInvocation({
+      ...base,
+      bot: "codex",
+      command: "codex",
+      sessionId: "sess_abc",
+      attachments: ["/tmp/img.png"],
+    });
+    expect(args).not.toContain("-i");
+  });
+
+  it("claude with attachments: returns stdin field with stream-json payload and uses stream-json args", async () => {
+    const { mkdtemp: mkd, writeFile: wf, rm: rmf } = await import("node:fs/promises");
+    const { join: pjoin } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const dir = await mkd(pjoin(tmpdir(), "bridge-test-"));
+    const imgPath = pjoin(dir, "img.png");
+    await wf(imgPath, Buffer.from([137, 80, 78, 71]));
+    try {
+      const result = buildCliInvocation({
+        ...base,
+        bot: "claude",
+        command: "claude",
+        attachments: [imgPath],
+      });
+      expect(result.args).toContain("--input-format");
+      expect(result.args).toContain("stream-json");
+      expect(result.args).toContain("--output-format");
+      expect(result.args).toContain("--verbose");
+      expect(result.stdin).toBeDefined();
+      const payload = JSON.parse(result.stdin!);
+      expect(payload.type).toBe("user");
+      expect(Array.isArray(payload.message.content)).toBe(true);
+    } finally {
+      await rmf(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("all bots: appends outputDir instruction to prompt when outputDir is set", () => {
+    for (const bot of ["antigravity", "codex", "claude"] as const) {
+      const { args } = buildCliInvocation({
+        ...base,
+        bot,
+        command: "cmd",
+        outputDir: "/tmp/bridge-out/42",
+      });
+      const prompt = args[args.length - 1];
+      expect(prompt).toContain("If you generate any files, save them to /tmp/bridge-out/42");
+    }
   });
 });

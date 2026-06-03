@@ -46,6 +46,22 @@ export interface TelegramUpdate {
   callback_query?: TelegramCallbackQuery;
 }
 
+export interface TelegramPhotoSize {
+  file_id: string;
+  file_unique_id: string;
+  width: number;
+  height: number;
+  file_size?: number;
+}
+
+export interface TelegramDocument {
+  file_id: string;
+  file_unique_id: string;
+  file_name?: string;
+  mime_type?: string;
+  file_size?: number;
+}
+
 /**
  * Telegram Message object.
  */
@@ -64,6 +80,8 @@ export interface TelegramMessage {
   };
   text?: string;
   caption?: string;
+  photo?: TelegramPhotoSize[];
+  document?: TelegramDocument;
   media_group_id?: string;
   message_thread_id?: number;
   reply_markup?: any;
@@ -93,6 +111,7 @@ export interface CliOptions {
   killGraceMs?: number;
   onProgress?: (text: string) => void;
   chatId?: number | string;
+  stdin?: string;
 }
 
 /**

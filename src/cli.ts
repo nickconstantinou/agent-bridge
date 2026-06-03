@@ -13,6 +13,7 @@ import { join, dirname } from "node:path";
 import type { CliOptions, CliResult, BotKind } from "./types.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { renderSoulContract } from "./soul.js";
+import { buildClaudeStreamJsonInput, parseClaudeStreamJsonOutput } from "./claudeStreamJson.js";
 
 const activeProcesses = new Map<number | string, ChildProcess>();
 const abortedChildren = new WeakSet<ChildProcess>();
@@ -93,6 +94,20 @@ export function shutdownCliProcesses(): number {
 /**
  * Builds the CLI invocation for a bot.
  */
+const ATTACHMENT_ANNOTATION_PREFIX = "[Attached file saved at: ";
+const OUTPUT_DIR_INSTRUCTION = "If you generate any files, save them to ";
+
+function appendAttachmentAnnotations(prompt: string, attachments: string[]): string {
+  if (!attachments.length) return prompt;
+  const lines = attachments.map((p) => `${ATTACHMENT_ANNOTATION_PREFIX}${p}]`);
+  return `${prompt}\n\n${lines.join("\n")}`;
+}
+
+function appendOutputDirInstruction(prompt: string, outputDir: string | null | undefined): string {
+  if (!outputDir) return prompt;
+  return `${prompt}\n\n${OUTPUT_DIR_INSTRUCTION}${outputDir}`;
+}
+
 export function buildCliInvocation({
   bot,
   prompt,
@@ -104,6 +119,8 @@ export function buildCliInvocation({
   outputFormat = null,
   logFile = null,
   soulContext = null,
+  attachments = [],
+  outputDir = null,
 }: {
   bot: string;
   prompt: string;
@@ -115,7 +132,9 @@ export function buildCliInvocation({
   outputFormat?: "json" | null;
   logFile?: string | null;
   soulContext?: string | null;
-}): { command: string; args: string[] } {
+  attachments?: string[];
+  outputDir?: string | null;
+}): { command: string; args: string[]; stdin?: string } {
   const args = [];
 
   if (bot === "codex") {
@@ -134,8 +153,29 @@ export function buildCliInvocation({
     if (outputFormat === "json") {
       args.push("--json");
     }
-    args.push(wrapPromptContext(prompt, soulContext));
+    // Codex supports -i <file> for image attachments on new sessions only
+    if (!sessionId && attachments.length > 0) {
+      for (const att of attachments) {
+        args.push("-i", att);
+      }
+    } else if (sessionId && attachments.length > 0) {
+      console.warn("[bridge] Codex: attachments ignored on resume session (no -i support on resume)");
+    }
+    const finalPrompt = appendOutputDirInstruction(wrapPromptContext(prompt, soulContext), outputDir);
+    args.push(finalPrompt);
   } else if (bot === "claude") {
+    const finalPrompt = appendOutputDirInstruction(wrapPromptContext(prompt, soulContext), outputDir);
+    if (attachments.length > 0) {
+      // Multimodal path: pipe stream-json with base64 images to stdin
+      const pluginSettings = buildClaudeExcludedPluginSettings();
+      if (pluginSettings) args.push("--settings", pluginSettings);
+      if (model) args.push("--model", model);
+      if (sessionId) args.push("--resume", sessionId);
+      if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
+      args.push("--input-format", "stream-json", "--output-format", "stream-json", "--verbose");
+      const stdinPayload = buildClaudeStreamJsonInput(finalPrompt, attachments);
+      return { command, args, stdin: stdinPayload };
+    }
     args.push("--print");
     const pluginSettings = buildClaudeExcludedPluginSettings();
     if (pluginSettings) args.push("--settings", pluginSettings);
@@ -143,7 +183,7 @@ export function buildCliInvocation({
     if (sessionId) args.push("--resume", sessionId);
     if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
     if (outputFormat === "json") args.push("--output-format", "json");
-    args.push(wrapPromptContext(prompt, soulContext));
+    args.push(finalPrompt);
   } else if (bot === "antigravity") {
     // Agy's --print flag takes the prompt as its value, so all other flags must come first.
     // Agy does not expose a --model CLI flag; model selection is applied by writing to
@@ -151,7 +191,12 @@ export function buildCliInvocation({
     if (sessionId) args.push("--conversation", sessionId);
     if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
     if (logFile) args.push("--log-file", logFile);
-    args.push("--print", wrapAntigravityPrompt(prompt, soulContext));
+    const annotatedPrompt = appendAttachmentAnnotations(
+      wrapAntigravityPrompt(prompt, soulContext),
+      attachments,
+    );
+    const finalPrompt = appendOutputDirInstruction(annotatedPrompt, outputDir);
+    args.push("--print", finalPrompt);
   }
 
   return { command, args };
@@ -569,6 +614,9 @@ export async function runCli(command: string, args: string[], cwd: string, optio
   return new Promise((resolve, reject) => {
     console.log(formatSpawnLog(command, args, cwd, options.chatId));
     const child = spawn(command, args, { cwd, shell: false });
+    if (options.stdin) {
+      child.stdin?.write(options.stdin);
+    }
     child.stdin?.end();
     if (options.chatId != null) activeProcesses.set(options.chatId, child);
     let stdout = "";
@@ -664,6 +712,9 @@ export async function runCliAsync(
   return new Promise((resolve, reject) => {
     console.log(formatSpawnLog(command, args, cwd, options.chatId));
     const child = spawn(command, args, { cwd, shell: false, detached: true });
+    if (options.stdin) {
+      child.stdin?.write(options.stdin);
+    }
     child.stdin?.end();
     if (options.chatId != null) activeProcesses.set(options.chatId, child);
     const pid = child.pid;

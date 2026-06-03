@@ -25,13 +25,15 @@ Telegram Bot Long-Polling
  (systemd)         (systemd)   (systemd)
 ```
 
-Each bot is an **independent systemd service** sharing the same TypeScript source, distinguished only by `BRIDGE_ENV_FILE` pointing to their own `.env` file:
+Each bot is an **independent systemd service** sharing the same TypeScript source. All services load a shared env file first, then the bot-specific file:
 
-| Service | Env | Data Dir |
-|---------|-----|----------|
-| `agent-bridge-antigravity.service` | `.env.antigravity` | `.data-antigravity/` |
-| `agent-bridge-codex.service` | `.env.codex` | `.data-codex/` |
-| `agent-bridge-claude.service` | `.env.claude` | `.data-claude/` |
+| Service | Shared env | Bot-specific env | Data Dir |
+|---------|-----------|-----------------|----------|
+| `agent-bridge-antigravity.service` | `.env.shared` | `/etc/default/agent-bridge-antigravity` | `.data-antigravity/` |
+| `agent-bridge-codex.service` | `.env.shared` | `/etc/default/agent-bridge-codex` | `.data-codex/` |
+| `agent-bridge-claude.service` | `.env.shared` | `.env.claude` | `.data-claude/` |
+
+`.env.shared` holds settings that apply to all bots: allowed user IDs, execution mode, bridge paths, health monitoring config. Bot-specific files hold only the token, CLI command, model preference, and DB path. See `.env.shared.example` for the full reference.
 
 ## Path Portability Rule
 
@@ -371,10 +373,12 @@ agent-bridge/
 ├── scripts/
 │   ├── install.sh          — First-time install (prompts for tokens, creates systemd units)
 │   └── install-deployment.sh — Update existing deployment (npm, CLI update, service reload)
+├── .env.shared            — Live shared config for all bots (gitignored)
+├── .env.shared.example    — Shared config template (committed)
 ├── .env.antigravity       — Live Antigravity config (gitignored)
 ├── .env.codex             — Live Codex config (gitignored)
 ├── .env.claude            — Live Claude config (gitignored)
-├── .env.*.example         — Template env files
+├── .env.*.example         — Bot-specific config templates (committed)
 └── agents.md              — This file
 ```
 
@@ -401,7 +405,7 @@ agent-bridge/
 | `BRIDGE_PROJECT_DIR` | All | Repo path (used for default `DB_PATH`) |
 | `AGENT_BRIDGE_SOUL_PATH` | All | Optional persona contract path (default: `<project-dir>/SOUL.md`) |
 | `AGENT_BRIDGE_SOUL_MODE` | All | `summary`, `full`, or `off` (default: `summary`) |
-| `HEALTH_MONITOR_ENABLED` | All | `false` to disable health monitoring (default: `true`) |
+| `HEALTH_MONITOR_ENABLED` | All | `false` to disable health monitoring. **Currently disabled by default in `.env.shared`** — see `docs/health-monitor-rectification.md` before re-enabling. |
 | `HEALTH_MONITOR_CADENCE_SECONDS` | All | Seconds between health check runs (default: `3600`) |
 | `HEALTH_MONITOR_AUTONOMY` | All | `report` — report only; `suggest` — also spawns a CLI for diagnosis (default: `report`) |
 | `HEALTH_MONITOR_CHAT_ID` | All | Telegram chat ID for health reports; if unset, logs to stdout |
@@ -444,6 +448,10 @@ interface CheckResult {
 **`SelfPlugin`** — always registered. Checks DB file existence and runs a read query as a liveness probe.
 
 **`ExternalPlugin`** — wraps any shell command. Spawns the command with `spawnSync`, expects exit 0 and a `HealthReport` JSON on stdout. Returns a synthetic red report on non-zero exit or invalid JSON.
+
+### Current status
+
+Health monitoring is **disabled** (`HEALTH_MONITOR_ENABLED=false` in `.env.shared`). There are known bugs that must be fixed before re-enabling — see `docs/health-monitor-rectification.md` for the full list and re-enable checklist. The two blocking issues are: `ExternalPlugin` uses `spawnSync` which blocks the event loop for up to 30s, and `generateSuggestion` can forward agy's internal error string verbatim to the user.
 
 ### Suggest mode
 

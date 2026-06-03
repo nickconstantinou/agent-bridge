@@ -18,26 +18,32 @@ export function buildSuggestionPrompt(report: HealthReport): string {
   ].join("\n");
 }
 
-export async function generateSuggestion(
-  report: HealthReport,
+export function buildSuggestionInvocation(
   bot: BotKind,
   botConfig: { command: string; modelPreference: string[] },
-  executionMode: "safe" | "trusted" = "safe",
-): Promise<string | null> {
-  const prompt = buildSuggestionPrompt(report);
-  const invocation = buildCliInvocation({
+  prompt: string,
+): { command: string; args: string[] } {
+  return buildCliInvocation({
     bot,
     command: botConfig.command,
     model: botConfig.modelPreference[0] ?? null,
     prompt,
     sessionId: null,
-    executionMode,
+    executionMode: "safe",
     outputFormat: bot !== "antigravity" ? "json" : null,
   });
+}
+
+export async function generateSuggestion(
+  report: HealthReport,
+  bot: BotKind,
+  botConfig: { command: string; modelPreference: string[] },
+): Promise<string | null> {
+  const prompt = buildSuggestionPrompt(report);
+  const invocation = buildSuggestionInvocation(bot, botConfig, prompt);
   try {
     const stdout = await runCli(invocation.command, invocation.args, process.cwd(), {
       timeoutMs: SUGGEST_TIMEOUT_MS,
-      chatId: "health-monitor",
     });
     const result = parseCliResult({ bot, stdout, logContent: null });
     return result.text.trim() || null;

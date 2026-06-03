@@ -386,6 +386,35 @@ describe("parseHealthEnabled", () => {
   });
 });
 
+// ── buildSuggestionInvocation ─────────────────────────────────────────────────
+
+describe("buildSuggestionInvocation", () => {
+  it("never includes --dangerously-skip-permissions for claude bot", async () => {
+    const { buildSuggestionInvocation } = await import("../src/health/suggest.js");
+    const inv = buildSuggestionInvocation("claude", { command: "claude", modelPreference: ["claude-sonnet-4-6"] }, "analyze this");
+    expect(inv.args).not.toContain("--dangerously-skip-permissions");
+  });
+
+  it("never includes --dangerously-bypass-approvals-and-sandbox for codex bot", async () => {
+    const { buildSuggestionInvocation } = await import("../src/health/suggest.js");
+    const inv = buildSuggestionInvocation("codex", { command: "codex", modelPreference: [] }, "analyze this");
+    expect(inv.args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+  });
+
+  it("uses json output format for claude", async () => {
+    const { buildSuggestionInvocation } = await import("../src/health/suggest.js");
+    const inv = buildSuggestionInvocation("claude", { command: "claude", modelPreference: [] }, "test");
+    expect(inv.args).toContain("--output-format");
+  });
+
+  it("does not use json output format for antigravity", async () => {
+    const { buildSuggestionInvocation } = await import("../src/health/suggest.js");
+    const inv = buildSuggestionInvocation("antigravity", { command: "agy", modelPreference: [] }, "test");
+    expect(inv.args).not.toContain("--json");
+    expect(inv.args).not.toContain("--output-format");
+  });
+});
+
 // ── generateSuggestion ────────────────────────────────────────────────────────
 
 describe("generateSuggestion", () => {

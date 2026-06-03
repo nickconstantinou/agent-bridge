@@ -338,6 +338,54 @@ describe("buildSuggestionPrompt", () => {
   });
 });
 
+// ── parseCadenceSeconds ───────────────────────────────────────────────────────
+
+describe("parseCadenceSeconds", () => {
+  it("returns 3600 when HEALTH_MONITOR_CADENCE_SECONDS is not set", async () => {
+    const { parseCadenceSeconds } = await import("../src/health/config.js");
+    expect(parseCadenceSeconds({})).toBe(3600);
+  });
+
+  it("returns parsed integer when valid", async () => {
+    const { parseCadenceSeconds } = await import("../src/health/config.js");
+    expect(parseCadenceSeconds({ HEALTH_MONITOR_CADENCE_SECONDS: "900" })).toBe(900);
+  });
+
+  it("returns 3600 when value is NaN", async () => {
+    const { parseCadenceSeconds } = await import("../src/health/config.js");
+    expect(parseCadenceSeconds({ HEALTH_MONITOR_CADENCE_SECONDS: "abc" })).toBe(3600);
+  });
+
+  it("returns 3600 when value is zero", async () => {
+    const { parseCadenceSeconds } = await import("../src/health/config.js");
+    expect(parseCadenceSeconds({ HEALTH_MONITOR_CADENCE_SECONDS: "0" })).toBe(3600);
+  });
+
+  it("returns 3600 when value is negative", async () => {
+    const { parseCadenceSeconds } = await import("../src/health/config.js");
+    expect(parseCadenceSeconds({ HEALTH_MONITOR_CADENCE_SECONDS: "-100" })).toBe(3600);
+  });
+});
+
+// ── parseHealthEnabled ────────────────────────────────────────────────────────
+
+describe("parseHealthEnabled", () => {
+  it("defaults to false when HEALTH_MONITOR_ENABLED is not set", async () => {
+    const { parseHealthEnabled } = await import("../src/health/config.js");
+    expect(parseHealthEnabled({})).toBe(false);
+  });
+
+  it("is true when HEALTH_MONITOR_ENABLED=true", async () => {
+    const { parseHealthEnabled } = await import("../src/health/config.js");
+    expect(parseHealthEnabled({ HEALTH_MONITOR_ENABLED: "true" })).toBe(true);
+  });
+
+  it("is false when HEALTH_MONITOR_ENABLED=false", async () => {
+    const { parseHealthEnabled } = await import("../src/health/config.js");
+    expect(parseHealthEnabled({ HEALTH_MONITOR_ENABLED: "false" })).toBe(false);
+  });
+});
+
 // ── generateSuggestion ────────────────────────────────────────────────────────
 
 describe("generateSuggestion", () => {

@@ -501,7 +501,7 @@ describe("HealthScheduler suggest mode", () => {
     expect(reports).toHaveLength(1);
   });
 
-  it("does NOT send suggestion when claudeCommand is not configured", async () => {
+  it("does NOT send suggestion when suggestBot is not configured", async () => {
     const { HealthScheduler } = await import("../src/health/scheduler.js");
     const mockReport = {
       pluginName: "test",

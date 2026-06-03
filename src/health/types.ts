@@ -29,5 +29,4 @@ export interface HealthConfig {
   reportChatId?: string;
   suggestBot?: "codex" | "antigravity" | "claude";
   suggestBotConfig?: { command: string; modelPreference: string[] };
-  executionMode?: "safe" | "trusted";
 }

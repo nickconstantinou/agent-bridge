@@ -7,7 +7,6 @@ type SuggestFn = (
   report: HealthReport,
   bot: BotKind,
   botConfig: { command: string; modelPreference: string[] },
-  executionMode: "safe" | "trusted",
 ) => Promise<string | null>;
 
 export class HealthScheduler {
@@ -15,17 +14,20 @@ export class HealthScheduler {
   private config: HealthConfig;
   private sendReport: (text: string) => Promise<void>;
   private suggestFn: SuggestFn;
+  private onRawReport?: (report: HealthReport) => Promise<void>;
   private timers: NodeJS.Timeout[] = [];
 
   constructor(options: {
     plugins: HealthPlugin[];
     config: HealthConfig;
     sendReport: (text: string) => Promise<void>;
+    onRawReport?: (report: HealthReport) => Promise<void>;
     _suggestFn?: SuggestFn;
   }) {
     this.plugins = options.plugins;
     this.config = options.config;
     this.sendReport = options.sendReport;
+    this.onRawReport = options.onRawReport;
     this.suggestFn = options._suggestFn ?? generateSuggestion;
   }
 
@@ -48,16 +50,16 @@ export class HealthScheduler {
 
   async runPlugin(plugin: HealthPlugin): Promise<void> {
     const report = await plugin.check();
+
+    if (this.onRawReport) {
+      await this.onRawReport(report);
+    }
+
     await this.sendReport(formatReport(report));
 
-    const { autonomy, suggestBot, suggestBotConfig, executionMode } = this.config;
+    const { autonomy, suggestBot, suggestBotConfig } = this.config;
     if (autonomy !== "report" && report.status !== "green" && suggestBot && suggestBotConfig) {
-      const suggestion = await this.suggestFn(
-        report,
-        suggestBot,
-        suggestBotConfig,
-        executionMode ?? "safe",
-      );
+      const suggestion = await this.suggestFn(report, suggestBot, suggestBotConfig);
       if (suggestion) {
         await this.sendReport(`💡 *Suggested actions:*\n\n${suggestion}`);
       }

@@ -50,6 +50,7 @@ import { HealthScheduler } from "./health/scheduler.js";
 import { SelfPlugin } from "./health/plugins/self.js";
 import { ExternalPlugin } from "./health/plugins/external.js";
 import type { HealthPlugin, HealthConfig } from "./health/types.js";
+import { parseHealthEnabled, parseCadenceSeconds } from "./health/config.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env",
@@ -706,11 +707,11 @@ const bots = (Object.entries(config.bots) as [("codex" | "antigravity" | "claude
   .map(([kind, botConfig]) => new BridgeBot(kind, botConfig));
 
 // ── Health monitoring ──────────────────────────────────────────────────────
-const healthEnabled = process.env.HEALTH_MONITOR_ENABLED !== "false";
+const healthEnabled = parseHealthEnabled(process.env);
 const healthChatId = process.env.HEALTH_MONITOR_CHAT_ID
   ? Number(process.env.HEALTH_MONITOR_CHAT_ID)
   : null;
-const healthCadence = Number(process.env.HEALTH_MONITOR_CADENCE_SECONDS || 3600);
+const healthCadence = parseCadenceSeconds(process.env);
 const healthAutonomy = (process.env.HEALTH_MONITOR_AUTONOMY as "report" | "suggest" | "auto") || "report";
 
 const healthPlugins: HealthPlugin[] = [new SelfPlugin(db, config.dbPath)];
@@ -735,7 +736,6 @@ const healthConfig: HealthConfig = {
   autonomy: healthAutonomy,
   suggestBot: healthAutonomy !== "report" ? healthSuggestBotKind : undefined,
   suggestBotConfig: healthAutonomy !== "report" ? config.bots[healthSuggestBotKind] : undefined,
-  executionMode: config.executionMode,
 };
 
 const sendHealthReport = async (text: string): Promise<void> => {

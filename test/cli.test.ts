@@ -341,4 +341,47 @@ describe("buildCliInvocation — attachment injection", () => {
       expect(prompt).toContain("If you generate any files, save them to /tmp/bridge-out/42");
     }
   });
+
+  it("outputDir instruction tells the CLI not to call the Telegram API directly", () => {
+    for (const bot of ["antigravity", "codex", "claude"] as const) {
+      const { args } = buildCliInvocation({
+        ...base,
+        bot,
+        command: "cmd",
+        outputDir: "/tmp/bridge-out/42",
+      });
+      const prompt = args[args.length - 1];
+      expect(prompt).toMatch(/do not.*telegram|bridge will/i);
+    }
+  });
+});
+
+describe("buildSafeChildEnv", () => {
+  it("strips TELEGRAM_BOT_TOKEN_* vars from the env", async () => {
+    const { buildSafeChildEnv } = await import("../src/cli.js");
+    const env = buildSafeChildEnv({
+      PATH: "/usr/bin",
+      TELEGRAM_BOT_TOKEN_CLAUDE: "secret1",
+      TELEGRAM_BOT_TOKEN_CODEX: "secret2",
+      TELEGRAM_BOT_TOKEN_ANTIGRAVITY: "secret3",
+      HOME: "/home/user",
+    });
+    expect(env.TELEGRAM_BOT_TOKEN_CLAUDE).toBeUndefined();
+    expect(env.TELEGRAM_BOT_TOKEN_CODEX).toBeUndefined();
+    expect(env.TELEGRAM_BOT_TOKEN_ANTIGRAVITY).toBeUndefined();
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HOME).toBe("/home/user");
+  });
+
+  it("also strips TELEGRAM_BOT_TOKEN (unqualified) and TELEGRAM_ALLOWED_USER_IDS", async () => {
+    const { buildSafeChildEnv } = await import("../src/cli.js");
+    const env = buildSafeChildEnv({
+      TELEGRAM_BOT_TOKEN: "secret",
+      TELEGRAM_ALLOWED_USER_IDS: "123",
+      OTHER: "keep",
+    });
+    expect(env.TELEGRAM_BOT_TOKEN).toBeUndefined();
+    expect(env.TELEGRAM_ALLOWED_USER_IDS).toBeUndefined();
+    expect(env.OTHER).toBe("keep");
+  });
 });

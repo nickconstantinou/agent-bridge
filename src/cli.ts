@@ -18,6 +18,14 @@ import { buildClaudeStreamJsonInput, parseClaudeStreamJsonOutput } from "./claud
 const activeProcesses = new Map<number | string, ChildProcess>();
 const abortedChildren = new WeakSet<ChildProcess>();
 
+const STRIPPED_ENV_KEYS = /^TELEGRAM_BOT_TOKEN|^TELEGRAM_ALLOWED_USER_IDS/;
+
+export function buildSafeChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter(([k]) => !STRIPPED_ENV_KEYS.test(k)),
+  );
+}
+
 const KILL_GRACE_MS = 5_000;
 const ANTIGRAVITY_FINAL_RESPONSE_DELIMITER = "***";
 
@@ -96,6 +104,7 @@ export function shutdownCliProcesses(): number {
  */
 const ATTACHMENT_ANNOTATION_PREFIX = "[Attached file saved at: ";
 const OUTPUT_DIR_INSTRUCTION = "If you generate any files, save them to ";
+const OUTPUT_DIR_SUFFIX = " — the bridge will deliver them automatically; do not call the Telegram API directly.";
 
 function appendAttachmentAnnotations(prompt: string, attachments: string[]): string {
   if (!attachments.length) return prompt;
@@ -105,7 +114,7 @@ function appendAttachmentAnnotations(prompt: string, attachments: string[]): str
 
 function appendOutputDirInstruction(prompt: string, outputDir: string | null | undefined): string {
   if (!outputDir) return prompt;
-  return `${prompt}\n\n${OUTPUT_DIR_INSTRUCTION}${outputDir}`;
+  return `${prompt}\n\n${OUTPUT_DIR_INSTRUCTION}${outputDir}${OUTPUT_DIR_SUFFIX}`;
 }
 
 export function buildCliInvocation({
@@ -613,7 +622,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
 
   return new Promise((resolve, reject) => {
     console.log(formatSpawnLog(command, args, cwd, options.chatId));
-    const child = spawn(command, args, { cwd, shell: false });
+    const child = spawn(command, args, { cwd, shell: false, env: buildSafeChildEnv() });
     if (options.stdin) {
       child.stdin?.write(options.stdin);
     }
@@ -711,7 +720,7 @@ export async function runCliAsync(
 
   return new Promise((resolve, reject) => {
     console.log(formatSpawnLog(command, args, cwd, options.chatId));
-    const child = spawn(command, args, { cwd, shell: false, detached: true });
+    const child = spawn(command, args, { cwd, shell: false, detached: true, env: buildSafeChildEnv() });
     if (options.stdin) {
       child.stdin?.write(options.stdin);
     }

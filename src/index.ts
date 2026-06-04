@@ -36,6 +36,7 @@ import {
   toUserMessage,
   resolveAntigravityConversationId,
   setAntigravityModel,
+  scrubOutputDir,
   openDb,
   BridgeDb,
 } from "./bridge.js";
@@ -421,6 +422,7 @@ class BridgeBot {
       }
       if (result?.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
       db.resetFailures(chatKey, this.kind);
+      result.text = scrubOutputDir(result.text, outDir);
       await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
         console.error(`[${this.kind}] output file upload failed`, err)
       );
@@ -564,6 +566,7 @@ class BridgeBot {
       }
       if (result.sessionId) db.setSession(chatKey, this.kind, result.sessionId);
       db.resetFailures(chatKey, this.kind);
+      result.text = scrubOutputDir(result.text, outDir);
       await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
         console.error(`[${this.kind}] output file upload failed`, err)
       );

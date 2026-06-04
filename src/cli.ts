@@ -26,6 +26,14 @@ export function buildSafeChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.
   );
 }
 
+export function scrubOutputDir(text: string, outDir: string | null | undefined): string {
+  if (!outDir) return text;
+  const lines = text.split("\n");
+  const filtered = lines.filter((line) => !line.includes(outDir));
+  // Collapse runs of more than one consecutive blank line left by removed lines
+  return filtered.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 const KILL_GRACE_MS = 5_000;
 const ANTIGRAVITY_FINAL_RESPONSE_DELIMITER = "***";
 
@@ -104,7 +112,7 @@ export function shutdownCliProcesses(): number {
  */
 const ATTACHMENT_ANNOTATION_PREFIX = "[Attached file saved at: ";
 const OUTPUT_DIR_INSTRUCTION = "If you generate any files, save them to ";
-const OUTPUT_DIR_SUFFIX = " — the bridge handles delivery.";
+const OUTPUT_DIR_SUFFIX = " — the bridge handles delivery; omit file paths from your response.";
 
 function appendAttachmentAnnotations(prompt: string, attachments: string[]): string {
   if (!attachments.length) return prompt;

@@ -342,7 +342,7 @@ describe("buildCliInvocation — attachment injection", () => {
     }
   });
 
-  it("outputDir instruction states that the bridge handles delivery", () => {
+  it("outputDir instruction states that the bridge handles delivery and omit file paths", () => {
     for (const bot of ["antigravity", "codex", "claude"] as const) {
       const { args } = buildCliInvocation({
         ...base,
@@ -352,6 +352,7 @@ describe("buildCliInvocation — attachment injection", () => {
       });
       const prompt = args[args.length - 1];
       expect(prompt).toContain("the bridge handles delivery");
+      expect(prompt).toMatch(/omit.*file path|file path.*omit/i);
     }
   });
 });
@@ -383,5 +384,31 @@ describe("buildSafeChildEnv", () => {
     expect(env.TELEGRAM_BOT_TOKEN).toBeUndefined();
     expect(env.TELEGRAM_ALLOWED_USER_IDS).toBeUndefined();
     expect(env.OTHER).toBe("keep");
+  });
+});
+
+describe("scrubOutputDir", () => {
+  it("removes lines that contain the output dir path", async () => {
+    const { scrubOutputDir } = await import("../src/cli.js");
+    const text = "Image generated.\n\nSaved to /tmp/bridge-out/codex-42/image.png\n\nHere is your result.";
+    expect(scrubOutputDir(text, "/tmp/bridge-out/codex-42")).toBe("Image generated.\n\nHere is your result.");
+  });
+
+  it("removes the entire line when path appears mid-sentence", async () => {
+    const { scrubOutputDir } = await import("../src/cli.js");
+    const text = "Done.\nFile written: /tmp/bridge-out/codex-42/out.jpg\nEnjoy.";
+    expect(scrubOutputDir(text, "/tmp/bridge-out/codex-42")).toBe("Done.\nEnjoy.");
+  });
+
+  it("collapses multiple blank lines left by removed lines", async () => {
+    const { scrubOutputDir } = await import("../src/cli.js");
+    const text = "A\n\n/tmp/bridge-out/codex-42/x.png\n\nB";
+    expect(scrubOutputDir(text, "/tmp/bridge-out/codex-42")).toBe("A\n\nB");
+  });
+
+  it("returns text unchanged when outDir is null", async () => {
+    const { scrubOutputDir } = await import("../src/cli.js");
+    const text = "Some text with no path.";
+    expect(scrubOutputDir(text, null)).toBe(text);
   });
 });

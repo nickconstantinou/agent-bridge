@@ -342,7 +342,7 @@ describe("buildCliInvocation — attachment injection", () => {
     }
   });
 
-  it("outputDir instruction tells the CLI not to call the Telegram API directly", () => {
+  it("outputDir instruction states that the bridge handles delivery", () => {
     for (const bot of ["antigravity", "codex", "claude"] as const) {
       const { args } = buildCliInvocation({
         ...base,
@@ -351,7 +351,7 @@ describe("buildCliInvocation — attachment injection", () => {
         outputDir: "/tmp/bridge-out/42",
       });
       const prompt = args[args.length - 1];
-      expect(prompt).toMatch(/do not.*telegram|bridge will/i);
+      expect(prompt).toContain("the bridge handles delivery");
     }
   });
 });

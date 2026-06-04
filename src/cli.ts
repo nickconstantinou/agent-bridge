@@ -104,7 +104,7 @@ export function shutdownCliProcesses(): number {
  */
 const ATTACHMENT_ANNOTATION_PREFIX = "[Attached file saved at: ";
 const OUTPUT_DIR_INSTRUCTION = "If you generate any files, save them to ";
-const OUTPUT_DIR_SUFFIX = " — the bridge will deliver them automatically; do not call the Telegram API directly.";
+const OUTPUT_DIR_SUFFIX = " — the bridge handles delivery.";
 
 function appendAttachmentAnnotations(prompt: string, attachments: string[]): string {
   if (!attachments.length) return prompt;

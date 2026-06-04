@@ -341,6 +341,40 @@ handleUpdate(update)
 
 ---
 
+---
+
+## File Exchange (Inbound + Outbound)
+
+Two-way file exchange is fully wired. Users can send photos or documents to any bot; the bot downloads them, passes them to the CLI, and if the CLI generates output files they are automatically sent back.
+
+### Inbound (Telegram → CLI)
+
+| Bot | Mechanism |
+|-----|-----------|
+| **Antigravity** | File path injected as `[Attached file saved at: /tmp/bridge-uploads-<chatId>/<file>]` annotation appended to prompt text |
+| **Codex** | `-i <file>` flag per attachment on new sessions; attachments silently dropped on resume (Codex `-i` is new-session only) |
+| **Claude** | `--input-format stream-json --output-format stream-json --verbose` with base64 image payload piped to stdin |
+
+- Attachment is downloaded to `/tmp/bridge-uploads-<chatId>/` before CLI invocation via `TelegramClient.getFilePath()` + `downloadFile()`
+- Maximum attachment size: **20 MB** (Telegram bot API limit) — oversized files are silently skipped
+- Attachment file is deleted after CLI execution regardless of outcome
+
+### Outbound (CLI → Telegram)
+
+- Before every CLI invocation, `prepareOutputDir(chatId)` creates `/tmp/bridge-out/<chatId>/`
+- The instruction `If you generate any files, save them to /tmp/bridge-out/<chatId>` is appended to every prompt for all bots
+- After execution, `uploadOutputFiles()` scans the directory, sends `.png`/`.jpg`/`.gif`/`.webp` as `sendPhoto` and everything else as `sendDocument`, then deletes each file and removes the directory
+
+### Key new source files
+
+| File | Purpose |
+|------|---------|
+| `src/fileDownload.ts` | `downloadTelegramAttachment()`, `mimeTypeFromExtension()` |
+| `src/fileOutput.ts` | `prepareOutputDir()`, `collectOutputFiles()`, `uploadOutputFiles()`, `cleanOutputDir()` |
+| `src/claudeStreamJson.ts` | `buildClaudeStreamJsonInput()`, `parseClaudeStreamJsonOutput()`, `encodeFileAsBase64()` |
+
+---
+
 ## Key File Structure
 
 ```
@@ -352,6 +386,9 @@ agent-bridge/
 │   │                        abortCliProcess, isCapacityExhaustedError, getNextFallbackModel
 │   ├── db.ts              — openDb(), BridgeDb (SQLite via better-sqlite3)
 │   ├── telegram.ts        — TelegramClient (HTTP), MediaGroupBuffer
+│   ├── fileDownload.ts    — downloadTelegramAttachment(), mimeTypeFromExtension()
+│   ├── fileOutput.ts      — prepareOutputDir(), uploadOutputFiles(), cleanOutputDir()
+│   ├── claudeStreamJson.ts — buildClaudeStreamJsonInput(), parseClaudeStreamJsonOutput()
 │   ├── messageDelivery.ts — sendTelegramMessage, sendMessageWithProgress, StreamingUpdater
 │   ├── render.ts          — splitTelegramText, escapeTelegramMarkdownV2, toTelegramEntitiesText
 │   ├── commands.ts        — handleCommand(): /reset, /models, /start
@@ -549,6 +586,8 @@ sudo systemctl restart agent-bridge-claude
 ```
 
 The SQLite polling offset persists across restarts — no re-processing of old updates.
+
+> **⚠️ Do not trigger restarts from within an active bot session.** Systemd uses `KillMode=control-group`, so the restart SIGTERM kills the entire cgroup including the currently-running CLI child process. This leaves the bot appearing unresponsive until the session times out. Always restart from an external terminal or Claude Code desktop interface. If the bot does get stuck, send `/reset` to clear the stale execution lock.
 
 ### Monitoring
 

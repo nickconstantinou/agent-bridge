@@ -38,6 +38,24 @@ Do not rely on MCP for memory.
 
 ---
 
+# Service Restart Safety
+
+**Never trigger `sudo systemctl restart agent-bridge-<bot>` from within an active bot session.**
+
+When the restart command runs inside a bot session, systemd sends SIGTERM to the entire control group — which includes the currently-running Claude CLI process. This kills the session that issued the restart, which looks like the bot went unresponsive.
+
+The correct restart pattern is to run restarts from outside any active bot session (e.g. from the server terminal or Claude Code desktop), one service at a time with a short timeout:
+
+```bash
+sudo systemctl restart agent-bridge-antigravity
+sudo systemctl restart agent-bridge-codex
+sudo systemctl restart agent-bridge-claude
+```
+
+If the bot becomes unresponsive after a bad restart, send `/reset` to the affected bot on Telegram to clear any stale execution lock.
+
+---
+
 # Health Monitoring System
 
 **Active** — enabled via `HEALTH_MONITOR_ENABLED=true` in `.env.shared` or `.env.health`.

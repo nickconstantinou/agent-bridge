@@ -257,4 +257,82 @@ describe("TelegramClient", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("sendPhoto throws when Telegram returns HTTP 200 but ok:false", async () => {
+    const fakeFetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: false, description: "Bad Request: PHOTO_INVALID_DIMENSIONS" }),
+    })) as any;
+
+    const dir = await mkdtemp(join(tmpdir(), "bridge-test-"));
+    const filePath = join(dir, "bad.jpg");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(filePath, Buffer.from([255, 216, 255]));
+    try {
+      const client = new TelegramClient("mytoken", fakeFetch);
+      await expect(client.sendPhoto(1, filePath)).rejects.toThrow(/PHOTO_INVALID_DIMENSIONS/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("sendDocument throws when Telegram returns HTTP 200 but ok:false", async () => {
+    const fakeFetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: false, description: "Bad Request: file too large" }),
+    })) as any;
+
+    const dir = await mkdtemp(join(tmpdir(), "bridge-test-"));
+    const filePath = join(dir, "big.pdf");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(filePath, "data");
+    try {
+      const client = new TelegramClient("mytoken", fakeFetch);
+      await expect(client.sendDocument(1, filePath)).rejects.toThrow(/file too large/);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("sendPhoto sets correct MIME type on the Blob for .jpg files", async () => {
+    let capturedBlob: Blob | null = null;
+    const fakeFetch = (async (_url: string, opts: any) => {
+      capturedBlob = (opts.body as FormData).get("photo") as Blob;
+      return { ok: true, status: 200, json: async () => ({ ok: true, result: {} }) };
+    }) as any;
+
+    const dir = await mkdtemp(join(tmpdir(), "bridge-test-"));
+    const filePath = join(dir, "photo.jpg");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(filePath, Buffer.from([255, 216, 255]));
+    try {
+      const client = new TelegramClient("mytoken", fakeFetch);
+      await client.sendPhoto(1, filePath);
+      expect(capturedBlob?.type).toBe("image/jpeg");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("sendPhoto sets correct MIME type on the Blob for .png files", async () => {
+    let capturedBlob: Blob | null = null;
+    const fakeFetch = (async (_url: string, opts: any) => {
+      capturedBlob = (opts.body as FormData).get("photo") as Blob;
+      return { ok: true, status: 200, json: async () => ({ ok: true, result: {} }) };
+    }) as any;
+
+    const dir = await mkdtemp(join(tmpdir(), "bridge-test-"));
+    const filePath = join(dir, "chart.png");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(filePath, Buffer.from([137, 80, 78, 71]));
+    try {
+      const client = new TelegramClient("mytoken", fakeFetch);
+      await client.sendPhoto(1, filePath);
+      expect(capturedBlob?.type).toBe("image/png");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

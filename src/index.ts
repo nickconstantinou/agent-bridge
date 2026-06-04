@@ -449,6 +449,8 @@ class BridgeBot {
             outputFormat: this.kind === "antigravity" ? undefined : "json",
             logFile: fallbackLogFile,
             soulContext,
+            outputDir: outDir,
+            attachments,
           });
           try {
             const fallbackCwd = getCliWorkingDir(this.kind);
@@ -457,6 +459,7 @@ class BridgeBot {
               ...buildExecutionOptions(this.kind),
               onProgress,
               chatId: chatKey,
+              stdin: fallbackInvocation.stdin,
             });
             let fallbackLogContent: string | null = null;
             if (fallbackLogFile) {
@@ -588,6 +591,8 @@ class BridgeBot {
             executionMode: config.executionMode,
             logFile: fallbackLogFile,
             soulContext,
+            outputDir: outDir,
+            attachments,
           });
           try {
             const fallbackCwd = getCliWorkingDir(this.kind);
@@ -595,6 +600,7 @@ class BridgeBot {
             const stdout = await runCli(fallbackInvocation.command, fallbackInvocation.args, fallbackCwd, {
               ...buildExecutionOptions(this.kind),
               chatId: chatKey,
+              stdin: fallbackInvocation.stdin,
             });
             let fallbackLogContent: string | null = null;
             if (fallbackLogFile) {

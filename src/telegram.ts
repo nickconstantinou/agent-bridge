@@ -1,9 +1,24 @@
 import { readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
-import { basename } from "node:path";
+import { basename, extname } from "node:path";
 import type { TelegramMessage } from "./types.js";
 
 const TELEGRAM_FILE_BASE_URL = "https://api.telegram.org/file/bot";
+
+const MIME_TYPE_MAP: Record<string, string> = {
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".pdf": "application/pdf",
+  ".zip": "application/zip",
+  ".txt": "text/plain",
+};
+
+function mimeTypeFromExtension(filePath: string): string {
+  return MIME_TYPE_MAP[extname(filePath).toLowerCase()] ?? "application/octet-stream";
+}
 
 export interface TelegramResponse<T> {
   ok: boolean;
@@ -143,7 +158,8 @@ export class TelegramClient {
     caption?: string,
   ): Promise<void> {
     const fileBytes = readFileSync(filePath);
-    const blob = new Blob([fileBytes]);
+    const mimeType = mimeTypeFromExtension(filePath);
+    const blob = new Blob([fileBytes], { type: mimeType });
     const fd = new FormData();
     fd.set("chat_id", String(chatId));
     fd.set(fieldName, blob, basename(filePath));
@@ -158,8 +174,8 @@ export class TelegramClient {
     } finally {
       clearTimeout(fetchTimer);
     }
-    if (!response.ok) {
-      const data = await response.json().catch(() => null) as any;
+    const data = await response.json().catch(() => null) as any;
+    if (!response.ok || data?.ok === false) {
       const detail = data?.description ? `: ${data.description}` : "";
       throw new Error(`Telegram ${endpoint} HTTP ${response.status}${detail}`);
     }

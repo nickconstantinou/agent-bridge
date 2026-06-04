@@ -84,10 +84,7 @@ Use the **Agy (Gemini) CLI** for all image generation — not the raw `gemini` c
 ```bash
 GEMINI_CLI_PATH=/home/content-crawler/.nvm/versions/node/v20.20.2/bin/gemini
 
-$GEMINI_CLI_PATH \
-  --dangerously-skip-permissions \
-  --yolo \
-  --print "Generate a photorealistic image of <description>. Use Imagen to generate directly — do not fetch from the web. Save the result as <output_path>."
+$GEMINI_CLI_PATH -y -p "Generate a photorealistic image of <description>. Use Imagen to generate directly — do not fetch from the web. Save the result as <output_path>."
 ```
 
 **Key rules:**

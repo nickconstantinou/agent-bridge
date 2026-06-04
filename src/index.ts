@@ -372,7 +372,7 @@ class BridgeBot {
       logFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
     }
 
-    const outDir = await prepareOutputDir(chatId);
+    const outDir = await prepareOutputDir(chatId, this.kind);
     const cwd = getCliWorkingDir(this.kind);
     const startedAtMs = Date.now();
     if (this.kind === "antigravity") setAntigravityModel(model);
@@ -513,7 +513,7 @@ class BridgeBot {
       logFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
     }
 
-    const outDir = await prepareOutputDir(chatId);
+    const outDir = await prepareOutputDir(chatId, this.kind);
     const cwd = getCliWorkingDir(this.kind);
     const startedAtMs = Date.now();
     if (this.kind === "antigravity") setAntigravityModel(model);

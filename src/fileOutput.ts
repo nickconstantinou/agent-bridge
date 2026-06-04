@@ -4,8 +4,8 @@ import type { TelegramClient } from "./telegram.js";
 
 const BRIDGE_OUT_BASE = "/tmp/bridge-out";
 
-export async function prepareOutputDir(chatId: number | string): Promise<string> {
-  const dir = join(BRIDGE_OUT_BASE, String(chatId));
+export async function prepareOutputDir(chatId: number | string, kind: string): Promise<string> {
+  const dir = join(BRIDGE_OUT_BASE, `${kind}-${String(chatId)}`);
   await mkdir(dir, { recursive: true });
   return dir;
 }

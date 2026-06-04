@@ -14,20 +14,33 @@ async function dirExists(p: string): Promise<boolean> {
 }
 
 describe("prepareOutputDir", () => {
-  it("creates /tmp/bridge-out/<chatId>/ and returns the path", async () => {
-    const dir = await prepareOutputDir(99999);
+  it("creates /tmp/bridge-out/<kind>-<chatId>/ and returns the path", async () => {
+    const dir = await prepareOutputDir(99999, "claude");
     try {
-      expect(dir).toBe("/tmp/bridge-out/99999");
+      expect(dir).toBe("/tmp/bridge-out/claude-99999");
       expect(await dirExists(dir)).toBe(true);
     } finally {
       await cleanOutputDir(dir);
     }
   });
 
-  it("is idempotent — calling twice does not throw", async () => {
-    const dir = await prepareOutputDir(88888);
+  it("different bot kinds get different directories for the same chatId", async () => {
+    const claudeDir = await prepareOutputDir(77777, "claude");
+    const codexDir = await prepareOutputDir(77777, "codex");
     try {
-      await expect(prepareOutputDir(88888)).resolves.toBe(dir);
+      expect(claudeDir).not.toBe(codexDir);
+      expect(claudeDir).toBe("/tmp/bridge-out/claude-77777");
+      expect(codexDir).toBe("/tmp/bridge-out/codex-77777");
+    } finally {
+      await cleanOutputDir(claudeDir);
+      await cleanOutputDir(codexDir);
+    }
+  });
+
+  it("is idempotent — calling twice does not throw", async () => {
+    const dir = await prepareOutputDir(88888, "antigravity");
+    try {
+      await expect(prepareOutputDir(88888, "antigravity")).resolves.toBe(dir);
     } finally {
       await cleanOutputDir(dir);
     }
@@ -107,7 +120,7 @@ describe("uploadOutputFiles", () => {
   });
 
   it("calls cleanOutputDir after all uploads even on empty dir", async () => {
-    const dir = await prepareOutputDir(77777);
+    const dir = await prepareOutputDir(77777, "claude");
     const client = { sendPhoto: vi.fn(), sendDocument: vi.fn() } as any;
     await uploadOutputFiles(dir, 77777, client);
     expect(await dirExists(dir)).toBe(false);

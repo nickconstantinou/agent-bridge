@@ -37,13 +37,15 @@ describe("prepareOutputDir", () => {
     }
   });
 
-  it("is idempotent — calling twice does not throw", async () => {
+  it("wipes existing contents on second call (clean-on-prepare)", async () => {
+    const { writeFile } = await import("node:fs/promises");
     const dir = await prepareOutputDir(88888, "antigravity");
-    try {
-      await expect(prepareOutputDir(88888, "antigravity")).resolves.toBe(dir);
-    } finally {
-      await cleanOutputDir(dir);
-    }
+    await writeFile(join(dir, "stale.jpg"), "x");
+    const dir2 = await prepareOutputDir(88888, "antigravity");
+    expect(dir2).toBe(dir);
+    const remaining = await readdir(dir);
+    expect(remaining).toHaveLength(0); // stale file was wiped
+    await cleanOutputDir(dir);
   });
 });
 

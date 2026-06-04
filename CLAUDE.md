@@ -72,3 +72,27 @@ A `HealthScheduler` runs alongside the bots and fires registered `HealthPlugin` 
 - **Content-crawler POC** — `~/content-crawler/scripts/health_check.py`; checks queue depth, failed items, stale workers, signal-feed age, disk space; enabled via `HEALTH_CONTENT_CRAWLER_ENABLED=1`
 
 When modifying the health module, keep `_suggestFn` injectable — do not inline `generateSuggestion` in the scheduler.
+
+---
+
+# Image Generation
+
+Use the **Agy (Gemini) CLI** for all image generation — not the raw `gemini` command invoked without context. Agy runs from its configured project directory with the correct settings, producing faster and more reliable results.
+
+**Invocation pattern:**
+
+```bash
+GEMINI_CLI_PATH=/home/content-crawler/.nvm/versions/node/v20.20.2/bin/gemini
+
+$GEMINI_CLI_PATH \
+  --dangerously-skip-permissions \
+  --yolo \
+  --print "Generate a photorealistic image of <description>. Use Imagen to generate directly — do not fetch from the web. Save the result as <output_path>."
+```
+
+**Key rules:**
+- Always include `"Use Imagen to generate directly — do not fetch from the web."` to prevent the Unsplash/web-fetch detour.
+- Save output to the user's bridge output dir: `/tmp/bridge-out/claude-<chatId>/`
+- Run the command as a **background process** (`run_in_background: true`) then wait for the task notification before reporting.
+- Verify the file exists and is a valid image (`file <path>`) before reporting success.
+- Do not mention the output path in the Telegram response — the bridge delivers the file automatically.

@@ -25,12 +25,15 @@ export function formatReport(report: HealthReport): string {
   ];
 
   if (report.checks.length > 0) {
+    const checkLines: string[] = [];
     for (const check of report.checks) {
       const ci = EMOJI[check.status] ?? "❓";
       const val = check.value !== undefined ? ` (${check.value})` : "";
-      lines.push(`  ${ci}  *${check.name}*: ${check.message}${val}`);
+      checkLines.push(`${ci}  ${check.name}: ${check.message}${val}`);
     }
-    lines.push(divider);
+    lines.push("```");
+    lines.push(...checkLines);
+    lines.push("```");
   }
 
   lines.push(`⏱️ _${formatTimestamp(report.timestamp)}_`);

@@ -74,6 +74,28 @@ describe("formatReport", () => {
     expect(text).toContain("failed-items");
     expect(text).toContain("3 failed in last hour");
   });
+
+  it("wraps check details in a code block for readability", async () => {
+    const { formatReport } = await import("../src/health/reporter.js");
+    const report = {
+      pluginName: "server",
+      status: "amber" as const,
+      checks: [
+        { name: "cpu-load", status: "amber" as const, message: "load 2.4 (threshold 2.0)" },
+      ],
+      summary: "Load elevated",
+      timestamp: "2026-06-02T00:00:00.000Z",
+    };
+    const text = formatReport(report);
+    // Header and summary remain outside the code block
+    expect(text).toContain("[server]");
+    expect(text).toContain("Load elevated");
+    // Check details are inside a fenced code block
+    const codeBlockMatch = text.match(/```[\s\S]+?```/);
+    expect(codeBlockMatch).not.toBeNull();
+    expect(codeBlockMatch![0]).toContain("cpu-load");
+    expect(codeBlockMatch![0]).toContain("load 2.4 (threshold 2.0)");
+  });
 });
 
 // ── ExternalPlugin ────────────────────────────────────────────────────────────

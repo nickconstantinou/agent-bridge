@@ -1,6 +1,6 @@
 import type { HealthPlugin, HealthConfig, HealthReport } from "./types.js";
 import type { BotKind } from "../types.js";
-import { formatReport } from "./reporter.js";
+import { formatReport, formatSuggestion } from "./reporter.js";
 import { generateSuggestion } from "./suggest.js";
 
 type SuggestFn = (
@@ -70,7 +70,7 @@ export class HealthScheduler {
       if (autonomy !== "report" && report.status !== "green" && suggestBot && suggestBotConfig) {
         const suggestion = await this.suggestFn(report, suggestBot, suggestBotConfig);
         if (suggestion) {
-          await this.sendReport(`💡 *Suggested actions:*\n\n${suggestion}`);
+          await this.sendReport(formatSuggestion(suggestion));
         }
       }
     } finally {

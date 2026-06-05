@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 import { HealthContextStore } from "./context.js";
-import { formatReport } from "./reporter.js";
+import { formatReport, formatSuggestion } from "./reporter.js";
 import type { HealthReport } from "./types.js";
 import type { BotKind } from "../types.js";
 
@@ -57,7 +57,7 @@ export class HealthBridgeBot {
       const suggestion = await this.suggestFn(report, this.cliBot, this.cliBotConfig);
       if (suggestion) {
         this.contextStore.saveSuggestion(suggestion);
-        await this.sendTextImpl(`💡 *Suggested actions:*\n\n${suggestion}`);
+        await this.sendTextImpl(formatSuggestion(suggestion));
       }
     }
   }

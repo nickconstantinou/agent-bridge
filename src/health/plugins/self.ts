@@ -1,5 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
 import { execSync } from "node:child_process";
+import { getHeapStatistics } from "node:v8";
 import type { HealthPlugin, HealthReport, CheckResult } from "../types.js";
 import type { BridgeDb } from "../../db.js";
 
@@ -73,7 +74,8 @@ export class SelfPlugin implements HealthPlugin {
 
     // Node.js heap utilisation
     const memUsage = process.memoryUsage();
-    const heapPct = Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100);
+    const heapStats = getHeapStatistics();
+    const heapPct = Math.max(1, Math.round((memUsage.heapUsed / heapStats.heap_size_limit) * 100));
     let heapStatus: "green" | "amber" | "red" = "green";
     if (heapPct >= 90) {
       heapStatus = "red";
@@ -83,7 +85,7 @@ export class SelfPlugin implements HealthPlugin {
     checks.push({
       name: "heap-usage",
       status: heapStatus,
-      message: `Heap: ${heapPct}% used (${Math.round(memUsage.heapUsed / 1024 / 1024)} MB / ${Math.round(memUsage.heapTotal / 1024 / 1024)} MB)`,
+      message: `Heap: ${heapPct}% used (${Math.round(memUsage.heapUsed / 1024 / 1024)} MB / ${Math.round(heapStats.heap_size_limit / 1024 / 1024)} MB)`,
       value: heapPct,
     });
 

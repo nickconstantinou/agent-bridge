@@ -257,12 +257,19 @@ The bridge runs a built-in `HealthScheduler` that polls plugins at a configurabl
 
 When `HEALTH_MONITOR_AUTONOMY=suggest` the bridge sends a second message for every amber or red report. It routes the failing checks through the CLI configured in `HEALTH_SUGGEST_BOT` using the **same auth path as normal user messages** (`buildCliInvocation → runCli → parseCliResult`). The response appears as:
 
-```
 💡 *Suggested actions:*
 
-The queue backlog (381 items) is normal throughput lag, not a fault.
-Workers are healthy and draining. No action needed unless the backlog
-grows beyond 500 or items start failing.
+1. Restarts the health monitor after a configuration or code change.
+
+```bash
+sudo systemctl restart agent-bridge-health
+```
+
+2. Raises the heap limit only if memory pressure is genuine.
+
+```bash
+echo 'NODE_OPTIONS="--max-old-space-size=512"' | sudo tee -a /etc/default/agent-bridge-health
+sudo systemctl restart agent-bridge-health
 ```
 
 To enable suggest mode, add to your `.env` file:

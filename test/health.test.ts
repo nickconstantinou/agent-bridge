@@ -98,6 +98,41 @@ describe("formatReport", () => {
   });
 });
 
+// ── formatSuggestion ────────────────────────────────────────────────────────
+
+describe("formatSuggestion", () => {
+  it("strips duplicate Suggested actions heading and fences shell commands", async () => {
+    const { formatSuggestion } = await import("../src/health/reporter.js");
+    const text = formatSuggestion([
+      "💡 *Suggested actions:*",
+      "",
+      "1. Fixes the false-positive health check logic.",
+      "Restart the health monitor service to apply the applied fix:",
+      "sudo systemctl restart agent-bridge-health",
+      "2. Increases the Node process heap limit if the process genuinely requires more memory.",
+      "Append the NODE_OPTIONS environment variable to the service default configuration:",
+      "echo 'NODE_OPTIONS=\"--max-old-space-size=512\"' | sudo tee -a /etc/default/agent-bridge-health && sudo systemctl restart agent-bridge-health",
+    ].join("\n"));
+
+    expect(text.match(/Suggested actions/g)).toHaveLength(1);
+    expect(text).toContain("```bash\nsudo systemctl restart agent-bridge-health\n```");
+    expect(text).toContain("```bash\necho 'NODE_OPTIONS=\"--max-old-space-size=512\"' | sudo tee -a /etc/default/agent-bridge-health && sudo systemctl restart agent-bridge-health\n```");
+  });
+
+  it("does not wrap commands that are already fenced", async () => {
+    const { formatSuggestion } = await import("../src/health/reporter.js");
+    const text = formatSuggestion([
+      "1. Restart the service.",
+      "```bash",
+      "sudo systemctl restart agent-bridge-health",
+      "```",
+    ].join("\n"));
+
+    expect(text.match(/```bash/g)).toHaveLength(1);
+    expect(text.match(/sudo systemctl restart/g)).toHaveLength(1);
+  });
+});
+
 // ── ExternalPlugin ────────────────────────────────────────────────────────────
 
 describe("ExternalPlugin", () => {
@@ -815,6 +850,35 @@ describe("HealthScheduler suggest mode", () => {
     expect(reports).toHaveLength(2);
     expect(reports[1]).toContain("Suggested actions");
     expect(reports[1]).toContain("Drain the queue");
+  });
+
+  it("normalizes suggestion messages to one heading and command code blocks", async () => {
+    const { HealthScheduler } = await import("../src/health/scheduler.js");
+    const mockReport = {
+      pluginName: "agent-bridge-health",
+      status: "red" as const,
+      checks: [{ name: "heap-usage", status: "red" as const, message: "Heap high" }],
+      summary: "Critical: heap-usage",
+      timestamp: new Date().toISOString(),
+    };
+    const mockPlugin = { name: "agent-bridge-health", check: vi.fn().mockResolvedValue(mockReport) };
+    const reports: string[] = [];
+    const scheduler = new HealthScheduler({
+      plugins: [mockPlugin],
+      config: { enabled: true, cadenceSeconds: 60, autonomy: "suggest", suggestBot: "claude" as const, suggestBotConfig: { command: "claude", modelPreference: [] } },
+      sendReport: async (text) => { reports.push(text); },
+      _suggestFn: async () => [
+        "💡 *Suggested actions:*",
+        "",
+        "1. Releases accumulated memory and resets the process heap.",
+        "Restart the failing health monitor service:",
+        "sudo systemctl restart agent-bridge-health",
+      ].join("\n"),
+    });
+    await scheduler.runPlugin(mockPlugin);
+    expect(reports).toHaveLength(2);
+    expect(reports[1].match(/Suggested actions/g)).toHaveLength(1);
+    expect(reports[1]).toContain("```bash\nsudo systemctl restart agent-bridge-health\n```");
   });
 
   it("does NOT send suggestion for green report in suggest mode", async () => {

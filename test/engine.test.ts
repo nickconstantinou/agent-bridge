@@ -196,6 +196,40 @@ describe("BridgeEngine", () => {
       expect(beforeExecute).not.toHaveBeenCalled();
       expect(runCli).not.toHaveBeenCalled();
     });
+
+    it("uses executionKind for non-agent CLI invocation and parsing", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+
+      const runCli = vi.fn().mockResolvedValue("***\nUse the Agy-specific response.");
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        {
+          kind: "health",
+          executionKind: "antigravity",
+          botConfig: { command: "agy", modelPreference: ["gemini-3-pro-preview"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          hooks: {
+            onBeforeExecute: async (prompt) => `HEALTH CONTEXT\n\n${prompt}`,
+          },
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("diagnose health report")]);
+
+      expect(runCli).toHaveBeenCalledOnce();
+      const [command, args] = runCli.mock.calls[0];
+      expect(command).toBe("agy");
+      expect(args).toContain("--print");
+      expect(args).not.toContain("--output-format");
+      expect(client.sendMessage).toHaveBeenCalledOnce();
+      expect(client.sendMessage.mock.calls[0][0].text).toBe("Use the Agy-specific response.");
+    });
   });
 
   describe("authorization", () => {

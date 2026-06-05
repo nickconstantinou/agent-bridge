@@ -245,6 +245,8 @@ The bridge runs a built-in `HealthScheduler` that polls plugins at a configurabl
 | `HEALTH_MONITOR_AUTONOMY` | `report` | `report` — formatted report only; `suggest` — also spawns a CLI to diagnose and propose fixes |
 | `HEALTH_MONITOR_CHAT_ID` | — | Telegram chat ID to receive reports; if unset, reports are logged to stdout only |
 | `HEALTH_SUGGEST_BOT` | `claude` | Which installed CLI diagnoses amber/red reports: `codex`, `antigravity`, or `claude` |
+| `HEALTH_SUGGEST_COMMAND` | bot default | Optional command override for the suggestion CLI. Defaults to `codex`, `agy`, or `claude` based on `HEALTH_SUGGEST_BOT` |
+| `HEALTH_SUGGEST_MODEL_PREFERENCE` | — | Optional comma-separated model preference list for suggestion CLI fallback |
 | `HEALTH_SERVER_MONITOR_ENABLED` | `1` | Set to `0` to disable the built-in server resource monitor plugin |
 | `HEALTH_CPU_LOAD_AMBER_MULTIPLIER` | `1.0` | Threshold multiplier for CPU load warning (e.g. `1.0` * CPU count) |
 | `HEALTH_CPU_LOAD_RED_MULTIPLIER` | `1.5` | Threshold multiplier for CPU load critical (e.g. `1.5` * CPU count) |
@@ -255,7 +257,7 @@ The bridge runs a built-in `HealthScheduler` that polls plugins at a configurabl
 
 ### Suggest mode
 
-When `HEALTH_MONITOR_AUTONOMY=suggest` the bridge sends a second message for every amber or red report. It routes the failing checks through the CLI configured in `HEALTH_SUGGEST_BOT` using the **same auth path as normal user messages** (`buildCliInvocation → runCli → parseCliResult`). The response appears as:
+When `HEALTH_MONITOR_AUTONOMY=suggest` the bridge sends a second message for every amber or red report. It routes the failing checks through the CLI configured in `HEALTH_SUGGEST_BOT` using the **same auth, invocation, parser, and Telegram rendering path as normal user messages** (`buildCliInvocation → runCli → parseCliResult → sendTelegramMessage`). The newer `HEALTH_CLI_*` variable names are also accepted as aliases, but `HEALTH_SUGGEST_*` is the documented form. The response appears as:
 
 💡 *Suggested actions:*
 

@@ -19,6 +19,7 @@ import { parseHealthEnabled, parseCadenceSeconds } from "./health/config.js";
 import { formatReport } from "./health/reporter.js";
 import { openDb } from "./db.js";
 import { BridgeEngine } from "./engine.js";
+import { sendTelegramMessage } from "./messageDelivery.js";
 import type { BotKind } from "./types.js";
 import type { HealthPlugin } from "./health/types.js";
 
@@ -51,10 +52,21 @@ const sessionTtlSeconds = Number(process.env.HEALTH_SESSION_TTL_SECONDS) > 0
   ? Number(process.env.HEALTH_SESSION_TTL_SECONDS)
   : 1800;
 
-const cliBot = (process.env.HEALTH_CLI_BOT || "claude") as BotKind;
+function parseHealthCliBot(value: string | undefined): BotKind {
+  if (value === "codex" || value === "antigravity" || value === "claude") return value;
+  return "claude";
+}
+
+function defaultHealthCliCommand(bot: BotKind): string {
+  if (bot === "codex") return process.env.CODEX_COMMAND || "codex";
+  if (bot === "antigravity") return process.env.ANTIGRAVITY_COMMAND || process.env.GEMINI_COMMAND || "agy";
+  return process.env.CLAUDE_COMMAND || "claude";
+}
+
+const cliBot = parseHealthCliBot(process.env.HEALTH_CLI_BOT || process.env.HEALTH_SUGGEST_BOT);
 const cliBotConfig = {
-  command: process.env.HEALTH_CLI_COMMAND || "claude",
-  modelPreference: (process.env.HEALTH_CLI_MODEL_PREFERENCE || "")
+  command: process.env.HEALTH_CLI_COMMAND || process.env.HEALTH_SUGGEST_COMMAND || defaultHealthCliCommand(cliBot),
+  modelPreference: (process.env.HEALTH_CLI_MODEL_PREFERENCE || process.env.HEALTH_SUGGEST_MODEL_PREFERENCE || "")
     .split(",").map(s => s.trim()).filter(Boolean),
 };
 
@@ -70,8 +82,7 @@ const sendText = async (text: string): Promise<void> => {
     console.log(`[health-bot] no HEALTH_MONITOR_CHAT_ID, dropping message:\n${text}`);
     return;
   }
-  // Send via engine's client to the configured chat (for scheduled reports)
-  await client.sendMessage({ chat_id: chatId, text });
+  await sendTelegramMessage({ client, kind: cliBot, chatId, body: { text } });
 };
 
 // ── Health bot ───────────────────────────────────────────────────────────────
@@ -123,6 +134,7 @@ const scheduler = new HealthScheduler({
 const engine = new BridgeEngine(
   {
     kind: "health",
+    executionKind: cliBot,
     botConfig: { command: cliBotConfig.command, modelPreference: cliBotConfig.modelPreference },
     allowedUserIds,
     executionMode: "safe",
@@ -134,8 +146,8 @@ const engine = new BridgeEngine(
           await engine.sendText(ctx.chatId, { text: "Checking health..." });
           const results = await Promise.all(plugins.map(p => p.check()));
           const combined = results.map(r => formatReport(r)).join("\n\n---\n\n");
-          // Also persist reports through healthBot for context store
-          await Promise.all(results.map(r => healthBot.handleReport(r, { force: true })));
+          // Persist reports through healthBot for context store without sending duplicates.
+          await Promise.all(results.map(r => healthBot.handleReport(r, { force: true, silent: true })));
           return { text: combined || "✅ All checks passed." };
         }
 

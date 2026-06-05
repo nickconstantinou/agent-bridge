@@ -130,3 +130,15 @@ graph TD
    - `/stop` abort cancels an in-flight execution and releases the lock.
    - Engine ignores messages from unauthorised user IDs.
 2. **Systemd smoke test** — after deployment, confirm `agent-bridge-health.service` starts cleanly, restarts on failure, and that a `/health` command round-trips successfully over Telegram.
+
+---
+
+## 7. Current Implementation Notes
+
+The health service now follows the shared-engine model:
+
+- `src/index-health.ts` instantiates `BridgeEngine` with `kind: "health"` so the health bot keeps isolated Telegram and SQLite state.
+- Health suggestions execute through the configured CLI kind from `HEALTH_SUGGEST_BOT` / `HEALTH_CLI_BOT`, passed as `executionKind`, so Codex, Antigravity, and Claude each use their own invocation, parsing, timeout, and Telegram rendering path.
+- Manual `/health` returns one combined report. Individual plugin reports are persisted silently for `/status` context with `HealthBridgeBot.handleReport(..., { force: true, silent: true })`; they are not force-sent as separate Telegram messages.
+
+`HEALTH_SUGGEST_*` is the documented health suggestion configuration family. `HEALTH_CLI_*` remains supported as a compatibility alias for existing deployments.

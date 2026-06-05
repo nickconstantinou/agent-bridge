@@ -47,13 +47,13 @@ export class HealthBridgeBot {
     });
   }
 
-  async handleReport(report: HealthReport, options?: { force?: boolean }): Promise<void> {
+  async handleReport(report: HealthReport, options?: { force?: boolean; silent?: boolean }): Promise<void> {
     this.contextStore.saveReport(report);
-    if (report.status !== "green" || options?.force) {
+    if (!options?.silent && (report.status !== "green" || options?.force)) {
       await this.sendTextImpl(formatReport(report));
     }
 
-    if (this.autonomy !== "report" && report.status !== "green") {
+    if (!options?.silent && this.autonomy !== "report" && report.status !== "green") {
       const suggestion = await this.suggestFn(report, this.cliBot, this.cliBotConfig);
       if (suggestion) {
         this.contextStore.saveSuggestion(suggestion);

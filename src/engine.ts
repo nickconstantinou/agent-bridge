@@ -61,6 +61,8 @@ export interface BridgeEngineHooks {
 
 export interface BridgeEngineOptions {
   kind: string;
+  /** CLI kind to invoke for non-agent engines such as health. Defaults to claude. */
+  executionKind?: BotKind;
   botConfig: { command: string; modelPreference: string[]; token?: string };
   allowedUserIds: ReadonlySet<string>;
   executionMode: "safe" | "trusted";
@@ -391,7 +393,7 @@ export class BridgeEngine {
       if (useAsync) {
         await sendMessageWithProgress({
           client: this.client,
-          kind: this.kind,
+          kind: this._deliveryKind(),
           chatId,
           body: { message_thread_id: threadId },
           isAborted: () => this.abortedChats.has(chatKey),
@@ -407,7 +409,7 @@ export class BridgeEngine {
       const userText = toUserMessage(error instanceof Error ? error : new Error(String(error)));
       await sendTelegramMessage({
         client: this.client,
-        kind: this.kind,
+        kind: this._deliveryKind(),
         chatId,
         body: { text: `Error: ${userText}`, message_thread_id: threadId },
       });
@@ -450,27 +452,28 @@ export class BridgeEngine {
     attachments: string[] = [],
   ): Promise<CliResult> {
     const chatKey = String(chatId);
+    const executionKind = this._executionKind();
     const model = isAgentKind(this.kind)
       ? (this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null)
       : (this.opts.botConfig.modelPreference[0] || null);
 
     let logFile: string | null = null;
-    if (this.kind === "antigravity") {
+    if (executionKind === "antigravity") {
       logFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
     }
 
     const outDir = await prepareOutputDir(chatId, this.kind);
-    const cwd = isAgentKind(this.kind) ? getCliWorkingDir(this.kind) : process.cwd();
+    const cwd = getCliWorkingDir(executionKind);
     const startedAtMs = Date.now();
-    if (this.kind === "antigravity") setAntigravityModel(model);
+    if (executionKind === "antigravity") setAntigravityModel(model);
     const invocation = buildCliInvocation({
-      bot: isAgentKind(this.kind) ? this.kind : "claude",
+      bot: executionKind,
       command: this.opts.botConfig.command,
       model,
       prompt,
       sessionId,
       executionMode: this.opts.executionMode,
-      outputFormat: this.kind === "antigravity" ? undefined : "json",
+      outputFormat: executionKind === "antigravity" ? undefined : "json",
       logFile,
       soulContext: this.opts.soulContext,
       attachments,
@@ -479,7 +482,7 @@ export class BridgeEngine {
     const isStreamJson = !!invocation.stdin;
     try {
       const cliResult = await this.exec.runCliAsync(invocation.command, invocation.args, cwd, {
-        ...buildExecutionOptions(isAgentKind(this.kind) ? this.kind : "claude"),
+        ...buildExecutionOptions(executionKind),
         onProgress,
         chatId: chatKey,
         stdin: invocation.stdin,
@@ -495,9 +498,9 @@ export class BridgeEngine {
         const parsed = parseClaudeStreamJsonOutput(cliResult.text);
         result = parsed ?? { text: cliResult.text.trim(), sessionId: null };
       } else {
-        result = parseCliResult({ bot: isAgentKind(this.kind) ? this.kind : "claude", stdout: cliResult.text, logContent });
+        result = parseCliResult({ bot: executionKind, stdout: cliResult.text, logContent });
       }
-      if (this.kind === "antigravity" && !result.sessionId) {
+      if (executionKind === "antigravity" && !result.sessionId) {
         result.sessionId = resolveAntigravityConversationId({ cwd, sinceMs: startedAtMs, explicitLogContent: logContent });
       }
       if (result?.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
@@ -530,21 +533,22 @@ export class BridgeEngine {
   ): Promise<CliResult> {
     const { message_thread_id: threadId } = body;
     const chatKey = String(chatId);
+    const executionKind = this._executionKind();
     const model = isAgentKind(this.kind)
       ? (this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null)
       : (this.opts.botConfig.modelPreference[0] || null);
 
     let logFile: string | null = null;
-    if (this.kind === "antigravity") {
+    if (executionKind === "antigravity") {
       logFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
     }
 
     const outDir = await prepareOutputDir(chatId, this.kind);
-    const cwd = isAgentKind(this.kind) ? getCliWorkingDir(this.kind) : process.cwd();
+    const cwd = getCliWorkingDir(executionKind);
     const startedAtMs = Date.now();
-    if (this.kind === "antigravity") setAntigravityModel(model);
+    if (executionKind === "antigravity") setAntigravityModel(model);
     const invocation = buildCliInvocation({
-      bot: isAgentKind(this.kind) ? this.kind : "claude",
+      bot: executionKind,
       command: this.opts.botConfig.command,
       model,
       prompt,
@@ -562,7 +566,7 @@ export class BridgeEngine {
     try {
       await typingTracker.start();
       const stdout = await this.exec.runCli(invocation.command, invocation.args, cwd, {
-        ...buildExecutionOptions(isAgentKind(this.kind) ? this.kind : "claude"),
+        ...buildExecutionOptions(executionKind),
         chatId: chatKey,
         stdin: invocation.stdin,
       });
@@ -577,9 +581,9 @@ export class BridgeEngine {
         const parsed = parseClaudeStreamJsonOutput(stdout);
         result = parsed ?? { text: stdout.trim(), sessionId: null };
       } else {
-        result = parseCliResult({ bot: isAgentKind(this.kind) ? this.kind : "claude", stdout, logContent });
+        result = parseCliResult({ bot: executionKind, stdout, logContent });
       }
-      if (this.kind === "antigravity" && !result.sessionId) {
+      if (executionKind === "antigravity" && !result.sessionId) {
         result.sessionId = resolveAntigravityConversationId({ cwd, sinceMs: startedAtMs, explicitLogContent: logContent });
       }
       if (result.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
@@ -619,20 +623,21 @@ export class BridgeEngine {
     _logFile: string | null,
     mode: "async" | "sync",
   ): Promise<CliResult> {
+    const executionKind = this._executionKind();
     let fallbackLogFile: string | null = null;
-    if (this.kind === "antigravity") {
+    if (executionKind === "antigravity") {
       fallbackLogFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
     }
-    if (this.kind === "antigravity") setAntigravityModel(fallbackModel);
+    if (executionKind === "antigravity") setAntigravityModel(fallbackModel);
     const fallbackInvocation = buildCliInvocation({
-      bot: isAgentKind(this.kind) ? this.kind : "claude",
+      bot: executionKind,
       command: this.opts.botConfig.command,
       model: fallbackModel,
       prompt,
       sessionId,
       sessionMode: "resume",
       executionMode: this.opts.executionMode,
-      outputFormat: this.kind === "antigravity" ? undefined : "json",
+      outputFormat: executionKind === "antigravity" ? undefined : "json",
       logFile: fallbackLogFile,
       soulContext: this.opts.soulContext,
       outputDir: outDir,
@@ -640,17 +645,17 @@ export class BridgeEngine {
     });
 
     try {
-      const fallbackCwd = isAgentKind(this.kind) ? getCliWorkingDir(this.kind) : process.cwd();
+      const fallbackCwd = getCliWorkingDir(executionKind);
       const fallbackStartedAtMs = Date.now();
       const rawResult = mode === "async"
         ? (await this.exec.runCliAsync(fallbackInvocation.command, fallbackInvocation.args, fallbackCwd, {
-            ...buildExecutionOptions(isAgentKind(this.kind) ? this.kind : "claude"),
+            ...buildExecutionOptions(executionKind),
             onProgress,
             chatId: chatKey,
             stdin: fallbackInvocation.stdin,
           })).text
         : await this.exec.runCli(fallbackInvocation.command, fallbackInvocation.args, fallbackCwd, {
-            ...buildExecutionOptions(isAgentKind(this.kind) ? this.kind : "claude"),
+            ...buildExecutionOptions(executionKind),
             chatId: chatKey,
             stdin: fallbackInvocation.stdin,
           });
@@ -661,8 +666,8 @@ export class BridgeEngine {
         finally { try { rmSync(fallbackLogFile); } catch {} }
       }
 
-      const result = parseCliResult({ bot: isAgentKind(this.kind) ? this.kind : "claude", stdout: rawResult, logContent: fallbackLogContent });
-      if (this.kind === "antigravity" && !result.sessionId) {
+      const result = parseCliResult({ bot: executionKind, stdout: rawResult, logContent: fallbackLogContent });
+      if (executionKind === "antigravity" && !result.sessionId) {
         result.sessionId = resolveAntigravityConversationId({ cwd: fallbackCwd, sinceMs: fallbackStartedAtMs, explicitLogContent: fallbackLogContent });
       }
       if (result.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
@@ -733,7 +738,15 @@ export class BridgeEngine {
   }
 
   async sendText(chatId: number, body: any): Promise<void> {
-    await sendTelegramMessage({ client: this.client, kind: this.kind, chatId, body });
+    await sendTelegramMessage({ client: this.client, kind: this._deliveryKind(), chatId, body });
+  }
+
+  private _executionKind(): BotKind {
+    return isAgentKind(this.kind) ? this.kind : (this.opts.executionKind ?? "claude");
+  }
+
+  private _deliveryKind(): string {
+    return this._executionKind();
   }
 
   /** Returns fullConfig if provided, otherwise builds a minimal BridgeConfig from engine options. */

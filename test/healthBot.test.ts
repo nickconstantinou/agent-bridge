@@ -143,6 +143,35 @@ describe("HealthBridgeBot", () => {
     expect(sent[0]).toContain("test");
   });
 
+  it("can save a forced report without sending it", async () => {
+    const { HealthBridgeBot } = await import("../src/health/bot.js");
+    const { HealthContextStore } = await import("../src/health/context.js");
+    const sent: string[] = [];
+    const bot = new HealthBridgeBot({
+      db,
+      chatId: 12345,
+      sessionTtlSeconds: 1800,
+      autonomy: "suggest",
+      cliBot: "claude",
+      cliBotConfig: { command: "claude", modelPreference: [] },
+      _sendText: async (text) => { sent.push(text); },
+      _suggestFn: async () => "should not appear",
+    });
+    const report = {
+      pluginName: "manual-health",
+      status: "green" as const,
+      checks: [],
+      summary: "All good",
+      timestamp: new Date().toISOString(),
+    };
+
+    await bot.handleReport(report, { force: true, silent: true });
+
+    expect(sent).toHaveLength(0);
+    const store = new HealthContextStore(db);
+    expect(store.getContext()?.lastReport?.pluginName).toBe("manual-health");
+  });
+
   it("stores report and suggestion in context store", async () => {
     const { HealthBridgeBot } = await import("../src/health/bot.js");
     const { HealthContextStore } = await import("../src/health/context.js");

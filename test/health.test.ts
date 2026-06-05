@@ -988,3 +988,24 @@ describe("HealthScheduler suggest mode", () => {
     consoleWarnSpy.mockRestore();
   });
 });
+
+// ── Health bot delivery ──────────────────────────────────────────────────────
+
+describe("health bot scheduled delivery", () => {
+  it("uses the configured CLI bot kind for Telegram rendering", async () => {
+    const { sendTelegramMessage } = await import("../src/messageDelivery.js");
+    const sent: Array<{ kind: string; body: any }> = [];
+    const client = { sendMessage: vi.fn(async (body) => { sent.push({ kind: "antigravity", body }); }) } as any;
+
+    await sendTelegramMessage({
+      client,
+      kind: "antigravity",
+      chatId: 123,
+      body: { text: "```bash\nsudo systemctl restart agent-bridge-health\n```" },
+    });
+
+    expect(client.sendMessage).toHaveBeenCalledOnce();
+    expect(sent[0].body.text).toBe("sudo systemctl restart agent-bridge-health\n");
+    expect(sent[0].body.entities[0]).toMatchObject({ type: "pre", language: "bash" });
+  });
+});

@@ -672,6 +672,125 @@ describe("generateSuggestion", () => {
   });
 });
 
+// ── SelfPlugin — extended SRE checks ─────────────────────────────────────────
+
+describe("SelfPlugin — extended checks", () => {
+  let dbPath: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let db: any;
+
+  beforeEach(async () => {
+    const { openDb } = await import("../src/db.js");
+    dbPath = join(tmpdir(), `health-self-ext-${Date.now()}.sqlite`);
+    db = openDb(dbPath);
+  });
+
+  afterEach(() => {
+    try { db.close(); } catch {}
+    try { rmSync(dbPath); } catch {}
+  });
+
+  it("includes heap-usage check with percentage value 0–100", async () => {
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const plugin = new SelfPlugin(db as any, dbPath);
+    const report = await plugin.check();
+    const heapCheck = report.checks.find(c => c.name === "heap-usage");
+    expect(heapCheck).toBeDefined();
+    expect(["green", "amber", "red"]).toContain(heapCheck?.status);
+    expect(typeof heapCheck?.value).toBe("number");
+    expect(heapCheck!.value as number).toBeGreaterThan(0);
+    expect(heapCheck!.value as number).toBeLessThanOrEqual(100);
+  });
+
+  it("includes fd-count check with numeric file descriptor count on Linux", async () => {
+    if (process.platform !== "linux") return;
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const plugin = new SelfPlugin(db as any, dbPath);
+    const report = await plugin.check();
+    const fdCheck = report.checks.find(c => c.name === "fd-count");
+    expect(fdCheck).toBeDefined();
+    expect(["green", "amber", "red"]).toContain(fdCheck?.status);
+    expect(typeof fdCheck?.value).toBe("number");
+    expect(fdCheck!.value as number).toBeGreaterThan(0);
+  });
+
+  it("includes service-restarts check when serviceNames provided", async () => {
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const plugin = new SelfPlugin(db as any, dbPath, ["agent-bridge-codex"]);
+    const report = await plugin.check();
+    const restartCheck = report.checks.find(c => c.name === "service-restarts");
+    expect(restartCheck).toBeDefined();
+    expect(["green", "amber", "red"]).toContain(restartCheck?.status);
+    expect(typeof restartCheck?.value).toBe("number");
+  });
+
+  it("summary names specific failing checks instead of generic message", async () => {
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const badPath = join(tmpdir(), `no-such-db-${Date.now()}.sqlite`);
+    const plugin = new SelfPlugin(db as any, badPath);
+    const report = await plugin.check();
+    expect(report.status).toBe("red");
+    expect(report.summary).toMatch(/db-file/);
+  });
+});
+
+// ── ServerPlugin — extended SRE checks ───────────────────────────────────────
+
+describe("ServerPlugin — extended checks", () => {
+  it("cpu-load message includes 5m and 15m load averages", async () => {
+    const { ServerPlugin } = await import("../src/health/plugins/server.js");
+    const plugin = new ServerPlugin();
+    const report = await plugin.check();
+    const cpuCheck = report.checks.find(c => c.name === "cpu-load");
+    expect(cpuCheck?.message).toMatch(/5m/i);
+    expect(cpuCheck?.message).toMatch(/15m/i);
+  });
+
+  it("includes disk-space-tmp check for /tmp filesystem", async () => {
+    const { ServerPlugin } = await import("../src/health/plugins/server.js");
+    const plugin = new ServerPlugin();
+    const report = await plugin.check();
+    const tmpDisk = report.checks.find(c => c.name === "disk-space-tmp");
+    expect(tmpDisk).toBeDefined();
+    expect(["green", "amber", "red"]).toContain(tmpDisk?.status);
+    expect(typeof tmpDisk?.value).toBe("number");
+    expect(tmpDisk!.value as number).toBeGreaterThan(0);
+  });
+
+  it("includes disk-space-home check for home directory filesystem", async () => {
+    const { ServerPlugin } = await import("../src/health/plugins/server.js");
+    const plugin = new ServerPlugin();
+    const report = await plugin.check();
+    const homeDisk = report.checks.find(c => c.name === "disk-space-home");
+    expect(homeDisk).toBeDefined();
+    expect(["green", "amber", "red"]).toContain(homeDisk?.status);
+    expect(typeof homeDisk?.value).toBe("number");
+    expect(homeDisk!.value as number).toBeGreaterThan(0);
+  });
+
+  it("includes inode-usage check for root filesystem", async () => {
+    const { ServerPlugin } = await import("../src/health/plugins/server.js");
+    const plugin = new ServerPlugin();
+    const report = await plugin.check();
+    const inodeCheck = report.checks.find(c => c.name === "inode-usage");
+    expect(inodeCheck).toBeDefined();
+    expect(["green", "amber", "red"]).toContain(inodeCheck?.status);
+  });
+
+  it("supports configurable memory amber threshold via HEALTH_MEMORY_AMBER_PCT", async () => {
+    process.env.HEALTH_MEMORY_AMBER_PCT = "1";
+    try {
+      const { ServerPlugin } = await import("../src/health/plugins/server.js");
+      const plugin = new ServerPlugin();
+      const report = await plugin.check();
+      const memCheck = report.checks.find(c => c.name === "memory-usage");
+      expect(["amber", "red"]).toContain(memCheck?.status);
+    } finally {
+      delete process.env.HEALTH_MEMORY_AMBER_PCT;
+    }
+  });
+});
+
 // ── HealthScheduler — suggest mode (runPlugin called directly) ────────────────
 
 describe("HealthScheduler suggest mode", () => {

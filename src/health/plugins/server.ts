@@ -48,10 +48,12 @@ export class ServerPlugin implements HealthPlugin {
       }
     }
 
+    const load5m = loadAvg[1] ?? 0;
+    const load15m = loadAvg[2] ?? 0;
     checks.push({
       name: "cpu-load",
       status: loadStatus,
-      message: `1-min load average: ${load1m.toFixed(2)} (${cpus} CPUs)${topProcessesMsg}`,
+      message: `1m: ${load1m.toFixed(2)}  5m: ${load5m.toFixed(2)}  15m: ${load15m.toFixed(2)} (${cpus} CPUs)${topProcessesMsg}`,
       value: Number(load1m.toFixed(2)),
     });
 
@@ -61,10 +63,12 @@ export class ServerPlugin implements HealthPlugin {
     const usedMem = totalMem - freeMem;
     const memPct = (usedMem / totalMem) * 100;
     
+    const memAmberPct = process.env.HEALTH_MEMORY_AMBER_PCT ? Number(process.env.HEALTH_MEMORY_AMBER_PCT) : 80;
+    const memRedPct = process.env.HEALTH_MEMORY_RED_PCT ? Number(process.env.HEALTH_MEMORY_RED_PCT) : 95;
     let memStatus: "green" | "amber" | "red" = "green";
-    if (memPct >= 95) {
+    if (memPct >= memRedPct) {
       memStatus = "red";
-    } else if (memPct >= 80) {
+    } else if (memPct >= memAmberPct) {
       memStatus = "amber";
     }
 
@@ -264,7 +268,57 @@ export class ServerPlugin implements HealthPlugin {
     }
     checks.push({ name: "disk-space", status: diskStatus, message: diskMsg, value: diskFreeGB });
 
-    // 10. Failed Systemd Services
+    // 10. Disk Space — /tmp
+    for (const [mountLabel, mountPath] of [["disk-space-tmp", "/tmp"], ["disk-space-home", os.homedir()]] as [string, string][]) {
+      let mStatus: "green" | "amber" | "red" = "green";
+      let mMsg = `${mountPath} OK`;
+      let mFreeGB: number | undefined;
+      try {
+        const mStats = statfsSync(mountPath);
+        const mFreeBytes = mStats.bfree * mStats.bsize;
+        mFreeGB = Math.round((mFreeBytes / (1024 ** 3)) * 10) / 10;
+        if (mFreeGB < 0.5) {
+          mStatus = "red";
+          mMsg = `Only ${mFreeGB} GB free on ${mountPath}`;
+        } else if (mFreeGB < 2) {
+          mStatus = "amber";
+          mMsg = `${mFreeGB} GB free on ${mountPath} (low)`;
+        } else {
+          mMsg = `${mFreeGB} GB free on ${mountPath}`;
+        }
+      } catch (err) {
+        mStatus = "amber";
+        mMsg = `${mountPath} disk check failed: ${(err as Error).message}`;
+      }
+      checks.push({ name: mountLabel, status: mStatus, message: mMsg, value: mFreeGB });
+    }
+
+    // 11. Inode Exhaustion (root filesystem)
+    let inodeStatus: "green" | "amber" | "red" = "green";
+    let inodeMsg = "Inodes OK";
+    try {
+      const iStats = statfsSync("/");
+      const inodeTotal = iStats.files;
+      const inodeFree = iStats.ffree;
+      if (inodeTotal > 0) {
+        const inodeUsedPct = Math.round(((inodeTotal - inodeFree) / inodeTotal) * 100);
+        if (inodeUsedPct >= 95) {
+          inodeStatus = "red";
+          inodeMsg = `Inode usage critical: ${inodeUsedPct}% used on /`;
+        } else if (inodeUsedPct >= 80) {
+          inodeStatus = "amber";
+          inodeMsg = `Inode usage: ${inodeUsedPct}% used on /`;
+        } else {
+          inodeMsg = `Inode usage: ${inodeUsedPct}% used on /`;
+        }
+      }
+    } catch (err) {
+      inodeStatus = "amber";
+      inodeMsg = `Inode check failed: ${(err as Error).message}`;
+    }
+    checks.push({ name: "inode-usage", status: inodeStatus, message: inodeMsg });
+
+    // 13. Failed Systemd Services
     let svcStatus: "green" | "amber" | "red" = "green";
     let svcMsg = "No failed services";
     try {

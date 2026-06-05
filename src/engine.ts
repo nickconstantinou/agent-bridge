@@ -1,0 +1,769 @@
+/**
+ * PURPOSE: Reusable BridgeEngine — polling loop, concurrency locking, message queuing,
+ *   and CLI execution dispatcher. Extracted from BridgeBot (index.ts) so both the agent
+ *   bots and the health bot can share one robust implementation.
+ * INPUTS: Engine options (kind, botConfig, allowedUserIds, hooks), BridgeDb, TelegramClient.
+ * OUTPUTS: Telegram replies, CLI dispatches, session/lock state updates.
+ * NEIGHBORS: src/index.ts, src/index-health.ts, src/cli.ts, src/db.ts, src/telegram.ts
+ */
+
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { readFileSync, rmSync, unlinkSync } from "node:fs";
+import {
+  buildCliInvocation,
+  buildExecutionOptions,
+  runCli as _runCli,
+  runCliAsync as _runCliAsync,
+  parseCliResult,
+  isCapacityExhaustedError,
+  getNextFallbackModel,
+  abortCliProcess,
+  toUserMessage,
+  resolveAntigravityConversationId,
+  setAntigravityModel,
+  scrubOutputDir,
+} from "./cli.js";
+import { TelegramClient, MediaGroupBuffer } from "./telegram.js";
+import { downloadTelegramAttachment } from "./fileDownload.js";
+import { prepareOutputDir, uploadOutputFiles } from "./fileOutput.js";
+import { parseClaudeStreamJsonOutput } from "./claudeStreamJson.js";
+import { createPollErrorState, planPollError, notePollSuccess } from "./polling.js";
+import { sendTelegramMessage, sendMessageWithProgress } from "./messageDelivery.js";
+import { buildModelKeyboard, buildModelsText, getCliWorkingDir, extractPromptText, extractThreadId, isAuthorizedMessage } from "./bridge.js";
+import { handleCommand, isBridgeCommand, buildTelegramCommands } from "./commands.js";
+import { getCodexUsageText } from "./codexUsage.js";
+import type { BridgeConfig, BotKind, BotConfig, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult } from "./types.js";
+import type { BridgeDb } from "./db.js";
+import { resolveTimeoutsForKind } from "./timeouts.js";
+
+// ── Public types ──────────────────────────────────────────────────────────────
+
+export interface HookContext {
+  chatId: number;
+  chatKey: string;
+  threadId?: number;
+  userId?: number;
+}
+
+export interface HookCommandResult {
+  text: string;
+  reply_markup?: any;
+}
+
+export interface BridgeEngineHooks {
+  /** Called before the built-in command handler. Return non-null to handle the command. */
+  onCommand?: (cmd: string, ctx: HookContext) => Promise<HookCommandResult | null>;
+  /** Called before CLI execution. Return the (optionally transformed) prompt. */
+  onBeforeExecute?: (prompt: string, ctx: HookContext) => Promise<string>;
+}
+
+export interface BridgeEngineOptions {
+  kind: string;
+  botConfig: { command: string; modelPreference: string[]; token?: string };
+  allowedUserIds: ReadonlySet<string>;
+  executionMode: "safe" | "trusted";
+  asyncEnabled: boolean;
+  pollIntervalMs: number;
+  soulContext?: string | null;
+  /** Required for built-in /models command on agent bot kinds */
+  fullConfig?: BridgeConfig;
+  hooks?: BridgeEngineHooks;
+}
+
+/** Injected execution functions — replace real CLI for unit tests. */
+export interface ExecFns {
+  runCli: typeof _runCli;
+  runCliAsync: typeof _runCliAsync;
+}
+
+// ── Internals ────────────────────────────────────────────────────────────────
+
+const MAX_QUEUE_DEPTH = 5;
+type QueuedMessage = {
+  prompt: string;
+  chatId: number;
+  threadId?: number;
+  chatKey: string;
+  chatType: string;
+  userId?: number;
+};
+
+const AGENT_KINDS = new Set<string>(["codex", "antigravity", "claude"]);
+function isAgentKind(kind: string): kind is BotKind {
+  return AGENT_KINDS.has(kind);
+}
+
+function createTypingTracker(client: TelegramClient, chatId: number, kind: string, body: any = {}) {
+  let timer: NodeJS.Timeout | null = null;
+  let active = false;
+  const { message_thread_id: threadId } = body;
+
+  const sendTyping = async () => {
+    if (!active) return;
+    try {
+      await client.sendChatAction({ chat_id: chatId, message_thread_id: threadId, action: "typing" });
+    } catch (error: any) {
+      // typing indicator failure is non-fatal
+    }
+  };
+
+  return {
+    async start() {
+      if (active) return;
+      active = true;
+      await sendTyping();
+      timer = setInterval(() => { void sendTyping(); }, 4500);
+    },
+    async stop() {
+      active = false;
+      if (timer) clearInterval(timer);
+      timer = null;
+    },
+  };
+}
+
+// ── BridgeEngine ──────────────────────────────────────────────────────────────
+
+export class BridgeEngine {
+  readonly kind: string;
+  readonly client: TelegramClient;
+  readonly mediaBuffer: MediaGroupBuffer;
+
+  private readonly opts: BridgeEngineOptions;
+  private readonly db: BridgeDb;
+  private readonly hooks: BridgeEngineHooks;
+  private readonly exec: ExecFns;
+  private readonly abortedChats = new Set<string>();
+  private readonly pendingQueues = new Map<string, QueuedMessage[]>();
+
+  constructor(
+    opts: BridgeEngineOptions,
+    db: BridgeDb,
+    client: TelegramClient,
+    exec: Partial<ExecFns> = {},
+  ) {
+    this.opts = opts;
+    this.kind = opts.kind;
+    this.db = db;
+    this.client = client;
+    this.hooks = opts.hooks ?? {};
+    this.exec = {
+      runCli: exec.runCli ?? _runCli,
+      runCliAsync: exec.runCliAsync ?? _runCliAsync,
+    };
+    this.mediaBuffer = new MediaGroupBuffer({
+      timeoutMs: 1500,
+      onFlush: (_groupId, messages) => {
+        this.handleMessages(messages).catch((err) => {
+          console.error(`[${this.kind}] mediaBuffer flush error`, err);
+        });
+      },
+    });
+  }
+
+  async run(): Promise<void> {
+    if (isAgentKind(this.kind)) {
+      await this.client.setMyCommands({
+        commands: buildTelegramCommands(this.kind),
+      }).catch((err) => console.warn(`[${this.kind}] setMyCommands failed`, err));
+    }
+
+    let offset = isAgentKind(this.kind) ? this.db.getLastUpdateId(this.kind) + 1 : 0;
+    console.log(`[${this.kind}] engine online (offset: ${offset})`);
+
+    const pollErrState = createPollErrorState();
+    const defaultErrorSleepMs = Math.max(this.opts.pollIntervalMs, 5000);
+
+    for (;;) {
+      try {
+        const updates = await this.client.getUpdates({
+          offset,
+          timeout: 30,
+          allowed_updates: ["message", "callback_query"],
+        });
+
+        if (notePollSuccess(pollErrState)) {
+          console.log(`[${this.kind}] polling recovered`);
+        }
+
+        for (const update of (updates.result as any) ?? []) {
+          const updateId: number = update.update_id;
+          offset = updateId + 1;
+          try {
+            await this.handleUpdate(update);
+          } catch (error) {
+            console.error(`[${this.kind}] update handling failed`, error);
+          }
+          if (isAgentKind(this.kind)) {
+            this.db.setLastUpdateId(this.kind, updateId);
+          }
+        }
+      } catch (error) {
+        const plan = planPollError(error, pollErrState, defaultErrorSleepMs);
+        if (plan.logKind === "warn-once") {
+          console.warn(`[${this.kind}] ${plan.message}`);
+        } else if (plan.logKind === "error-stack") {
+          console.error(`[${this.kind}] ${plan.message}`, error);
+        }
+        await new Promise((r) => setTimeout(r, plan.sleepMs));
+      }
+    }
+  }
+
+  async handleUpdate(update: TelegramUpdate): Promise<void> {
+    if (update.callback_query) {
+      await this.handleCallback(update.callback_query);
+      return;
+    }
+
+    const message = update.message;
+    if (!message) return;
+    if (!isAuthorizedMessage(message, this.opts.allowedUserIds)) return;
+
+    const rawText = (message.text || message.caption || "").trim().toLowerCase();
+    if (rawText === "/stop" || rawText === "/cancel") {
+      const chatId = message.chat.id;
+      const chatKey = String(chatId);
+      const threadId = message.message_thread_id;
+      const wasAborted = abortCliProcess(chatKey);
+      if (wasAborted) {
+        this.db.unlock(chatKey);
+        this.abortedChats.add(chatKey);
+      }
+      this.pendingQueues.delete(chatKey);
+      await this.sendText(chatId, { text: "🛑 Execution aborted by user.", message_thread_id: threadId });
+      return;
+    }
+
+    this.mediaBuffer.push(message);
+  }
+
+  async handleMessages(messages: TelegramMessage[]): Promise<void> {
+    const primaryMessage = messages.find((m) => m.text || m.caption) || messages[0];
+
+    // Auth check — defence-in-depth; handleUpdate also checks before buffering
+    if (!isAuthorizedMessage(primaryMessage, this.opts.allowedUserIds)) return;
+
+    const threadId = extractThreadId(messages);
+    const rawText = (primaryMessage.text || primaryMessage.caption || "").trim();
+    // A slash command is any text starting with /; isBridgeCommand only covers built-ins
+    const isSlashCmd = rawText.startsWith("/");
+    const commandText = isSlashCmd ? rawText : null;
+    const hasAttachment = !!(primaryMessage.photo?.length || primaryMessage.document);
+    const rawPrompt = commandText ? null : extractPromptText(primaryMessage);
+    const prompt = commandText ? null : (rawPrompt || (hasAttachment ? "Describe the attached file." : null));
+    if (!commandText && !prompt) return;
+
+    const chatId = primaryMessage.chat.id;
+    const isGroup = primaryMessage.chat.type === "group" || primaryMessage.chat.type === "supergroup";
+    const userId = primaryMessage.from?.id;
+    const chatKey = isGroup
+      ? `${chatId}:${threadId ?? ""}:${userId ?? ""}`
+      : String(chatId);
+    this.abortedChats.delete(chatKey);
+
+    const hookCtx: HookContext = { chatId, chatKey, threadId, userId };
+
+    // ── Command handling ──────────────────────────────────────────────────────
+    if (commandText) {
+      // Plugin hook first
+      if (this.hooks.onCommand) {
+        const hookResult = await this.hooks.onCommand(commandText, hookCtx);
+        if (hookResult !== null) {
+          if (hookResult.text) {
+            await this.sendText(chatId, {
+              text: hookResult.text,
+              reply_markup: hookResult.reply_markup,
+              message_thread_id: threadId,
+            });
+          }
+          return;
+        }
+      }
+
+      // Built-in handler for known agent kinds
+      if (isAgentKind(this.kind) && isBridgeCommand(commandText)) {
+        const commandResponse = handleCommand(this.kind, commandText, {
+          db: this.db,
+          chatId: chatKey,
+          config: this._effectiveConfig(),
+        });
+        if (commandResponse) {
+          if (commandResponse.kind === "message") {
+            if (commandText === "/reset") {
+              this.pendingQueues.delete(chatKey);
+              abortCliProcess(chatKey);
+              this.db.unlock(chatKey);
+            }
+            await this.sendText(chatId, { text: commandResponse.text, message_thread_id: threadId });
+            return;
+          }
+          if (commandResponse.kind === "keyboard_message") {
+            await this.sendText(chatId, {
+              text: commandResponse.text,
+              reply_markup: commandResponse.reply_markup,
+              message_thread_id: threadId,
+            });
+            return;
+          }
+          if (commandResponse.kind === "codex_usage") {
+            try {
+              const text = await getCodexUsageText();
+              await this.sendText(chatId, { text, message_thread_id: threadId });
+            } catch (error) {
+              const userText = toUserMessage(error instanceof Error ? error : new Error(String(error)));
+              await this.sendText(chatId, { text: `Error: ${userText}`, message_thread_id: threadId });
+            }
+            return;
+          }
+          if (commandResponse.kind === "execute") {
+            // Fall through to execution with the overridden prompt
+            return this._executeAndSend(commandResponse.prompt, chatId, chatKey, threadId, userId, hookCtx, []);
+          }
+        }
+        return; // Unrecognised command for agent bot — ignore
+      }
+
+      // For non-agent kinds with no hook match — ignore
+      return;
+    }
+
+    // ── Prompt execution ──────────────────────────────────────────────────────
+    const uploadDir = join(tmpdir(), `bridge-uploads-${chatId}`);
+    let attachmentLocalPath: string | null = null;
+    if (hasAttachment) {
+      try {
+        const info = await downloadTelegramAttachment(this.client, primaryMessage, uploadDir);
+        attachmentLocalPath = info?.localPath ?? null;
+      } catch (err) {
+        console.error(`[${this.kind}] attachment download failed`, err);
+      }
+    }
+    const attachments: string[] = attachmentLocalPath ? [attachmentLocalPath] : [];
+
+    return this._executeAndSend(prompt!, chatId, chatKey, threadId, userId, hookCtx, attachments, attachmentLocalPath);
+  }
+
+  private async _executeAndSend(
+    rawPrompt: string,
+    chatId: number,
+    chatKey: string,
+    threadId: number | undefined,
+    userId: number | undefined,
+    hookCtx: HookContext,
+    attachments: string[],
+    attachmentLocalPath: string | null = null,
+  ): Promise<void> {
+    // Apply onBeforeExecute hook
+    let prompt = rawPrompt;
+    if (this.hooks.onBeforeExecute) {
+      prompt = await this.hooks.onBeforeExecute(rawPrompt, hookCtx);
+    }
+
+    const sessionId = isAgentKind(this.kind)
+      ? this.db.getSession(chatKey, this.kind)
+      : null;
+    const useAsync = this.opts.asyncEnabled === true;
+
+    if (!this.db.tryLock(chatKey)) {
+      const queue = this.pendingQueues.get(chatKey) ?? [];
+      if (queue.length >= MAX_QUEUE_DEPTH) {
+        if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
+        await this.sendText(chatId, {
+          text: `⏳ Queue is full (max ${MAX_QUEUE_DEPTH}). Please wait.`,
+          message_thread_id: threadId,
+        });
+        return;
+      }
+      queue.push({ prompt, chatId, threadId, chatKey, chatType: "private", userId });
+      this.pendingQueues.set(chatKey, queue);
+      if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
+      await this.sendText(chatId, {
+        text: `⏳ Queued (position ${queue.length} of ${MAX_QUEUE_DEPTH}). Will process shortly.`,
+        message_thread_id: threadId,
+      });
+      return;
+    }
+
+    try {
+      if (useAsync) {
+        await sendMessageWithProgress({
+          client: this.client,
+          kind: this.kind,
+          chatId,
+          body: { message_thread_id: threadId },
+          isAborted: () => this.abortedChats.has(chatKey),
+          execution: (onProgress: (text: string) => void) =>
+            this.executePromptAsync(prompt, sessionId, chatId, { message_thread_id: threadId }, onProgress, attachments),
+        });
+      } else {
+        const result = await this.executePrompt(prompt, sessionId, chatId, { message_thread_id: threadId }, attachments);
+        await this.sendText(chatId, { text: result.text, message_thread_id: threadId });
+      }
+    } catch (error) {
+      console.error(`[${this.kind}] prompt execution failed`, error);
+      const userText = toUserMessage(error instanceof Error ? error : new Error(String(error)));
+      await sendTelegramMessage({
+        client: this.client,
+        kind: this.kind,
+        chatId,
+        body: { text: `Error: ${userText}`, message_thread_id: threadId },
+      });
+    } finally {
+      if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
+      this.db.unlock(chatKey);
+      this._drainQueue(chatKey);
+    }
+  }
+
+  private _drainQueue(chatKey: string): void {
+    const queue = this.pendingQueues.get(chatKey);
+    if (!queue?.length) return;
+    const next = queue.shift()!;
+    if (!queue.length) this.pendingQueues.delete(chatKey);
+    setImmediate(() => {
+      this.sendText(next.chatId, {
+        text: "▶️ Processing your queued message...",
+        message_thread_id: next.threadId,
+      }).catch(() => {});
+      const syntheticMessage: TelegramMessage = {
+        message_id: 0,
+        chat: { id: next.chatId, type: next.chatType },
+        from: { id: next.userId ?? Number([...this.opts.allowedUserIds][0] ?? 0), first_name: "queue" },
+        message_thread_id: next.threadId,
+        text: next.prompt,
+      };
+      this.handleMessages([syntheticMessage]).catch((err) =>
+        console.error(`[${this.kind}] drainQueue error`, err)
+      );
+    });
+  }
+
+  async executePromptAsync(
+    prompt: string,
+    sessionId: string | null,
+    chatId: number,
+    body: any = {},
+    onProgress = (_text: string) => {},
+    attachments: string[] = [],
+  ): Promise<CliResult> {
+    const chatKey = String(chatId);
+    const model = isAgentKind(this.kind)
+      ? (this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null)
+      : (this.opts.botConfig.modelPreference[0] || null);
+
+    let logFile: string | null = null;
+    if (this.kind === "antigravity") {
+      logFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
+    }
+
+    const outDir = await prepareOutputDir(chatId, this.kind);
+    const cwd = isAgentKind(this.kind) ? getCliWorkingDir(this.kind) : process.cwd();
+    const startedAtMs = Date.now();
+    if (this.kind === "antigravity") setAntigravityModel(model);
+    const invocation = buildCliInvocation({
+      bot: isAgentKind(this.kind) ? this.kind : "claude",
+      command: this.opts.botConfig.command,
+      model,
+      prompt,
+      sessionId,
+      executionMode: this.opts.executionMode,
+      outputFormat: this.kind === "antigravity" ? undefined : "json",
+      logFile,
+      soulContext: this.opts.soulContext,
+      attachments,
+      outputDir: outDir,
+    });
+    const isStreamJson = !!invocation.stdin;
+    try {
+      const cliResult = await this.exec.runCliAsync(invocation.command, invocation.args, cwd, {
+        ...buildExecutionOptions(isAgentKind(this.kind) ? this.kind : "claude"),
+        onProgress,
+        chatId: chatKey,
+        stdin: invocation.stdin,
+      });
+
+      let logContent: string | null = null;
+      if (logFile) {
+        try { logContent = readFileSync(logFile, "utf8"); } catch {} finally { try { rmSync(logFile); } catch {} }
+      }
+
+      let result: CliResult;
+      if (isStreamJson) {
+        const parsed = parseClaudeStreamJsonOutput(cliResult.text);
+        result = parsed ?? { text: cliResult.text.trim(), sessionId: null };
+      } else {
+        result = parseCliResult({ bot: isAgentKind(this.kind) ? this.kind : "claude", stdout: cliResult.text, logContent });
+      }
+      if (this.kind === "antigravity" && !result.sessionId) {
+        result.sessionId = resolveAntigravityConversationId({ cwd, sinceMs: startedAtMs, explicitLogContent: logContent });
+      }
+      if (result?.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
+      if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
+      result.text = scrubOutputDir(result.text, outDir);
+      await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
+        console.error(`[${this.kind}] output file upload failed`, err)
+      );
+      return result;
+    } catch (error) {
+      if (logFile) { try { rmSync(logFile); } catch {} }
+      await uploadOutputFiles(outDir, chatId, this.client).catch(() => {});
+      if (isCapacityExhaustedError(error as Error) && this.opts.botConfig.modelPreference.length > 1) {
+        const fallbackModel = getNextFallbackModel(model, this.opts.botConfig.modelPreference);
+        if (fallbackModel) {
+          return this._runWithFallback(prompt, sessionId, chatId, chatKey, fallbackModel, outDir, cwd, startedAtMs, onProgress, attachments, logFile, "async");
+        }
+      }
+      this._handleCircuitBreaker(error as Error, chatKey);
+      throw error;
+    }
+  }
+
+  async executePrompt(
+    prompt: string,
+    sessionId: string | null,
+    chatId: number,
+    body: any = {},
+    attachments: string[] = [],
+  ): Promise<CliResult> {
+    const { message_thread_id: threadId } = body;
+    const chatKey = String(chatId);
+    const model = isAgentKind(this.kind)
+      ? (this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null)
+      : (this.opts.botConfig.modelPreference[0] || null);
+
+    let logFile: string | null = null;
+    if (this.kind === "antigravity") {
+      logFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
+    }
+
+    const outDir = await prepareOutputDir(chatId, this.kind);
+    const cwd = isAgentKind(this.kind) ? getCliWorkingDir(this.kind) : process.cwd();
+    const startedAtMs = Date.now();
+    if (this.kind === "antigravity") setAntigravityModel(model);
+    const invocation = buildCliInvocation({
+      bot: isAgentKind(this.kind) ? this.kind : "claude",
+      command: this.opts.botConfig.command,
+      model,
+      prompt,
+      sessionId,
+      sessionMode: "resume",
+      executionMode: this.opts.executionMode,
+      logFile,
+      soulContext: this.opts.soulContext,
+      attachments,
+      outputDir: outDir,
+    });
+    const isStreamJson = !!invocation.stdin;
+    const typingTracker = createTypingTracker(this.client, chatId, this.kind, { message_thread_id: threadId });
+
+    try {
+      await typingTracker.start();
+      const stdout = await this.exec.runCli(invocation.command, invocation.args, cwd, {
+        ...buildExecutionOptions(isAgentKind(this.kind) ? this.kind : "claude"),
+        chatId: chatKey,
+        stdin: invocation.stdin,
+      });
+
+      let logContent: string | null = null;
+      if (logFile) {
+        try { logContent = readFileSync(logFile, "utf8"); } catch {} finally { try { rmSync(logFile); } catch {} }
+      }
+
+      let result: CliResult;
+      if (isStreamJson) {
+        const parsed = parseClaudeStreamJsonOutput(stdout);
+        result = parsed ?? { text: stdout.trim(), sessionId: null };
+      } else {
+        result = parseCliResult({ bot: isAgentKind(this.kind) ? this.kind : "claude", stdout, logContent });
+      }
+      if (this.kind === "antigravity" && !result.sessionId) {
+        result.sessionId = resolveAntigravityConversationId({ cwd, sinceMs: startedAtMs, explicitLogContent: logContent });
+      }
+      if (result.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
+      if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
+      result.text = scrubOutputDir(result.text, outDir);
+      await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
+        console.error(`[${this.kind}] output file upload failed`, err)
+      );
+      return result;
+    } catch (error) {
+      if (logFile) { try { rmSync(logFile); } catch {} }
+      await uploadOutputFiles(outDir, chatId, this.client).catch(() => {});
+      if (isCapacityExhaustedError(error as Error) && this.opts.botConfig.modelPreference.length > 1) {
+        const fallbackModel = getNextFallbackModel(model, this.opts.botConfig.modelPreference);
+        if (fallbackModel) {
+          return this._runWithFallback(prompt, sessionId, chatId, chatKey, fallbackModel, outDir, cwd, startedAtMs, () => {}, attachments, logFile, "sync");
+        }
+      }
+      this._handleCircuitBreaker(error as Error, chatKey);
+      throw error;
+    } finally {
+      await typingTracker.stop();
+    }
+  }
+
+  private async _runWithFallback(
+    prompt: string,
+    sessionId: string | null,
+    chatId: number,
+    chatKey: string,
+    fallbackModel: string,
+    outDir: string,
+    cwd: string,
+    _startedAtMs: number,
+    onProgress: (t: string) => void,
+    attachments: string[],
+    _logFile: string | null,
+    mode: "async" | "sync",
+  ): Promise<CliResult> {
+    let fallbackLogFile: string | null = null;
+    if (this.kind === "antigravity") {
+      fallbackLogFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
+    }
+    if (this.kind === "antigravity") setAntigravityModel(fallbackModel);
+    const fallbackInvocation = buildCliInvocation({
+      bot: isAgentKind(this.kind) ? this.kind : "claude",
+      command: this.opts.botConfig.command,
+      model: fallbackModel,
+      prompt,
+      sessionId,
+      sessionMode: "resume",
+      executionMode: this.opts.executionMode,
+      outputFormat: this.kind === "antigravity" ? undefined : "json",
+      logFile: fallbackLogFile,
+      soulContext: this.opts.soulContext,
+      outputDir: outDir,
+      attachments,
+    });
+
+    try {
+      const fallbackCwd = isAgentKind(this.kind) ? getCliWorkingDir(this.kind) : process.cwd();
+      const fallbackStartedAtMs = Date.now();
+      const rawResult = mode === "async"
+        ? (await this.exec.runCliAsync(fallbackInvocation.command, fallbackInvocation.args, fallbackCwd, {
+            ...buildExecutionOptions(isAgentKind(this.kind) ? this.kind : "claude"),
+            onProgress,
+            chatId: chatKey,
+            stdin: fallbackInvocation.stdin,
+          })).text
+        : await this.exec.runCli(fallbackInvocation.command, fallbackInvocation.args, fallbackCwd, {
+            ...buildExecutionOptions(isAgentKind(this.kind) ? this.kind : "claude"),
+            chatId: chatKey,
+            stdin: fallbackInvocation.stdin,
+          });
+
+      let fallbackLogContent: string | null = null;
+      if (fallbackLogFile) {
+        try { fallbackLogContent = readFileSync(fallbackLogFile, "utf8"); } catch {}
+        finally { try { rmSync(fallbackLogFile); } catch {} }
+      }
+
+      const result = parseCliResult({ bot: isAgentKind(this.kind) ? this.kind : "claude", stdout: rawResult, logContent: fallbackLogContent });
+      if (this.kind === "antigravity" && !result.sessionId) {
+        result.sessionId = resolveAntigravityConversationId({ cwd: fallbackCwd, sinceMs: fallbackStartedAtMs, explicitLogContent: fallbackLogContent });
+      }
+      if (result.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
+      if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
+      const currentModel = isAgentKind(this.kind) ? (this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null) : null;
+      return {
+        ...result,
+        text: `⚠️ Fell back to ${fallbackModel} (${currentModel || "default"} at capacity)\n\n${result.text}`,
+      };
+    } catch (fallbackError) {
+      if (fallbackLogFile) { try { rmSync(fallbackLogFile); } catch {} }
+      throw fallbackError;
+    }
+  }
+
+  private _handleCircuitBreaker(error: Error, chatKey: string): void {
+    if (!isAgentKind(this.kind)) return;
+    if (/timeout|killed by signal/i.test(error.message ?? "")) {
+      const failures = this.db.incrementFailures(chatKey, this.kind);
+      if (failures >= 2) {
+        console.warn(`[${this.kind}] clearing session after ${failures} consecutive failures for ${chatKey}`);
+        db_setSession(this.db, chatKey, this.kind, null);
+        this.db.resetFailures(chatKey, this.kind);
+      }
+    }
+  }
+
+  async handleCallback(callbackQuery: TelegramCallbackQuery): Promise<void> {
+    const fromId = callbackQuery?.from?.id;
+    if (!this.opts.allowedUserIds.has(String(fromId))) return;
+    if (!isAgentKind(this.kind) || !this.opts.fullConfig) return;
+
+    const data = String(callbackQuery?.data || "");
+    const [action, targetKind, ...rest] = data.split(":");
+    if (action !== "model" || targetKind !== this.kind) return;
+
+    const value = rest.join(":").trim();
+    const messageId = callbackQuery.message?.message_id;
+    const chatId = callbackQuery.message?.chat?.id;
+    if (!chatId || !messageId) return;
+
+    if (value === "reset") {
+      this.db.setSetting(this.kind, null);
+      if (this.kind === "antigravity") setAntigravityModel(null);
+      await this.client.answerCallbackQuery({
+        callback_query_id: callbackQuery.id,
+        text: `${this.kind} reset to default`,
+      });
+      await this.client.editMessageText({
+        chat_id: chatId,
+        message_id: messageId,
+        text: buildModelsText(this.kind, { db: this.db, config: this.opts.fullConfig }),
+        reply_markup: buildModelKeyboard(this.kind, this.opts.botConfig.modelPreference, null),
+      });
+      return;
+    }
+
+    this.db.setSetting(this.kind, value);
+    if (this.kind === "antigravity") setAntigravityModel(value);
+    await this.client.answerCallbackQuery({ callback_query_id: callbackQuery.id });
+    await this.client.editMessageText({
+      chat_id: chatId,
+      message_id: messageId,
+      text: buildModelsText(this.kind, { db: this.db, config: this.opts.fullConfig }),
+      reply_markup: buildModelKeyboard(this.kind, this.opts.botConfig.modelPreference, value),
+    });
+    await this.sendText(chatId, { text: `✓ Model set to ${value}` });
+  }
+
+  async sendText(chatId: number, body: any): Promise<void> {
+    await sendTelegramMessage({ client: this.client, kind: this.kind, chatId, body });
+  }
+
+  /** Returns fullConfig if provided, otherwise builds a minimal BridgeConfig from engine options. */
+  private _effectiveConfig(): BridgeConfig {
+    if (this.opts.fullConfig) return this.opts.fullConfig;
+    const kind = this.kind as BotKind;
+    const emptyBot = { token: undefined, command: "", modelPreference: [] };
+    return {
+      allowedUserIds: this.opts.allowedUserIds,
+      serviceEnvFile: null,
+      serviceKind: isAgentKind(this.kind) ? kind : null,
+      pollIntervalMs: this.opts.pollIntervalMs,
+      executionMode: this.opts.executionMode,
+      asyncEnabled: this.opts.asyncEnabled,
+      dbPath: "",
+      bots: {
+        codex: this.kind === "codex" ? { token: undefined, command: this.opts.botConfig.command, modelPreference: this.opts.botConfig.modelPreference } : emptyBot,
+        antigravity: this.kind === "antigravity" ? { token: undefined, command: this.opts.botConfig.command, modelPreference: this.opts.botConfig.modelPreference } : emptyBot,
+        claude: this.kind === "claude" ? { token: undefined, command: this.opts.botConfig.command, modelPreference: this.opts.botConfig.modelPreference } : emptyBot,
+      },
+    };
+  }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function db_setSession(db: BridgeDb, chatKey: string, kind: BotKind, sessionId: string | null) {
+  try {
+    db.setSession(chatKey, kind, sessionId);
+  } catch {
+    // ignore — non-agent kinds are not tracked
+  }
+}

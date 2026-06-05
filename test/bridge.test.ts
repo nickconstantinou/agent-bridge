@@ -667,7 +667,7 @@ describe("/models command returns keyboard_message", () => {
 
 describe("handleMessages sends reply_markup for /models", () => {
   it("handleMessages passes reply_markup to sendText for keyboard_message commands", () => {
-    const src = readFileSync("src/index.ts", "utf-8");
+    const src = readFileSync("src/engine.ts", "utf-8");
     expect(src).toMatch(/keyboard_message/);
     expect(src).toMatch(/reply_markup.*commandResponse/s);
   });
@@ -686,8 +686,8 @@ describe("Telegram command menu", () => {
 
 describe("handleCallback uses full model keyboard", () => {
   it("handleCallback passes modelPreference to buildModelKeyboard", () => {
-    const src = readFileSync("src/index.ts", "utf-8");
-    expect(src).toMatch(/buildModelKeyboard\(\s*this\.kind\s*,\s*this\.config\.modelPreference/);
+    const src = readFileSync("src/engine.ts", "utf-8");
+    expect(src).toMatch(/buildModelKeyboard\(\s*this\.kind\s*,\s*this\.opts\.botConfig\.modelPreference/);
   });
 });
 
@@ -723,7 +723,7 @@ describe("model keyboard current model indicator", () => {
 
 describe("model selection confirmation", () => {
   it("handleCallback sends a follow-up message after model set instead of show_alert popup", () => {
-    const src = readFileSync("src/index.ts", "utf-8");
+    const src = readFileSync("src/engine.ts", "utf-8");
     expect(src).not.toMatch(/show_alert:\s*true/);
     expect(src).toMatch(/sendText[\s\S]{0,100}Model set to/s);
   });

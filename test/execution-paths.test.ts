@@ -17,7 +17,8 @@ describe("Execution Path Selection - TDD", () => {
 
     it("timeout-based fallback removed; capacity-based fallback uses isCapacityExhaustedError", async () => {
       const fs = await import("fs");
-      const src = fs.readFileSync("src/index.ts", "utf-8");
+      // Execution logic now lives in engine.ts (extracted from index.ts)
+      const src = fs.readFileSync("src/engine.ts", "utf-8");
 
       // Old timeout-based fallback must be gone
       expect(src.includes("isCliTimeout(error)")).toBe(false);
@@ -42,7 +43,8 @@ describe("Execution Path Selection - TDD", () => {
   describe("Phase 3: Generic flag works for all bots", () => {
     it("useAsync assignment does not branch on bot kind", async () => {
       const fs = await import("fs");
-      const src = fs.readFileSync("src/index.ts", "utf-8");
+      // Execution logic now lives in engine.ts (extracted from index.ts)
+      const src = fs.readFileSync("src/engine.ts", "utf-8");
 
       // The useAsync flag must be set from config alone, not per-bot-kind
       const useAsyncLine = src.split("\n").find((l) => l.includes("useAsync") && l.includes("=") && !l.includes("if") && !l.includes("await"));

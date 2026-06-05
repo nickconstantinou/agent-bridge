@@ -2,6 +2,7 @@
  * PURPOSE: Entry point for the dedicated health monitoring bot service.
  * Runs independently from the main bridge bots — uses its own Telegram bot token,
  * its own SQLite DB, and has no shared state with agent-bridge-claude/codex/antigravity services.
+ * Uses BridgeEngine for robust polling, locking, queuing, and /stop abort handling.
  */
 
 import dotenv from "dotenv";
@@ -15,10 +16,9 @@ import { SelfPlugin } from "./health/plugins/self.js";
 import { ExternalPlugin } from "./health/plugins/external.js";
 import { ServerPlugin } from "./health/plugins/server.js";
 import { parseHealthEnabled, parseCadenceSeconds } from "./health/config.js";
-import { sendTelegramMessage } from "./messageDelivery.js";
-import { createPollErrorState, planPollError, notePollSuccess } from "./polling.js";
-import { buildCliInvocation, runCli, parseCliResult } from "./cli.js";
-import { BridgeDb, openDb } from "./db.js";
+import { formatReport } from "./health/reporter.js";
+import { openDb } from "./db.js";
+import { BridgeEngine } from "./engine.js";
 import type { BotKind } from "./types.js";
 import type { HealthPlugin } from "./health/types.js";
 
@@ -70,7 +70,8 @@ const sendText = async (text: string): Promise<void> => {
     console.log(`[health-bot] no HEALTH_MONITOR_CHAT_ID, dropping message:\n${text}`);
     return;
   }
-  await sendTelegramMessage({ client, kind: "health", chatId, body: { text } });
+  // Send via engine's client to the configured chat (for scheduled reports)
+  await client.sendMessage({ chat_id: chatId, text });
 };
 
 // ── Health bot ───────────────────────────────────────────────────────────────
@@ -106,105 +107,63 @@ const scheduler = new HealthScheduler({
   config: {
     enabled: healthEnabled,
     cadenceSeconds,
-    autonomy: "report", // scheduler only sends formatted report; bot handles suggestions
+    autonomy: "report",
   },
   sendReport: async (text) => {
     if (!chatId) {
       console.log(`[health-bot] report (no chatId):\n${text}`);
     }
-    // Raw report handling is done via onRawReport — this path is for any fallback text
   },
   onRawReport: async (report) => {
     await healthBot.handleReport(report);
   },
 });
 
-// ── Telegram polling ─────────────────────────────────────────────────────────
-let offset = 0;
-const pollErrState = createPollErrorState();
-const defaultSleepMs = 5000;
-
-async function processMessage(text: string, fromUserId: number): Promise<void> {
-  if (!allowedUserIds.has(String(fromUserId))) return;
-  if (!chatId) return;
-
-  const trimmed = text.trim();
-
-  if (trimmed === "/health") {
-    await sendText("Checking health...");
-    for (const plugin of plugins) {
-      const report = await plugin.check();
-      await healthBot.handleReport(report, { force: true });
-    }
-    return;
-  }
-
-  if (trimmed === "/status") {
-    const { HealthContextStore } = await import("./health/context.js");
-    const store = new HealthContextStore(rawDb);
-    const context = store.getContext();
-    if (!context?.lastReport) {
-      await sendText("No health data yet. Use /health to run a check.");
-      return;
-    }
-    const { formatReport } = await import("./health/reporter.js");
-    let statusText = formatReport(context.lastReport);
-    if (context.lastSuggestion) {
-      statusText += `\n\n*Last suggestion:*\n\n${context.lastSuggestion}`;
-    }
-    await sendText(statusText);
-    return;
-  }
-
-  // Any other message — route to CLI with context prefix
-  const prompt = healthBot.buildOnDemandPrompt(trimmed);
-  const sessionId = healthBot.getActiveSessionId();
-
-  const invocation = buildCliInvocation({
-    bot: cliBot,
-    command: cliBotConfig.command,
-    model: cliBotConfig.modelPreference[0] ?? null,
-    prompt,
-    sessionId,
+// ── BridgeEngine with health hooks ───────────────────────────────────────────
+const engine = new BridgeEngine(
+  {
+    kind: "health",
+    botConfig: { command: cliBotConfig.command, modelPreference: cliBotConfig.modelPreference },
+    allowedUserIds,
     executionMode: "safe",
-    outputFormat: cliBot !== "antigravity" ? "json" : null,
-  });
+    asyncEnabled: false,
+    pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 1000),
+    hooks: {
+      onCommand: async (cmd, ctx) => {
+        if (cmd === "/health") {
+          await engine.sendText(ctx.chatId, { text: "Checking health..." });
+          const results = await Promise.all(plugins.map(p => p.check()));
+          const combined = results.map(r => formatReport(r)).join("\n\n---\n\n");
+          // Also persist reports through healthBot for context store
+          await Promise.all(results.map(r => healthBot.handleReport(r, { force: true })));
+          return { text: combined || "✅ All checks passed." };
+        }
 
-  try {
-    await sendText("Working...");
-    const stdout = await runCli(invocation.command, invocation.args, process.cwd(), {
-      timeoutMs: 600_000,
-      chatId: `health-chat-${fromUserId}`,
-    });
-    const result = parseCliResult({ bot: cliBot, stdout, logContent: null });
-    if (result.sessionId) healthBot.saveSession(result.sessionId);
-    await sendText(result.text || "No response.");
-  } catch (err) {
-    console.error("[health-bot] CLI error", err);
-    await sendText("CLI error — check logs.");
-  }
-}
+        if (cmd === "/status") {
+          const { HealthContextStore } = await import("./health/context.js");
+          const store = new HealthContextStore(rawDb);
+          const context = store.getContext();
+          if (!context?.lastReport) {
+            return { text: "No health data yet. Use /health to run a check." };
+          }
+          let statusText = formatReport(context.lastReport);
+          if (context.lastSuggestion) {
+            statusText += `\n\n*Last suggestion:*\n\n${context.lastSuggestion}`;
+          }
+          return { text: statusText };
+        }
 
-async function poll(): Promise<void> {
-  for (;;) {
-    try {
-      const updates = await client.getUpdates({ offset, timeout: 30, allowed_updates: ["message"] });
-      notePollSuccess(pollErrState);
+        return null;
+      },
 
-      for (const update of (updates.result ?? [])) {
-        offset = update.update_id + 1;
-        const msg = update.message;
-        if (!msg?.text || !msg.from) continue;
-        processMessage(msg.text, msg.from.id).catch((err: unknown) =>
-          console.error("[health-bot] message error", err)
-        );
-      }
-    } catch (err: unknown) {
-      const plan = planPollError(err, pollErrState, defaultSleepMs);
-      await new Promise(r => setTimeout(r, plan.sleepMs));
-    }
-  }
-}
+      onBeforeExecute: async (prompt) => {
+        return healthBot.buildOnDemandPrompt(prompt);
+      },
+    },
+  },
+  bridgeDb,
+  client,
+);
 
 // ── Start ────────────────────────────────────────────────────────────────────
 console.log("[health-bot] starting...");
@@ -213,12 +172,12 @@ await client.setMyCommands({
   commands: [
     { command: "health", description: "Run health checks immediately" },
     { command: "status", description: "Show last health report and suggestions" },
+    { command: "stop", description: "Abort running execution" },
   ],
 }).catch((err) => console.warn(`[health-bot] setMyCommands failed`, err));
 
 if (healthEnabled) {
   scheduler.start();
-  // Fire immediately on startup
   for (const plugin of plugins) {
     plugin.check().then(report => healthBot.handleReport(report)).catch((err: unknown) =>
       console.error("[health-bot] startup check error", err)
@@ -237,4 +196,4 @@ const shutdown = (signal: string) => {
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
 
-await poll();
+await engine.run();

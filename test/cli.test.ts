@@ -418,3 +418,38 @@ describe("scrubOutputDir", () => {
     expect(scrubOutputDir(text, null)).toBe(text);
   });
 });
+
+describe("redactArgs — spawn log prompt redaction", () => {
+  it("keeps short args intact", async () => {
+    const { redactArgs } = await import("../src/cli.js");
+    const args = ["--print", "--model", "claude-sonnet-4-6", "--output-format", "json"];
+    expect(redactArgs(args)).toEqual(args);
+  });
+
+  it("redacts args longer than 100 chars with a placeholder", async () => {
+    const { redactArgs } = await import("../src/cli.js");
+    const longPrompt = "A".repeat(200);
+    const result = redactArgs(["--print", longPrompt]);
+    expect(result[0]).toBe("--print");
+    expect(result[1]).toMatch(/^\[prompt: \d+chars\]$/);
+    expect(result[1]).not.toContain("A");
+  });
+
+  it("placeholder includes the original char count", async () => {
+    const { redactArgs } = await import("../src/cli.js");
+    const result = redactArgs(["A".repeat(150)]);
+    expect(result[0]).toContain("150chars");
+  });
+
+  it("does not redact args exactly at the 100-char boundary", async () => {
+    const { redactArgs } = await import("../src/cli.js");
+    const arg = "x".repeat(100);
+    expect(redactArgs([arg])).toEqual([arg]);
+  });
+
+  it("redacts args over 100 chars (101+)", async () => {
+    const { redactArgs } = await import("../src/cli.js");
+    const arg = "x".repeat(101);
+    expect(redactArgs([arg])[0]).toMatch(/^\[prompt:/);
+  });
+});

@@ -1009,3 +1009,50 @@ describe("health bot scheduled delivery", () => {
     expect(sent[0].body.entities[0]).toMatchObject({ type: "pre", language: "bash" });
   });
 });
+
+// ── parseHealthCliConfig — env alias precedence ───────────────────────────────
+
+describe("parseHealthCliConfig", () => {
+  it("prefers HEALTH_SUGGEST_BOT over HEALTH_CLI_BOT", async () => {
+    const { parseHealthCliConfig } = await import("../src/health/config.js");
+    const config = parseHealthCliConfig({ HEALTH_SUGGEST_BOT: "codex", HEALTH_CLI_BOT: "antigravity" });
+    expect(config.bot).toBe("codex");
+  });
+
+  it("falls back to HEALTH_CLI_BOT when HEALTH_SUGGEST_BOT is absent", async () => {
+    const { parseHealthCliConfig } = await import("../src/health/config.js");
+    const config = parseHealthCliConfig({ HEALTH_CLI_BOT: "antigravity" });
+    expect(config.bot).toBe("antigravity");
+  });
+
+  it("defaults bot to claude when neither env var is set", async () => {
+    const { parseHealthCliConfig } = await import("../src/health/config.js");
+    const config = parseHealthCliConfig({});
+    expect(config.bot).toBe("claude");
+  });
+
+  it("prefers HEALTH_SUGGEST_COMMAND over HEALTH_CLI_COMMAND", async () => {
+    const { parseHealthCliConfig } = await import("../src/health/config.js");
+    const config = parseHealthCliConfig({
+      HEALTH_SUGGEST_COMMAND: "/usr/bin/claude",
+      HEALTH_CLI_COMMAND: "/old/claude",
+    });
+    expect(config.command).toBe("/usr/bin/claude");
+  });
+
+  it("falls back to HEALTH_CLI_COMMAND when HEALTH_SUGGEST_COMMAND is absent", async () => {
+    const { parseHealthCliConfig } = await import("../src/health/config.js");
+    const config = parseHealthCliConfig({ HEALTH_CLI_COMMAND: "/opt/claude" });
+    expect(config.command).toBe("/opt/claude");
+  });
+
+  it("prefers HEALTH_SUGGEST_MODEL_PREFERENCE over HEALTH_CLI_MODEL_PREFERENCE", async () => {
+    const { parseHealthCliConfig } = await import("../src/health/config.js");
+    const config = parseHealthCliConfig({
+      HEALTH_SUGGEST_MODEL_PREFERENCE: "claude-opus-4-8,claude-sonnet-4-6",
+      HEALTH_CLI_MODEL_PREFERENCE: "claude-haiku-4-5",
+    });
+    expect(config.modelPreference[0]).toBe("claude-opus-4-8");
+    expect(config.modelPreference).toHaveLength(2);
+  });
+});

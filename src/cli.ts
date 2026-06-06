@@ -736,7 +736,22 @@ export async function runCliAsync(
   const onEvent = options.onEvent;
   const evtCtx = options.eventContext;
 
-  const emit = (e: BridgeEvent) => { try { onEvent?.(e); } catch { /* never let event emission break execution */ } };
+  const emit = (e: BridgeEvent) => {
+    try {
+      if (e.type === "run.started") {
+        console.log(`[event] run.started runId=${e.runId} bot=${e.bot} chatId=${e.chatId}`);
+      } else if (e.type === "run.completed") {
+        console.log(`[event] run.completed runId=${e.runId} sessionId=${e.sessionId}`);
+      } else if (e.type === "run.failed") {
+        console.log(`[event] run.failed runId=${e.runId} category=${e.category} error="${e.error.replace(/\n/g, " ")}"`);
+      } else if (e.type === "run.cancelled") {
+        console.log(`[event] run.cancelled runId=${e.runId} reason=${e.reason}`);
+      }
+      onEvent?.(e);
+    } catch {
+      /* never let event emission break execution */
+    }
+  };
 
   return new Promise((resolve, reject) => {
     console.log(formatSpawnLog(command, args, cwd, options.chatId));

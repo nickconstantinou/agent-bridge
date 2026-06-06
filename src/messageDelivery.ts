@@ -2,6 +2,10 @@ import { splitTelegramText, toTelegramEntitiesText } from "./render.js";
 import { toUserMessage } from "./cli.js";
 import type { TelegramClient } from "./telegram.js";
 import type { CliResult } from "./types.js";
+import { type as eventType } from "./events/types.js";
+import type { BridgeEvent } from "./events/types.js";
+import { reduce as reduceEvents } from "./events/reducer.js";
+import { runViewToTelegramText } from "./events/telegramAdapter.js";
 
 const MAX_TELEGRAM_TEXT = 4096;
 
@@ -78,6 +82,8 @@ export async function sendMessageWithProgress({
   onProgress = () => {},
   body = {},
   isAborted,
+  runId,
+  onEvent,
 }: {
   client: TelegramClient;
   kind: string;
@@ -86,6 +92,8 @@ export async function sendMessageWithProgress({
   onProgress?: (text: string) => void;
   body?: any;
   isAborted?: () => boolean;
+  runId?: string;
+  onEvent?: (event: BridgeEvent) => void;
 }): Promise<CliResult | null> {
   const { text: _ignored, ...rest } = body;
 
@@ -99,6 +107,17 @@ export async function sendMessageWithProgress({
 
   await sendTyping();
   const typingInterval = setInterval(sendTyping, 4500);
+
+  if (onEvent && runId) {
+    onEvent(eventType.runStarted({
+      runId,
+      bot: kind as any,
+      chatId: String(chatId),
+      command: "mock",
+      cwd: process.cwd(),
+      model: null,
+    }));
+  }
 
   let currentText = "";
   const originalOnProgress = onProgress;
@@ -118,7 +137,34 @@ export async function sendMessageWithProgress({
     const finalText = result?.text || currentText || "";
 
     if (isAborted?.()) return result;
-    await sendTelegramMessage({ client, kind, chatId, body: { ...body, text: finalText } });
+
+    if (onEvent && runId) {
+      const completedEvent = eventType.runCompleted({
+        runId,
+        bot: kind as any,
+        chatId: String(chatId),
+        text: finalText,
+        sessionId: result?.sessionId || null,
+      });
+      onEvent(completedEvent);
+
+      const view = reduceEvents([
+        eventType.runStarted({
+          runId,
+          bot: kind as any,
+          chatId: String(chatId),
+          command: "mock",
+          cwd: process.cwd(),
+          model: null,
+        }),
+        completedEvent
+      ]);
+
+      const eventText = runViewToTelegramText(view);
+      await sendTelegramMessage({ client, kind, chatId, body: { ...body, text: eventText } });
+    } else {
+      await sendTelegramMessage({ client, kind, chatId, body: { ...body, text: finalText } });
+    }
 
     clearInterval(typingInterval);
     return { ...result, onProgress: wrappedOnProgress };

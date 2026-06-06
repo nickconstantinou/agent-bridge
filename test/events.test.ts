@@ -3,7 +3,7 @@
  * Phase 2 — Event emission from runCliAsync (red until implementation).
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 
 // ── Type contract ─────────────────────────────────────────────────────────────
 
@@ -186,6 +186,18 @@ describe("runCliAsync — event emission", () => {
     const completed = events.findIndex(e => e.type === "run.completed");
     expect(started).toBeLessThan(delta);
     expect(delta).toBeLessThan(completed);
+  });
+
+  it("logs structured events to the console", async () => {
+    const { runCliAsync } = await import("../src/cli.js");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runCliAsync("node", ["-e", "process.stdout.write('hello')"], process.cwd(), {
+      eventContext: eventCtx,
+      onEvent: () => {},
+    });
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("[event] run.started runId=r-test bot=claude chatId=test-99"));
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("[event] run.completed runId=r-test"));
+    logSpy.mockRestore();
   });
 
   it("text.delta events carry the stdout chunk text", async () => {

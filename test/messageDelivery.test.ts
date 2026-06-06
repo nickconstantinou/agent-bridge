@@ -280,5 +280,20 @@ describe("sendMessageWithProgress Option 1 validation", () => {
     warnSpy.mockRestore();
     adapterSpy.mockRestore();
   });
+
+  it("does not log a mismatch warning for nested markdown bold and inline code", async () => {
+    const client = createMockClient();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await sendMessageWithProgress({
+      client,
+      kind: "codex",
+      chatId: 123,
+      execution: Promise.resolve({ text: "- **`agent-bridge-antigravity.service`**: Active", sessionId: null }),
+    });
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
 });
 

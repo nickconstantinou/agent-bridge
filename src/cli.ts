@@ -622,10 +622,20 @@ export function getNextFallbackModel(currentModel: string | null, modelPreferenc
   return modelPreference[idx + 1];
 }
 
-function formatSpawnLog(command: string, args: string[], cwd: string, chatId?: number | string): string {
-  const visibleArgs = args.map((arg) => (arg.includes(" ") ? `"${arg}"` : arg)).join(" ");
+const PROMPT_REDACT_THRESHOLD = 100;
+
+/** Replaces any arg longer than PROMPT_REDACT_THRESHOLD with a size-only placeholder. */
+export function redactArgs(args: string[]): string[] {
+  return args.map((arg) =>
+    arg.length > PROMPT_REDACT_THRESHOLD ? `[prompt: ${arg.length}chars]` : arg
+  );
+}
+
+function formatSpawnLog(command: string, args: string[], cwd: string, chatId?: number | string, stdin?: string): string {
+  const safeArgs = redactArgs(args).map((arg) => (arg.includes(" ") ? `"${arg}"` : arg)).join(" ");
   const chatPart = chatId != null ? ` chatId=${String(chatId)}` : "";
-  return `[spawn]${chatPart} cwd=${cwd} command=${command} args=${visibleArgs}`;
+  const stdinPart = stdin ? ` stdin=[${stdin.length}chars]` : "";
+  return `[spawn]${chatPart} cwd=${cwd} command=${command} args=${safeArgs}${stdinPart}`;
 }
 
 /**
@@ -656,7 +666,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
   };
 
   return new Promise((resolve, reject) => {
-    console.log(formatSpawnLog(command, args, cwd, options.chatId));
+    console.log(formatSpawnLog(command, args, cwd, options.chatId, options.stdin));
     const child = spawn(command, args, { cwd, shell: false, env: buildSafeChildEnv() });
     if (options.stdin) {
       child.stdin?.write(options.stdin);
@@ -785,7 +795,7 @@ export async function runCliAsync(
   };
 
   return new Promise((resolve, reject) => {
-    console.log(formatSpawnLog(command, args, cwd, options.chatId));
+    console.log(formatSpawnLog(command, args, cwd, options.chatId, options.stdin));
     const child = spawn(command, args, { cwd, shell: false, detached: true, env: buildSafeChildEnv() });
     if (options.stdin) {
       child.stdin?.write(options.stdin);

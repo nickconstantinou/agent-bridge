@@ -15,7 +15,7 @@ import { HealthBridgeBot } from "./health/bot.js";
 import { SelfPlugin } from "./health/plugins/self.js";
 import { ExternalPlugin } from "./health/plugins/external.js";
 import { ServerPlugin } from "./health/plugins/server.js";
-import { parseHealthEnabled, parseCadenceSeconds } from "./health/config.js";
+import { parseHealthEnabled, parseCadenceSeconds, parseHealthCliConfig } from "./health/config.js";
 import { formatReport } from "./health/reporter.js";
 import { openDb } from "./db.js";
 import { BridgeEngine } from "./engine.js";
@@ -63,11 +63,11 @@ function defaultHealthCliCommand(bot: BotKind): string {
   return process.env.CLAUDE_COMMAND || "claude";
 }
 
-const cliBot = parseHealthCliBot(process.env.HEALTH_CLI_BOT || process.env.HEALTH_SUGGEST_BOT);
+const _healthCliParsed = parseHealthCliConfig(process.env);
+const cliBot = _healthCliParsed.bot;
 const cliBotConfig = {
-  command: process.env.HEALTH_CLI_COMMAND || process.env.HEALTH_SUGGEST_COMMAND || defaultHealthCliCommand(cliBot),
-  modelPreference: (process.env.HEALTH_CLI_MODEL_PREFERENCE || process.env.HEALTH_SUGGEST_MODEL_PREFERENCE || "")
-    .split(",").map(s => s.trim()).filter(Boolean),
+  command: _healthCliParsed.command ?? defaultHealthCliCommand(cliBot),
+  modelPreference: _healthCliParsed.modelPreference,
 };
 
 const dbPath = process.env.HEALTH_DB_PATH || ".data-health/health.sqlite";

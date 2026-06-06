@@ -452,12 +452,16 @@ CREATE TABLE IF NOT EXISTS bridge_events (
 );
 ```
 
-Initial persistence policy:
+Implemented persistence policy:
 
-- persist lifecycle events
-- persist final text preview/hash
-- persist artifact metadata when artifacts exist
-- do **not** persist every `text.delta` by default
+- `BridgeEngine` creates one run context per prompt execution and persists coarse lifecycle state to `bridge_runs` / `bridge_events`
+- persist the first `run.started` immediately, including command/cwd/model metadata in the event payload
+- keep `text.delta` events in memory only by default; do not write high-volume deltas to SQLite
+- defer `run.completed` persistence until the parsed, authoritative final text and session ID are available
+- persist `run.failed` and `run.cancelled` as terminal events when emitted by the CLI execution path
+- enable SQLite foreign key enforcement so `bridge_events.run_id` must reference an existing `bridge_runs.run_id`
+- disable `sendMessageWithProgress` synthetic lifecycle events for real engine CLI paths so production runs do not record duplicate `run.started` / `run.completed` events
+- artifact metadata remains future work when artifact events are introduced
 
 Tests:
 
@@ -465,6 +469,7 @@ Tests:
 - inserting events preserves ordering
 - final run summary can be queried
 - DB remains backward-compatible with existing `bridge_state`
+- production async engine execution persists one run, lifecycle-only events, and the final parsed response/session
 
 ### Phase 6 — Future Renderers / Protocol Mapping (Deferred)
 

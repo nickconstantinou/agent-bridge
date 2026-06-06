@@ -5,6 +5,7 @@ import { rmSync } from "node:fs";
 import Database from "better-sqlite3";
 import { openDb } from "../src/db.js";
 import type { TelegramMessage } from "../src/types.js";
+import { type as eventType } from "../src/events/types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -316,6 +317,60 @@ describe("BridgeEngine", () => {
       expect(client.sendMessage).toHaveBeenCalledOnce();
       const sentBody = client.sendMessage.mock.calls[0][0];
       expect(sentBody.text).toContain("Queued");
+    });
+  });
+
+  describe("BridgeEvent persistence", () => {
+    it("persists one run and lifecycle events from the async production path", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+      const rawOutput = [
+        JSON.stringify({ type: "thread.started", thread_id: "session-123" }),
+        JSON.stringify({ type: "response.completed", output_text: "Persisted final answer" }),
+      ].join("\n");
+
+      const runCliAsync = vi.fn().mockImplementation(async (
+        _command: string,
+        _args: string[],
+        cwd: string,
+        options: any,
+      ) => {
+        const ctx = options.eventContext;
+        options.onEvent?.(eventType.runStarted({ ...ctx, command: "codex", cwd, model: null }));
+        options.onEvent?.(eventType.textDelta({ ...ctx, text: rawOutput, source: "stdout" }));
+        options.onEvent?.(eventType.runCompleted({ ...ctx, text: rawOutput, sessionId: null }));
+        return { text: rawOutput };
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "codex",
+          botConfig: { command: "codex", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: true,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCliAsync },
+      );
+
+      await engine.handleMessages([makeMessage("persist this run")]);
+
+      const runs = db.raw.prepare("SELECT * FROM bridge_runs").all() as any[];
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({
+        chat_id: "100",
+        bot: "codex",
+        status: "done",
+        session_id: "session-123",
+        final_text_preview: "Persisted final answer",
+      });
+
+      const events = db.getEventsForRun(runs[0].run_id);
+      expect(events.map((event) => event.type)).toEqual(["run.started", "run.completed"]);
+      expect(events.map((event) => JSON.parse(event.payload_json).type)).toEqual(["run.started", "run.completed"]);
     });
   });
 });

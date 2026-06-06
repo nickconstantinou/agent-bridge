@@ -262,4 +262,10 @@ describe("BridgeDb runs and events persistence", () => {
     expect(events[0].seq).toBe(1);
     expect(JSON.parse(events[0].payload_json).command).toBe("codex");
   });
+
+  it("enforces bridge_events run foreign keys", () => {
+    expect(() =>
+      db.insertEvent("missing-run", 1, "run.started", new Date().toISOString(), { command: "codex" })
+    ).toThrow();
+  });
 });

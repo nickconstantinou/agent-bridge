@@ -211,3 +211,55 @@ describe("Per-topic session isolation", () => {
     expect(db.getSession("-1001:10:222", "codex")).toBe("s-user-222");
   });
 });
+
+describe("BridgeDb runs and events persistence", () => {
+  it("creates a run on insertRun", () => {
+    db.insertRun("run-1", "chat-123", "codex", "codex --help", "/app", "gpt-4");
+    const run = db.getRun("run-1");
+    expect(run).toBeDefined();
+    expect(run.run_id).toBe("run-1");
+    expect(run.chat_id).toBe("chat-123");
+    expect(run.bot).toBe("codex");
+    expect(run.status).toBe("running");
+    expect(run.started_at).toBeDefined();
+  });
+
+  it("updates run on completion", () => {
+    db.insertRun("run-1", "chat-123", "codex", "codex --help", "/app", "gpt-4");
+    db.updateRunCompleted("run-1", "all done", "sess-abc");
+    const run = db.getRun("run-1");
+    expect(run.status).toBe("done");
+    expect(run.final_text_preview).toBe("all done");
+    expect(run.session_id).toBe("sess-abc");
+    expect(run.ended_at).toBeDefined();
+  });
+
+  it("updates run on failure", () => {
+    db.insertRun("run-1", "chat-123", "codex", "codex --help", "/app", "gpt-4");
+    db.updateRunFailed("run-1", "CLI crashed");
+    const run = db.getRun("run-1");
+    expect(run.status).toBe("failed");
+    expect(run.error).toBe("CLI crashed");
+    expect(run.ended_at).toBeDefined();
+  });
+
+  it("updates run on cancellation", () => {
+    db.insertRun("run-1", "chat-123", "codex", "codex --help", "/app", "gpt-4");
+    db.updateRunCancelled("run-1", "user");
+    const run = db.getRun("run-1");
+    expect(run.status).toBe("cancelled");
+    expect(run.ended_at).toBeDefined();
+  });
+
+  it("inserts and retrieves events for a run", () => {
+    db.insertRun("run-1", "chat-123", "codex", "codex --help", "/app", "gpt-4");
+    db.insertEvent("run-1", 1, "run.started", new Date().toISOString(), { command: "codex" });
+    db.insertEvent("run-1", 2, "run.completed", new Date().toISOString(), { text: "done" });
+    
+    const events = db.getEventsForRun("run-1");
+    expect(events.length).toBe(2);
+    expect(events[0].type).toBe("run.started");
+    expect(events[0].seq).toBe(1);
+    expect(JSON.parse(events[0].payload_json).command).toBe("codex");
+  });
+});

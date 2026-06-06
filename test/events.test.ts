@@ -259,6 +259,7 @@ describe("runCliAsync — event emission", () => {
   });
 
   it("event base fields carry the runId, bot, and chatId from eventContext", async () => {
+    // (Phase 3 tests follow this describe block)
     const { runCliAsync } = await import("../src/cli.js");
     const events: any[] = [];
     const ctx = { runId: "my-run-id", bot: "codex" as const, chatId: "chat-42" };
@@ -272,5 +273,55 @@ describe("runCliAsync — event emission", () => {
       expect(e.chatId).toBe("chat-42");
       expect(e.version).toBe(1);
     }
+  });
+});
+
+// ── Phase 3: Telegram parity adapter ─────────────────────────────────────────
+
+describe("runViewToTelegramText — parity adapter", () => {
+  it("returns final text for a completed run", async () => {
+    const { runViewToTelegramText } = await import("../src/events/telegramAdapter.js");
+    expect(runViewToTelegramText({ runId: "r", status: "done", text: "Hello world", updatedAt: "" }))
+      .toBe("Hello world");
+  });
+
+  it("returns error text prefixed with ❌ for a failed run", async () => {
+    const { runViewToTelegramText } = await import("../src/events/telegramAdapter.js");
+    const result = runViewToTelegramText({ runId: "r", status: "failed", text: "", error: "timeout", updatedAt: "" });
+    expect(result).toContain("❌");
+    expect(result).toContain("timeout");
+  });
+
+  it("returns a cancellation notice for a cancelled run", async () => {
+    const { runViewToTelegramText } = await import("../src/events/telegramAdapter.js");
+    const result = runViewToTelegramText({ runId: "r", status: "cancelled", text: "", updatedAt: "" });
+    expect(result.length).toBeGreaterThan(0);
+  });
+
+  it("passes text through toTelegramEntitiesText — code blocks become pre entities", async () => {
+    const { runViewToTelegramText } = await import("../src/events/telegramAdapter.js");
+    const { toTelegramEntitiesText } = await import("../src/render.js");
+    const codeText = "```js\nconsole.log('hi')\n```";
+    const adapterResult = runViewToTelegramText({ runId: "r", status: "done", text: codeText, updatedAt: "" });
+    const directResult = toTelegramEntitiesText(codeText);
+    // Both should produce the same entity-encoded text
+    expect(adapterResult).toBe(directResult.text);
+  });
+
+  it("long text is split into chunks via splitTelegramText — each chunk within limit", async () => {
+    const { runViewToTelegramChunks } = await import("../src/events/telegramAdapter.js");
+    const longText = "word ".repeat(1000).trim();
+    const chunks = runViewToTelegramChunks({ runId: "r", status: "done", text: longText, updatedAt: "" });
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      expect(chunk.length).toBeLessThanOrEqual(3500);
+    }
+  });
+
+  it("returns single-element array for short text", async () => {
+    const { runViewToTelegramChunks } = await import("../src/events/telegramAdapter.js");
+    const chunks = runViewToTelegramChunks({ runId: "r", status: "done", text: "Short answer", updatedAt: "" });
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toBe("Short answer");
   });
 });

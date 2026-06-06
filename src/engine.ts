@@ -34,7 +34,8 @@ import { sendTelegramMessage, sendMessageWithProgress } from "./messageDelivery.
 import { buildModelKeyboard, buildModelsText, getCliWorkingDir, extractPromptText, extractThreadId, isAuthorizedMessage } from "./bridge.js";
 import { handleCommand, isBridgeCommand, buildTelegramCommands } from "./commands.js";
 import { getCodexUsageText } from "./codexUsage.js";
-import type { BridgeConfig, BotKind, BotConfig, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult } from "./types.js";
+import type { BridgeEvent } from "./events/types.js";
+import type { BridgeConfig, BotKind, BotConfig, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult, CliOptions } from "./types.js";
 import type { BridgeDb } from "./db.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 
@@ -391,18 +392,26 @@ export class BridgeEngine {
 
     try {
       if (useAsync) {
+        const { runId, eventContext, collect } = this._createEventContext(chatId, threadId);
         await sendMessageWithProgress({
           client: this.client,
           kind: this._deliveryKind(),
           chatId,
           body: { message_thread_id: threadId },
           isAborted: () => this.abortedChats.has(chatKey),
+          runId,
+          onEvent: (e) => collect(e),
           execution: (onProgress: (text: string) => void) =>
-            this.executePromptAsync(prompt, sessionId, chatId, { message_thread_id: threadId }, onProgress, attachments),
+            this.executePromptAsync(prompt, sessionId, chatId, { message_thread_id: threadId }, onProgress, attachments, eventContext, runId, collect),
         });
       } else {
-        const result = await this.executePrompt(prompt, sessionId, chatId, { message_thread_id: threadId }, attachments);
-        await this.sendText(chatId, { text: result.text, message_thread_id: threadId });
+        const { runId, eventContext, collect } = this._createEventContext(chatId, threadId);
+        const result = await this.executePrompt(prompt, sessionId, chatId, { message_thread_id: threadId }, attachments, eventContext, runId, collect);
+        // For the sync path the final message is sent below; build a view from the
+        // collected events so the new event-driven path drives the output text.
+        if (result && result.text) {
+          await this.sendText(chatId, { text: result.text, message_thread_id: threadId });
+        }
       }
     } catch (error) {
       console.error(`[${this.kind}] prompt execution failed`, error);
@@ -418,6 +427,34 @@ export class BridgeEngine {
       this.db.unlock(chatKey);
       this._drainQueue(chatKey);
     }
+  }
+
+  /**
+   * Build a fresh event context for a single run. Returns the runId, the
+   * eventContext payload expected by `runCli`/`runCliAsync`, and a collector
+   * that downstream consumers (sendMessageWithProgress) can use to receive
+   * every emitted event for the run. The collector writes into a shared
+   * array on the returned record so callers can also read the buffered
+   * events if they need to inspect them.
+   */
+  private _createEventContext(chatId: number, threadId?: number): {
+    runId: string;
+    eventContext: CliOptions["eventContext"];
+    collect: (e: BridgeEvent) => void;
+    events: BridgeEvent[];
+  } {
+    const runId = randomUUID();
+    const eventContext = {
+      runId,
+      bot: (isAgentKind(this.kind) ? this.kind : "claude") as BotKind,
+      chatId: String(chatId),
+      threadId: threadId != null ? String(threadId) : undefined,
+    };
+    const events: BridgeEvent[] = [];
+    const collect = (e: BridgeEvent) => {
+      events.push(e);
+    };
+    return { runId, eventContext, collect, events };
   }
 
   private _drainQueue(chatKey: string): void {
@@ -450,6 +487,9 @@ export class BridgeEngine {
     body: any = {},
     onProgress = (_text: string) => {},
     attachments: string[] = [],
+    eventContext: CliOptions["eventContext"] = undefined as any,
+    runId: string | null = null,
+    collect: ((e: BridgeEvent) => void) | null = null,
   ): Promise<CliResult> {
     const chatKey = String(chatId);
     const executionKind = this._executionKind();
@@ -486,6 +526,8 @@ export class BridgeEngine {
         onProgress,
         chatId: chatKey,
         stdin: invocation.stdin,
+        eventContext,
+        onEvent: collect ?? undefined,
       });
 
       let logContent: string | null = null;
@@ -509,6 +551,24 @@ export class BridgeEngine {
       await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
         console.error(`[${this.kind}] output file upload failed`, err)
       );
+      // Emit a richer run.completed with the real sessionId for downstream
+      // collectors (e.g. sendMessageWithProgress's onEvent branch). The
+      // runCliAsync already emitted a run.completed with sessionId: null;
+      // appending a corrected one keeps the event stream coherent.
+      if (collect && runId && eventContext) {
+        collect({
+          type: "run.completed",
+          version: 1,
+          id: randomUUID(),
+          runId,
+          timestamp: new Date().toISOString(),
+          bot: eventContext.bot,
+          chatId: eventContext.chatId,
+          threadId: eventContext.threadId,
+          sessionId: result.sessionId ?? null,
+          text: result.text,
+        });
+      }
       return result;
     } catch (error) {
       if (logFile) { try { rmSync(logFile); } catch {} }
@@ -516,7 +576,7 @@ export class BridgeEngine {
       if (isCapacityExhaustedError(error as Error) && this.opts.botConfig.modelPreference.length > 1) {
         const fallbackModel = getNextFallbackModel(model, this.opts.botConfig.modelPreference);
         if (fallbackModel) {
-          return this._runWithFallback(prompt, sessionId, chatId, chatKey, fallbackModel, outDir, cwd, startedAtMs, onProgress, attachments, logFile, "async");
+          return this._runWithFallback(prompt, sessionId, chatId, chatKey, fallbackModel, outDir, cwd, startedAtMs, onProgress, attachments, logFile, "async", eventContext, runId, collect);
         }
       }
       this._handleCircuitBreaker(error as Error, chatKey);
@@ -530,6 +590,9 @@ export class BridgeEngine {
     chatId: number,
     body: any = {},
     attachments: string[] = [],
+    eventContext: CliOptions["eventContext"] = undefined as any,
+    runId: string | null = null,
+    collect: ((e: BridgeEvent) => void) | null = null,
   ): Promise<CliResult> {
     const { message_thread_id: threadId } = body;
     const chatKey = String(chatId);
@@ -569,6 +632,8 @@ export class BridgeEngine {
         ...buildExecutionOptions(executionKind),
         chatId: chatKey,
         stdin: invocation.stdin,
+        eventContext,
+        onEvent: collect ?? undefined,
       });
 
       let logContent: string | null = null;
@@ -592,6 +657,20 @@ export class BridgeEngine {
       await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
         console.error(`[${this.kind}] output file upload failed`, err)
       );
+      if (collect && runId && eventContext) {
+        collect({
+          type: "run.completed",
+          version: 1,
+          id: randomUUID(),
+          runId,
+          timestamp: new Date().toISOString(),
+          bot: eventContext.bot,
+          chatId: eventContext.chatId,
+          threadId: eventContext.threadId,
+          sessionId: result.sessionId ?? null,
+          text: result.text,
+        });
+      }
       return result;
     } catch (error) {
       if (logFile) { try { rmSync(logFile); } catch {} }
@@ -599,7 +678,7 @@ export class BridgeEngine {
       if (isCapacityExhaustedError(error as Error) && this.opts.botConfig.modelPreference.length > 1) {
         const fallbackModel = getNextFallbackModel(model, this.opts.botConfig.modelPreference);
         if (fallbackModel) {
-          return this._runWithFallback(prompt, sessionId, chatId, chatKey, fallbackModel, outDir, cwd, startedAtMs, () => {}, attachments, logFile, "sync");
+          return this._runWithFallback(prompt, sessionId, chatId, chatKey, fallbackModel, outDir, cwd, startedAtMs, () => {}, attachments, logFile, "sync", eventContext, runId, collect);
         }
       }
       this._handleCircuitBreaker(error as Error, chatKey);
@@ -622,6 +701,9 @@ export class BridgeEngine {
     attachments: string[],
     _logFile: string | null,
     mode: "async" | "sync",
+    eventContext: CliOptions["eventContext"] = undefined as any,
+    runId: string | null = null,
+    collect: ((e: BridgeEvent) => void) | null = null,
   ): Promise<CliResult> {
     const executionKind = this._executionKind();
     let fallbackLogFile: string | null = null;
@@ -653,11 +735,15 @@ export class BridgeEngine {
             onProgress,
             chatId: chatKey,
             stdin: fallbackInvocation.stdin,
+            eventContext,
+            onEvent: collect ?? undefined,
           })).text
         : await this.exec.runCli(fallbackInvocation.command, fallbackInvocation.args, fallbackCwd, {
             ...buildExecutionOptions(executionKind),
             chatId: chatKey,
             stdin: fallbackInvocation.stdin,
+            eventContext,
+            onEvent: collect ?? undefined,
           });
 
       let fallbackLogContent: string | null = null;

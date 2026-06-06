@@ -635,6 +635,25 @@ export async function runCli(command: string, args: string[], cwd: string, optio
   const timeoutMs = options.timeoutMs ?? 300_000;
   const idleTimeoutMs = options.idleTimeoutMs ?? null;
   const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
+  const onEvent = options.onEvent;
+  const evtCtx = options.eventContext;
+
+  const emit = (e: BridgeEvent) => {
+    try {
+      if (e.type === "run.started") {
+        console.log(`[event] run.started runId=${e.runId} bot=${e.bot} chatId=${e.chatId}`);
+      } else if (e.type === "run.completed") {
+        console.log(`[event] run.completed runId=${e.runId} sessionId=${e.sessionId}`);
+      } else if (e.type === "run.failed") {
+        console.log(`[event] run.failed runId=${e.runId} category=${e.category} error="${e.error.replace(/\n/g, " ")}"`);
+      } else if (e.type === "run.cancelled") {
+        console.log(`[event] run.cancelled runId=${e.runId} reason=${e.reason}`);
+      }
+      onEvent?.(e);
+    } catch {
+      /* never let event emission break execution */
+    }
+  };
 
   return new Promise((resolve, reject) => {
     console.log(formatSpawnLog(command, args, cwd, options.chatId));
@@ -644,9 +663,12 @@ export async function runCli(command: string, args: string[], cwd: string, optio
     }
     child.stdin?.end();
     if (options.chatId != null) activeProcesses.set(options.chatId, child);
+    const pid = child.pid;
     let stdout = "";
     let stderr = "";
     let settled = false;
+
+    if (evtCtx) emit(evtType.runStarted({ ...evtCtx, command, cwd, model: null }));
 
     const doReject = (err: Error) => {
       if (settled) return;
@@ -662,6 +684,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
 
     const timer = setTimeout(() => {
       console.error(`[HARD TIMEOUT] CLI hard timeout after ${timeoutMs}ms - killing process\n${formatSpawnLog(command, args, cwd, options.chatId)}`);
+      if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI hard timeout after ${timeoutMs}ms`, category: "timeout" }));
       doReject(new Error(`CLI hard timeout after ${timeoutMs}ms`));
       killWithGrace(child, killGraceMs);
     }, timeoutMs);
@@ -672,6 +695,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         console.error(`[IDLE TIMEOUT] CLI idle timeout after ${idleTimeoutMs}ms with no stdout/stderr${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""}`);
+        if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI idle timeout after ${idleTimeoutMs}ms`, category: "timeout" }));
         doReject(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`));
         killWithGrace(child, killGraceMs);
       }, idleTimeoutMs);
@@ -680,14 +704,16 @@ export async function runCli(command: string, args: string[], cwd: string, optio
     resetIdleTimer();
 
     child.stdout.on("data", (data) => {
-      stdout += data;
+      const chunk = data.toString();
+      stdout += chunk;
       resetIdleTimer();
+      if (evtCtx) emit(evtType.textDelta({ ...evtCtx, text: chunk, source: "stdout" }));
     });
 
     child.stderr.on("data", (data) => {
       const chunk = data.toString();
       stderr += chunk;
-      console.error(`[stderr]${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${child.pid ?? "?"} ${chunk.trimEnd()}`);
+      console.error(`[stderr]${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"} ${chunk.trimEnd()}`);
       resetIdleTimer();
     });
 
@@ -695,17 +721,21 @@ export async function runCli(command: string, args: string[], cwd: string, optio
       clearTimeout(timer);
       if (idleTimer) clearTimeout(idleTimer);
       if (options.chatId != null) activeProcesses.delete(options.chatId);
-      console.log(`[close]${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${child.pid ?? "?"} code=${code} signal=${signal ?? "none"}`);
+      console.log(`[close]${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"} code=${code} signal=${signal ?? "none"}`);
 
       if (settled) return;
 
       if (signal && abortedChildren.has(child)) {
+        if (evtCtx) emit(evtType.runCancelled({ ...evtCtx, reason: "user" }));
         doResolve(stdout);
       } else if (signal) {
+        if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI killed by signal ${signal}`, category: "cli" }));
         doReject(new Error(`CLI killed by signal ${signal}: ${stderr || stdout}`));
       } else if (code !== 0 && code !== null) {
+        if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI exited with code ${code}`, category: "cli" }));
         doReject(new Error(`CLI exited with code ${code}: ${stderr || stdout}`));
       } else {
+        if (evtCtx) emit(evtType.runCompleted({ ...evtCtx, text: stdout, sessionId: null }));
         doResolve(stdout);
       }
     });
@@ -714,6 +744,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
       clearTimeout(timer);
       if (idleTimer) clearTimeout(idleTimer);
       if (options.chatId != null) activeProcesses.delete(options.chatId);
+      if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: err.message, category: "cli" }));
       doReject(err);
     });
   });

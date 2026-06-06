@@ -259,6 +259,22 @@ This keeps the first reducer simple enough to test exhaustively.
 
 ## Implementation Plan
 
+## TDD commit discipline — applies to every phase below
+
+Each phase that introduces new behaviour must follow this sequence without exception:
+
+1. Write the tests described in that phase.
+2. Run `npm test` — confirm the new tests **fail**. If they do not fail, stop: the test is wrong or already covered.
+3. Commit the failing tests: `test: <phase description>` ← red state
+4. Write the minimal production code to pass them.
+5. Run `npm test` — confirm all tests **pass**.
+6. Commit the implementation: `feat/fix: <phase description>` ← green state
+7. Refactor if needed, keeping tests green throughout.
+
+Never bundle test files and production code in a single commit. The commit history must prove the red state existed before the implementation.
+
+---
+
 ### Phase 0 — Characterisation Tests (Red → Green → Refactor)
 
 Goal: capture current observable behaviour before architecture changes.
@@ -274,11 +290,13 @@ Add or strengthen tests around:
 - Telegram chunk splitting
 - Codex JSON progress filtering
 
+TDD sequence: these tests should be green immediately (they describe existing behaviour). If any are red, that is a bug — fix it before proceeding. Commit characterisation tests as a single `test:` commit before any production code changes.
+
 Gate:
 
 ```bash
 npm run typecheck
-npm test
+npm test   # all characterisation tests must pass
 ```
 
 No production code should change in this phase unless a missing test fixture requires minor test-only scaffolding.
@@ -287,31 +305,37 @@ No production code should change in this phase unless a missing test fixture req
 
 Goal: introduce the contract with no runtime behaviour change.
 
-Add:
+TDD sequence:
+1. Add `test/events.test.ts` with the failing tests listed below. Run `npm test` — confirm red.
+2. Commit: `test: failing tests for BridgeEvent types and reducer`
+3. Add `src/events/types.ts` and `src/events/reducer.ts`. Run `npm test` — confirm green.
+4. Commit: `feat(events): add BridgeEvent contract and RunView reducer`
 
-- `src/events/types.ts`
-- `src/events/reducer.ts`
-- `test/events.test.ts`
+Tests (all must be red before implementation):
 
-Tests:
-
-- reducer starts a run
-- appends text deltas in order
-- completed event overrides interim text with final text
-- failed event stores error category and message
-- cancelled event produces cancelled status
-- unknown/future-safe handling is explicit, either compile-time impossible or test-covered
+- reducer starts a run on `run.started`
+- appends text deltas in order on `text.delta`
+- `run.completed` overrides interim text with final text
+- `run.failed` stores error category and message
+- `run.cancelled` sets status to cancelled
+- unknown/future-safe handling is explicit — compile-time impossible or test-covered
 
 Gate:
 
 ```bash
 npm run typecheck
-npm test
+npm test   # all tests pass; events.test.ts tests are green
 ```
 
 ### Phase 2 — Emit Events in Parallel
 
 Goal: event emission exists, but Telegram behaviour is still driven by the current code path.
+
+TDD sequence:
+1. Add failing tests for event emission in `test/events.test.ts` or `test/cli.test.ts`. Run `npm test` — confirm red.
+2. Commit: `test: failing tests for runCliAsync event emission`
+3. Add `onEvent` callback and emission in `runCliAsync`. Run `npm test` — confirm green.
+4. Commit: `feat(events): emit BridgeEvents from runCliAsync`
 
 Implementation sketch:
 
@@ -324,23 +348,29 @@ Implementation sketch:
   - `run.cancelled` for user aborts
 - Keep existing `onProgress` and `CliResult` behaviour unchanged.
 
-Tests:
+Tests (all must be red before implementation):
 
 - `runCliAsync("echo")` emits `run.started`, `text.delta`, `run.completed` in order.
 - idle timeout emits `run.failed` with `category = "timeout"`.
-- abort emits `run.cancelled` or equivalent cancellation signal without changing existing abort resolution expectations.
+- abort emits `run.cancelled` without changing existing abort resolution expectations.
 - no Telegram test expectations change.
 
 Gate:
 
 ```bash
 npm run typecheck
-npm test
+npm test   # all existing tests still pass; new emission tests green
 ```
 
 ### Phase 3 — Build Telegram Parity Adapter Behind Tests
 
 Goal: prove events can produce the same final Telegram output without switching production yet.
+
+TDD sequence:
+1. Add failing tests for `runViewToTelegramText`. Run `npm test` — confirm red.
+2. Commit: `test: failing parity tests for runViewToTelegramText`
+3. Implement the adapter. Run `npm test` — confirm green.
+4. Commit: `feat(events): Telegram parity adapter runViewToTelegramText`
 
 Add a pure adapter function:
 
@@ -348,12 +378,10 @@ Add a pure adapter function:
 runViewToTelegramText(view: RunView): string
 ```
 
-or a non-sending renderer that returns intended Telegram payloads.
+Tests (all must be red before implementation):
 
-Tests:
-
-- current final text -> same Telegram text
-- error event -> same `❌ ...` text as `sendMessageWithProgress`
+- current final text → same Telegram text
+- error event → same `❌ ...` text as `sendMessageWithProgress`
 - code block text still flows through existing `toTelegramEntitiesText`
 - long text still uses existing `splitTelegramText`
 
@@ -361,7 +389,7 @@ Gate:
 
 ```bash
 npm run typecheck
-npm test
+npm test   # parity adapter tests green; no existing test changes
 ```
 
 ### Phase 4 — Switch One Narrow Path to Events
@@ -379,6 +407,12 @@ Do not start with:
 - `/stop`
 - timeouts
 - Antigravity delimiter parsing
+
+TDD sequence:
+1. Add failing acceptance tests proving the narrow path produces identical Telegram output via events. Run `npm test` — confirm red.
+2. Commit: `test: failing acceptance tests for event-driven narrow path`
+3. Migrate the path. Run `npm test` — confirm green.
+4. Commit: `feat(events): route narrow success path through event adapter`
 
 Acceptance:
 

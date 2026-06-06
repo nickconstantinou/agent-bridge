@@ -1,3 +1,38 @@
+# Development Practice — Red-Green-Refactor TDD
+
+**All implementation work uses red-green-refactor TDD. No exceptions.**
+
+The full TDD rules are in `CLAUDE.md`. The critical agent-specific requirements are:
+
+## Verification — mandatory each cycle
+
+```bash
+# Step 1: write tests, then confirm they fail
+npm test   # new test(s) must appear as FAILING
+
+# Step 2: write implementation, then confirm everything passes
+npm test   # all tests must PASS
+```
+
+Do not skip the red verification. If you cannot see the test failing before writing implementation, the test is not testing anything useful.
+
+## Commit discipline — required
+
+Tests and implementation are always **separate commits**:
+
+```
+commit 1: test: failing tests for <feature>     ← red
+commit 2: feat/fix: implementation              ← green
+```
+
+Never bundle test files and production code in the same commit. This is the most common TDD failure in agent-assisted development — it produces tests-alongside-code with no verifiable red state.
+
+## Planning requirement
+
+When executing or reviewing a plan, every phase that adds new behaviour must include an explicit red→green step. If a plan does not call out "commit tests first, confirm red, then implement", raise it before starting that phase.
+
+---
+
 # Persistent memory
 
 You have access to a local memory CLI named `agent-memory`.

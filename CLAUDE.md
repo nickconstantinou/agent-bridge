@@ -11,7 +11,32 @@ By work type:
 - **Bug fix:** reproduce with a failing regression test before fixing.
 - **Refactor:** add characterization tests that lock existing behaviour before restructuring.
 
-Run `npm test` for the full suite. Report: red test → green change → suite result.
+## Verification protocol — do this every cycle
+
+```bash
+# After writing tests, before writing implementation:
+npm test   # must show the new test(s) FAILING — confirm red
+
+# After writing implementation:
+npm test   # must show all tests PASSING — confirm green
+```
+
+If you cannot confirm the red state, stop. The test is either wrong, already covered, or testing nothing.
+
+## Commit discipline
+
+**Tests and implementation must be separate commits.** Never bundle them together.
+
+```
+commit 1: test: add failing tests for <feature>    ← red state
+commit 2: feat/fix: implement <feature>            ← green state
+```
+
+The commit history must prove that the test existed before the implementation. A single commit containing both test and production code is not TDD — it is tests-alongside-code with no proof of the red state.
+
+Planning note: when writing or reviewing an implementation plan, ensure every phase explicitly requires:
+1. Write tests → run `npm test` → confirm red → commit
+2. Write implementation → run `npm test` → confirm green → commit
 
 ---
 

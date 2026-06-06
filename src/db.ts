@@ -33,6 +33,26 @@ export function openDb(dbPath: string): BridgeDb {
       key   TEXT PRIMARY KEY,
       value TEXT
     );
+    CREATE TABLE IF NOT EXISTS bridge_runs (
+      run_id             TEXT    PRIMARY KEY,
+      chat_id            TEXT    NOT NULL,
+      bot                TEXT    NOT NULL,
+      status             TEXT    NOT NULL,
+      started_at         TEXT    NOT NULL,
+      ended_at           TEXT,
+      session_id         TEXT,
+      final_text_preview TEXT,
+      error              TEXT
+    );
+    CREATE TABLE IF NOT EXISTS bridge_events (
+      id                 TEXT    PRIMARY KEY,
+      run_id             TEXT    NOT NULL,
+      seq                INTEGER NOT NULL,
+      type               TEXT    NOT NULL,
+      timestamp          TEXT    NOT NULL,
+      payload_json       TEXT    NOT NULL,
+      FOREIGN KEY(run_id) REFERENCES bridge_runs(run_id)
+    );
   `);
   try {
     raw.exec(`ALTER TABLE bridge_state ADD COLUMN claude_session_id TEXT`);
@@ -210,6 +230,79 @@ export class BridgeDb {
          ON CONFLICT (key) DO UPDATE SET value = excluded.value`
       )
       .run(key, value);
+  }
+
+  insertRun(
+    runId: string,
+    chatId: string,
+    bot: string,
+    command: string,
+    cwd: string,
+    model: string | null
+  ): void {
+    const startedAt = new Date().toISOString();
+    this.raw
+      .prepare(
+        `INSERT INTO bridge_runs (run_id, chat_id, bot, status, started_at)
+         VALUES (?, ?, ?, 'running', ?)`
+      )
+      .run(runId, chatId, bot, startedAt);
+  }
+
+  getRun(runId: string): any {
+    return this.raw
+      .prepare(`SELECT * FROM bridge_runs WHERE run_id = ?`)
+      .get(runId);
+  }
+
+  updateRunCompleted(runId: string, text: string, sessionId: string | null): void {
+    const endedAt = new Date().toISOString();
+    this.raw
+      .prepare(
+        `UPDATE bridge_runs
+         SET status = 'done', ended_at = ?, final_text_preview = ?, session_id = ?
+         WHERE run_id = ?`
+      )
+      .run(endedAt, text, sessionId, runId);
+  }
+
+  updateRunFailed(runId: string, error: string): void {
+    const endedAt = new Date().toISOString();
+    this.raw
+      .prepare(
+        `UPDATE bridge_runs
+         SET status = 'failed', ended_at = ?, error = ?
+         WHERE run_id = ?`
+      )
+      .run(endedAt, error, runId);
+  }
+
+  updateRunCancelled(runId: string, reason: string): void {
+    const endedAt = new Date().toISOString();
+    this.raw
+      .prepare(
+        `UPDATE bridge_runs
+         SET status = 'cancelled', ended_at = ?
+         WHERE run_id = ?`
+      )
+      .run(endedAt, runId);
+  }
+
+  insertEvent(runId: string, seq: number, type: string, timestamp: string, payload: any): void {
+    const id = `${runId}:${seq}`;
+    const payloadJson = JSON.stringify(payload);
+    this.raw
+      .prepare(
+        `INSERT INTO bridge_events (id, run_id, seq, type, timestamp, payload_json)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(id, runId, seq, type, timestamp, payloadJson);
+  }
+
+  getEventsForRun(runId: string): any[] {
+    return this.raw
+      .prepare(`SELECT * FROM bridge_events WHERE run_id = ? ORDER BY seq ASC`)
+      .all(runId);
   }
 
   close(): void {

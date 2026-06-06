@@ -214,7 +214,7 @@ describe("Per-topic session isolation", () => {
 
 describe("BridgeDb runs and events persistence", () => {
   it("creates a run on insertRun", () => {
-    db.insertRun("run-1", "chat-123", "codex", "codex --help", "/app", "gpt-4");
+    db.insertRun("run-1", "chat-123", "codex");
     const run = db.getRun("run-1");
     expect(run).toBeDefined();
     expect(run.run_id).toBe("run-1");
@@ -225,7 +225,7 @@ describe("BridgeDb runs and events persistence", () => {
   });
 
   it("updates run on completion", () => {
-    db.insertRun("run-1", "chat-123", "codex", "codex --help", "/app", "gpt-4");
+    db.insertRun("run-1", "chat-123", "codex");
     db.updateRunCompleted("run-1", "all done", "sess-abc");
     const run = db.getRun("run-1");
     expect(run.status).toBe("done");
@@ -235,7 +235,7 @@ describe("BridgeDb runs and events persistence", () => {
   });
 
   it("updates run on failure", () => {
-    db.insertRun("run-1", "chat-123", "codex", "codex --help", "/app", "gpt-4");
+    db.insertRun("run-1", "chat-123", "codex");
     db.updateRunFailed("run-1", "CLI crashed");
     const run = db.getRun("run-1");
     expect(run.status).toBe("failed");
@@ -244,7 +244,7 @@ describe("BridgeDb runs and events persistence", () => {
   });
 
   it("updates run on cancellation", () => {
-    db.insertRun("run-1", "chat-123", "codex", "codex --help", "/app", "gpt-4");
+    db.insertRun("run-1", "chat-123", "codex");
     db.updateRunCancelled("run-1", "user");
     const run = db.getRun("run-1");
     expect(run.status).toBe("cancelled");
@@ -252,7 +252,7 @@ describe("BridgeDb runs and events persistence", () => {
   });
 
   it("inserts and retrieves events for a run", () => {
-    db.insertRun("run-1", "chat-123", "codex", "codex --help", "/app", "gpt-4");
+    db.insertRun("run-1", "chat-123", "codex");
     db.insertEvent("run-1", 1, "run.started", new Date().toISOString(), { command: "codex" });
     db.insertEvent("run-1", 2, "run.completed", new Date().toISOString(), { text: "done" });
     
@@ -267,5 +267,18 @@ describe("BridgeDb runs and events persistence", () => {
     expect(() =>
       db.insertEvent("missing-run", 1, "run.started", new Date().toISOString(), { command: "codex" })
     ).toThrow();
+  });
+});
+
+describe("insertRun — simplified signature", () => {
+  it("accepts only runId, chatId, bot (no command/cwd/model)", () => {
+    // These params are not stored in bridge_runs — only in bridge_events payload.
+    // insertRun should not accept them to avoid the misleading implication they are persisted.
+    db.insertRun("run-sig", "chat-x", "claude");
+    const run = db.getRun("run-sig");
+    expect(run).toBeDefined();
+    expect(run.run_id).toBe("run-sig");
+    expect(run.bot).toBe("claude");
+    expect(run.status).toBe("running");
   });
 });

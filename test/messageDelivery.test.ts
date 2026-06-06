@@ -37,31 +37,16 @@ describe("sendMessageWithProgress", () => {
     );
   });
 
-  it("routes final-only success path through events, emitting run.started and run.completed", async () => {
+  it("delivers final text to Telegram for a resolved-promise execution", async () => {
     const client = createMockClient();
     const chatId = 123;
-    const execution = Promise.resolve({ text: "Final answer from events", sessionId: "s1" } as CliResult);
-    const events: any[] = [];
+    const execution = Promise.resolve({ text: "Final answer", sessionId: "s1" } as CliResult);
 
-    await sendMessageWithProgress({
-      client,
-      kind: "codex",
-      chatId,
-      execution,
-      runId: "test-run-123",
-      onEvent: (e) => events.push(e),
-    });
+    await sendMessageWithProgress({ client, kind: "codex", chatId, execution });
 
     expect(client.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ chat_id: chatId, text: "Final answer from events" })
+      expect.objectContaining({ chat_id: chatId, text: "Final answer" })
     );
-    expect(events.map(e => e.type)).toEqual(["run.started", "run.completed"]);
-    const started = events[0];
-    const completed = events[1];
-    expect(started.runId).toBe("test-run-123");
-    expect(started.bot).toBe("codex");
-    expect(completed.text).toBe("Final answer from events");
-    expect(completed.sessionId).toBe("s1");
   });
 
   it("handles execution as a function and passes onProgress", async () => {

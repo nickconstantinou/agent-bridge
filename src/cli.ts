@@ -155,9 +155,13 @@ export function buildCliInvocation({
   const args = [];
 
   if (bot === "codex") {
-    if (sessionId) {
+    const forceFreshForAttachments = attachments.length > 0;
+    if (sessionId && !forceFreshForAttachments) {
       args.push("exec", "resume", sessionId);
     } else {
+      if (sessionId && forceFreshForAttachments) {
+        console.warn("[bridge] Codex: starting fresh session for attachment turn because resume does not support -i");
+      }
       args.push("exec");
     }
     args.push("--skip-git-repo-check");
@@ -170,15 +174,17 @@ export function buildCliInvocation({
     if (outputFormat === "json") {
       args.push("--json");
     }
-    // Codex supports -i <file> for image attachments on new sessions only
-    if (!sessionId && attachments.length > 0) {
+    const finalPrompt = appendOutputDirInstruction(wrapPromptContext(prompt, soulContext), outputDir);
+    // Codex supports -i <file> for image attachments on fresh exec invocations.
+    // Because --image accepts multiple files, pass the prompt via stdin to avoid
+    // the prompt being parsed as another image path.
+    if (attachments.length > 0) {
       for (const att of attachments) {
         args.push("-i", att);
       }
-    } else if (sessionId && attachments.length > 0) {
-      console.warn("[bridge] Codex: attachments ignored on resume session (no -i support on resume)");
+      args.push("--", "-");
+      return { command, args, stdin: finalPrompt };
     }
-    const finalPrompt = appendOutputDirInstruction(wrapPromptContext(prompt, soulContext), outputDir);
     args.push(finalPrompt);
   } else if (bot === "claude") {
     const finalPrompt = appendOutputDirInstruction(wrapPromptContext(prompt, soulContext), outputDir);

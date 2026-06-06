@@ -291,15 +291,21 @@ describe("buildCliInvocation — attachment injection", () => {
     expect(args).not.toContain("-i");
   });
 
-  it("codex: drops attachments and does not add -i when sessionId is set (resume path)", () => {
-    const { args } = buildCliInvocation({
+  it("codex: starts a fresh invocation with -i when attachments are present on a resumed chat", () => {
+    const result = buildCliInvocation({
       ...base,
       bot: "codex",
       command: "codex",
       sessionId: "sess_abc",
       attachments: ["/tmp/img.png"],
     });
-    expect(args).not.toContain("-i");
+    const { args } = result;
+    expect(args[0]).toBe("exec");
+    expect(args).not.toContain("resume");
+    expect(args).toContain("-i");
+    expect(args[args.indexOf("-i") + 1]).toBe("/tmp/img.png");
+    expect(args.slice(-2)).toEqual(["--", "-"]);
+    expect(result.stdin).toContain("hello");
   });
 
   it("claude with attachments: returns stdin field with stream-json payload and uses stream-json args", async () => {

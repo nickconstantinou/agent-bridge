@@ -479,7 +479,7 @@ export class BridgeEngine {
       attachments,
       outputDir: outDir,
     });
-    const isStreamJson = !!invocation.stdin;
+    const isClaudeStreamJson = executionKind === "claude" && !!invocation.stdin;
     try {
       const cliResult = await this.exec.runCliAsync(invocation.command, invocation.args, cwd, {
         ...buildExecutionOptions(executionKind),
@@ -494,7 +494,7 @@ export class BridgeEngine {
       }
 
       let result: CliResult;
-      if (isStreamJson) {
+      if (isClaudeStreamJson) {
         const parsed = parseClaudeStreamJsonOutput(cliResult.text);
         result = parsed ?? { text: cliResult.text.trim(), sessionId: null };
       } else {
@@ -560,7 +560,7 @@ export class BridgeEngine {
       attachments,
       outputDir: outDir,
     });
-    const isStreamJson = !!invocation.stdin;
+    const isClaudeStreamJson = executionKind === "claude" && !!invocation.stdin;
     const typingTracker = createTypingTracker(this.client, chatId, this.kind, { message_thread_id: threadId });
 
     try {
@@ -577,7 +577,7 @@ export class BridgeEngine {
       }
 
       let result: CliResult;
-      if (isStreamJson) {
+      if (isClaudeStreamJson) {
         const parsed = parseClaudeStreamJsonOutput(stdout);
         result = parsed ?? { text: stdout.trim(), sessionId: null };
       } else {

@@ -1,6 +1,6 @@
 /**
- * Phase 1 — BridgeEvent types and RunView reducer.
- * Written before any implementation (red state).
+ * Phase 1 — BridgeEvent types and RunView reducer (green).
+ * Phase 2 — Event emission from runCliAsync (red until implementation).
  */
 
 import { describe, it, expect } from "vitest";
@@ -162,5 +162,115 @@ describe("RunView reducer", () => {
       type.runCompleted({ ...base, text: "done", sessionId: null }),
     ]);
     expect(new Date(v2.updatedAt) >= new Date(v1.updatedAt)).toBe(true);
+  });
+});
+
+// ── Phase 2: Event emission from runCliAsync ──────────────────────────────────
+
+describe("runCliAsync — event emission", () => {
+  const eventCtx = { runId: "r-test", bot: "claude" as const, chatId: "test-99" };
+
+  it("emits run.started then text.delta then run.completed for a successful command", async () => {
+    const { runCliAsync } = await import("../src/cli.js");
+    const events: any[] = [];
+    await runCliAsync("node", ["-e", "process.stdout.write('hello')"], process.cwd(), {
+      eventContext: eventCtx,
+      onEvent: (e) => events.push(e),
+    });
+    const types = events.map(e => e.type);
+    expect(types).toContain("run.started");
+    expect(types).toContain("text.delta");
+    expect(types).toContain("run.completed");
+    const started = events.findIndex(e => e.type === "run.started");
+    const delta = events.findIndex(e => e.type === "text.delta");
+    const completed = events.findIndex(e => e.type === "run.completed");
+    expect(started).toBeLessThan(delta);
+    expect(delta).toBeLessThan(completed);
+  });
+
+  it("text.delta events carry the stdout chunk text", async () => {
+    const { runCliAsync } = await import("../src/cli.js");
+    const deltas: string[] = [];
+    await runCliAsync("node", ["-e", "process.stdout.write('ping')"], process.cwd(), {
+      eventContext: eventCtx,
+      onEvent: (e) => { if (e.type === "text.delta") deltas.push(e.text); },
+    });
+    expect(deltas.join("")).toContain("ping");
+  });
+
+  it("run.completed carries the full stdout text", async () => {
+    const { runCliAsync } = await import("../src/cli.js");
+    const events: any[] = [];
+    await runCliAsync("node", ["-e", "process.stdout.write('final')"], process.cwd(), {
+      eventContext: eventCtx,
+      onEvent: (e) => events.push(e),
+    });
+    const completed = events.find(e => e.type === "run.completed");
+    expect(completed?.text).toContain("final");
+  });
+
+  it("emits run.failed with category=cli when process exits non-zero", async () => {
+    const { runCliAsync } = await import("../src/cli.js");
+    const events: any[] = [];
+    await runCliAsync("node", ["-e", "process.exit(1)"], process.cwd(), {
+      eventContext: eventCtx,
+      onEvent: (e) => events.push(e),
+    }).catch(() => {});
+    const failed = events.find(e => e.type === "run.failed");
+    expect(failed).toBeDefined();
+    expect(failed?.category).toBe("cli");
+  });
+
+  it("emits run.failed with category=timeout on idle timeout", async () => {
+    const { runCliAsync } = await import("../src/cli.js");
+    const events: any[] = [];
+    await runCliAsync("node", ["-e", "setTimeout(()=>{},30000)"], process.cwd(), {
+      eventContext: eventCtx,
+      idleTimeoutMs: 100,
+      onEvent: (e) => events.push(e),
+    }).catch(() => {});
+    const failed = events.find(e => e.type === "run.failed");
+    expect(failed).toBeDefined();
+    expect(failed?.category).toBe("timeout");
+  });
+
+  it("emits run.cancelled when process is aborted", async () => {
+    const { runCliAsync, abortCliProcess } = await import("../src/cli.js");
+    const events: any[] = [];
+    const runPromise = runCliAsync("node", ["-e", "setTimeout(()=>{},30000)"], process.cwd(), {
+      chatId: "abort-test-phase2",
+      eventContext: { ...eventCtx, runId: "r-abort" },
+      onEvent: (e) => events.push(e),
+    }).catch(() => {});
+    await new Promise(r => setTimeout(r, 50));
+    abortCliProcess("abort-test-phase2");
+    await runPromise;
+    const cancelled = events.find(e => e.type === "run.cancelled");
+    expect(cancelled).toBeDefined();
+    expect(cancelled?.reason).toBe("user");
+  });
+
+  it("does not emit events when onEvent is not provided (no-op)", async () => {
+    const { runCliAsync } = await import("../src/cli.js");
+    // Should not throw even when eventContext is absent
+    await expect(
+      runCliAsync("node", ["-e", "process.stdout.write('ok')"], process.cwd(), {})
+    ).resolves.toBeDefined();
+  });
+
+  it("event base fields carry the runId, bot, and chatId from eventContext", async () => {
+    const { runCliAsync } = await import("../src/cli.js");
+    const events: any[] = [];
+    const ctx = { runId: "my-run-id", bot: "codex" as const, chatId: "chat-42" };
+    await runCliAsync("node", ["-e", "process.stdout.write('x')"], process.cwd(), {
+      eventContext: ctx,
+      onEvent: (e) => events.push(e),
+    });
+    for (const e of events) {
+      expect(e.runId).toBe("my-run-id");
+      expect(e.bot).toBe("codex");
+      expect(e.chatId).toBe("chat-42");
+      expect(e.version).toBe(1);
+    }
   });
 });

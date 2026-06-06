@@ -2,7 +2,10 @@
 
 ## Status
 
-Research / architecture note. This document proposes a low-risk refactor path for introducing a normalized internal event contract into `agent-bridge` without changing current Telegram behaviour.
+**Phases 1-5 & Observability:** Completed.
+**Phase 6 (Future Renderers / Protocol Mapping):** Deferred.
+
+Research / architecture note. This document outlines the refactor path for introducing a normalized internal event contract into `agent-bridge` without changing current Telegram behaviour.
 
 ## Context
 
@@ -275,7 +278,7 @@ Never bundle test files and production code in a single commit. The commit histo
 
 ---
 
-### Phase 0 — Characterisation Tests (Red → Green → Refactor)
+### Phase 0 — Characterisation Tests (Completed)
 
 Goal: capture current observable behaviour before architecture changes.
 
@@ -301,7 +304,7 @@ npm test   # all characterisation tests must pass
 
 No production code should change in this phase unless a missing test fixture requires minor test-only scaffolding.
 
-### Phase 1 — Add Event Types and Reducer Only
+### Phase 1 — Add Event Types and Reducer Only (Completed)
 
 Goal: introduce the contract with no runtime behaviour change.
 
@@ -327,7 +330,7 @@ npm run typecheck
 npm test   # all tests pass; events.test.ts tests are green
 ```
 
-### Phase 2 — Emit Events in Parallel
+### Phase 2 — Emit Events in Parallel (Completed)
 
 Goal: event emission exists, but Telegram behaviour is still driven by the current code path.
 
@@ -362,7 +365,7 @@ npm run typecheck
 npm test   # all existing tests still pass; new emission tests green
 ```
 
-### Phase 3 — Build Telegram Parity Adapter Behind Tests
+### Phase 3 — Build Telegram Parity Adapter Behind Tests (Completed)
 
 Goal: prove events can produce the same final Telegram output without switching production yet.
 
@@ -392,7 +395,7 @@ npm run typecheck
 npm test   # parity adapter tests green; no existing test changes
 ```
 
-### Phase 4 — Switch One Narrow Path to Events
+### Phase 4 — Switch One Narrow Path to Events (Completed)
 
 Goal: migrate one low-risk path first.
 
@@ -419,7 +422,7 @@ Acceptance:
 - messageDelivery tests remain semantically identical
 - no new live-service behaviour observed
 
-### Phase 5 — Coarse Event Persistence
+### Phase 5 — Coarse Event Persistence (Completed)
 
 Goal: add audit/replay value without DB bloat.
 
@@ -463,9 +466,9 @@ Tests:
 - final run summary can be queried
 - DB remains backward-compatible with existing `bridge_state`
 
-### Phase 6 — Future Renderers / Protocol Mapping
+### Phase 6 — Future Renderers / Protocol Mapping (Deferred)
 
-Only after Phases 0-5 are stable:
+Deferred. Future work to support:
 
 - Discord renderer
 - WebSocket renderer

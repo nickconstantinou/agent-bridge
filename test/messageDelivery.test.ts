@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { sendTelegramMessage, sendMessageWithProgress } from "../src/messageDelivery.js";
 import type { TelegramClient } from "../src/telegram.js";
 import type { CliResult } from "../src/types.js";
+import * as telegramAdapter from "../src/events/telegramAdapter.js";
 
 const createMockClient = () => ({
   sendMessage: vi.fn(async (body: any) => ({ ok: true, result: { message_id: 456, ...body } })),
@@ -258,3 +259,26 @@ describe("isAborted suppression", () => {
     expect(client.sendMessage).not.toHaveBeenCalled();
   });
 });
+
+describe("sendMessageWithProgress Option 1 validation", () => {
+  it("logs a warning when the legacy output and the event adapter output do not match", async () => {
+    const client = createMockClient();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const adapterSpy = vi.spyOn(telegramAdapter, "runViewToTelegramText").mockReturnValue("mismatch text");
+
+    await sendMessageWithProgress({
+      client,
+      kind: "codex",
+      chatId: 123,
+      execution: Promise.resolve({ text: "Final answer", sessionId: null }),
+    });
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[validation] Output mismatch")
+    );
+
+    warnSpy.mockRestore();
+    adapterSpy.mockRestore();
+  });
+});
+

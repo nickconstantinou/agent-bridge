@@ -74,6 +74,75 @@ export async function sendTelegramMessage({
   }
 }
 
+function validateParity({
+  kind,
+  chatId,
+  runId,
+  finalText,
+  errorText,
+  sessionId,
+}: {
+  kind: string;
+  chatId: number;
+  runId?: string;
+  finalText?: string;
+  errorText?: string;
+  sessionId?: string | null;
+}) {
+  try {
+    const valRunId = runId || `val-${Math.random().toString(36).substring(2)}`;
+    const events: BridgeEvent[] = [
+      eventType.runStarted({
+        runId: valRunId,
+        bot: kind as any,
+        chatId: String(chatId),
+        command: "validation",
+        cwd: process.cwd(),
+        model: null,
+      }),
+    ];
+
+    let expectedText = "";
+    if (errorText) {
+      expectedText = errorText;
+      events.push(
+        eventType.runFailed({
+          runId: valRunId,
+          bot: kind as any,
+          chatId: String(chatId),
+          error: errorText.startsWith("❌ ") ? errorText.slice(2) : errorText,
+          category: "cli",
+        })
+      );
+    } else {
+      expectedText = finalText || "";
+      events.push(
+        eventType.runCompleted({
+          runId: valRunId,
+          bot: kind as any,
+          chatId: String(chatId),
+          text: expectedText,
+          sessionId: sessionId || null,
+        })
+      );
+    }
+
+    const view = reduceEvents(events);
+    const eventText = runViewToTelegramText(view);
+
+    const cleanExpected = toTelegramEntitiesText(expectedText).text;
+    const cleanEvent = toTelegramEntitiesText(eventText).text;
+
+    if (cleanEvent !== cleanExpected) {
+      console.warn(
+        `[validation] Output mismatch for run ${valRunId}: legacy="${cleanExpected}" vs event="${cleanEvent}"`
+      );
+    }
+  } catch (valErr) {
+    console.warn(`[validation] Parity check failed to execute`, valErr);
+  }
+}
+
 export async function sendMessageWithProgress({
   client,
   kind,
@@ -138,6 +207,14 @@ export async function sendMessageWithProgress({
 
     if (isAborted?.()) return result;
 
+    validateParity({
+      kind,
+      chatId,
+      runId,
+      finalText,
+      sessionId: result?.sessionId,
+    });
+
     if (onEvent && runId) {
       const completedEvent = eventType.runCompleted({
         runId,
@@ -171,6 +248,12 @@ export async function sendMessageWithProgress({
   } catch (err: any) {
     clearInterval(typingInterval);
     const errorText = `❌ ${toUserMessage(err instanceof Error ? err : new Error(String(err)))}`;
+    validateParity({
+      kind,
+      chatId,
+      runId,
+      errorText,
+    });
     await sendTelegramMessage({ client, kind, chatId, body: { ...body, text: errorText } });
     console.error(`[${kind}] execution error`, err);
     return null;

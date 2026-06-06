@@ -14,6 +14,8 @@ import type { CliOptions, CliResult, BotKind } from "./types.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { renderSoulContract } from "./soul.js";
 import { buildClaudeStreamJsonInput, parseClaudeStreamJsonOutput } from "./claudeStreamJson.js";
+import { type as evtType } from "./events/types.js";
+import type { BridgeEvent } from "./events/types.js";
 
 const activeProcesses = new Map<number | string, ChildProcess>();
 const abortedChildren = new WeakSet<ChildProcess>();
@@ -731,6 +733,10 @@ export async function runCliAsync(
   const idleTimeoutMs = options.idleTimeoutMs ?? null;
   const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
   const onProgress = options.onProgress;
+  const onEvent = options.onEvent;
+  const evtCtx = options.eventContext;
+
+  const emit = (e: BridgeEvent) => { try { onEvent?.(e); } catch { /* never let event emission break execution */ } };
 
   return new Promise((resolve, reject) => {
     console.log(formatSpawnLog(command, args, cwd, options.chatId));
@@ -742,6 +748,8 @@ export async function runCliAsync(
     if (options.chatId != null) activeProcesses.set(options.chatId, child);
     const pid = child.pid;
     let settled = false;
+
+    if (evtCtx) emit(evtType.runStarted({ ...evtCtx, command, cwd, model: null }));
 
     const doReject = (err: Error) => {
       if (settled) return;
@@ -760,6 +768,7 @@ export async function runCliAsync(
 
     const timer = setTimeout(() => {
       console.error(`[HARD TIMEOUT] CLI hard timeout after ${timeoutMs}ms${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"}`);
+      if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI hard timeout after ${timeoutMs}ms`, category: "timeout" }));
       if (pid) killProcessTree(child, pid, killGraceMs);
       doReject(new Error(`CLI hard timeout after ${timeoutMs}ms`));
     }, timeoutMs);
@@ -770,6 +779,7 @@ export async function runCliAsync(
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         console.error(`[IDLE TIMEOUT] CLI idle timeout after ${idleTimeoutMs}ms with no stdout/stderr${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"}`);
+        if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI idle timeout after ${idleTimeoutMs}ms`, category: "timeout" }));
         if (pid) killProcessTree(child, pid, killGraceMs);
         doReject(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`));
       }, idleTimeoutMs);
@@ -781,6 +791,7 @@ export async function runCliAsync(
       stdout += chunk;
       resetIdleTimer();
       if (onProgress) onProgress(chunk);
+      if (evtCtx) emit(evtType.textDelta({ ...evtCtx, text: chunk, source: "stdout" }));
     });
 
     child.stderr.on("data", (data) => {
@@ -798,12 +809,16 @@ export async function runCliAsync(
       if (settled) return;
 
       if (signal && abortedChildren.has(child)) {
+        if (evtCtx) emit(evtType.runCancelled({ ...evtCtx, reason: "user" }));
         doResolve({ text: stdout });
       } else if (signal) {
+        if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI killed by signal ${signal}`, category: "cli" }));
         doReject(new Error(`CLI killed by signal ${signal}: ${stderr || stdout.slice(-2000)}`));
       } else if (code !== 0 && code !== null) {
+        if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI exited with code ${code}`, category: "cli" }));
         doReject(new Error(`CLI exited with code ${code}: ${stderr || stdout.slice(-2000)}`));
       } else {
+        if (evtCtx) emit(evtType.runCompleted({ ...evtCtx, text: stdout, sessionId: null }));
         doResolve({ text: stdout });
       }
     });
@@ -812,6 +827,7 @@ export async function runCliAsync(
       clearTimeout(timer);
       if (idleTimer) clearTimeout(idleTimer);
       if (options.chatId != null) activeProcesses.delete(options.chatId);
+      if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: err.message, category: "cli" }));
       doReject(err);
     });
   });

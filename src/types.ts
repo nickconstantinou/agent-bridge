@@ -112,6 +112,10 @@ export interface CliOptions {
   onProgress?: (text: string) => void;
   chatId?: number | string;
   stdin?: string;
+  /** Context for BridgeEvent emission. When provided, runCliAsync emits lifecycle events. */
+  eventContext?: { runId: string; bot: "codex" | "antigravity" | "claude"; chatId: string; threadId?: string };
+  /** Called with each emitted BridgeEvent. Requires eventContext to be set. */
+  onEvent?: (event: import("./events/types.js").BridgeEvent) => void;
 }
 
 /**

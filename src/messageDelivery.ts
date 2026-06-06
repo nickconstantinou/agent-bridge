@@ -153,7 +153,6 @@ export async function sendMessageWithProgress({
   isAborted,
   runId,
   onEvent,
-  emitLifecycleEvents = true,
 }: {
   client: TelegramClient;
   kind: string;
@@ -164,10 +163,8 @@ export async function sendMessageWithProgress({
   isAborted?: () => boolean;
   runId?: string;
   onEvent?: (event: BridgeEvent) => void;
-  emitLifecycleEvents?: boolean;
 }): Promise<CliResult | null> {
   const { text: _ignored, ...rest } = body;
-  const useSyntheticEvents = emitLifecycleEvents && !!onEvent && !!runId;
 
   const sendTyping = async () => {
     try {
@@ -179,17 +176,6 @@ export async function sendMessageWithProgress({
 
   await sendTyping();
   const typingInterval = setInterval(sendTyping, 4500);
-
-  if (useSyntheticEvents) {
-    onEvent(eventType.runStarted({
-      runId,
-      bot: kind as any,
-      chatId: String(chatId),
-      command: "mock",
-      cwd: process.cwd(),
-      model: null,
-    }));
-  }
 
   let currentText = "";
   const originalOnProgress = onProgress;
@@ -218,33 +204,7 @@ export async function sendMessageWithProgress({
       sessionId: result?.sessionId,
     });
 
-    if (useSyntheticEvents) {
-      const completedEvent = eventType.runCompleted({
-        runId,
-        bot: kind as any,
-        chatId: String(chatId),
-        text: finalText,
-        sessionId: result?.sessionId || null,
-      });
-      onEvent(completedEvent);
-
-      const view = reduceEvents([
-        eventType.runStarted({
-          runId,
-          bot: kind as any,
-          chatId: String(chatId),
-          command: "mock",
-          cwd: process.cwd(),
-          model: null,
-        }),
-        completedEvent
-      ]);
-
-      const eventText = runViewToTelegramText(view);
-      await sendTelegramMessage({ client, kind, chatId, body: { ...body, text: eventText } });
-    } else {
-      await sendTelegramMessage({ client, kind, chatId, body: { ...body, text: finalText } });
-    }
+    await sendTelegramMessage({ client, kind, chatId, body: { ...body, text: finalText } });
 
     clearInterval(typingInterval);
     return { ...result, onProgress: wrappedOnProgress };

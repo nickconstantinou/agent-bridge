@@ -237,9 +237,6 @@ export class BridgeDb {
     runId: string,
     chatId: string,
     bot: string,
-    command: string,
-    cwd: string,
-    model: string | null
   ): void {
     const startedAt = new Date().toISOString();
     this.raw

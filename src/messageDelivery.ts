@@ -131,7 +131,7 @@ function validateParity({
     const eventText = runViewToTelegramText(view);
 
     const cleanExpected = toTelegramEntitiesText(expectedText).text;
-    const cleanEvent = toTelegramEntitiesText(eventText).text;
+    const cleanEvent = eventText;
 
     if (cleanEvent !== cleanExpected) {
       console.warn(

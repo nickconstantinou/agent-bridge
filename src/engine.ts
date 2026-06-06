@@ -392,7 +392,7 @@ export class BridgeEngine {
 
     try {
       if (useAsync) {
-        const { runId, eventContext, collect } = this._createEventContext(chatId, threadId);
+        const { runId, eventContext, collect, finalize } = this._createEventContext(chatId, threadId);
         await sendMessageWithProgress({
           client: this.client,
           kind: this._deliveryKind(),
@@ -401,12 +401,15 @@ export class BridgeEngine {
           isAborted: () => this.abortedChats.has(chatKey),
           runId,
           onEvent: (e) => collect(e),
+          emitLifecycleEvents: false,
           execution: (onProgress: (text: string) => void) =>
             this.executePromptAsync(prompt, sessionId, chatId, { message_thread_id: threadId }, onProgress, attachments, eventContext, runId, collect),
         });
+        finalize();
       } else {
-        const { runId, eventContext, collect } = this._createEventContext(chatId, threadId);
+        const { runId, eventContext, collect, finalize } = this._createEventContext(chatId, threadId);
         const result = await this.executePrompt(prompt, sessionId, chatId, { message_thread_id: threadId }, attachments, eventContext, runId, collect);
+        finalize();
         // For the sync path the final message is sent below; build a view from the
         // collected events so the new event-driven path drives the output text.
         if (result && result.text) {
@@ -441,6 +444,7 @@ export class BridgeEngine {
     runId: string;
     eventContext: CliOptions["eventContext"];
     collect: (e: BridgeEvent) => void;
+    finalize: () => void;
     events: BridgeEvent[];
   } {
     const runId = randomUUID();
@@ -451,10 +455,58 @@ export class BridgeEngine {
       threadId: threadId != null ? String(threadId) : undefined,
     };
     const events: BridgeEvent[] = [];
+    let seq = 0;
+    let runInserted = false;
+    let terminalPersisted = false;
+    let latestCompleted: Extract<BridgeEvent, { type: "run.completed" }> | null = null;
+
+    const persistRunStart = (e: Extract<BridgeEvent, { type: "run.started" }>) => {
+      if (runInserted) return;
+      this.db.insertRun(e.runId, e.chatId, e.bot, e.command, e.cwd, e.model);
+      this.db.insertEvent(e.runId, ++seq, e.type, e.timestamp, e);
+      runInserted = true;
+    };
+
+    const persistTerminal = (e: Extract<BridgeEvent, { type: "run.completed" | "run.failed" | "run.cancelled" }>) => {
+      if (terminalPersisted) return;
+      if (!runInserted) {
+        this.db.insertRun(e.runId, e.chatId, e.bot, "", "", null);
+        runInserted = true;
+      }
+      this.db.insertEvent(e.runId, ++seq, e.type, e.timestamp, e);
+      if (e.type === "run.completed") {
+        this.db.updateRunCompleted(e.runId, e.text, e.sessionId);
+      } else if (e.type === "run.failed") {
+        this.db.updateRunFailed(e.runId, e.error);
+      } else {
+        this.db.updateRunCancelled(e.runId, e.reason);
+      }
+      terminalPersisted = true;
+    };
+
     const collect = (e: BridgeEvent) => {
       events.push(e);
+      try {
+        if (e.type === "run.started") {
+          persistRunStart(e);
+        } else if (e.type === "run.completed") {
+          latestCompleted = e;
+        } else if (e.type === "run.failed" || e.type === "run.cancelled") {
+          persistTerminal(e);
+        }
+      } catch (error) {
+        console.error(`[${this.kind}] event persistence failed`, error);
+      }
     };
-    return { runId, eventContext, collect, events };
+    const finalize = () => {
+      if (!latestCompleted) return;
+      try {
+        persistTerminal(latestCompleted);
+      } catch (error) {
+        console.error(`[${this.kind}] event finalization failed`, error);
+      }
+    };
+    return { runId, eventContext, collect, finalize, events };
   }
 
   private _drainQueue(chatKey: string): void {

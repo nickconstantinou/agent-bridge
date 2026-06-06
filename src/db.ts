@@ -19,6 +19,7 @@ export function openDb(dbPath: string): BridgeDb {
   }
   const raw = new Database(dbPath);
   raw.pragma("journal_mode = WAL");
+  raw.pragma("foreign_keys = ON");
   raw.exec(`
     CREATE TABLE IF NOT EXISTS bridge_state (
       chat_id               TEXT    PRIMARY KEY,

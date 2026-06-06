@@ -153,6 +153,7 @@ export async function sendMessageWithProgress({
   isAborted,
   runId,
   onEvent,
+  emitLifecycleEvents = true,
 }: {
   client: TelegramClient;
   kind: string;
@@ -163,8 +164,10 @@ export async function sendMessageWithProgress({
   isAborted?: () => boolean;
   runId?: string;
   onEvent?: (event: BridgeEvent) => void;
+  emitLifecycleEvents?: boolean;
 }): Promise<CliResult | null> {
   const { text: _ignored, ...rest } = body;
+  const useSyntheticEvents = emitLifecycleEvents && !!onEvent && !!runId;
 
   const sendTyping = async () => {
     try {
@@ -177,7 +180,7 @@ export async function sendMessageWithProgress({
   await sendTyping();
   const typingInterval = setInterval(sendTyping, 4500);
 
-  if (onEvent && runId) {
+  if (useSyntheticEvents) {
     onEvent(eventType.runStarted({
       runId,
       bot: kind as any,
@@ -215,7 +218,7 @@ export async function sendMessageWithProgress({
       sessionId: result?.sessionId,
     });
 
-    if (onEvent && runId) {
+    if (useSyntheticEvents) {
       const completedEvent = eventType.runCompleted({
         runId,
         bot: kind as any,

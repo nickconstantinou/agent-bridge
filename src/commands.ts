@@ -121,10 +121,8 @@ export function handleCommand(
 export function buildTelegramCommands(kind: "codex" | "antigravity" | "claude"): Array<{ command: string; description: string }> {
   const commands = [
     { command: "models", description: "Switch model" },
-    { command: "skills", description: "List bundled skills" },
     { command: "reset",  description: "Clear current session" },
     { command: "stop",   description: "Abort running execution" },
-    { command: "memory", description: "Run memory smoke test" },
   ];
 
   if (kind === "codex") {

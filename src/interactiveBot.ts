@@ -48,8 +48,9 @@ export function setUserCliPreference(db: BridgeDb, chatId: string, cli: CliKind)
 // ── Command parsing ───────────────────────────────────────────────────────────
 
 type SwitchOk = { ok: true; cli: CliKind };
+type SwitchMenu = { ok: "menu" };
 type SwitchErr = { ok: false; error: string };
-type SwitchResult = SwitchOk | SwitchErr;
+export type SwitchResult = SwitchOk | SwitchMenu | SwitchErr;
 
 /** Returns a SwitchResult for /switch commands, null for anything else. */
 export function parseCliSwitchCommand(text: string): SwitchResult | null {
@@ -60,15 +61,20 @@ export function parseCliSwitchCommand(text: string): SwitchResult | null {
   if (parts[0] !== "/switch") return null;
 
   const arg = parts[1];
-  if (!arg) {
-    return { ok: false, error: `Specify a CLI: /switch ${VALID_CLI_KINDS.join(" | ")}` };
-  }
+  if (!arg) return { ok: "menu" };
 
   if (isValidCliKind(arg)) return { ok: true, cli: arg };
   return {
     ok: false,
     error: `Unknown CLI "${arg}". Available: ${VALID_CLI_KINDS.join(", ")}`,
   };
+}
+
+/** Parses a cli:* callback_data string into a CliKind, or returns null. */
+export function handleCliSwitchCallback(data: string): CliKind | null {
+  if (!data.startsWith("cli:")) return null;
+  const kind = data.slice(4);
+  return isValidCliKind(kind) ? kind : null;
 }
 
 export function buildCliStatusText(activeCli: CliKind): string {
@@ -78,6 +84,15 @@ export function buildCliStatusText(activeCli: CliKind): string {
     `Available: ${VALID_CLI_KINDS.join(", ")}`,
     `Switch with: /switch ${others[0]}`,
   ].join("\n");
+}
+
+export function buildCliKeyboard(activeCli: CliKind): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+  return {
+    inline_keyboard: VALID_CLI_KINDS.map((cli) => [{
+      text: cli === activeCli ? `✓ ${cli}` : cli,
+      callback_data: `cli:${cli}`,
+    }]),
+  };
 }
 
 // ── Telegram command registration ─────────────────────────────────────────────

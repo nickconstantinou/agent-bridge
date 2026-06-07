@@ -25,6 +25,8 @@ import {
   setUserCliPreference,
   parseCliSwitchCommand,
   buildCliStatusText,
+  buildCliKeyboard,
+  handleCliSwitchCallback,
   buildInteractiveCommands,
   resolveUpdateChatKey,
   isAuthorizedInteractiveUpdate,
@@ -88,7 +90,7 @@ const soulContext = loadSoulContext({
 if (soulContext) console.log(`[interactive] loaded SOUL.md context (${soulContext.length} chars)`);
 
 const db = openDb(dbPath);
-const client = new TelegramClient(token, fetch, 30_000);
+const client = new TelegramClient(token, fetch, 45_000);
 
 // Build one engine per CLI kind — none polls; we dispatch handleUpdate manually.
 const CLI_KINDS: CliKind[] = ["codex", "claude", "antigravity"];
@@ -160,21 +162,57 @@ for (;;) {
 
           if (rawText.toLowerCase() === "/cli") {
             const pref = getUserCliPreference(db, chatKey);
-            await sendTelegramMessage({ client, kind: "interactive", chatId, body: { text: buildCliStatusText(pref) } });
+            await sendTelegramMessage({ client, kind: "interactive", chatId, body: {
+              text: buildCliStatusText(pref),
+              reply_markup: buildCliKeyboard(pref),
+            } });
             continue;
           }
 
           const switchResult = parseCliSwitchCommand(rawText);
           if (switchResult !== null) {
-            if (switchResult.ok) {
+            if (switchResult.ok === true) {
               setUserCliPreference(db, chatKey, switchResult.cli);
               await client.setMyCommands({ commands: buildInteractiveCommands(switchResult.cli) })
                 .catch((err: unknown) => console.warn("[interactive] setMyCommands failed after /switch", err));
               await sendTelegramMessage({ client, kind: "interactive", chatId, body: {
                 text: `Switched to **${switchResult.cli}**.\n${buildCliStatusText(switchResult.cli)}`,
+                reply_markup: buildCliKeyboard(switchResult.cli),
+              } });
+            } else if (switchResult.ok === "menu") {
+              const pref = getUserCliPreference(db, chatKey);
+              await sendTelegramMessage({ client, kind: "interactive", chatId, body: {
+                text: buildCliStatusText(pref),
+                reply_markup: buildCliKeyboard(pref),
               } });
             } else {
               await sendTelegramMessage({ client, kind: "interactive", chatId, body: { text: switchResult.error } });
+            }
+            continue;
+          }
+        }
+
+        // Handle cli:* callback taps (CLI switch from inline keyboard)
+        const cbq = (update as TelegramUpdate).callback_query;
+        if (cbq?.data) {
+          const newCli = handleCliSwitchCallback(cbq.data);
+          if (newCli !== null) {
+            const chatId = cbq.message?.chat?.id;
+            const messageId = cbq.message?.message_id;
+            const chatKey = chatId != null ? String(chatId) : null;
+            if (chatKey) setUserCliPreference(db, chatKey, newCli);
+            await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `Switched to ${newCli}` });
+            if (chatId && messageId) {
+              await client.editMessageText({
+                chat_id: chatId,
+                message_id: messageId,
+                text: buildCliStatusText(newCli),
+                reply_markup: buildCliKeyboard(newCli),
+              });
+            }
+            if (chatKey) {
+              await client.setMyCommands({ commands: buildInteractiveCommands(newCli) })
+                .catch((err: unknown) => console.warn("[interactive] setMyCommands failed after cli callback", err));
             }
             continue;
           }

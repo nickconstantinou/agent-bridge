@@ -32,9 +32,11 @@ const allowedUserIds = new Set(
 );
 
 const workerEnabled = process.env.WORKER_ENABLED === "true";
+const cliChain = (process.env.WORKER_CLI_CHAIN || "codex,claude,antigravity")
+  .split(",").map(s => s.trim()).filter(Boolean);
 const dbPath = process.env.DB_PATH || `${getBridgeProjectDir()}/.data/bridge.sqlite`;
 const db = openDb(dbPath);
-const client = new TelegramClient(token, fetch, 30_000);
+const client = new TelegramClient(token, fetch, 45_000);
 
 await client.setMyCommands({ commands: buildWorkerCommands() })
   .catch((err: unknown) => console.warn("[worker-bot] setMyCommands failed", err));
@@ -59,9 +61,12 @@ for (;;) {
         const rawText = (message.text || "").trim();
         if (!isWorkerCommand(rawText)) continue;
 
-        const result = handleWorkerCommand(rawText, { workerEnabled });
+        const result = handleWorkerCommand(rawText, { workerEnabled, cliChain });
         if (result) {
-          await sendTelegramMessage({ client, kind: "worker-bot", chatId: message.chat.id, body: { text: result.text } });
+          const body = result.kind === "keyboard_message"
+            ? { text: result.text, reply_markup: result.reply_markup }
+            : { text: result.text };
+          await sendTelegramMessage({ client, kind: "worker-bot", chatId: message.chat.id, body });
         }
       } catch (err) {
         console.error("[worker-bot] update handling failed", err);

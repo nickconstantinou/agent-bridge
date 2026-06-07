@@ -9,7 +9,6 @@ import type { TelegramUpdate } from "../src/types.js";
 import {
   getUserCliPreference,
   setUserCliPreference,
-  parseCliSwitchCommand,
   buildCliStatusText,
   buildCliKeyboard,
   handleCliSwitchCallback,
@@ -48,40 +47,6 @@ describe("getUserCliPreference", () => {
   });
 });
 
-describe("parseCliSwitchCommand", () => {
-  it("parses /switch codex", () => {
-    expect(parseCliSwitchCommand("/switch codex")).toEqual({ ok: true, cli: "codex" });
-  });
-
-  it("parses /switch claude", () => {
-    expect(parseCliSwitchCommand("/switch claude")).toEqual({ ok: true, cli: "claude" });
-  });
-
-  it("parses /switch antigravity", () => {
-    expect(parseCliSwitchCommand("/switch antigravity")).toEqual({ ok: true, cli: "antigravity" });
-  });
-
-  it("is case-insensitive", () => {
-    expect(parseCliSwitchCommand("/switch Claude")).toEqual({ ok: true, cli: "claude" });
-  });
-
-  it("returns error for unknown CLI", () => {
-    const result = parseCliSwitchCommand("/switch gpt");
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain("codex");
-  });
-
-  it("returns menu result when no CLI specified", () => {
-    const result = parseCliSwitchCommand("/switch");
-    expect(result).toEqual({ ok: "menu" });
-  });
-
-  it("returns null for non-switch commands", () => {
-    expect(parseCliSwitchCommand("/cli")).toBeNull();
-    expect(parseCliSwitchCommand("/reset")).toBeNull();
-    expect(parseCliSwitchCommand("hello")).toBeNull();
-  });
-});
 
 describe("buildCliStatusText", () => {
   it("names the active CLI", () => {
@@ -203,9 +168,10 @@ describe("buildInteractiveCommands", () => {
     expect(cmds.some(c => c.command === "cli")).toBe(true);
   });
 
-  it("includes /switch command", () => {
-    const cmds = buildInteractiveCommands("codex");
-    expect(cmds.some(c => c.command === "switch")).toBe(true);
+  it("does not include /switch command — /cli handles switching via keyboard", () => {
+    for (const pref of VALID_CLI_KINDS) {
+      expect(buildInteractiveCommands(pref).some(c => c.command === "switch")).toBe(false);
+    }
   });
 
   it("includes underlying CLI commands (/models, /reset) but not skills or memory", () => {

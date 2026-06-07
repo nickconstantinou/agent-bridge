@@ -1,8 +1,8 @@
 /**
  * PURPOSE: Entry point for the unified interactive bot.
  * One Telegram bot polls for messages; each message is routed to the user's
- * preferred CLI engine (codex | claude | antigravity). /switch and /cli
- * commands change the active CLI without losing existing sessions.
+ * preferred CLI engine (codex | claude | antigravity). /cli shows the active
+ * CLI and an inline keyboard for one-tap switching.
  * NEIGHBORS: src/interactiveBot.ts, src/engine.ts, src/bridge.ts, src/db.ts
  */
 
@@ -22,7 +22,6 @@ import { isAuthorizedMessage, extractPromptText } from "./bridge.js";
 import {
   getUserCliPreference,
   setUserCliPreference,
-  parseCliSwitchCommand,
   buildCliStatusText,
   buildCliKeyboard,
   handleCliSwitchCallback,
@@ -137,7 +136,7 @@ for (;;) {
       try {
         if (!isAuthorizedInteractiveUpdate(update as TelegramUpdate, allowedUserIds)) continue;
 
-        // Handle /switch and /cli before engine dispatch
+        // Handle /cli before engine dispatch
         const message = (update as TelegramUpdate).message;
         if (message) {
           const rawText = (message.text || "").trim();
@@ -150,28 +149,6 @@ for (;;) {
               text: buildCliStatusText(pref),
               reply_markup: buildCliKeyboard(pref),
             } });
-            continue;
-          }
-
-          const switchResult = parseCliSwitchCommand(rawText);
-          if (switchResult !== null) {
-            if (switchResult.ok === true) {
-              setUserCliPreference(db, chatKey, switchResult.cli);
-              await client.setMyCommands({ commands: buildInteractiveCommands(switchResult.cli) })
-                .catch((err: unknown) => console.warn("[interactive] setMyCommands failed after /switch", err));
-              await sendTelegramMessage({ client, kind: "interactive", chatId, body: {
-                text: `Switched to **${switchResult.cli}**.\n${buildCliStatusText(switchResult.cli)}`,
-                reply_markup: buildCliKeyboard(switchResult.cli),
-              } });
-            } else if (switchResult.ok === "menu") {
-              const pref = getUserCliPreference(db, chatKey);
-              await sendTelegramMessage({ client, kind: "interactive", chatId, body: {
-                text: buildCliStatusText(pref),
-                reply_markup: buildCliKeyboard(pref),
-              } });
-            } else {
-              await sendTelegramMessage({ client, kind: "interactive", chatId, body: { text: switchResult.error } });
-            }
             continue;
           }
         }

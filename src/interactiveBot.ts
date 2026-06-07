@@ -45,31 +45,6 @@ export function setUserCliPreference(db: BridgeDb, chatId: string, cli: CliKind)
     .run(chatId, cli);
 }
 
-// ── Command parsing ───────────────────────────────────────────────────────────
-
-type SwitchOk = { ok: true; cli: CliKind };
-type SwitchMenu = { ok: "menu" };
-type SwitchErr = { ok: false; error: string };
-export type SwitchResult = SwitchOk | SwitchMenu | SwitchErr;
-
-/** Returns a SwitchResult for /switch commands, null for anything else. */
-export function parseCliSwitchCommand(text: string): SwitchResult | null {
-  const lower = text.trim().toLowerCase();
-  if (!lower.startsWith("/switch")) return null;
-
-  const parts = lower.split(/\s+/);
-  if (parts[0] !== "/switch") return null;
-
-  const arg = parts[1];
-  if (!arg) return { ok: "menu" };
-
-  if (isValidCliKind(arg)) return { ok: true, cli: arg };
-  return {
-    ok: false,
-    error: `Unknown CLI "${arg}". Available: ${VALID_CLI_KINDS.join(", ")}`,
-  };
-}
-
 /** Parses a cli:* callback_data string into a CliKind, or returns null. */
 export function handleCliSwitchCallback(data: string): CliKind | null {
   if (!data.startsWith("cli:")) return null;
@@ -100,8 +75,7 @@ export function buildCliKeyboard(activeCli: CliKind): { inline_keyboard: Array<A
 /** Returns the merged command list for setMyCommands: interactive commands + active CLI commands. */
 export function buildInteractiveCommands(pref: CliKind): Array<{ command: string; description: string }> {
   const interactiveOnly = [
-    { command: "cli",    description: "Show active CLI and available options" },
-    { command: "switch", description: "Switch CLI: /switch codex | claude | antigravity" },
+    { command: "cli", description: "Show active CLI and switch with one tap" },
   ];
   const cliKind = pref === "antigravity" ? "antigravity" : pref === "claude" ? "claude" : "codex";
   const cliCmds = buildTelegramCommands(cliKind);

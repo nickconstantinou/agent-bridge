@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import {
   handleWorkerCommand,
   isWorkerCommand,
+  buildWorkerCommands,
   type WorkerCommandResult,
 } from "../src/workerBot.js";
 
@@ -73,5 +74,27 @@ describe("handleWorkerCommand unknown", () => {
   it("returns null for unrecognised commands", () => {
     expect(handleWorkerCommand("/reset", { workerEnabled: false })).toBeNull();
     expect(handleWorkerCommand("hello", { workerEnabled: false })).toBeNull();
+  });
+});
+
+// ── buildWorkerCommands ───────────────────────────────────────────────────────
+
+describe("buildWorkerCommands", () => {
+  it("includes /jobs command", () => {
+    expect(buildWorkerCommands().some(c => c.command === "jobs")).toBe(true);
+  });
+
+  it("includes /issues command", () => {
+    expect(buildWorkerCommands().some(c => c.command === "issues")).toBe(true);
+  });
+
+  it("includes /review command", () => {
+    expect(buildWorkerCommands().some(c => c.command === "review")).toBe(true);
+  });
+
+  it("all entries have non-empty descriptions", () => {
+    for (const cmd of buildWorkerCommands()) {
+      expect(cmd.description.length).toBeGreaterThan(0);
+    }
   });
 });

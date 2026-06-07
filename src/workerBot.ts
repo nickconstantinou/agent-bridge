@@ -18,6 +18,14 @@ export type WorkerCommandResult = WorkerMessageResult;
 
 const WORKER_COMMANDS = new Set(["/jobs", "/issues", "/review"]);
 
+export function buildWorkerCommands(): Array<{ command: string; description: string }> {
+  return [
+    { command: "jobs",   description: "List active and pending jobs" },
+    { command: "issues", description: "List proposed work items" },
+    { command: "review", description: "Trigger a defect scan: /review [repo]" },
+  ];
+}
+
 function normalizeCommand(text: string): string {
   return text.trim().toLowerCase().split(/\s+/)[0].replace(/@\S+$/, "");
 }

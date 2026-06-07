@@ -5,6 +5,8 @@
  */
 
 import type { BridgeDb } from "./db.js";
+import type { TelegramUpdate } from "./types.js";
+import { buildTelegramCommands } from "./commands.js";
 
 export type CliKind = "codex" | "claude" | "antigravity";
 
@@ -76,6 +78,45 @@ export function buildCliStatusText(activeCli: CliKind): string {
     `Available: ${VALID_CLI_KINDS.join(", ")}`,
     `Switch with: /switch ${others[0]}`,
   ].join("\n");
+}
+
+// ── Telegram command registration ─────────────────────────────────────────────
+
+/** Returns the merged command list for setMyCommands: interactive commands + active CLI commands. */
+export function buildInteractiveCommands(pref: CliKind): Array<{ command: string; description: string }> {
+  const interactiveOnly = [
+    { command: "cli",    description: "Show active CLI and available options" },
+    { command: "switch", description: "Switch CLI: /switch codex | claude | antigravity" },
+  ];
+  const cliKind = pref === "antigravity" ? "antigravity" : pref === "claude" ? "claude" : "codex";
+  const cliCmds = buildTelegramCommands(cliKind);
+  const seen = new Set(interactiveOnly.map(c => c.command));
+  const merged = [...interactiveOnly];
+  for (const cmd of cliCmds) {
+    if (!seen.has(cmd.command)) {
+      seen.add(cmd.command);
+      merged.push(cmd);
+    }
+  }
+  return merged;
+}
+
+// ── Update routing helpers ────────────────────────────────────────────────────
+
+/** Returns the chat key (string chat_id) from a message or callback_query update, or null. */
+export function resolveUpdateChatKey(update: TelegramUpdate): string | null {
+  const chatId = update.message?.chat?.id ?? update.callback_query?.message?.chat?.id;
+  return chatId != null ? String(chatId) : null;
+}
+
+/** Returns true if the update's sender (message.from or callback_query.from) is in the allowed set. */
+export function isAuthorizedInteractiveUpdate(
+  update: TelegramUpdate,
+  allowedUserIds: ReadonlySet<string>,
+): boolean {
+  const userId = update.message?.from?.id ?? update.callback_query?.from?.id;
+  if (userId == null) return false;
+  return allowedUserIds.has(String(userId));
 }
 
 // ── Internal ──────────────────────────────────────────────────────────────────

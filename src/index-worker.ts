@@ -15,7 +15,7 @@ import {
 } from "./bridge.js";
 import { TelegramClient } from "./telegram.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
-import { handleWorkerCommand, isWorkerCommand } from "./workerBot.js";
+import { handleWorkerCommand, isWorkerCommand, buildWorkerCommands } from "./workerBot.js";
 import type { TelegramUpdate } from "./types.js";
 
 dotenv.config({
@@ -35,6 +35,9 @@ const workerEnabled = process.env.WORKER_ENABLED === "true";
 const dbPath = process.env.DB_PATH || `${getBridgeProjectDir()}/.data/bridge.sqlite`;
 const db = openDb(dbPath);
 const client = new TelegramClient(token, fetch, 30_000);
+
+await client.setMyCommands({ commands: buildWorkerCommands() })
+  .catch((err: unknown) => console.warn("[worker-bot] setMyCommands failed", err));
 
 console.log(`[worker-bot] starting (workerEnabled=${workerEnabled})`);
 

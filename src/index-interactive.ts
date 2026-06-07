@@ -25,6 +25,9 @@ import {
   setUserCliPreference,
   parseCliSwitchCommand,
   buildCliStatusText,
+  buildInteractiveCommands,
+  resolveUpdateChatKey,
+  isAuthorizedInteractiveUpdate,
   type CliKind,
 } from "./interactiveBot.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
@@ -127,6 +130,10 @@ for (const kind of CLI_KINDS) {
   killOrphanedCli(kind, config.bots[kind as BotKind].command);
 }
 
+const defaultPref = getUserCliPreference(db, "default");
+await client.setMyCommands({ commands: buildInteractiveCommands(defaultPref) })
+  .catch((err: unknown) => console.warn("[interactive] setMyCommands failed", err));
+
 console.log("[interactive] starting polling...");
 
 let offset = db.getLastUpdateId("codex"); // reuse existing offset tracking
@@ -142,9 +149,11 @@ for (;;) {
       db.setLastUpdateId(POLL_KIND, updateId);
 
       try {
+        if (!isAuthorizedInteractiveUpdate(update as TelegramUpdate, allowedUserIds)) continue;
+
         // Handle /switch and /cli before engine dispatch
         const message = (update as TelegramUpdate).message;
-        if (message && isAuthorizedMessage(message, allowedUserIds)) {
+        if (message) {
           const rawText = (message.text || "").trim();
           const chatId = message.chat.id;
           const chatKey = String(chatId);
@@ -159,6 +168,8 @@ for (;;) {
           if (switchResult !== null) {
             if (switchResult.ok) {
               setUserCliPreference(db, chatKey, switchResult.cli);
+              await client.setMyCommands({ commands: buildInteractiveCommands(switchResult.cli) })
+                .catch((err: unknown) => console.warn("[interactive] setMyCommands failed after /switch", err));
               await sendTelegramMessage({ client, kind: "interactive", chatId, body: {
                 text: `Switched to **${switchResult.cli}**.\n${buildCliStatusText(switchResult.cli)}`,
               } });
@@ -169,8 +180,8 @@ for (;;) {
           }
         }
 
-        // Route to the user's preferred engine
-        const chatKey = message ? String(message.chat.id) : null;
+        // Route to the user's preferred engine, resolved from message or callback_query
+        const chatKey = resolveUpdateChatKey(update as TelegramUpdate);
         const pref = chatKey ? getUserCliPreference(db, chatKey) : "codex";
         await engines[pref].handleUpdate(update as TelegramUpdate);
       } catch (err) {

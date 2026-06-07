@@ -935,7 +935,7 @@ describe("ServerPlugin — extended checks", () => {
       const check = report.checks.find(c => c.name === "pending-updates");
       expect(check).toBeDefined();
       expect(check?.status).toBe("amber");
-      expect(check?.message).toBe("12 update(s) available (3 security updates)");
+      expect(check?.message).toBe("12 update(s) available (3 security update(s))");
     } finally {
       delete (globalThis as any).__mockExistsSync;
       delete (globalThis as any).__mockExecSync;

@@ -337,6 +337,56 @@ export class ServerPlugin implements HealthPlugin {
     }
     checks.push({ name: "failed-services", status: svcStatus, message: svcMsg });
 
+    // 14. Pending updates
+    let updatesStatus: "green" | "amber" | "red" = "green";
+    let updatesMsg = "All packages up to date";
+    if (os.platform() === "linux") {
+      try {
+        const aptCheckPath = "/usr/lib/update-notifier/apt-check";
+        if (existsSync(aptCheckPath)) {
+          const output = execSync(aptCheckPath, { stdio: ["ignore", "ignore", "pipe"], timeout: 5000 }).toString().trim();
+          const match = output.match(/^(\d+);(\d+)/);
+          if (match) {
+            const totalUpdates = parseInt(match[1], 10);
+            const securityUpdates = parseInt(match[2], 10);
+            if (securityUpdates > 0) {
+              updatesStatus = "amber";
+              updatesMsg = `${totalUpdates} update(s) available (${securityUpdates} security update(s))`;
+            } else if (totalUpdates > 0) {
+              updatesMsg = `${totalUpdates} update(s) available (0 security updates)`;
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+    checks.push({ name: "pending-updates", status: updatesStatus, message: updatesMsg });
+
+    // 15. Reboot required
+    let rebootStatus: "green" | "amber" = "green";
+    let rebootMsg = "No reboot required";
+    if (existsSync("/var/run/reboot-required")) {
+      rebootStatus = "amber";
+      try {
+        let pkgList = "";
+        if (existsSync("/var/run/reboot-required.pkgs")) {
+          const pkgs = readFileSync("/var/run/reboot-required.pkgs", "utf8")
+            .trim()
+            .split("\n")
+            .map(p => p.trim())
+            .filter(Boolean);
+          if (pkgs.length > 0) {
+            pkgList = ` (packages: ${pkgs.join(", ")})`;
+          }
+        }
+        rebootMsg = `Reboot required by system updates${pkgList}`;
+      } catch {
+        rebootMsg = "Reboot required by system updates";
+      }
+    }
+    checks.push({ name: "reboot-required", status: rebootStatus, message: rebootMsg });
+
     // ── Overall Status ───────────────────────────────────────────────────────
 
     const worst = checks.some(c => c.status === "red") ? "red"

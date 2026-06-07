@@ -344,7 +344,7 @@ describe("buildCliInvocation — attachment injection", () => {
         outputDir: "/tmp/bridge-out/42",
       });
       const prompt = args[args.length - 1];
-      expect(prompt).toContain("If you generate any files, save them to /tmp/bridge-out/42");
+      expect(prompt).toContain("If you are explicitly asked to share or generate a file for the user, save it to /tmp/bridge-out/42");
     }
   });
 

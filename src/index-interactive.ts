@@ -7,7 +7,6 @@
  */
 
 import dotenv from "dotenv";
-import { execFileSync } from "node:child_process";
 import {
   validateBridgeConfig,
   getBridgeProjectDir,
@@ -116,21 +115,6 @@ const engines = Object.fromEntries(
     ];
   }),
 ) as Record<CliKind, BridgeEngine>;
-
-function killOrphanedCli(kind: CliKind, command: string): void {
-  const patterns: Record<CliKind, string> = {
-    codex: `${command} exec`,
-    antigravity: `${command} --dangerously-skip-permissions`,
-    claude: `${command} --print`,
-  };
-  try {
-    execFileSync("pkill", ["-f", patterns[kind]], { stdio: "ignore" });
-  } catch { /* no processes matched */ }
-}
-
-for (const kind of CLI_KINDS) {
-  killOrphanedCli(kind, config.bots[kind as BotKind].command);
-}
 
 const defaultPref = getUserCliPreference(db, "default");
 await client.setMyCommands({ commands: buildInteractiveCommands(defaultPref) })

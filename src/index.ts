@@ -5,7 +5,6 @@
  */
 
 import dotenv from "dotenv";
-import { execFileSync } from "node:child_process";
 import { basename } from "node:path";
 import {
   validateBridgeConfig,
@@ -82,28 +81,7 @@ if (soulContext) console.log(`[bridge] loaded SOUL.md context (${soulContext.len
 
 const db = openDb(config.dbPath);
 
-function killOrphanedCli(kind: BotKind, command: string): void {
-  const patterns: Partial<Record<BotKind, string>> = {
-    codex:       `${command} exec`,
-    antigravity: `${command} --dangerously-skip-permissions`,
-    claude:      `${command} --print`,
-  };
-  const pattern = patterns[kind];
-  if (!pattern) return;
-  try {
-    execFileSync("pkill", ["-f", pattern], { stdio: "ignore" });
-    console.log(`[${kind}] killed orphaned CLI processes matching: ${pattern}`);
-  } catch {
-    // pkill exits 1 when no processes matched — normal on a clean start
-  }
-}
-
-
 console.log("[bridge] starting bots...");
-
-for (const [kind, botConfig] of Object.entries(config.bots) as [BotKind, BotConfig][]) {
-  if (botConfig.token) killOrphanedCli(kind, botConfig.command);
-}
 
 const engines = (Object.entries(config.bots) as [BotKind, BotConfig][])
   .filter(([, bot]) => bot.token)

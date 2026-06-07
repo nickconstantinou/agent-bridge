@@ -8,6 +8,7 @@ import {
   isWorkerCommand,
   buildWorkerCommands,
   type WorkerCommandResult,
+  type WorkerKeyboardMessageResult,
 } from "../src/workerBot.js";
 
 describe("isWorkerCommand", () => {
@@ -77,6 +78,36 @@ describe("handleWorkerCommand unknown", () => {
   });
 });
 
+// ── /models keyboard ──────────────────────────────────────────────────────────
+
+describe("isWorkerCommand /models", () => {
+  it("recognises /models", () => expect(isWorkerCommand("/models")).toBe(true));
+});
+
+describe("handleWorkerCommand /models", () => {
+  it("returns a keyboard_message result", () => {
+    const result = handleWorkerCommand("/models", { workerEnabled: false, cliChain: ["codex", "claude", "antigravity"] });
+    expect(result).not.toBeNull();
+    expect(result!.kind).toBe("keyboard_message");
+  });
+
+  it("keyboard includes one button per CLI in the chain", () => {
+    const result = handleWorkerCommand("/models", { workerEnabled: false, cliChain: ["codex", "claude", "antigravity"] });
+    expect(result!.kind).toBe("keyboard_message");
+    const kb = result as WorkerKeyboardMessageResult;
+    const allButtons = kb.reply_markup.inline_keyboard.flat();
+    const texts = allButtons.map((b: any) => b.text);
+    expect(texts.some((t: string) => t.includes("codex"))).toBe(true);
+    expect(texts.some((t: string) => t.includes("claude"))).toBe(true);
+    expect(texts.some((t: string) => t.includes("antigravity"))).toBe(true);
+  });
+
+  it("uses default chain when cliChain not provided", () => {
+    const result = handleWorkerCommand("/models", { workerEnabled: false });
+    expect(result!.kind).toBe("keyboard_message");
+  });
+});
+
 // ── buildWorkerCommands ───────────────────────────────────────────────────────
 
 describe("buildWorkerCommands", () => {
@@ -96,5 +127,9 @@ describe("buildWorkerCommands", () => {
     for (const cmd of buildWorkerCommands()) {
       expect(cmd.description.length).toBeGreaterThan(0);
     }
+  });
+
+  it("includes /models command", () => {
+    expect(buildWorkerCommands().some(c => c.command === "models")).toBe(true);
   });
 });

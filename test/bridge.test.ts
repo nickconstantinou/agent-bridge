@@ -446,6 +446,38 @@ describe("agent bridge MVP", () => {
     });
   });
 
+  it("throws an error if antigravity output indicates a print mode timeout", () => {
+    const stdout = [
+      "***",
+      "Previous answer.",
+      "I will run the tests...",
+      "Error: timed out waiting for response",
+    ].join("\n");
+    expect(() =>
+      parseCliResult({
+        bot: "antigravity",
+        stdout,
+      }),
+    ).toThrow(/timed out/);
+  });
+
+  it("throws an error if antigravity log content indicates a print mode timeout", () => {
+    const stdout = [
+      "***",
+      "Previous answer.",
+      "I will run the tests...",
+    ].join("\n");
+    const logContent = "Print mode: timed out after 45 polls";
+    expect(() =>
+      parseCliResult({
+        bot: "antigravity",
+        stdout,
+        logContent,
+      }),
+    ).toThrow(/timed out/);
+  });
+
+
   it("parses antigravity output and strips thinking steps/HUD using the 🧠 Memory Loaded: separator", () => {
     const stdout = [
       "I am going to check the application directory to see if `.AGENTS.md` exists to follow the boot sequence protocol.",

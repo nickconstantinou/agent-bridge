@@ -3,7 +3,43 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { mkdirSync, rmSync, existsSync } from "node:fs";
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    existsSync: (path: string) => {
+      if ((globalThis as any).__mockExistsSync) {
+        const res = (globalThis as any).__mockExistsSync(path);
+        if (res !== undefined) return res;
+      }
+      return actual.existsSync(path);
+    },
+    readFileSync: (path: string, options: any) => {
+      if ((globalThis as any).__mockReadFileSync) {
+        const res = (globalThis as any).__mockReadFileSync(path, options);
+        if (res !== undefined) return res;
+      }
+      return actual.readFileSync(path, options);
+    }
+  };
+});
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execSync: (cmd: string, options: any) => {
+      if ((globalThis as any).__mockExecSync) {
+        const res = (globalThis as any).__mockExecSync(cmd, options);
+        if (res !== undefined) return res;
+      }
+      return actual.execSync(cmd, options);
+    }
+  };
+});
+
 // ── formatReport ─────────────────────────────────────────────────────────────
+
 
 describe("formatReport", () => {
   it("prefixes green status with checkmark emoji", async () => {
@@ -824,7 +860,136 @@ describe("ServerPlugin — extended checks", () => {
       delete process.env.HEALTH_MEMORY_AMBER_PCT;
     }
   });
+
+  it("includes pending-updates check and reports green when no updates", async () => {
+    (globalThis as any).__mockExistsSync = (path: string) => {
+      if (path === "/usr/lib/update-notifier/apt-check") return true;
+      if (path === "/var/run/reboot-required") return false;
+      return undefined;
+    };
+    (globalThis as any).__mockExecSync = (cmd: string) => {
+      if (cmd === "/usr/lib/update-notifier/apt-check") {
+        return Buffer.from("0;0");
+      }
+      return undefined;
+    };
+
+    try {
+      const { ServerPlugin } = await import("../src/health/plugins/server.js");
+      const plugin = new ServerPlugin();
+      const report = await plugin.check();
+      const check = report.checks.find(c => c.name === "pending-updates");
+      expect(check).toBeDefined();
+      expect(check?.status).toBe("green");
+      expect(check?.message).toBe("All packages up to date");
+    } finally {
+      delete (globalThis as any).__mockExistsSync;
+      delete (globalThis as any).__mockExecSync;
+    }
+  });
+
+  it("includes pending-updates check and reports green when only regular updates available", async () => {
+    (globalThis as any).__mockExistsSync = (path: string) => {
+      if (path === "/usr/lib/update-notifier/apt-check") return true;
+      if (path === "/var/run/reboot-required") return false;
+      return undefined;
+    };
+    (globalThis as any).__mockExecSync = (cmd: string) => {
+      if (cmd === "/usr/lib/update-notifier/apt-check") {
+        return Buffer.from("5;0");
+      }
+      return undefined;
+    };
+
+    try {
+      const { ServerPlugin } = await import("../src/health/plugins/server.js");
+      const plugin = new ServerPlugin();
+      const report = await plugin.check();
+      const check = report.checks.find(c => c.name === "pending-updates");
+      expect(check).toBeDefined();
+      expect(check?.status).toBe("green");
+      expect(check?.message).toBe("5 update(s) available (0 security updates)");
+    } finally {
+      delete (globalThis as any).__mockExistsSync;
+      delete (globalThis as any).__mockExecSync;
+    }
+  });
+
+  it("includes pending-updates check and reports amber when security updates available", async () => {
+    (globalThis as any).__mockExistsSync = (path: string) => {
+      if (path === "/usr/lib/update-notifier/apt-check") return true;
+      if (path === "/var/run/reboot-required") return false;
+      return undefined;
+    };
+    (globalThis as any).__mockExecSync = (cmd: string) => {
+      if (cmd === "/usr/lib/update-notifier/apt-check") {
+        return Buffer.from("12;3");
+      }
+      return undefined;
+    };
+
+    try {
+      const { ServerPlugin } = await import("../src/health/plugins/server.js");
+      const plugin = new ServerPlugin();
+      const report = await plugin.check();
+      const check = report.checks.find(c => c.name === "pending-updates");
+      expect(check).toBeDefined();
+      expect(check?.status).toBe("amber");
+      expect(check?.message).toBe("12 update(s) available (3 security updates)");
+    } finally {
+      delete (globalThis as any).__mockExistsSync;
+      delete (globalThis as any).__mockExecSync;
+    }
+  });
+
+  it("includes reboot-required check and reports green when not required", async () => {
+    (globalThis as any).__mockExistsSync = (path: string) => {
+      if (path === "/var/run/reboot-required") return false;
+      return undefined;
+    };
+
+    try {
+      const { ServerPlugin } = await import("../src/health/plugins/server.js");
+      const plugin = new ServerPlugin();
+      const report = await plugin.check();
+      const check = report.checks.find(c => c.name === "reboot-required");
+      expect(check).toBeDefined();
+      expect(check?.status).toBe("green");
+      expect(check?.message).toBe("No reboot required");
+    } finally {
+      delete (globalThis as any).__mockExistsSync;
+    }
+  });
+
+  it("includes reboot-required check and reports amber when reboot is required with package list", async () => {
+    (globalThis as any).__mockExistsSync = (path: string) => {
+      if (path === "/var/run/reboot-required") return true;
+      if (path === "/var/run/reboot-required.pkgs") return true;
+      return undefined;
+    };
+    (globalThis as any).__mockReadFileSync = (path: string) => {
+      if (path === "/var/run/reboot-required.pkgs") {
+        return "linux-image-generic\nlibc6\n";
+      }
+      return undefined;
+    };
+
+    try {
+      const { ServerPlugin } = await import("../src/health/plugins/server.js");
+      const plugin = new ServerPlugin();
+      const report = await plugin.check();
+      const check = report.checks.find(c => c.name === "reboot-required");
+      expect(check).toBeDefined();
+      expect(check?.status).toBe("amber");
+      expect(check?.message).toBe("Reboot required by system updates (packages: linux-image-generic, libc6)");
+    } finally {
+      delete (globalThis as any).__mockExistsSync;
+      delete (globalThis as any).__mockReadFileSync;
+    }
+  });
+
 });
+
 
 // ── HealthScheduler — suggest mode (runPlugin called directly) ────────────────
 

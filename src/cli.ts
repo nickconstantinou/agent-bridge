@@ -216,6 +216,9 @@ export function buildCliInvocation({
     if (sessionId) args.push("--conversation", sessionId);
     if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
     if (logFile) args.push("--log-file", logFile);
+    const timeouts = resolveTimeoutsForKind("antigravity");
+    const timeoutSeconds = Math.floor(timeouts.cliTimeoutMs / 1000);
+    args.push("--print-timeout", `${timeoutSeconds}s`);
     const annotatedPrompt = appendAttachmentAnnotations(
       wrapAntigravityPrompt(prompt, soulContext),
       attachments,
@@ -527,6 +530,9 @@ function extractAntigravityError(logContent: string | null | undefined): Error |
       const cleanMsg = deduplicateErrorString(rawMsg);
       return new Error(JSON.stringify({ type: "error", message: cleanMsg }));
     }
+    if (line.toLowerCase().includes("print mode: timed out") || line.toLowerCase().includes("timed out after")) {
+      return new Error(JSON.stringify({ type: "error", message: "Print mode timed out waiting for response" }));
+    }
   }
   return null;
 }
@@ -538,6 +544,9 @@ function parseAntigravityResult(stdout: string, logContent?: string | null): Cli
   }
 
   let text = stdout.trim();
+  if (text.toLowerCase().includes("timed out waiting for response") || text.toLowerCase().includes("error: timed out")) {
+    throw new Error(JSON.stringify({ type: "error", message: "Agy execution timed out waiting for response" }));
+  }
   const markerIndex = text.indexOf(ANTIGRAVITY_FINAL_RESPONSE_DELIMITER);
   if (markerIndex !== -1) {
     const lines = text.split(/\r?\n/);

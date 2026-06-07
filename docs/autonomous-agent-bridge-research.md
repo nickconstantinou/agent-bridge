@@ -2,7 +2,19 @@
 
 ## Status
 
-Research / architecture blueprint. No implementation has started from this document.
+**Phase 0 complete.** Both new bots are deployed and running. Phase 1 (durable work schema) is next.
+
+| Phase | Status |
+|---|---|
+| Phase 0 — bot infrastructure | ✅ Complete |
+| Phase 1 — durable work schema | Not started |
+| Phase 2 — job lease lifecycle | Not started |
+| Phase 3 — Telegram job commands | Not started |
+| Phase 4 — read-only defect scan | Not started |
+| Phase 5 — feature planning loop | Not started |
+| Phase 6 — GitHub issue creation | Not started |
+| Phase 7 — TDD implementation job | Not started |
+| Phase 8 — PR lifecycle + merge gate | Not started |
 
 This note reviews the proposed Agent Bridge evolution from a Telegram-driven CLI wrapper into an asynchronous, policy-gated engineering agent. It is intentionally specific enough for a later implementation agent to use, but it should be treated as a design document until each phase is converted into red-green-refactor work.
 
@@ -338,6 +350,7 @@ CREATE TABLE approvals (
                       'start_implementation',
                       'push_branch',
                       'open_pr',
+                      'merge_pr',
                       'restart_service',
                       'cancel_job'
                     )),
@@ -380,6 +393,29 @@ CREATE TABLE github_links (
 
 This avoids overloading the internal work item identity with GitHub issue numbers.
 
+### `feature_plans`
+
+```sql
+CREATE TABLE feature_plans (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_id    TEXT NOT NULL,
+  user_id    TEXT NOT NULL,
+  status     TEXT NOT NULL CHECK (status IN (
+               'drafting',
+               'ready',
+               'accepted',
+               'cancelled',
+               'expired'
+             )),
+  brief      TEXT NOT NULL,
+  scope_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+Used by the feature planning state machine (Slice 9). Keyed by `(chat_id, user_id)` for an active draft. Survives restarts. Stale rows with status `drafting` can be expired by the worker on startup.
+
 ## Worker Execution Model
 
 The worker should be boring:
@@ -410,6 +446,7 @@ Lease recovery:
 - A job with expired `lease_expires_at` can be reclaimed.
 - A worker updates `heartbeat_at` while a CLI child is alive.
 - On service startup, jobs stuck in `leased` or `running` with expired leases become `pending` if attempts remain, otherwise `failed`.
+- The worker systemd unit must use `KillMode=control-group` (consistent with the existing bridge units) so that a restart terminates any in-flight CLI child before the new worker instance starts. Without this, a restarting worker can claim a job that the previous worker's CLI child is still executing, causing duplicate work. Startup recovery handles the lease left by the killed process.
 
 Cancellation:
 
@@ -840,6 +877,15 @@ Secrets:
 ## Implementation Phases
 
 Every behavior-changing phase must follow red-green-refactor with separate test and implementation commits.
+
+## Document Navigation
+
+This document contains two complementary views of the implementation:
+
+- **Detailed Agent Handoff Plan (Slices 1–17)** — prescriptive, one behavior per slice, with exact files, red tests, green implementation, and commit sequences. Use this as the primary implementation guide.
+- **Condensed Handoff Checklist (Phases 0–8)** — summary of the same work grouped at a higher level, suitable for progress tracking and checkpoint reviews. Phases map to slices roughly as: Phase 1 ≈ Slices 1–2, Phase 2 ≈ Slice 2, Phase 3 ≈ Slices 3–5, Phase 4 ≈ Slices 6–8, Phase 5 ≈ Slices 9–10, Phase 6 ≈ Slice 13, Phase 7 ≈ Slice 14, Phase 8 ≈ Slices 15–16.
+
+An implementing agent should follow the **Slices**. The **Phases** are for the human reviewer.
 
 ## Detailed Agent Handoff Plan
 
@@ -1910,6 +1956,8 @@ Feature flags:
 - `GITHUB_PR_WRITE_ENABLED`
 - `GITHUB_MERGE_APPROVAL_ENABLED`
 
+**Where flags live:** `.env.shared` for flags that apply to both the Telegram bot process and the worker process; `.env.worker` for worker-only flags. This is consistent with the existing bridge `.env.*` pattern. Never put flags in SQLite — they need to be readable before the DB is opened.
+
 Default all flags to off except local read-only rendering/tests until the corresponding phase is verified. Enabling PR writes should not enable merge; merge must remain gated by Telegram approval.
 
 ## Condensed Handoff Checklist
@@ -2111,16 +2159,100 @@ Green implementation:
 
 Do not run `git checkout -b`, `npm test`, push, PR creation, or merge from a generic worker loop. Implementation and PR lifecycle jobs need task-specific executors, repository policy checks, and a final Telegram merge gate because they carry source-control risk.
 
-### Phase 0: Research acceptance
+### Phase 0: New Bot Infrastructure (No Automation Yet) ✅
 
-No code.
+**Status: Complete.** Both bots deployed, enabled, and running. 506/506 tests passing.
 
-Deliverables:
+**What was shipped:**
+- `src/interactiveBot.ts` — CLI preference DB helpers, `/switch` inline keyboard (`buildCliKeyboard`), `handleCliSwitchCallback`, `buildInteractiveCommands`, `resolveUpdateChatKey`, `isAuthorizedInteractiveUpdate`
+- `src/workerBot.ts` — `/jobs`, `/issues`, `/review` stubs; `/models` shows fallback chain keyboard; `buildWorkerCommands`
+- `src/index-interactive.ts` — polls one bot token, routes to active CLI engine; `setMyCommands` at startup and after every `/switch`; `cli:*` callbacks edit message in-place
+- `src/index-worker.ts` — polls worker bot token, reads `WORKER_CLI_CHAIN` env var
+- `systemd/agent-bridge-interactive.service` + `systemd/agent-bridge-worker-bot.service` — both `KillMode=control-group`, `Restart=always`
+- `/etc/default/agent-bridge-interactive` + `/etc/default/agent-bridge-worker-bot` — tokens and env config
+- `/skills` and `/memory` removed from all bot command palettes (handlers remain)
 
-- agree on scope
-- agree on first repo target
-- agree on which bot kind the worker uses by default
-- decide whether GitHub issue creation is in phase 1 or deferred
+**Resolved decisions:**
+
+- Two new Telegram bots are being added alongside the existing three CLI bots (Codex, Claude, Antigravity). The existing bots remain operational and unchanged.
+- GitHub issue creation is deferred to Phase 6. Phases 1–5 create local work items only.
+- Default repository target: `agent-bridge` (the bridge itself is the first subject).
+- Agy auth is resolved — Agy is eligible for the worker fallback chain.
+
+**New bot 1: Autonomous Worker Bot**
+
+A new Telegram bot dedicated to background autonomous work. It has no direct CLI conversation. It receives job commands, queues work items, and reports outcomes.
+
+CLI fallback chain for job execution:
+
+```text
+codex → claude → antigravity
+```
+
+On each failure (rate limit, auth error, timeout): try next CLI in chain. On exhaustion: job stays `pending`, Telegram notification sent, user decides whether to retry or cancel.
+
+Fallback chain is configurable via `.env.worker`:
+
+```bash
+WORKER_BOT_TOKEN=<new-bot-token>
+WORKER_CLI_CHAIN=codex,claude,antigravity
+WORKER_DEFAULT_REPO=agent-bridge
+WORKER_ENABLED=false           # off until Phase 4
+WORK_QUEUE_ENABLED=true        # schema and commands active from Phase 1
+```
+
+Phase 0 scope for this bot: wire up the bot, register commands (`/jobs`, `/issues`, `/review`), confirm Telegram connectivity and command routing. No job execution yet — `WORKER_ENABLED=false`.
+
+**New bot 2: Unified Interactive Bot**
+
+A new Telegram bot that presents a single conversation surface but routes under the hood to a preferred CLI. Useful for evaluating the UX before committing to replacing the individual bots.
+
+CLI preference is per-user, stored in SQLite, and changeable mid-session:
+
+```text
+/switch codex     ← route all subsequent prompts to Codex
+/switch claude    ← route to Claude
+/switch agy       ← route to Antigravity
+/cli              ← show current active CLI and available options
+```
+
+Default preference order: `codex` first. On explicit `/switch`, the chosen CLI becomes the active one for that user's session (persisted across restarts).
+
+No automatic fallback in the interactive bot — a rate-limited CLI surfaces an error and prompts the user to `/switch` manually. Silent fallback in an interactive session loses conversation context, which is worse than a transparent error.
+
+Config in `.env.interactive`:
+
+```bash
+INTERACTIVE_BOT_TOKEN=<new-bot-token>
+INTERACTIVE_DEFAULT_CLI=codex
+```
+
+Phase 0 scope for this bot: wire up the bot, implement `/switch` and `/cli` commands, confirm CLI routing works for plain prompts, evaluate UX alongside the existing separate bots.
+
+**Phase 0 deliverables:**
+
+1. Register two new bots via BotFather, obtain tokens.
+2. Add `.env.worker` and `.env.interactive` with tokens and chain config.
+3. Add `src/workerBot.ts` and `src/interactiveBot.ts` entry points.
+4. Add `agent-bridge-worker-bot.service` and `agent-bridge-interactive-bot.service` systemd units with `KillMode=control-group`.
+5. Worker bot: receives `/jobs`, `/issues`, `/review` — acknowledges with job IDs, no execution yet.
+6. Interactive bot: receives any prompt, routes to active CLI, supports `/switch` and `/cli`.
+7. Add `user_cli_preference` table or column to SQLite for interactive bot state.
+8. Both services running and stable alongside the three existing bots.
+9. Evaluate interactive bot UX for one week before enabling `WORKER_ENABLED=true`.
+
+**Open questions resolved by Phase 0:**
+
+- Which bot handles worker jobs? → Dedicated worker bot with fallback chain. Not the interactive bot.
+- Single bot or multiple? → Additive for now: two new bots plus existing three.
+- Default CLI for worker? → Codex first.
+- GitHub issue creation in scope for early phases? → No. Deferred to Phase 6.
+
+**Still open:**
+
+- Default open PR cap per repository (suggested: 3).
+- Daily new PR cap per repository (suggested: 3).
+- Stale PR threshold before digest (suggested: 48 hours).
 
 ### Phase 1: Durable work schema
 
@@ -2342,13 +2474,13 @@ Before enabling scheduled autonomous scans:
 
 ## Open Questions
 
-1. Should the worker use the Codex bot by default, or inherit from the chat/bot that created the work item?
-2. Should defect scans open local-only work items first, or create GitHub issues automatically when confidence and policy thresholds pass?
-3. Should scheduled scans run all repositories or only an allowlisted default repository?
-4. What are the default open PR cap and daily PR creation cap per repository?
-5. How much local artifact retention is acceptable before cleanup is required?
-6. Should GitHub label sync be one-way from local state to GitHub, or bidirectional?
-7. Should implementation jobs run in separate worktrees to avoid colliding with interactive bridge work?
+1. ~~Should the worker use the Codex bot by default, or inherit from the chat/bot that created the work item?~~ **Resolved: dedicated worker bot with fallback chain `codex → claude → antigravity`. Not inherited from the interactive session.**
+2. Should defect scans open local-only work items first, or create GitHub issues automatically when confidence and policy thresholds pass? **Working assumption: local-only until Phase 6. GitHub issue creation requires explicit policy enablement.**
+3. ~~Should scheduled scans run all repositories or only an allowlisted default repository?~~ **Resolved: allowlisted only. Default repo: `agent-bridge`. Additional repos require explicit policy configuration.**
+4. What are the default open PR cap and daily PR creation cap per repository? **Working assumption: 3 open PRs, 3 new PRs per day. To be confirmed before Phase 8.**
+5. How much local artifact retention is acceptable before cleanup is required? **To be decided before Phase 4 worker activation.**
+6. Should GitHub label sync be one-way from local state to GitHub, or bidirectional? **To be decided before Phase 6.**
+7. ~~Should implementation jobs run in separate worktrees to avoid colliding with interactive bridge work?~~ **Resolved: yes.** Implementation jobs (Slice 14, `run_tdd_fix`) must always operate in an isolated git worktree (`git worktree add`), never in the main checkout. This prevents the dirty-state guard from blocking interactive bridge work and avoids branch conflicts when the user is also working in the repo. The worktree is created at job start and removed after the job completes or fails. The existing `superpowers:using-git-worktrees` skill documents the mechanics.
 
 ## Recommendation
 

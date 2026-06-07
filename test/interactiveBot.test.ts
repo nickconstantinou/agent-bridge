@@ -11,6 +11,8 @@ import {
   setUserCliPreference,
   parseCliSwitchCommand,
   buildCliStatusText,
+  buildCliKeyboard,
+  handleCliSwitchCallback,
   resolveUpdateChatKey,
   isAuthorizedInteractiveUpdate,
   buildInteractiveCommands,
@@ -69,9 +71,9 @@ describe("parseCliSwitchCommand", () => {
     if (!result.ok) expect(result.error).toContain("codex");
   });
 
-  it("returns error when no CLI specified", () => {
+  it("returns menu result when no CLI specified", () => {
     const result = parseCliSwitchCommand("/switch");
-    expect(result.ok).toBe(false);
+    expect(result).toEqual({ ok: "menu" });
   });
 
   it("returns null for non-switch commands", () => {
@@ -206,12 +208,13 @@ describe("buildInteractiveCommands", () => {
     expect(cmds.some(c => c.command === "switch")).toBe(true);
   });
 
-  it("includes underlying CLI commands (/models, /reset, /skills)", () => {
+  it("includes underlying CLI commands (/models, /reset) but not skills or memory", () => {
     const cmds = buildInteractiveCommands("claude");
     const names = cmds.map(c => c.command);
     expect(names).toContain("models");
     expect(names).toContain("reset");
-    expect(names).toContain("skills");
+    expect(names).not.toContain("skills");
+    expect(names).not.toContain("memory");
   });
 
   it("includes /usage only when pref is codex", () => {
@@ -226,5 +229,78 @@ describe("buildInteractiveCommands", () => {
       const names = buildInteractiveCommands(pref).map(c => c.command);
       expect(new Set(names).size).toBe(names.length);
     }
+  });
+});
+
+// ── buildCliKeyboard ──────────────────────────────────────────────────────────
+
+describe("buildCliKeyboard", () => {
+  it("returns an inline_keyboard with one row per CLI kind", () => {
+    const kb = buildCliKeyboard("codex");
+    expect(kb.inline_keyboard).toHaveLength(3);
+  });
+
+  it("marks the active CLI with a checkmark", () => {
+    const kb = buildCliKeyboard("claude");
+    const allButtons = kb.inline_keyboard.flat();
+    const active = allButtons.find((b) => b.text.includes("✓"));
+    expect(active).toBeDefined();
+    expect(active!.text).toContain("claude");
+  });
+
+  it("does not mark inactive CLIs with a checkmark", () => {
+    const kb = buildCliKeyboard("codex");
+    const allButtons = kb.inline_keyboard.flat();
+    const checked = allButtons.filter((b) => b.text.includes("✓"));
+    expect(checked).toHaveLength(1);
+    expect(checked[0].text).toContain("codex");
+  });
+
+  it("callback_data encodes the CLI kind for each button", () => {
+    const kb = buildCliKeyboard("codex");
+    const allButtons = kb.inline_keyboard.flat();
+    expect(allButtons.every((b) => b.callback_data.startsWith("cli:"))).toBe(true);
+    for (const cli of VALID_CLI_KINDS) {
+      expect(allButtons.some((b) => b.callback_data === `cli:${cli}`)).toBe(true);
+    }
+  });
+
+  it("all callback_data values are under 64 bytes", () => {
+    for (const pref of VALID_CLI_KINDS) {
+      const kb = buildCliKeyboard(pref);
+      for (const row of kb.inline_keyboard) {
+        for (const btn of row) {
+          expect(Buffer.byteLength(btn.callback_data, "utf8")).toBeLessThan(64);
+        }
+      }
+    }
+  });
+});
+
+// ── handleCliSwitchCallback ───────────────────────────────────────────────────
+
+describe("handleCliSwitchCallback", () => {
+  it("parses cli:codex → codex", () => {
+    expect(handleCliSwitchCallback("cli:codex")).toBe("codex");
+  });
+
+  it("parses cli:claude → claude", () => {
+    expect(handleCliSwitchCallback("cli:claude")).toBe("claude");
+  });
+
+  it("parses cli:antigravity → antigravity", () => {
+    expect(handleCliSwitchCallback("cli:antigravity")).toBe("antigravity");
+  });
+
+  it("returns null for unrecognized prefix", () => {
+    expect(handleCliSwitchCallback("model:codex:gpt4")).toBeNull();
+  });
+
+  it("returns null for cli: with unknown kind", () => {
+    expect(handleCliSwitchCallback("cli:gpt")).toBeNull();
+  });
+
+  it("returns null for empty string", () => {
+    expect(handleCliSwitchCallback("")).toBeNull();
   });
 });

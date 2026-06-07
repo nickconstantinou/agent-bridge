@@ -714,6 +714,18 @@ describe("Telegram command menu", () => {
     expect(buildTelegramCommands("antigravity").some((command: any) => command.command === "usage")).toBe(false);
     expect(buildTelegramCommands("claude").some((command: any) => command.command === "usage")).toBe(false);
   });
+
+  it("does not include /skills in the command palette", () => {
+    for (const kind of ["codex", "antigravity", "claude"] as const) {
+      expect(buildTelegramCommands(kind).some((c: any) => c.command === "skills")).toBe(false);
+    }
+  });
+
+  it("does not include /memory in the command palette", () => {
+    for (const kind of ["codex", "antigravity", "claude"] as const) {
+      expect(buildTelegramCommands(kind).some((c: any) => c.command === "memory")).toBe(false);
+    }
+  });
 });
 
 describe("handleCallback uses full model keyboard", () => {

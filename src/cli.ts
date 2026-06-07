@@ -113,8 +113,8 @@ export function shutdownCliProcesses(): number {
  * Builds the CLI invocation for a bot.
  */
 const ATTACHMENT_ANNOTATION_PREFIX = "[Attached file saved at: ";
-const OUTPUT_DIR_INSTRUCTION = "If you generate any files, save them to ";
-const OUTPUT_DIR_SUFFIX = " — the bridge handles delivery; omit file paths from your response.";
+const OUTPUT_DIR_INSTRUCTION = "If you are explicitly asked to share or generate a file for the user, save it to ";
+const OUTPUT_DIR_SUFFIX = " — the bridge handles delivery; omit file paths from your response. Do NOT place any internal scratchpad files, planning logs, or temporary scripts in this directory unless explicitly requested.";
 
 function appendAttachmentAnnotations(prompt: string, attachments: string[]): string {
   if (!attachments.length) return prompt;

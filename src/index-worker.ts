@@ -22,6 +22,9 @@ import { handleWorkerCommand, isWorkerCommand, buildWorkerCommands } from "./wor
 import { WorkerFallbackChain } from "./workerFallback.js";
 import { dispatchWithFallback } from "./workerDispatch.js";
 import { handleWorkerCallback } from "./workCallbacks.js";
+import { startJobExecutorLoop } from "./jobExecutorLoop.js";
+import { createDefectScanHandler } from "./handlers/defectScan.js";
+import { runCli } from "./cli.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 
 dotenv.config({
@@ -38,6 +41,8 @@ const allowedUserIds = new Set(
 );
 
 const workerEnabled = process.env.WORKER_ENABLED === "true";
+const jobPollIntervalMs = Number(process.env.WORKER_JOB_POLL_INTERVAL_MS || 10_000);
+const defectScanCommand = process.env.DEFECT_SCAN_CLI_COMMAND || "claude";
 const cliChain = (process.env.WORKER_CLI_CHAIN || "codex,claude,antigravity")
   .split(",").map(s => s.trim()).filter(Boolean);
 const dbPath = process.env.DB_PATH || `${getBridgeProjectDir()}/.data/bridge.sqlite`;
@@ -127,7 +132,27 @@ const engines = Object.fromEntries(
 await client.setMyCommands({ commands: buildWorkerCommands() })
   .catch((err: unknown) => console.warn("[worker-bot] setMyCommands failed", err));
 
-console.log(`[worker-bot] starting (workerEnabled=${workerEnabled}, cliChain=${cliChain.join(",")})`);
+// ── Background job executor loop ──────────────────────────────────────────────
+
+const stopJobLoop = startJobExecutorLoop({
+  db,
+  workerId: `worker-bot-${process.pid}`,
+  handlers: {
+    defect_scan: createDefectScanHandler({
+      runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd()),
+      command: defectScanCommand,
+    }),
+  },
+  sendMessage: async (chatId: number, text: string) => {
+    await sendTelegramMessage({ client, kind: "worker-bot", chatId, body: { text } });
+  },
+  intervalMs: jobPollIntervalMs,
+});
+
+process.once("SIGTERM", stopJobLoop);
+process.once("SIGINT", stopJobLoop);
+
+console.log(`[worker-bot] starting (workerEnabled=${workerEnabled}, cliChain=${cliChain.join(",")}, jobPollIntervalMs=${jobPollIntervalMs})`);
 
 let offset = 0;
 
@@ -156,7 +181,7 @@ for (;;) {
 
         // Worker commands (/jobs, /issues, /review, /models) take priority
         if (isWorkerCommand(rawText)) {
-          const result = handleWorkerCommand(rawText, { workerEnabled, cliChain, db });
+          const result = handleWorkerCommand(rawText, { workerEnabled, cliChain, db, chatId });
           if (result) {
             const body = result.kind === "keyboard_message"
               ? { text: result.text, reply_markup: result.reply_markup }

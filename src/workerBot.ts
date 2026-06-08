@@ -13,6 +13,7 @@ export interface WorkerCommandContext {
   workerEnabled: boolean;
   cliChain?: string[];
   db?: BridgeDb;
+  chatId?: number;
 }
 
 export interface WorkerMessageResult {
@@ -230,10 +231,13 @@ export function handleWorkerCommand(
       };
     }
 
+    const input: Record<string, unknown> = { repository: targetRepo };
+    if (ctx.chatId != null) input.notify_chat_id = ctx.chatId;
+
     const newJob = db.createWorkJob({
       task_type: "defect_scan",
       idempotency_key: `scan:${targetRepo}:${Date.now()}`,
-      input_json: { repository: targetRepo },
+      input_json: input,
     });
 
     return {

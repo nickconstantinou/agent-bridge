@@ -47,7 +47,7 @@ const chatId = process.env.HEALTH_MONITOR_CHAT_ID
 
 const healthEnabled = parseHealthEnabled(process.env);
 const cadenceSeconds = parseCadenceSeconds(process.env);
-const autonomy = (process.env.HEALTH_MONITOR_AUTONOMY as "report" | "suggest" | "auto") || "report";
+const autonomy = (process.env.HEALTH_MONITOR_AUTONOMY as "report" | "suggest") || "report";
 const sessionTtlSeconds = Number(process.env.HEALTH_SESSION_TTL_SECONDS) > 0
   ? Number(process.env.HEALTH_SESSION_TTL_SECONDS)
   : 1800;

@@ -28,7 +28,7 @@ export class SelfPlugin implements HealthPlugin {
 
     if (dbExists) {
       try {
-        this.db.getLastUpdateId("codex");
+        this.db.raw.prepare("SELECT 1").get();
         checks.push({ name: "db-read", status: "green", message: "DB read OK" });
       } catch (e) {
         checks.push({ name: "db-read", status: "red", message: `DB error: ${(e as Error).message}` });

@@ -1,10 +1,8 @@
 import Database from "better-sqlite3";
 import { HealthContextStore } from "./context.js";
 import { formatReport, formatSuggestion } from "./reporter.js";
-import type { HealthReport } from "./types.js";
+import type { HealthReport, AutonomyLevel } from "./types.js";
 import type { BotKind } from "../types.js";
-
-type AutonomyLevel = "report" | "suggest" | "auto";
 
 type SuggestFn = (
   report: HealthReport,

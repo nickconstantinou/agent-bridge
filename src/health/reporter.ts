@@ -20,7 +20,7 @@ export function formatReport(report: HealthReport): string {
   
   const lines: string[] = [
     header,
-    `_${report.summary}_`,
+    `_${report.summary.replace(/_/g, "\\_")}_`,
     divider,
   ];
 

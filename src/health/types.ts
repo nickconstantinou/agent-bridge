@@ -15,7 +15,7 @@ export interface HealthReport {
   timestamp: string;
 }
 
-export type AutonomyLevel = "report" | "suggest" | "auto";
+export type AutonomyLevel = "report" | "suggest";
 
 export interface HealthPlugin {
   name: string;
@@ -27,7 +27,6 @@ export interface HealthConfig {
   cadenceSeconds: number;
   autonomy: AutonomyLevel;
   silenceOnGreen?: boolean;
-  reportChatId?: string;
   suggestBot?: "codex" | "antigravity" | "claude";
   suggestBotConfig?: { command: string; modelPreference: string[] };
 }

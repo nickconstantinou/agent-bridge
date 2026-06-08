@@ -203,5 +203,21 @@ describe("worker commands with DB (Slice 4)", () => {
     expect(result!.text).toContain("already in progress");
     expect(db.listWorkJobs().length).toBe(1);
   });
+
+  it("stores notify_chat_id in input_json when chatId is provided in context", () => {
+    handleWorkerCommand("/review", { workerEnabled: true, db, chatId: 99999 });
+    const jobs = db.listWorkJobs();
+    expect(jobs.length).toBe(1);
+    const input = JSON.parse(jobs[0].input_json);
+    expect(input.notify_chat_id).toBe(99999);
+  });
+
+  it("omits notify_chat_id when no chatId is provided", () => {
+    handleWorkerCommand("/review", { workerEnabled: true, db });
+    const jobs = db.listWorkJobs();
+    expect(jobs.length).toBe(1);
+    const input = JSON.parse(jobs[0].input_json);
+    expect(input.notify_chat_id).toBeUndefined();
+  });
 });
 

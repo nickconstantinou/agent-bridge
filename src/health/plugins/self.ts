@@ -1,4 +1,5 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { execSync } from "node:child_process";
 import { getHeapStatistics } from "node:v8";
 import type { HealthPlugin, HealthReport, CheckResult } from "../types.js";
@@ -147,28 +148,41 @@ export class SelfPlugin implements HealthPlugin {
     }
 
     // Agent CLI update checks
-    let outdatedStdout = "";
+    let outdatedStdout: string | null = null;
+    let commandSuccess = false;
     try {
       outdatedStdout = execSync("npm outdated --json", {
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 10000,
       }).toString();
+      commandSuccess = true;
     } catch (err: any) {
       if (err.stdout) {
         outdatedStdout = err.stdout.toString();
+        commandSuccess = true;
       }
     }
 
-    if (outdatedStdout.trim()) {
+    if (commandSuccess) {
       try {
-        const outdated = JSON.parse(outdatedStdout);
+        const outdated = outdatedStdout && outdatedStdout.trim()
+          ? JSON.parse(outdatedStdout)
+          : {};
         const cliNames = ["@anthropic-ai/claude-code", "@openai/codex"];
         for (const cli of cliNames) {
+          const checkName = `cli-update-${cli.split("/").pop()}`;
           if (outdated[cli]) {
             checks.push({
-              name: `cli-update-${cli.split("/").pop()}`,
+              name: checkName,
               status: "amber",
               message: `${cli} update available: ${outdated[cli].current} -> ${outdated[cli].latest}`,
+            });
+          } else {
+            const version = getInstalledVersion(cli);
+            checks.push({
+              name: checkName,
+              status: "green",
+              message: `${cli} is up to date${version ? ` (${version})` : ""}`,
             });
           }
         }
@@ -193,5 +207,21 @@ export class SelfPlugin implements HealthPlugin {
       summary,
       timestamp: new Date().toISOString(),
     };
+  }
+}
+
+function getInstalledVersion(packageName: string): string | null {
+  try {
+    const pkgPath = join(process.cwd(), "node_modules", packageName, "package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+    return pkg.version || null;
+  } catch {
+    try {
+      const pkgPath = join(import.meta.dirname, "..", "..", "..", "node_modules", packageName, "package.json");
+      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+      return pkg.version || null;
+    } catch {
+      return null;
+    }
   }
 }

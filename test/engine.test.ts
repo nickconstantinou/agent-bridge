@@ -373,4 +373,65 @@ describe("BridgeEngine", () => {
       expect(events.map((event) => JSON.parse(event.payload_json).type)).toEqual(["run.started", "run.completed"]);
     });
   });
+
+  describe("onCapacityExhausted hook", () => {
+    it("calls onCapacityExhausted when CLI throws a capacity error", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+
+      const runCli = vi.fn().mockRejectedValue(new Error("MODEL_CAPACITY_EXHAUSTED"));
+      const client = makeMockClient();
+      const exhaustedChats: string[] = [];
+
+      const engine = new BridgeEngine(
+        {
+          kind: "codex",
+          botConfig: { command: "codex", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          hooks: {
+            onCapacityExhausted: async (chatKey) => { exhaustedChats.push(chatKey); },
+          },
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(exhaustedChats).toHaveLength(1);
+      expect(exhaustedChats[0]).toBe("100");
+    });
+
+    it("does not call onCapacityExhausted for non-capacity errors", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+
+      const runCli = vi.fn().mockRejectedValue(new Error("some other error"));
+      const client = makeMockClient();
+      const exhaustedCalled = vi.fn();
+
+      const engine = new BridgeEngine(
+        {
+          kind: "codex",
+          botConfig: { command: "codex", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          hooks: {
+            onCapacityExhausted: exhaustedCalled,
+          },
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(exhaustedCalled).not.toHaveBeenCalled();
+    });
+  });
 });

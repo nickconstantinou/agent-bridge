@@ -5,11 +5,14 @@
  * NEIGHBORS: src/index-worker.ts, src/db.ts
  */
 
+import type { BridgeDb } from "./db.js";
+
 const DEFAULT_CLI_CHAIN = ["codex", "claude", "antigravity"];
 
 export interface WorkerCommandContext {
   workerEnabled: boolean;
   cliChain?: string[];
+  db?: BridgeDb;
 }
 
 export interface WorkerMessageResult {
@@ -25,7 +28,7 @@ export interface WorkerKeyboardMessageResult {
 
 export type WorkerCommandResult = WorkerMessageResult | WorkerKeyboardMessageResult;
 
-const WORKER_COMMANDS = new Set(["/jobs", "/issues", "/review", "/models"]);
+const WORKER_COMMANDS = new Set(["/jobs", "/issues", "/review", "/models", "/job", "/issue"]);
 
 export function buildWorkerCommands(): Array<{ command: string; description: string }> {
   return [
@@ -43,8 +46,9 @@ function normalizeCommand(text: string): string {
 export function isWorkerCommand(text: string): boolean {
   const cmd = normalizeCommand(text);
   if (WORKER_COMMANDS.has(cmd)) return true;
-  // /review with a repo arg
   if (text.trim().toLowerCase().startsWith("/review ")) return true;
+  if (text.trim().toLowerCase().startsWith("/job ")) return true;
+  if (text.trim().toLowerCase().startsWith("/issue ")) return true;
   return false;
 }
 
@@ -54,19 +58,134 @@ export function handleWorkerCommand(
 ): WorkerCommandResult | null {
   const trimmed = text.trim();
   const cmd = normalizeCommand(trimmed);
+  const db = ctx.db;
 
   if (cmd === "/jobs") {
     if (!ctx.workerEnabled) {
       return { kind: "message", text: "No jobs — worker is not yet active (WORKER_ENABLED=false).\nEnable it once Phase 1 schema is deployed." };
     }
-    return { kind: "message", text: "No jobs queued." };
+    if (!db) {
+      return { kind: "message", text: "No jobs queued." };
+    }
+    const jobs = db.listWorkJobs();
+    const activeJobs = jobs.filter(j => j.status === "pending" || j.status === "leased" || j.status === "running");
+    if (activeJobs.length === 0) {
+      return { kind: "message", text: "No active or pending jobs." };
+    }
+    let textOut = "📋 **Active and Pending Jobs**\n\n";
+    const inline_keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
+    for (const j of activeJobs) {
+      textOut += `• **Job #${j.id}** | \`${j.task_type}\` | status: \`${j.status}\` | attempts: ${j.attempt_count}/${j.max_attempts}\n`;
+      if (j.error) textOut += `  Error: \`${j.error}\`\n`;
+      inline_keyboard.push([{ text: `🚫 Cancel #${j.id}`, callback_data: `job:${j.id}:cncl` }]);
+    }
+    return { kind: "keyboard_message", text: textOut.trim(), reply_markup: { inline_keyboard } };
+  }
+
+  if (cmd === "/job") {
+    if (!ctx.workerEnabled) {
+      return { kind: "message", text: "Worker is not yet active (WORKER_ENABLED=false)." };
+    }
+    if (!db) {
+      return { kind: "message", text: "Database not available." };
+    }
+    const parts = trimmed.split(/\s+/);
+    const id = Number(parts[1]);
+    if (!parts[1] || !Number.isInteger(id) || id <= 0) {
+      return { kind: "message", text: "Invalid job ID." };
+    }
+    const job = db.getWorkJob(id);
+    if (!job) {
+      return { kind: "message", text: `Job ${id} not found.` };
+    }
+    let textOut = `📋 **Job Details**\n\n`;
+    textOut += `**Job ID**: ${job.id}\n`;
+    textOut += `**Type**: \`${job.task_type}\`\n`;
+    textOut += `**Status**: \`${job.status}\`\n`;
+    textOut += `**Bot**: \`${job.bot ?? "none"}\`\n`;
+    textOut += `**Lease Owner**: \`${job.lease_owner ?? "none"}\`\n`;
+    textOut += `**Lease Expires At**: \`${job.lease_expires_at ?? "none"}\`\n`;
+    textOut += `**Heartbeat At**: \`${job.heartbeat_at ?? "none"}\`\n`;
+    textOut += `**Attempts**: ${job.attempt_count}/${job.max_attempts}\n`;
+    textOut += `**Idempotency Key**: \`${job.idempotency_key}\`\n`;
+    if (job.error) textOut += `**Error**: \`${job.error}\`\n`;
+    if (job.result_json) textOut += `**Result**: \`${job.result_json.slice(0, 500)}\`\n`;
+    textOut += `**Created At**: ${job.created_at}\n`;
+    textOut += `**Updated At**: ${job.updated_at}\n`;
+
+    const inline_keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
+    if (job.status === "pending" || job.status === "leased" || job.status === "running") {
+      inline_keyboard.push([{ text: "🚫 Cancel Job", callback_data: `job:${job.id}:cncl` }]);
+    }
+    return { kind: "keyboard_message", text: textOut.trim(), reply_markup: { inline_keyboard } };
   }
 
   if (cmd === "/issues") {
     if (!ctx.workerEnabled) {
       return { kind: "message", text: "No issues — worker is not yet active (WORKER_ENABLED=false).\nEnable it once Phase 1 schema is deployed." };
     }
-    return { kind: "message", text: "No work items yet." };
+    if (!db) {
+      return { kind: "message", text: "No work items yet." };
+    }
+    const items = db.listWorkItems();
+    const proposed = items.filter(item => item.status === "proposed" || item.status === "waiting_approval");
+    if (proposed.length === 0) {
+      return { kind: "message", text: "No proposed work items." };
+    }
+    let textOut = "📦 **Proposed Work Items**\n\n";
+    const inline_keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
+    for (const item of proposed) {
+      const displayTitle = item.title.length > 50 ? item.title.slice(0, 47) + "..." : item.title;
+      textOut += `• **#${item.id}** | ${displayTitle} | status: \`${item.status}\`\n`;
+      inline_keyboard.push([
+        { text: `🔍 View #${item.id}`, callback_data: `wi:${item.id}:view` },
+        { text: `✅ Approve #${item.id}`, callback_data: `wi:${item.id}:appv` },
+        { text: `❌ Close #${item.id}`, callback_data: `wi:${item.id}:clse` }
+      ]);
+    }
+    return { kind: "keyboard_message", text: textOut.trim(), reply_markup: { inline_keyboard } };
+  }
+
+  if (cmd === "/issue") {
+    if (!ctx.workerEnabled) {
+      return { kind: "message", text: "Worker is not yet active (WORKER_ENABLED=false)." };
+    }
+    if (!db) {
+      return { kind: "message", text: "Database not available." };
+    }
+    const parts = trimmed.split(/\s+/);
+    const id = Number(parts[1]);
+    if (!parts[1] || !Number.isInteger(id) || id <= 0) {
+      return { kind: "message", text: "Invalid issue ID." };
+    }
+    const item = db.getWorkItem(id);
+    if (!item) {
+      return { kind: "message", text: `Work item ${id} not found.` };
+    }
+    let textOut = `📦 **Work Item Details**\n\n`;
+    textOut += `**Work Item ID**: ${item.id}\n`;
+    textOut += `**Type**: \`${item.kind}\`\n`;
+    textOut += `**Source**: \`${item.source}\`\n`;
+    textOut += `**Repository**: \`${item.repository ?? "none"}\`\n`;
+    textOut += `**Title**: ${item.title}\n`;
+    textOut += `**Status**: \`${item.status}\`\n`;
+    textOut += `**Priority**: \`${item.priority}\`\n`;
+    textOut += `**Created By**: ${item.created_by}\n`;
+    if (item.body) {
+      const displayBody = item.body.length > 1000 ? item.body.slice(0, 997) + "..." : item.body;
+      textOut += `**Body**:\n${displayBody}\n`;
+    }
+    textOut += `**Created At**: ${item.created_at}\n`;
+    textOut += `**Updated At**: ${item.updated_at}\n`;
+
+    const inline_keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
+    if (item.status === "proposed" || item.status === "waiting_approval") {
+      inline_keyboard.push([
+        { text: "✅ Approve", callback_data: `wi:${item.id}:appv` },
+        { text: "❌ Close/Reject", callback_data: `wi:${item.id}:clse` }
+      ]);
+    }
+    return { kind: "keyboard_message", text: textOut.trim(), reply_markup: { inline_keyboard } };
   }
 
   if (cmd === "/models") {
@@ -83,6 +202,7 @@ export function handleWorkerCommand(
   if (cmd === "/review") {
     const parts = trimmed.split(/\s+/);
     const repo = parts.slice(1).join(" ").trim() || null;
+    const targetRepo = repo || "agent-bridge";
     const repoNote = repo ? ` for **${repo}**` : "";
 
     if (!ctx.workerEnabled) {
@@ -91,9 +211,34 @@ export function handleWorkerCommand(
         text: `Review request${repoNote} received — worker is not yet active (WORKER_ENABLED=false).\nEnable it once Phase 1 schema is deployed.`,
       };
     }
+    if (!db) {
+      return {
+        kind: "message",
+        text: `Defect scan queued${repoNote}. Use /jobs to check progress.`,
+      };
+    }
+
+    const activeJobs = db.listWorkJobs().filter(
+      j => j.task_type === "defect_scan" &&
+           j.idempotency_key.startsWith(`scan:${targetRepo}:`) &&
+           (j.status === "pending" || j.status === "leased" || j.status === "running")
+    );
+    if (activeJobs.length > 0) {
+      return {
+        kind: "message",
+        text: `Defect scan already in progress for **${targetRepo}** (Job ID: ${activeJobs[0].id}). Use /job ${activeJobs[0].id} to view.`,
+      };
+    }
+
+    const newJob = db.createWorkJob({
+      task_type: "defect_scan",
+      idempotency_key: `scan:${targetRepo}:${Date.now()}`,
+      input_json: JSON.stringify({ repository: targetRepo }),
+    });
+
     return {
       kind: "message",
-      text: `Defect scan queued${repoNote}. Use /jobs to check progress.`,
+      text: `Defect scan queued for **${targetRepo}** (Job ID: ${newJob.id}). Use /jobs to check progress.`,
     };
   }
 

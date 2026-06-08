@@ -149,7 +149,7 @@ for (;;) {
 
         // Worker commands (/jobs, /issues, /review, /models) take priority
         if (isWorkerCommand(rawText)) {
-          const result = handleWorkerCommand(rawText, { workerEnabled, cliChain });
+          const result = handleWorkerCommand(rawText, { workerEnabled, cliChain, db });
           if (result) {
             const body = result.kind === "keyboard_message"
               ? { text: result.text, reply_markup: result.reply_markup }

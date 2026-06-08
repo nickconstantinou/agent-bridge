@@ -21,6 +21,7 @@ import { sendTelegramMessage } from "./messageDelivery.js";
 import { handleWorkerCommand, isWorkerCommand, buildWorkerCommands } from "./workerBot.js";
 import { WorkerFallbackChain } from "./workerFallback.js";
 import { dispatchWithFallback } from "./workerDispatch.js";
+import { handleWorkerCallback } from "./workCallbacks.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 
 dotenv.config({
@@ -132,13 +133,19 @@ let offset = 0;
 
 for (;;) {
   try {
-    const updates = await client.getUpdates({ offset, timeout: 30, allowed_updates: ["message"] });
+    const updates = await client.getUpdates({ offset, timeout: 30, allowed_updates: ["message", "callback_query"] });
 
     for (const update of (updates.result as any) ?? []) {
       const updateId: number = update.update_id;
       offset = updateId + 1;
 
       try {
+        const callbackQuery = update.callback_query;
+        if (callbackQuery) {
+          await handleWorkerCallback(callbackQuery, db, client, allowedUserIds);
+          continue;
+        }
+
         const message = (update as TelegramUpdate).message;
         if (!message) continue;
         if (!isAuthorizedMessage(message, allowedUserIds)) continue;

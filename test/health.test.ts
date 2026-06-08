@@ -874,7 +874,7 @@ describe("SelfPlugin — extended checks", () => {
     expect(codexCheck?.message).toContain("0.135.0 -> 0.137.0");
   });
 
-  it("does not report warnings when agent CLIs are up to date", async () => {
+  it("reports green status when agent CLIs are up to date", async () => {
     (globalThis as any).__mockExecSync = (cmd: string) => {
       if (cmd.includes("npm outdated --json")) {
         return ""; // status 0, empty output
@@ -887,10 +887,14 @@ describe("SelfPlugin — extended checks", () => {
     const report = await plugin.check();
 
     const claudeCheck = report.checks.find(c => c.name === "cli-update-claude-code");
-    expect(claudeCheck).toBeUndefined();
+    expect(claudeCheck).toBeDefined();
+    expect(claudeCheck?.status).toBe("green");
+    expect(claudeCheck?.message).toContain("up to date");
 
     const codexCheck = report.checks.find(c => c.name === "cli-update-codex");
-    expect(codexCheck).toBeUndefined();
+    expect(codexCheck).toBeDefined();
+    expect(codexCheck?.status).toBe("green");
+    expect(codexCheck?.message).toContain("up to date");
   });
 
   it("handles npm outdated errors gracefully without failing the entire plugin", async () => {

@@ -116,6 +116,16 @@ export function openDb(dbPath: string): BridgeDb {
       UNIQUE(repository, pr_number),
       FOREIGN KEY(work_item_id) REFERENCES work_items(id)
     );
+    CREATE TABLE IF NOT EXISTS feature_plans (
+      id         INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id    TEXT NOT NULL,
+      user_id    TEXT NOT NULL,
+      status     TEXT NOT NULL DEFAULT 'drafting' CHECK (status IN ('drafting','ready','accepted','cancelled','expired')),
+      brief      TEXT NOT NULL,
+      scope_json TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `);
   try {
     raw.exec(`ALTER TABLE bridge_state ADD COLUMN claude_session_id TEXT`);
@@ -560,6 +570,42 @@ export class BridgeDb {
     ).get(work_item_id, repository, pr_number, branch_name, commit_sha) as GithubLink;
   }
 
+  // ── Feature plans ────────────────────────────────────────────────────────
+
+  createFeaturePlan(input: { chatId: string; userId: string; brief: string }): FeaturePlan {
+    const { chatId, userId, brief } = input;
+    // Cancel any existing drafting plan for this chat before creating a new one
+    this.raw.prepare(
+      `UPDATE feature_plans SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+       WHERE chat_id = ? AND status = 'drafting'`
+    ).run(chatId);
+    return this.raw.prepare(
+      `INSERT INTO feature_plans (chat_id, user_id, brief) VALUES (?, ?, ?) RETURNING *`
+    ).get(chatId, userId, brief) as FeaturePlan;
+  }
+
+  getFeaturePlan(id: number): FeaturePlan | null {
+    return (this.raw.prepare(`SELECT * FROM feature_plans WHERE id = ?`).get(id) as FeaturePlan | undefined) ?? null;
+  }
+
+  getActivePlanForChat(chatId: string): FeaturePlan | null {
+    return (this.raw.prepare(
+      `SELECT * FROM feature_plans WHERE chat_id = ? AND status = 'drafting' ORDER BY id DESC LIMIT 1`
+    ).get(chatId) as FeaturePlan | undefined) ?? null;
+  }
+
+  updateFeaturePlanStatus(id: number, status: string): void {
+    this.raw.prepare(
+      `UPDATE feature_plans SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(status, id);
+  }
+
+  updateFeaturePlanScope(id: number, scope: object): void {
+    this.raw.prepare(
+      `UPDATE feature_plans SET scope_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(JSON.stringify(scope), id);
+  }
+
   close(): void {
     this.raw.close();
   }
@@ -623,6 +669,17 @@ export interface GithubLink {
   branch_name: string | null;
   commit_sha: string | null;
   remote_url: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FeaturePlan {
+  id: number;
+  chat_id: string;
+  user_id: string;
+  status: string;
+  brief: string;
+  scope_json: string;
   created_at: string;
   updated_at: string;
 }

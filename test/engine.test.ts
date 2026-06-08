@@ -231,6 +231,49 @@ describe("BridgeEngine", () => {
       expect(client.sendMessage).toHaveBeenCalledOnce();
       expect(client.sendMessage.mock.calls[0][0].text).toBe("Use the Agy-specific response.");
     });
+
+    it("retries Agy print timeouts once with a fresh conversation and recent context", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+
+      const capturedPrompts: string[] = [];
+      const capturedArgs: string[][] = [];
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedArgs.push(args);
+        capturedPrompts.push(args[args.length - 1]);
+        if (runCli.mock.calls.length === 1) return "***\nPrior answer from Agy";
+        if (runCli.mock.calls.length === 2) return "Error: timed out waiting for response";
+        return "***\nRecovered answer";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        {
+          kind: "antigravity",
+          botConfig: { command: "agy", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      db.setSession("100", "antigravity", "stale-conversation");
+
+      await engine.handleMessages([makeMessage("first question")]);
+      await engine.handleMessages([makeMessage("second question")]);
+
+      expect(runCli).toHaveBeenCalledTimes(3);
+      expect(db.getSession("100", "antigravity")).not.toBe("stale-conversation");
+      expect(capturedArgs[2]).not.toContain("--conversation");
+      expect(capturedPrompts[2]).toContain("[Context from previous conversation]");
+      expect(capturedPrompts[2]).toContain("User: first question");
+      expect(capturedPrompts[2]).toContain("Assistant: Prior answer from Agy");
+      expect(capturedPrompts[2]).toContain("User request:");
+      expect(capturedPrompts[2]).toContain("second question");
+      expect(client.sendMessage.mock.calls.at(-1)?.[0].text).toBe("Recovered answer");
+    });
   });
 
   describe("authorization", () => {

@@ -2,7 +2,7 @@
 
 ## Status
 
-**Phases 0–4 complete. Phase 5 in progress.** Both new bots are deployed and running. The SQLite schema, lease lifecycle, Telegram commands, callback handling, job executor loop, and defect scan handler are fully implemented and tested. `/review` now queues real defect_scan jobs that execute via the CLI and create proposed work_items.
+**Phases 0–5 complete. Phase 6 in progress.** Both new bots are deployed and running. The SQLite schema, lease lifecycle, Telegram commands, callback handling, job executor loop, and defect scan handler are fully implemented and tested. `/review` now queues real defect_scan jobs that execute via the CLI and create proposed work_items.
 
 | Phase | Status |
 |---|---|
@@ -11,8 +11,8 @@
 | Phase 2 — job lease lifecycle | ✅ Complete |
 | Phase 3 — Telegram job commands | ✅ Complete |
 | Phase 4 — read-only defect scan | ✅ Complete |
-| Phase 5 — feature planning loop | 🔄 In progress |
-| Phase 6 — GitHub issue creation | Not started |
+| Phase 5 — feature planning loop | ✅ Complete |
+| Phase 6 — GitHub issue creation | 🔄 In progress |
 | Phase 7 — TDD implementation job | Not started |
 | Phase 8 — PR lifecycle + merge gate | Not started |
 

@@ -24,6 +24,7 @@ import { dispatchWithFallback } from "./workerDispatch.js";
 import { handleWorkerCallback } from "./workCallbacks.js";
 import { startJobExecutorLoop } from "./jobExecutorLoop.js";
 import { createDefectScanHandler } from "./handlers/defectScan.js";
+import { createFeaturePlanHandler } from "./handlers/featurePlan.js";
 import { runCli } from "./cli.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 
@@ -142,6 +143,10 @@ const stopJobLoop = startJobExecutorLoop({
       runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd()),
       command: defectScanCommand,
     }),
+    feature_plan: createFeaturePlanHandler({
+      runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd()),
+      command: defectScanCommand,
+    }),
   },
   sendMessage: async (chatId: number, text: string) => {
     await sendTelegramMessage({ client, kind: "worker-bot", chatId, body: { text } });
@@ -178,10 +183,11 @@ for (;;) {
         const rawText = (message.text || "").trim();
         const chatId = message.chat.id;
         const chatKey = String(chatId);
+        const userId = message.from ? String(message.from.id) : "unknown";
 
-        // Worker commands (/jobs, /issues, /review, /models) take priority
+        // Worker commands (/jobs, /issues, /review, /feature, /models) take priority
         if (isWorkerCommand(rawText)) {
-          const result = handleWorkerCommand(rawText, { workerEnabled, cliChain, db, chatId });
+          const result = handleWorkerCommand(rawText, { workerEnabled, cliChain, db, chatId, userId });
           if (result) {
             const body = result.kind === "keyboard_message"
               ? { text: result.text, reply_markup: result.reply_markup }

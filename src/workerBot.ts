@@ -205,7 +205,12 @@ export function handleWorkerCommand(
     if (db && ctx.chatId != null) {
       const chatKey = String(ctx.chatId);
       const userId = ctx.userId ?? "unknown";
-      db.createFeaturePlan({ chatId: chatKey, userId, brief });
+      const plan = db.createFeaturePlan({ chatId: chatKey, userId, brief });
+      db.createWorkJob({
+        task_type: "feature_plan",
+        idempotency_key: `feature_plan:${plan.id}`,
+        input_json: { plan_id: plan.id, notify_chat_id: ctx.chatId },
+      });
       return {
         kind: "message",
         text: `Feature plan started: **${brief}**\n\nAnalysing the codebase and drafting an implementation plan. Use /issues to view the result when it's ready.`,

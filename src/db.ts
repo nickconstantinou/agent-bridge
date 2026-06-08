@@ -54,6 +54,68 @@ export function openDb(dbPath: string): BridgeDb {
       payload_json       TEXT    NOT NULL,
       FOREIGN KEY(run_id) REFERENCES bridge_runs(run_id)
     );
+    CREATE TABLE IF NOT EXISTS work_items (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind        TEXT NOT NULL CHECK (kind IN ('defect','feature','maintenance','research','ops')),
+      source      TEXT NOT NULL CHECK (source IN ('telegram','health','defect_scan','schedule','github','manual')),
+      repository  TEXT,
+      title       TEXT NOT NULL,
+      body        TEXT,
+      status      TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','needs_approval','approved','in_progress','blocked','resolved','closed','rejected')),
+      priority    TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('low','normal','high','urgent')),
+      created_by  TEXT NOT NULL,
+      created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS work_jobs (
+      id               INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_item_id     INTEGER,
+      task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check')),
+      status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','leased','running','waiting_approval','completed','failed','cancelled')),
+      bot              TEXT CHECK (bot IN ('codex','antigravity','claude')),
+      lease_owner      TEXT,
+      lease_expires_at TEXT,
+      heartbeat_at     TEXT,
+      attempt_count    INTEGER NOT NULL DEFAULT 0,
+      max_attempts     INTEGER NOT NULL DEFAULT 2,
+      idempotency_key  TEXT NOT NULL UNIQUE,
+      input_json       TEXT NOT NULL DEFAULT '{}',
+      result_json      TEXT,
+      error            TEXT,
+      created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(work_item_id) REFERENCES work_items(id)
+    );
+    CREATE TABLE IF NOT EXISTS approvals (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_item_id  INTEGER,
+      job_id        INTEGER,
+      approval_type TEXT NOT NULL CHECK (approval_type IN ('create_issue','start_implementation','push_branch','open_pr','merge_pr','restart_service','cancel_job')),
+      status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','expired')),
+      requested_by  TEXT NOT NULL,
+      requested_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      decided_by    TEXT,
+      decided_at    TEXT,
+      expires_at    TEXT,
+      payload_json  TEXT NOT NULL DEFAULT '{}',
+      FOREIGN KEY(work_item_id) REFERENCES work_items(id),
+      FOREIGN KEY(job_id) REFERENCES work_jobs(id)
+    );
+    CREATE TABLE IF NOT EXISTS github_links (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_item_id INTEGER NOT NULL,
+      repository   TEXT NOT NULL,
+      issue_number INTEGER,
+      pr_number    INTEGER,
+      branch_name  TEXT,
+      commit_sha   TEXT,
+      remote_url   TEXT,
+      created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(repository, issue_number),
+      UNIQUE(repository, pr_number),
+      FOREIGN KEY(work_item_id) REFERENCES work_items(id)
+    );
   `);
   try {
     raw.exec(`ALTER TABLE bridge_state ADD COLUMN claude_session_id TEXT`);
@@ -303,7 +365,260 @@ export class BridgeDb {
       .all(runId);
   }
 
+  // ── Work items ───────────────────────────────────────────────────────────
+
+  createWorkItem(input: {
+    kind: string;
+    source: string;
+    title: string;
+    created_by: string;
+    repository?: string;
+    body?: string;
+    priority?: string;
+  }): WorkItem {
+    const { kind, source, title, created_by, repository = null, body = null, priority = "normal" } = input;
+    const stmt = this.raw.prepare(
+      `INSERT INTO work_items (kind, source, title, created_by, repository, body, priority)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       RETURNING *`
+    );
+    return stmt.get(kind, source, title, created_by, repository, body, priority) as WorkItem;
+  }
+
+  getWorkItem(id: number): WorkItem | null {
+    return (this.raw.prepare(`SELECT * FROM work_items WHERE id = ?`).get(id) as WorkItem | undefined) ?? null;
+  }
+
+  listWorkItems(filter: { status?: string } = {}): WorkItem[] {
+    if (filter.status) {
+      return this.raw.prepare(`SELECT * FROM work_items WHERE status = ? ORDER BY id ASC`).all(filter.status) as WorkItem[];
+    }
+    return this.raw.prepare(`SELECT * FROM work_items ORDER BY id ASC`).all() as WorkItem[];
+  }
+
+  updateWorkItemStatus(id: number, status: string): void {
+    this.raw.prepare(
+      `UPDATE work_items SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(status, id);
+  }
+
+  // ── Work jobs ────────────────────────────────────────────────────────────
+
+  createWorkJob(input: {
+    task_type: string;
+    idempotency_key: string;
+    work_item_id?: number | null;
+    bot?: string;
+    input_json?: object;
+    max_attempts?: number;
+  }): WorkJob {
+    const { task_type, idempotency_key, work_item_id = null, bot = null, input_json = {}, max_attempts = 2 } = input;
+    // Return existing job if idempotency key already exists
+    const existing = this.raw.prepare(`SELECT * FROM work_jobs WHERE idempotency_key = ?`).get(idempotency_key) as WorkJob | undefined;
+    if (existing) return existing;
+    const stmt = this.raw.prepare(
+      `INSERT INTO work_jobs (task_type, idempotency_key, work_item_id, bot, input_json, max_attempts)
+       VALUES (?, ?, ?, ?, ?, ?)
+       RETURNING *`
+    );
+    return stmt.get(task_type, idempotency_key, work_item_id, bot, JSON.stringify(input_json), max_attempts) as WorkJob;
+  }
+
+  getWorkJob(id: number): WorkJob | null {
+    return (this.raw.prepare(`SELECT * FROM work_jobs WHERE id = ?`).get(id) as WorkJob | undefined) ?? null;
+  }
+
+  listWorkJobs(filter: { status?: string } = {}): WorkJob[] {
+    if (filter.status) {
+      return this.raw.prepare(`SELECT * FROM work_jobs WHERE status = ? ORDER BY id ASC`).all(filter.status) as WorkJob[];
+    }
+    return this.raw.prepare(`SELECT * FROM work_jobs ORDER BY id ASC`).all() as WorkJob[];
+  }
+
+  // ── Job lease lifecycle ──────────────────────────────────────────────────
+
+  claimNextWorkJob(workerId: string, now: string, leaseSeconds: number): WorkJob | null {
+    const expiresAt = new Date(new Date(now).getTime() + leaseSeconds * 1000).toISOString();
+    const job = this.raw.prepare(
+      `SELECT * FROM work_jobs
+       WHERE status = 'pending'
+          OR (status IN ('leased','running') AND lease_expires_at < ?)
+       ORDER BY created_at ASC
+       LIMIT 1`
+    ).get(now) as WorkJob | undefined;
+    if (!job) return null;
+    const { changes } = this.raw.prepare(
+      `UPDATE work_jobs
+       SET status = 'leased', lease_owner = ?, lease_expires_at = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?
+         AND (status = 'pending' OR (status IN ('leased','running') AND lease_expires_at < ?))`
+    ).run(workerId, expiresAt, job.id, now);
+    if (changes === 0) return null;
+    return this.raw.prepare(`SELECT * FROM work_jobs WHERE id = ?`).get(job.id) as WorkJob;
+  }
+
+  markWorkJobRunning(jobId: number, _workerId: string): void {
+    this.raw.prepare(
+      `UPDATE work_jobs SET status = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(jobId);
+  }
+
+  heartbeatWorkJob(jobId: number, _workerId: string, now: string): void {
+    this.raw.prepare(
+      `UPDATE work_jobs SET heartbeat_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(now, jobId);
+  }
+
+  completeWorkJob(jobId: number, result: object): void {
+    this.raw.prepare(
+      `UPDATE work_jobs
+       SET status = 'completed', lease_owner = NULL, lease_expires_at = NULL,
+           result_json = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    ).run(JSON.stringify(result), jobId);
+  }
+
+  failWorkJob(jobId: number, error: string): void {
+    const job = this.raw.prepare(`SELECT attempt_count, max_attempts FROM work_jobs WHERE id = ?`).get(jobId) as { attempt_count: number; max_attempts: number } | undefined;
+    if (!job) return;
+    const newCount = job.attempt_count + 1;
+    const nextStatus = newCount < job.max_attempts ? "pending" : "failed";
+    this.raw.prepare(
+      `UPDATE work_jobs
+       SET status = ?, attempt_count = ?, error = ?,
+           lease_owner = NULL, lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    ).run(nextStatus, newCount, error, jobId);
+  }
+
+  recoverExpiredWorkJobs(now: string): number {
+    const { changes } = this.raw.prepare(
+      `UPDATE work_jobs
+       SET status = CASE WHEN attempt_count < max_attempts THEN 'pending' ELSE 'failed' END,
+           lease_owner = NULL, lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE status IN ('leased','running') AND lease_expires_at < ?`
+    ).run(now);
+    return changes;
+  }
+
+  cancelWorkJob(jobId: number, _reason: string): void {
+    this.raw.prepare(
+      `UPDATE work_jobs SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(jobId);
+  }
+
+  // ── Approvals ────────────────────────────────────────────────────────────
+
+  createApproval(input: {
+    approval_type: string;
+    requested_by: string;
+    work_item_id?: number | null;
+    job_id?: number | null;
+    expires_at?: string | null;
+    payload?: object;
+  }): Approval {
+    const { approval_type, requested_by, work_item_id = null, job_id = null, expires_at = null, payload = {} } = input;
+    const stmt = this.raw.prepare(
+      `INSERT INTO approvals (approval_type, requested_by, work_item_id, job_id, expires_at, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?)
+       RETURNING *`
+    );
+    return stmt.get(approval_type, requested_by, work_item_id, job_id, expires_at, JSON.stringify(payload)) as Approval;
+  }
+
+  resolveApproval(id: number, decision: "approved" | "rejected", decidedBy: string): Approval {
+    // Only update if still pending — first decision sticks
+    this.raw.prepare(
+      `UPDATE approvals
+       SET status = ?, decided_by = ?, decided_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status = 'pending'`
+    ).run(decision, decidedBy, id);
+    return this.raw.prepare(`SELECT * FROM approvals WHERE id = ?`).get(id) as Approval;
+  }
+
+  // ── GitHub links ─────────────────────────────────────────────────────────
+
+  linkGithubIssue(input: { work_item_id: number; repository: string; issue_number: number }): GithubLink {
+    const { work_item_id, repository, issue_number } = input;
+    return this.raw.prepare(
+      `INSERT INTO github_links (work_item_id, repository, issue_number)
+       VALUES (?, ?, ?)
+       RETURNING *`
+    ).get(work_item_id, repository, issue_number) as GithubLink;
+  }
+
+  linkGithubPr(input: { work_item_id: number; repository: string; pr_number: number; branch_name?: string; commit_sha?: string }): GithubLink {
+    const { work_item_id, repository, pr_number, branch_name = null, commit_sha = null } = input;
+    return this.raw.prepare(
+      `INSERT INTO github_links (work_item_id, repository, pr_number, branch_name, commit_sha)
+       VALUES (?, ?, ?, ?, ?)
+       RETURNING *`
+    ).get(work_item_id, repository, pr_number, branch_name, commit_sha) as GithubLink;
+  }
+
   close(): void {
     this.raw.close();
   }
+}
+
+// ── Domain types ─────────────────────────────────────────────────────────────
+
+export interface WorkItem {
+  id: number;
+  kind: string;
+  source: string;
+  repository: string | null;
+  title: string;
+  body: string | null;
+  status: string;
+  priority: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkJob {
+  id: number;
+  work_item_id: number | null;
+  task_type: string;
+  status: string;
+  bot: string | null;
+  lease_owner: string | null;
+  lease_expires_at: string | null;
+  heartbeat_at: string | null;
+  attempt_count: number;
+  max_attempts: number;
+  idempotency_key: string;
+  input_json: string;
+  result_json: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Approval {
+  id: number;
+  work_item_id: number | null;
+  job_id: number | null;
+  approval_type: string;
+  status: string;
+  requested_by: string;
+  requested_at: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  expires_at: string | null;
+  payload_json: string;
+}
+
+export interface GithubLink {
+  id: number;
+  work_item_id: number;
+  repository: string;
+  issue_number: number | null;
+  pr_number: number | null;
+  branch_name: string | null;
+  commit_sha: string | null;
+  remote_url: string | null;
+  created_at: string;
+  updated_at: string;
 }

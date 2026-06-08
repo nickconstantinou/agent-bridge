@@ -146,6 +146,37 @@ export class SelfPlugin implements HealthPlugin {
       checks.push({ name: "service-restarts", status: restartStatus, message: restartMsg, value: totalRestarts });
     }
 
+    // Agent CLI update checks
+    let outdatedStdout = "";
+    try {
+      outdatedStdout = execSync("npm outdated --json", {
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 10000,
+      }).toString();
+    } catch (err: any) {
+      if (err.stdout) {
+        outdatedStdout = err.stdout.toString();
+      }
+    }
+
+    if (outdatedStdout.trim()) {
+      try {
+        const outdated = JSON.parse(outdatedStdout);
+        const cliNames = ["@anthropic-ai/claude-code", "@openai/codex"];
+        for (const cli of cliNames) {
+          if (outdated[cli]) {
+            checks.push({
+              name: `cli-update-${cli.split("/").pop()}`,
+              status: "amber",
+              message: `${cli} update available: ${outdated[cli].current} -> ${outdated[cli].latest}`,
+            });
+          }
+        }
+      } catch {
+        // Ignore JSON parsing errors
+      }
+    }
+
     const worst = checks.some(c => c.status === "red") ? "red"
                 : checks.some(c => c.status === "amber") ? "amber"
                 : "green";

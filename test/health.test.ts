@@ -33,6 +33,9 @@ vi.mock("node:child_process", async (importOriginal) => {
         const res = (globalThis as any).__mockExecSync(cmd, options);
         if (res !== undefined) return res;
       }
+      if (cmd.includes("npm outdated")) {
+        return "";
+      }
       return actual.execSync(cmd, options);
     }
   };

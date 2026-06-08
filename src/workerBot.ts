@@ -14,6 +14,7 @@ export interface WorkerCommandContext {
   cliChain?: string[];
   db?: BridgeDb;
   chatId?: number;
+  userId?: string;
 }
 
 export interface WorkerMessageResult {
@@ -29,7 +30,7 @@ export interface WorkerKeyboardMessageResult {
 
 export type WorkerCommandResult = WorkerMessageResult | WorkerKeyboardMessageResult;
 
-const WORKER_COMMANDS = new Set(["/jobs", "/issues", "/review", "/models", "/job", "/issue"]);
+const WORKER_COMMANDS = new Set(["/jobs", "/issues", "/review", "/models", "/job", "/issue", "/feature"]);
 
 export function buildWorkerCommands(): Array<{ command: string; description: string }> {
   return [
@@ -50,6 +51,7 @@ export function isWorkerCommand(text: string): boolean {
   if (text.trim().toLowerCase().startsWith("/review ")) return true;
   if (text.trim().toLowerCase().startsWith("/job ")) return true;
   if (text.trim().toLowerCase().startsWith("/issue ")) return true;
+  if (text.trim().toLowerCase().startsWith("/feature ")) return true;
   return false;
 }
 
@@ -187,6 +189,33 @@ export function handleWorkerCommand(
       ]);
     }
     return { kind: "keyboard_message", text: textOut.trim(), reply_markup: { inline_keyboard } };
+  }
+
+  if (cmd === "/feature") {
+    const parts = trimmed.split(/\s+/);
+    const brief = parts.slice(1).join(" ").trim();
+
+    if (!brief) {
+      return {
+        kind: "message",
+        text: "Describe the feature you'd like to build. Example:\n`/feature add dark mode support to the dashboard`",
+      };
+    }
+
+    if (db && ctx.chatId != null) {
+      const chatKey = String(ctx.chatId);
+      const userId = ctx.userId ?? "unknown";
+      db.createFeaturePlan({ chatId: chatKey, userId, brief });
+      return {
+        kind: "message",
+        text: `Feature plan started: **${brief}**\n\nAnalysing the codebase and drafting an implementation plan. Use /issues to view the result when it's ready.`,
+      };
+    }
+
+    return {
+      kind: "message",
+      text: `Feature plan received: **${brief}**\n\nUse /issues to track progress once the worker is active.`,
+    };
   }
 
   if (cmd === "/models") {

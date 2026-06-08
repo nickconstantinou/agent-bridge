@@ -87,6 +87,8 @@ export interface ExecFns {
 // ── Internals ────────────────────────────────────────────────────────────────
 
 const MAX_QUEUE_DEPTH = 5;
+const ENGINE_CONTEXT_TURNS = 3;
+const ENGINE_TURN_TEXT_LIMIT = 1_200;
 type QueuedMessage = {
   prompt: string;
   chatId: number;
@@ -95,10 +97,21 @@ type QueuedMessage = {
   chatType: string;
   userId?: number;
 };
+type RecentTurn = { role: "user" | "assistant"; text: string };
 
 const AGENT_KINDS = new Set<string>(["codex", "antigravity", "claude"]);
 function isAgentKind(kind: string): kind is BotKind {
   return AGENT_KINDS.has(kind);
+}
+
+function isAntigravityPrintTimeoutError(error: Error): boolean {
+  return /agy execution timed out waiting for response|print mode timed out waiting for response/i.test(error.message ?? "");
+}
+
+function trimTurnText(text: string): string {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (normalized.length <= ENGINE_TURN_TEXT_LIMIT) return normalized;
+  return `${normalized.slice(0, ENGINE_TURN_TEXT_LIMIT - 15).trimEnd()}... [truncated]`;
 }
 
 function createTypingTracker(client: TelegramClient, chatId: number, kind: string, body: any = {}) {
@@ -143,6 +156,7 @@ export class BridgeEngine {
   private readonly exec: ExecFns;
   private readonly abortedChats = new Set<string>();
   private readonly pendingQueues = new Map<string, QueuedMessage[]>();
+  private readonly recentTurns = new Map<string, RecentTurn[]>();
 
   constructor(
     opts: BridgeEngineOptions,
@@ -498,6 +512,25 @@ export class BridgeEngine {
     });
   }
 
+  private _rememberTurn(chatKey: string, userPrompt: string, assistantText: string): void {
+    const turns = this.recentTurns.get(chatKey) ?? [];
+    turns.push({ role: "user", text: trimTurnText(userPrompt) });
+    turns.push({ role: "assistant", text: trimTurnText(assistantText) });
+    while (turns.length > ENGINE_CONTEXT_TURNS * 2) turns.shift();
+    this.recentTurns.set(chatKey, turns);
+  }
+
+  private _buildRecentContextPrompt(chatKey: string, prompt: string): string {
+    const turns = this.recentTurns.get(chatKey) ?? [];
+    if (!turns.length) return prompt;
+    const lines = ["[Context from previous conversation]"];
+    for (const turn of turns.slice(-ENGINE_CONTEXT_TURNS * 2)) {
+      lines.push(`${turn.role === "user" ? "User" : "Assistant"}: ${turn.text}`);
+    }
+    lines.push("[End context — continue naturally]");
+    return `${lines.join("\n")}\n\n${prompt}`;
+  }
+
   async executePromptAsync(
     prompt: string,
     sessionId: string | null,
@@ -566,6 +599,9 @@ export class BridgeEngine {
       if (result?.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
       if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
       result.text = scrubOutputDir(result.text, outDir);
+      if (executionKind === "antigravity" && isAgentKind(this.kind)) {
+        this._rememberTurn(chatKey, prompt, result.text);
+      }
       await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
         console.error(`[${this.kind}] output file upload failed`, err)
       );
@@ -591,6 +627,13 @@ export class BridgeEngine {
     } catch (error) {
       if (logFile) { try { rmSync(logFile); } catch {} }
       await uploadOutputFiles(outDir, chatId, this.client).catch(() => {});
+      if (executionKind === "antigravity" && isAntigravityPrintTimeoutError(error as Error)) {
+        if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
+        const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
+        const retryResult = await this._runFreshAntigravityRetry(retryPrompt, chatId, chatKey, outDir, onProgress, attachments, "async", eventContext, runId, collect);
+        this._rememberTurn(chatKey, prompt, retryResult.text);
+        return retryResult;
+      }
       if (isCapacityExhaustedError(error as Error) && this.opts.botConfig.modelPreference.length > 1) {
         const fallbackModel = getNextFallbackModel(model, this.opts.botConfig.modelPreference);
         if (fallbackModel) {
@@ -672,6 +715,9 @@ export class BridgeEngine {
       if (result.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
       if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
       result.text = scrubOutputDir(result.text, outDir);
+      if (executionKind === "antigravity" && isAgentKind(this.kind)) {
+        this._rememberTurn(chatKey, prompt, result.text);
+      }
       await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
         console.error(`[${this.kind}] output file upload failed`, err)
       );
@@ -693,6 +739,13 @@ export class BridgeEngine {
     } catch (error) {
       if (logFile) { try { rmSync(logFile); } catch {} }
       await uploadOutputFiles(outDir, chatId, this.client).catch(() => {});
+      if (executionKind === "antigravity" && isAntigravityPrintTimeoutError(error as Error)) {
+        if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
+        const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
+        const retryResult = await this._runFreshAntigravityRetry(retryPrompt, chatId, chatKey, outDir, () => {}, attachments, "sync", eventContext, runId, collect);
+        this._rememberTurn(chatKey, prompt, retryResult.text);
+        return retryResult;
+      }
       if (isCapacityExhaustedError(error as Error) && this.opts.botConfig.modelPreference.length > 1) {
         const fallbackModel = getNextFallbackModel(model, this.opts.botConfig.modelPreference);
         if (fallbackModel) {
@@ -703,6 +756,91 @@ export class BridgeEngine {
       throw error;
     } finally {
       await typingTracker.stop();
+    }
+  }
+
+  private async _runFreshAntigravityRetry(
+    prompt: string,
+    chatId: number,
+    chatKey: string,
+    outDir: string,
+    onProgress: (t: string) => void,
+    attachments: string[],
+    mode: "async" | "sync",
+    eventContext: CliOptions["eventContext"] = undefined as any,
+    runId: string | null = null,
+    collect: ((e: BridgeEvent) => void) | null = null,
+  ): Promise<CliResult> {
+    const executionKind = this._executionKind();
+    const model = isAgentKind(this.kind)
+      ? (this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null)
+      : (this.opts.botConfig.modelPreference[0] || null);
+    const retryLogFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
+    const retryCwd = getCliWorkingDir(executionKind);
+    const retryStartedAtMs = Date.now();
+    setAntigravityModel(model);
+    const retryInvocation = buildCliInvocation({
+      bot: executionKind,
+      command: this.opts.botConfig.command,
+      model,
+      prompt,
+      sessionId: null,
+      sessionMode: "resume",
+      executionMode: this.opts.executionMode,
+      outputFormat: undefined,
+      logFile: retryLogFile,
+      soulContext: this.opts.soulContext,
+      outputDir: outDir,
+      attachments,
+    });
+
+    try {
+      const rawResult = mode === "async"
+        ? (await this.exec.runCliAsync(retryInvocation.command, retryInvocation.args, retryCwd, {
+            ...buildExecutionOptions(executionKind),
+            onProgress,
+            chatId: chatKey,
+            stdin: retryInvocation.stdin,
+            eventContext,
+            onEvent: collect ?? undefined,
+          })).text
+        : await this.exec.runCli(retryInvocation.command, retryInvocation.args, retryCwd, {
+            ...buildExecutionOptions(executionKind),
+            chatId: chatKey,
+            stdin: retryInvocation.stdin,
+            eventContext,
+            onEvent: collect ?? undefined,
+          });
+
+      let retryLogContent: string | null = null;
+      try { retryLogContent = readFileSync(retryLogFile, "utf8"); } catch {}
+      finally { try { rmSync(retryLogFile); } catch {} }
+
+      const result = parseCliResult({ bot: executionKind, stdout: rawResult, logContent: retryLogContent });
+      if (!result.sessionId) {
+        result.sessionId = resolveAntigravityConversationId({ cwd: retryCwd, sinceMs: retryStartedAtMs, explicitLogContent: retryLogContent });
+      }
+      if (result.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
+      if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
+      result.text = scrubOutputDir(result.text, outDir);
+      if (collect && runId && eventContext) {
+        collect({
+          type: "run.completed",
+          version: 1,
+          id: randomUUID(),
+          runId,
+          timestamp: new Date().toISOString(),
+          bot: eventContext.bot,
+          chatId: eventContext.chatId,
+          threadId: eventContext.threadId,
+          sessionId: result.sessionId ?? null,
+          text: result.text,
+        });
+      }
+      return result;
+    } catch (retryError) {
+      try { rmSync(retryLogFile); } catch {}
+      throw retryError;
     }
   }
 

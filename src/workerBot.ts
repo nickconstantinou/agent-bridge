@@ -233,7 +233,7 @@ export function handleWorkerCommand(
     const newJob = db.createWorkJob({
       task_type: "defect_scan",
       idempotency_key: `scan:${targetRepo}:${Date.now()}`,
-      input_json: JSON.stringify({ repository: targetRepo }),
+      input_json: { repository: targetRepo },
     });
 
     return {

@@ -59,6 +59,8 @@ export interface BridgeEngineHooks {
   onCommand?: (cmd: string, ctx: HookContext) => Promise<HookCommandResult | null>;
   /** Called before CLI execution. Return the (optionally transformed) prompt. */
   onBeforeExecute?: (prompt: string, ctx: HookContext) => Promise<string>;
+  /** Called when the CLI throws a capacity/rate-limit error after all model fallbacks are exhausted. */
+  onCapacityExhausted?: (chatKey: string) => void | Promise<void>;
 }
 
 export interface BridgeEngineOptions {
@@ -418,13 +420,17 @@ export class BridgeEngine {
       }
     } catch (error) {
       console.error(`[${this.kind}] prompt execution failed`, error);
-      const userText = toUserMessage(error instanceof Error ? error : new Error(String(error)));
-      await sendTelegramMessage({
-        client: this.client,
-        kind: this._deliveryKind(),
-        chatId,
-        body: { text: `Error: ${userText}`, message_thread_id: threadId },
-      });
+      if (isCapacityExhaustedError(error instanceof Error ? error : new Error(String(error))) && this.hooks.onCapacityExhausted) {
+        await this.hooks.onCapacityExhausted(chatKey);
+      } else {
+        const userText = toUserMessage(error instanceof Error ? error : new Error(String(error)));
+        await sendTelegramMessage({
+          client: this.client,
+          kind: this._deliveryKind(),
+          chatId,
+          body: { text: `Error: ${userText}`, message_thread_id: threadId },
+        });
+      }
     } finally {
       if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
       this.db.unlock(chatKey);

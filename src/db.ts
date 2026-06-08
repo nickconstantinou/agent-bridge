@@ -457,38 +457,37 @@ export class BridgeDb {
     return this.raw.prepare(`SELECT * FROM work_jobs WHERE id = ?`).get(job.id) as WorkJob;
   }
 
-  markWorkJobRunning(jobId: number, _workerId: string): void {
+  markWorkJobRunning(jobId: number, workerId: string): void {
     this.raw.prepare(
-      `UPDATE work_jobs SET status = 'running', updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    ).run(jobId);
+      `UPDATE work_jobs SET status = 'running', updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND lease_owner = ?`
+    ).run(jobId, workerId);
   }
 
-  heartbeatWorkJob(jobId: number, _workerId: string, now: string): void {
+  heartbeatWorkJob(jobId: number, workerId: string, now: string): void {
     this.raw.prepare(
-      `UPDATE work_jobs SET heartbeat_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    ).run(now, jobId);
+      `UPDATE work_jobs SET heartbeat_at = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND lease_owner = ?`
+    ).run(now, jobId, workerId);
   }
 
-  completeWorkJob(jobId: number, result: object): void {
+  completeWorkJob(jobId: number, result: object, workerId: string): void {
     this.raw.prepare(
       `UPDATE work_jobs
        SET status = 'completed', lease_owner = NULL, lease_expires_at = NULL,
            result_json = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`
-    ).run(JSON.stringify(result), jobId);
+       WHERE id = ? AND lease_owner = ?`
+    ).run(JSON.stringify(result), jobId, workerId);
   }
 
-  failWorkJob(jobId: number, error: string): void {
-    const job = this.raw.prepare(`SELECT attempt_count, max_attempts FROM work_jobs WHERE id = ?`).get(jobId) as { attempt_count: number; max_attempts: number } | undefined;
-    if (!job) return;
-    const newCount = job.attempt_count + 1;
-    const nextStatus = newCount < job.max_attempts ? "pending" : "failed";
+  failWorkJob(jobId: number, error: string, workerId: string): void {
     this.raw.prepare(
       `UPDATE work_jobs
-       SET status = ?, attempt_count = ?, error = ?,
-           lease_owner = NULL, lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?`
-    ).run(nextStatus, newCount, error, jobId);
+       SET attempt_count = attempt_count + 1,
+           status = CASE WHEN attempt_count + 1 < max_attempts THEN 'pending' ELSE 'failed' END,
+           error = ?, lease_owner = NULL, lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND lease_owner = ?`
+    ).run(error, jobId, workerId);
   }
 
   recoverExpiredWorkJobs(now: string): number {
@@ -526,13 +525,18 @@ export class BridgeDb {
     return stmt.get(approval_type, requested_by, work_item_id, job_id, expires_at, JSON.stringify(payload)) as Approval;
   }
 
-  resolveApproval(id: number, decision: "approved" | "rejected", decidedBy: string): Approval {
-    // Only update if still pending — first decision sticks
+  resolveApproval(id: number, decision: "approved" | "rejected", decidedBy: string, now: string = new Date().toISOString()): Approval {
+    // First mark any pending approvals that have passed expires_at as expired
+    this.raw.prepare(
+      `UPDATE approvals SET status = 'expired'
+       WHERE id = ? AND status = 'pending' AND expires_at IS NOT NULL AND expires_at <= ?`
+    ).run(id, now);
+    // Only update if still pending and not expired — first decision sticks
     this.raw.prepare(
       `UPDATE approvals
-       SET status = ?, decided_by = ?, decided_at = CURRENT_TIMESTAMP
+       SET status = ?, decided_by = ?, decided_at = ?
        WHERE id = ? AND status = 'pending'`
-    ).run(decision, decidedBy, id);
+    ).run(decision, decidedBy, now, id);
     return this.raw.prepare(`SELECT * FROM approvals WHERE id = ?`).get(id) as Approval;
   }
 

@@ -89,6 +89,7 @@ describe("executeNextJob", () => {
       task_type: "defect_scan",
       idempotency_key: `scan:agent-bridge:3`,
       input_json: { repository: "agent-bridge" },
+      max_attempts: 1,
     });
 
     const handler = vi.fn().mockRejectedValue(new Error("CLI timed out"));

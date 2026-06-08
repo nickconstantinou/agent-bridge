@@ -788,6 +788,7 @@ describe("SelfPlugin — extended checks", () => {
   afterEach(() => {
     try { db.close(); } catch {}
     try { rmSync(dbPath); } catch {}
+    delete (globalThis as any).__mockExecSync;
   });
 
   it("includes heap-usage check with percentage value 0–100", async () => {
@@ -831,6 +832,80 @@ describe("SelfPlugin — extended checks", () => {
     const report = await plugin.check();
     expect(report.status).toBe("red");
     expect(report.summary).toMatch(/db-file/);
+  });
+
+  it("reports amber status when agent CLI updates are available", async () => {
+    (globalThis as any).__mockExecSync = (cmd: string) => {
+      if (cmd.includes("npm outdated --json")) {
+        const err = new Error("Command failed");
+        (err as any).status = 1;
+        (err as any).stdout = Buffer.from(JSON.stringify({
+          "@anthropic-ai/claude-code": {
+            "current": "2.1.158",
+            "wanted": "2.1.168",
+            "latest": "2.1.168"
+          },
+          "@openai/codex": {
+            "current": "0.135.0",
+            "wanted": "0.137.0",
+            "latest": "0.137.0"
+          }
+        }));
+        throw err;
+      }
+      return undefined;
+    };
+
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const plugin = new SelfPlugin(db as any, dbPath);
+    const report = await plugin.check();
+
+    const claudeCheck = report.checks.find(c => c.name === "cli-update-claude-code");
+    expect(claudeCheck).toBeDefined();
+    expect(claudeCheck?.status).toBe("amber");
+    expect(claudeCheck?.message).toContain("2.1.158 -> 2.1.168");
+
+    const codexCheck = report.checks.find(c => c.name === "cli-update-codex");
+    expect(codexCheck).toBeDefined();
+    expect(codexCheck?.status).toBe("amber");
+    expect(codexCheck?.message).toContain("0.135.0 -> 0.137.0");
+  });
+
+  it("does not report warnings when agent CLIs are up to date", async () => {
+    (globalThis as any).__mockExecSync = (cmd: string) => {
+      if (cmd.includes("npm outdated --json")) {
+        return ""; // status 0, empty output
+      }
+      return undefined;
+    };
+
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const plugin = new SelfPlugin(db as any, dbPath);
+    const report = await plugin.check();
+
+    const claudeCheck = report.checks.find(c => c.name === "cli-update-claude-code");
+    expect(claudeCheck).toBeUndefined();
+
+    const codexCheck = report.checks.find(c => c.name === "cli-update-codex");
+    expect(codexCheck).toBeUndefined();
+  });
+
+  it("handles npm outdated errors gracefully without failing the entire plugin", async () => {
+    (globalThis as any).__mockExecSync = (cmd: string) => {
+      if (cmd.includes("npm outdated --json")) {
+        throw new Error("npm command completely failed");
+      }
+      return undefined;
+    };
+
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const plugin = new SelfPlugin(db as any, dbPath);
+    const report = await plugin.check();
+
+    // The plugin check itself should succeed, but there won't be any update checks
+    expect(report.status).toBe("green");
+    const claudeCheck = report.checks.find(c => c.name === "cli-update-claude-code");
+    expect(claudeCheck).toBeUndefined();
   });
 });
 

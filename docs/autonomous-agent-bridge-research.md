@@ -2,12 +2,12 @@
 
 ## Status
 
-**Phase 0 complete.** Both new bots are deployed and running. Phase 1 (durable work schema) is next.
+**Phase 0 complete. Phase 1 in progress.** Both new bots are deployed and running. Worker bot now routes plain messages through the CLI fallback chain.
 
 | Phase | Status |
 |---|---|
 | Phase 0 — bot infrastructure | ✅ Complete |
-| Phase 1 — durable work schema | Not started |
+| Phase 1 — durable work schema | 🔄 In progress |
 | Phase 2 — job lease lifecycle | Not started |
 | Phase 3 — Telegram job commands | Not started |
 | Phase 4 — read-only defect scan | Not started |
@@ -2164,13 +2164,17 @@ Do not run `git checkout -b`, `npm test`, push, PR creation, or merge from a gen
 **Status: Complete.** Both bots deployed, enabled, and running. 506/506 tests passing.
 
 **What was shipped:**
-- `src/interactiveBot.ts` — CLI preference DB helpers, `/switch` inline keyboard (`buildCliKeyboard`), `handleCliSwitchCallback`, `buildInteractiveCommands`, `resolveUpdateChatKey`, `isAuthorizedInteractiveUpdate`
+- `src/interactiveBot.ts` — CLI preference DB helpers, `/cli` inline keyboard (`buildCliKeyboard`), `handleCliSwitchCallback`, `buildInteractiveCommands`, `resolveUpdateChatKey`, `isAuthorizedInteractiveUpdate`
 - `src/workerBot.ts` — `/jobs`, `/issues`, `/review` stubs; `/models` shows fallback chain keyboard; `buildWorkerCommands`
-- `src/index-interactive.ts` — polls one bot token, routes to active CLI engine; `setMyCommands` at startup and after every `/switch`; `cli:*` callbacks edit message in-place
-- `src/index-worker.ts` — polls worker bot token, reads `WORKER_CLI_CHAIN` env var
+- `src/workerFallback.ts` — `WorkerFallbackChain`: per-chat CLI chain state + last-3-turns context history; `CONTEXT_TURNS=3`
+- `src/workerDispatch.ts` — `dispatchWithFallback`: routes update to active CLI engine; on capacity exhaustion advances chain, injects context preamble, retries with next CLI
+- `src/index-interactive.ts` — polls one bot token, routes to active CLI engine; `setMyCommands` at startup and after every `/cli` tap; `cli:*` callbacks edit message in-place
+- `src/index-worker.ts` — polls worker bot token; plain messages routed through `dispatchWithFallback`; worker commands handled by `handleWorkerCommand`; 3 `BridgeEngine` instances (one per CLI); `onCapacityExhausted` hook marks chat for fallback; `onBeforeExecute` injects context preamble on retry
+- `src/engine.ts` — added `onCapacityExhausted` hook to `BridgeEngineHooks`; fires instead of sending error message when hook is registered and error is capacity-type
+- `src/bridge.ts` — `parseModelPreference` extracted here (was duplicated in both entry points)
 - `systemd/agent-bridge-interactive.service` + `systemd/agent-bridge-worker-bot.service` — both `KillMode=control-group`, `Restart=always`
-- `/etc/default/agent-bridge-interactive` + `/etc/default/agent-bridge-worker-bot` — tokens and env config
-- `/skills` and `/memory` removed from all bot command palettes (handlers remain)
+- `/etc/default/agent-bridge-interactive` + `/etc/default/agent-bridge-worker-bot` — tokens, env config, model preferences for all 3 CLIs
+- `/skills` and `/memory` removed from all bot command palettes (handlers remain); `/switch` removed, `/cli` is the single switching surface
 
 **Resolved decisions:**
 
@@ -2254,7 +2258,9 @@ Phase 0 scope for this bot: wire up the bot, implement `/switch` and `/cli` comm
 - Daily new PR cap per repository (suggested: 3).
 - Stale PR threshold before digest (suggested: 48 hours).
 
-### Phase 1: Durable work schema
+### Phase 1: Durable work schema ✅ In progress
+
+Covers Slices 1–2 from the Detailed Agent Handoff Plan.
 
 Red tests:
 

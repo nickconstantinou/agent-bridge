@@ -221,3 +221,60 @@ describe("worker commands with DB (Slice 4)", () => {
   });
 });
 
+// ── /feature command ──────────────────────────────────────────────────────────
+
+describe("handleWorkerCommand /feature", () => {
+  let db: ReturnType<typeof import("../src/db.js").openDb>;
+
+  beforeEach(async () => {
+    const { openDb } = await import("../src/db.js");
+    db = openDb(":memory:");
+  });
+
+  afterEach(() => db.close());
+
+  it("isWorkerCommand recognises /feature", () => {
+    expect(isWorkerCommand("/feature add dark mode")).toBe(true);
+    expect(isWorkerCommand("/feature")).toBe(true);
+  });
+
+  it("returns a message prompting for a brief when called with no args", () => {
+    const result = handleWorkerCommand("/feature", { workerEnabled: true, db });
+    expect(result).not.toBeNull();
+    expect(result!.kind).toBe("message");
+    expect(result!.text.toLowerCase()).toMatch(/brief|describe|what feature/i);
+  });
+
+  it("creates a feature_plan record on /feature <brief>", () => {
+    handleWorkerCommand("/feature add dark mode support", {
+      workerEnabled: true, db, chatId: 42, userId: "user-1",
+    });
+    const plan = db.getActivePlanForChat("42");
+    expect(plan).not.toBeNull();
+    expect(plan!.brief).toBe("add dark mode support");
+    expect(plan!.status).toBe("drafting");
+  });
+
+  it("stores userId from context on the feature plan", () => {
+    handleWorkerCommand("/feature improve logging", {
+      workerEnabled: true, db, chatId: 100, userId: "user-99",
+    });
+    const plan = db.getActivePlanForChat("100");
+    expect(plan!.user_id).toBe("user-99");
+  });
+
+  it("returns an acknowledgement message with the brief", () => {
+    const result = handleWorkerCommand("/feature refactor auth module", {
+      workerEnabled: true, db, chatId: 7, userId: "u",
+    });
+    expect(result!.text).toContain("refactor auth module");
+  });
+
+  it("replaces an existing drafting plan when /feature is called again", () => {
+    handleWorkerCommand("/feature first idea", { workerEnabled: true, db, chatId: 55, userId: "u" });
+    handleWorkerCommand("/feature second idea", { workerEnabled: true, db, chatId: 55, userId: "u" });
+    const plan = db.getActivePlanForChat("55");
+    expect(plan!.brief).toBe("second idea");
+  });
+});
+

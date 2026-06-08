@@ -2,7 +2,7 @@
  * Tests for the worker bot's command handling (Phase 0 — no job execution yet).
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   handleWorkerCommand,
   isWorkerCommand,
@@ -133,3 +133,75 @@ describe("buildWorkerCommands", () => {
     expect(buildWorkerCommands().some(c => c.command === "models")).toBe(true);
   });
 });
+
+// ── Slice 4: Work Item Renderers and Commands with DB ────────────────────────
+
+import { openDb } from "../src/db.js";
+
+describe("worker commands with DB (Slice 4)", () => {
+  let db: any;
+
+  beforeEach(() => {
+    db = openDb(":memory:");
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("lists active and pending jobs on /jobs", () => {
+    db.createWorkJob({ task_type: "defect_scan", idempotency_key: "scan:1" });
+    const result = handleWorkerCommand("/jobs", { workerEnabled: true, db });
+    expect(result).not.toBeNull();
+    expect(result!.kind).toBe("keyboard_message");
+    expect(result!.text).toContain("Active and Pending Jobs");
+    expect(result!.text).toContain("defect_scan");
+    expect((result as any).reply_markup.inline_keyboard.flat().length).toBe(1);
+  });
+
+  it("shows job details on /job <id>", () => {
+    const job = db.createWorkJob({ task_type: "defect_scan", idempotency_key: "scan:1" });
+    const result = handleWorkerCommand(`/job ${job.id}`, { workerEnabled: true, db });
+    expect(result).not.toBeNull();
+    expect(result!.kind).toBe("keyboard_message");
+    expect(result!.text).toContain(`Job ID: ${job.id}`);
+    expect(result!.text).toContain("defect_scan");
+  });
+
+  it("lists proposed issues on /issues", () => {
+    db.createWorkItem({ kind: "defect", source: "defect_scan", title: "A bug", created_by: "worker" });
+    const result = handleWorkerCommand("/issues", { workerEnabled: true, db });
+    expect(result).not.toBeNull();
+    expect(result!.kind).toBe("keyboard_message");
+    expect(result!.text).toContain("Proposed Work Items");
+    expect(result!.text).toContain("A bug");
+    expect((result as any).reply_markup.inline_keyboard.flat().length).toBe(3); // view, approve, close buttons
+  });
+
+  it("shows issue details on /issue <id>", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "defect_scan", title: "A bug", created_by: "worker" });
+    const result = handleWorkerCommand(`/issue ${item.id}`, { workerEnabled: true, db });
+    expect(result).not.toBeNull();
+    expect(result!.kind).toBe("keyboard_message");
+    expect(result!.text).toContain(`Work Item ID: ${item.id}`);
+    expect(result!.text).toContain("A bug");
+  });
+
+  it("creates a defect scan job on /review", () => {
+    const result = handleWorkerCommand("/review", { workerEnabled: true, db });
+    expect(result).not.toBeNull();
+    expect(result!.kind).toBe("message");
+    expect(result!.text).toContain("Defect scan queued");
+    const jobs = db.listWorkJobs();
+    expect(jobs.length).toBe(1);
+    expect(jobs[0].task_type).toBe("defect_scan");
+  });
+
+  it("idempotently returns info if defect scan is already active", () => {
+    handleWorkerCommand("/review repo-a", { workerEnabled: true, db });
+    const result = handleWorkerCommand("/review repo-a", { workerEnabled: true, db });
+    expect(result!.text).toContain("already in progress");
+    expect(db.listWorkJobs().length).toBe(1);
+  });
+});
+

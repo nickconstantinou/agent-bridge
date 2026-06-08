@@ -132,6 +132,19 @@ describe("formatReport", () => {
     expect(codeBlockMatch![0]).toContain("cpu-load");
     expect(codeBlockMatch![0]).toContain("load 2.4 (threshold 2.0)");
   });
+
+  it("escapes underscores in summary to prevent markdown corruption", async () => {
+    const { formatReport } = await import("../src/health/reporter.js");
+    const report = {
+      pluginName: "content-crawler",
+      status: "green" as const,
+      checks: [],
+      summary: "Queue_depth_fast is high",
+      timestamp: "2026-06-02T00:00:00.000Z",
+    };
+    const text = formatReport(report);
+    expect(text).toContain("Queue\\_depth\\_fast is high");
+  });
 });
 
 // ── formatSuggestion ────────────────────────────────────────────────────────
@@ -240,6 +253,22 @@ describe("SelfPlugin", () => {
       const report = await plugin.check();
       expect(report.status).toBe("green");
       expect(report.pluginName).toBe("agent-bridge");
+    } finally {
+      db.close();
+      try { rmSync(dbPath); } catch {}
+    }
+  });
+
+  it("does not call getLastUpdateId with hardcoded codex for database check", async () => {
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const { openDb } = await import("../src/db.js");
+    const dbPath = join(tmpdir(), `health-test-self-${Date.now()}.sqlite`);
+    const db = openDb(dbPath);
+    const spy = vi.spyOn(db, "getLastUpdateId");
+    try {
+      const plugin = new SelfPlugin(db, dbPath);
+      await plugin.check();
+      expect(spy).not.toHaveBeenCalled();
     } finally {
       db.close();
       try { rmSync(dbPath); } catch {}

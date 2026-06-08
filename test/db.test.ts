@@ -616,3 +616,68 @@ describe("lease ownership enforcement", () => {
     expect(db.getWorkJob(job.id)!.status).toBe("running");
   });
 });
+
+// ── feature_plans ─────────────────────────────────────────────────────────────
+
+describe("feature_plans CRUD", () => {
+  it("creates a feature plan and returns it with default status 'drafting'", () => {
+    const plan = db.createFeaturePlan({ chatId: "chat-1", userId: "user-1", brief: "Add dark mode" });
+    expect(plan.id).toBeGreaterThan(0);
+    expect(plan.chat_id).toBe("chat-1");
+    expect(plan.user_id).toBe("user-1");
+    expect(plan.brief).toBe("Add dark mode");
+    expect(plan.status).toBe("drafting");
+    expect(plan.scope_json).toBe("{}");
+  });
+
+  it("retrieves a plan by id", () => {
+    const plan = db.createFeaturePlan({ chatId: "chat-1", userId: "user-1", brief: "Refactor DB layer" });
+    const fetched = db.getFeaturePlan(plan.id);
+    expect(fetched).not.toBeNull();
+    expect(fetched!.id).toBe(plan.id);
+  });
+
+  it("returns null for a missing plan id", () => {
+    expect(db.getFeaturePlan(9999)).toBeNull();
+  });
+
+  it("getActivePlanForChat returns the drafting plan for a chat", () => {
+    db.createFeaturePlan({ chatId: "chat-2", userId: "user-1", brief: "Active plan" });
+    const plan = db.getActivePlanForChat("chat-2");
+    expect(plan).not.toBeNull();
+    expect(plan!.brief).toBe("Active plan");
+  });
+
+  it("getActivePlanForChat returns null when no active plan exists", () => {
+    expect(db.getActivePlanForChat("chat-no-plan")).toBeNull();
+  });
+
+  it("getActivePlanForChat returns null after plan is accepted", () => {
+    const plan = db.createFeaturePlan({ chatId: "chat-3", userId: "user-1", brief: "Will be accepted" });
+    db.updateFeaturePlanStatus(plan.id, "accepted");
+    expect(db.getActivePlanForChat("chat-3")).toBeNull();
+  });
+
+  it("updateFeaturePlanStatus transitions status and updates updated_at", () => {
+    const plan = db.createFeaturePlan({ chatId: "chat-4", userId: "user-1", brief: "Status test" });
+    db.updateFeaturePlanStatus(plan.id, "ready");
+    const updated = db.getFeaturePlan(plan.id)!;
+    expect(updated.status).toBe("ready");
+  });
+
+  it("updateFeaturePlanScope stores JSON scope on the plan", () => {
+    const plan = db.createFeaturePlan({ chatId: "chat-5", userId: "user-1", brief: "Scope test" });
+    const scope = { files: ["src/foo.ts"], assumptions: ["No auth changes"] };
+    db.updateFeaturePlanScope(plan.id, scope);
+    const updated = db.getFeaturePlan(plan.id)!;
+    expect(JSON.parse(updated.scope_json)).toEqual(scope);
+  });
+
+  it("createFeaturePlan replaces an existing drafting plan for the same chat", () => {
+    db.createFeaturePlan({ chatId: "chat-6", userId: "user-1", brief: "First brief" });
+    const second = db.createFeaturePlan({ chatId: "chat-6", userId: "user-1", brief: "Second brief" });
+    const active = db.getActivePlanForChat("chat-6");
+    expect(active!.id).toBe(second.id);
+    expect(active!.brief).toBe("Second brief");
+  });
+});

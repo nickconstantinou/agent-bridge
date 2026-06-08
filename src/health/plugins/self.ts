@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import https from "node:https";
 import { execSync } from "node:child_process";
 import { getHeapStatistics } from "node:v8";
 import type { HealthPlugin, HealthReport, CheckResult } from "../types.js";
@@ -189,6 +190,52 @@ export class SelfPlugin implements HealthPlugin {
       } catch {
         // Ignore JSON parsing errors
       }
+    }
+
+    // Antigravity (agy) CLI update check
+    try {
+      const localVersion = execSync("agy --version", { stdio: ["ignore", "pipe", "ignore"], timeout: 2000 }).toString().trim();
+      if (localVersion) {
+        const remoteVersion = await new Promise<string | null>((resolve) => {
+          const CHANGELOG_URL = "https://raw.githubusercontent.com/google-antigravity/antigravity-cli/refs/heads/main/CHANGELOG.md";
+          const req = https.get(CHANGELOG_URL, { timeout: 5000 }, (res) => {
+            if (res.statusCode !== 200) {
+              resolve(null);
+              return;
+            }
+            let data = "";
+            res.on("data", (chunk) => { data += chunk; });
+            res.on("end", () => {
+              const match = data.match(/^##\s+([0-9]+\.[0-9]+\.[0-9]+)/m);
+              resolve(match ? match[1] : null);
+            });
+          });
+          req.on("error", () => resolve(null));
+          req.on("timeout", () => {
+            req.destroy();
+            resolve(null);
+          });
+        });
+
+        if (remoteVersion) {
+          const checkName = "cli-update-agy";
+          if (localVersion === remoteVersion) {
+            checks.push({
+              name: checkName,
+              status: "green",
+              message: `Antigravity CLI is up to date (${localVersion})`,
+            });
+          } else {
+            checks.push({
+              name: checkName,
+              status: "amber",
+              message: `Antigravity CLI update available: ${localVersion} -> ${remoteVersion}`,
+            });
+          }
+        }
+      }
+    } catch {
+      // Ignore errors gracefully
     }
 
     const worst = checks.some(c => c.status === "red") ? "red"

@@ -164,7 +164,7 @@ describe("worker commands with DB (Slice 4)", () => {
     const result = handleWorkerCommand(`/job ${job.id}`, { workerEnabled: true, db });
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("keyboard_message");
-    expect(result!.text).toContain(`Job ID: ${job.id}`);
+    expect(result!.text).toContain(`**Job ID**: ${job.id}`);
     expect(result!.text).toContain("defect_scan");
   });
 
@@ -183,7 +183,7 @@ describe("worker commands with DB (Slice 4)", () => {
     const result = handleWorkerCommand(`/issue ${item.id}`, { workerEnabled: true, db });
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("keyboard_message");
-    expect(result!.text).toContain(`Work Item ID: ${item.id}`);
+    expect(result!.text).toContain(`**Work Item ID**: ${item.id}`);
     expect(result!.text).toContain("A bug");
   });
 

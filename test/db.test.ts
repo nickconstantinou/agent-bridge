@@ -282,3 +282,290 @@ describe("insertRun — simplified signature", () => {
     expect(run.status).toBe("running");
   });
 });
+
+// ── Phase 1: Slice 1 — Canonical Work Schema ──────────────────────────────────
+
+describe("work schema — tables exist", () => {
+  it("opens a DB with work_items table", () => {
+    const row = db.raw.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='work_items'`
+    ).get();
+    expect(row).toBeDefined();
+  });
+
+  it("opens a DB with work_jobs table", () => {
+    const row = db.raw.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='work_jobs'`
+    ).get();
+    expect(row).toBeDefined();
+  });
+
+  it("opens a DB with approvals table", () => {
+    const row = db.raw.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='approvals'`
+    ).get();
+    expect(row).toBeDefined();
+  });
+
+  it("opens a DB with github_links table", () => {
+    const row = db.raw.prepare(
+      `SELECT name FROM sqlite_master WHERE type='table' AND name='github_links'`
+    ).get();
+    expect(row).toBeDefined();
+  });
+
+  it("has foreign keys enabled", () => {
+    const row = db.raw.prepare(`PRAGMA foreign_keys`).get() as { foreign_keys: number };
+    expect(row.foreign_keys).toBe(1);
+  });
+});
+
+describe("createWorkItem", () => {
+  it("creates a work item and returns an id", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Fix the thing", created_by: "user:42" });
+    expect(item.id).toBeGreaterThan(0);
+    expect(item.status).toBe("proposed");
+    expect(item.title).toBe("Fix the thing");
+  });
+
+  it("created_at and updated_at are populated", () => {
+    const item = db.createWorkItem({ kind: "feature", source: "manual", title: "New feature", created_by: "user:1" });
+    expect(item.created_at).toBeTruthy();
+    expect(item.updated_at).toBeTruthy();
+  });
+});
+
+describe("getWorkItem", () => {
+  it("returns the work item by id", () => {
+    const created = db.createWorkItem({ kind: "defect", source: "health", title: "Leak", created_by: "health" });
+    const fetched = db.getWorkItem(created.id);
+    expect(fetched).not.toBeNull();
+    expect(fetched!.title).toBe("Leak");
+  });
+
+  it("returns null for unknown id", () => {
+    expect(db.getWorkItem(99999)).toBeNull();
+  });
+});
+
+describe("listWorkItems", () => {
+  it("lists work items matching status filter", () => {
+    db.createWorkItem({ kind: "defect", source: "defect_scan", title: "A", created_by: "worker" });
+    db.createWorkItem({ kind: "feature", source: "telegram", title: "B", created_by: "user:1" });
+    expect(db.listWorkItems({ status: "proposed" })).toHaveLength(2);
+  });
+
+  it("returns empty when no items match", () => {
+    expect(db.listWorkItems({ status: "resolved" })).toHaveLength(0);
+  });
+});
+
+describe("updateWorkItemStatus", () => {
+  it("updates status to a valid value", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Bug", created_by: "user:1" });
+    db.updateWorkItemStatus(item.id, "approved");
+    expect(db.getWorkItem(item.id)!.status).toBe("approved");
+  });
+});
+
+describe("createWorkJob", () => {
+  it("creates a job with a work_item_id", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Bug", created_by: "user:1" });
+    const job = db.createWorkJob({ work_item_id: item.id, task_type: "defect_scan", idempotency_key: "scan:agent-bridge:1" });
+    expect(job.id).toBeGreaterThan(0);
+    expect(job.status).toBe("pending");
+    expect(job.work_item_id).toBe(item.id);
+  });
+
+  it("creates a job with no work_item_id (repository scan)", () => {
+    const job = db.createWorkJob({ task_type: "defect_scan", idempotency_key: "scan:agent-bridge:standalone" });
+    expect(job.id).toBeGreaterThan(0);
+    expect(job.work_item_id).toBeNull();
+  });
+
+  it("duplicate idempotency_key returns the existing job", () => {
+    const key = "scan:agent-bridge:idem";
+    const j1 = db.createWorkJob({ task_type: "defect_scan", idempotency_key: key });
+    const j2 = db.createWorkJob({ task_type: "defect_scan", idempotency_key: key });
+    expect(j2.id).toBe(j1.id);
+  });
+});
+
+describe("getWorkJob / listWorkJobs", () => {
+  it("retrieves job by id", () => {
+    const job = db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:1" });
+    expect(db.getWorkJob(job.id)!.task_type).toBe("ops_check");
+  });
+
+  it("returns null for unknown id", () => {
+    expect(db.getWorkJob(99999)).toBeNull();
+  });
+
+  it("lists jobs filtered by status", () => {
+    db.createWorkJob({ task_type: "defect_scan", idempotency_key: "scan:a" });
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:b" });
+    expect(db.listWorkJobs({ status: "pending" })).toHaveLength(2);
+    expect(db.listWorkJobs({ status: "completed" })).toHaveLength(0);
+  });
+});
+
+describe("createApproval / resolveApproval", () => {
+  it("creates a pending approval", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "X", created_by: "user:1" });
+    const appr = db.createApproval({ work_item_id: item.id, approval_type: "merge_pr", requested_by: "worker" });
+    expect(appr.status).toBe("pending");
+  });
+
+  it("resolveApproval sets approved state", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Y", created_by: "user:1" });
+    const appr = db.createApproval({ work_item_id: item.id, approval_type: "open_pr", requested_by: "worker" });
+    const resolved = db.resolveApproval(appr.id, "approved", "user:42");
+    expect(resolved.status).toBe("approved");
+    expect(resolved.decided_by).toBe("user:42");
+  });
+
+  it("resolving an already-decided approval does not change state", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Z", created_by: "user:1" });
+    const appr = db.createApproval({ work_item_id: item.id, approval_type: "open_pr", requested_by: "worker" });
+    db.resolveApproval(appr.id, "approved", "user:42");
+    const second = db.resolveApproval(appr.id, "rejected", "user:99");
+    expect(second.status).toBe("approved");
+  });
+});
+
+describe("linkGithubIssue / linkGithubPr", () => {
+  it("stores a github issue link", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Issue", created_by: "user:1" });
+    const link = db.linkGithubIssue({ work_item_id: item.id, repository: "owner/repo", issue_number: 42 });
+    expect(link.issue_number).toBe(42);
+  });
+
+  it("github_links enforces uniqueness for (repository, issue_number)", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Dup", created_by: "user:1" });
+    db.linkGithubIssue({ work_item_id: item.id, repository: "owner/repo", issue_number: 10 });
+    expect(() => db.linkGithubIssue({ work_item_id: item.id, repository: "owner/repo", issue_number: 10 })).toThrow();
+  });
+
+  it("stores a github PR link", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "PR", created_by: "user:1" });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 7, branch_name: "agent/work-1" });
+    expect(link.pr_number).toBe(7);
+    expect(link.branch_name).toBe("agent/work-1");
+  });
+
+  it("github_links enforces uniqueness for (repository, pr_number)", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Dup PR", created_by: "user:1" });
+    db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 5 });
+    expect(() => db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 5 })).toThrow();
+  });
+});
+
+// ── Phase 1: Slice 2 — Job Lease Lifecycle ────────────────────────────────────
+
+describe("claimNextWorkJob", () => {
+  it("claims the oldest pending job", () => {
+    db.createWorkJob({ task_type: "defect_scan", idempotency_key: "scan:old" });
+    const claimed = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60);
+    expect(claimed).not.toBeNull();
+    expect(claimed!.status).toBe("leased");
+    expect(claimed!.lease_owner).toBe("worker-1");
+  });
+
+  it("returns null when no pending jobs exist", () => {
+    expect(db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)).toBeNull();
+  });
+
+  it("second worker cannot claim same active lease", () => {
+    db.createWorkJob({ task_type: "defect_scan", idempotency_key: "scan:x" });
+    db.claimNextWorkJob("worker-1", new Date().toISOString(), 60);
+    expect(db.claimNextWorkJob("worker-2", new Date().toISOString(), 60)).toBeNull();
+  });
+
+  it("expired leased job can be reclaimed", () => {
+    db.createWorkJob({ task_type: "defect_scan", idempotency_key: "scan:exp" });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 1)!;
+    const past = new Date(Date.now() - 120_000).toISOString();
+    db.raw.prepare(`UPDATE work_jobs SET lease_expires_at = ? WHERE id = ?`).run(past, job.id);
+    const reclaimed = db.claimNextWorkJob("worker-2", new Date().toISOString(), 60);
+    expect(reclaimed).not.toBeNull();
+    expect(reclaimed!.lease_owner).toBe("worker-2");
+  });
+});
+
+describe("markWorkJobRunning / heartbeatWorkJob", () => {
+  it("transitions job from leased to running", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:r" });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
+    db.markWorkJobRunning(job.id, "worker-1");
+    expect(db.getWorkJob(job.id)!.status).toBe("running");
+  });
+
+  it("heartbeat updates heartbeat_at", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:hb" });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
+    db.markWorkJobRunning(job.id, "worker-1");
+    const ts = new Date().toISOString();
+    db.heartbeatWorkJob(job.id, "worker-1", ts);
+    expect(db.getWorkJob(job.id)!.heartbeat_at).toBe(ts);
+  });
+});
+
+describe("completeWorkJob / failWorkJob", () => {
+  it("completing clears lease and stores result", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:done" });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
+    db.markWorkJobRunning(job.id, "worker-1");
+    db.completeWorkJob(job.id, { summary: "ok" });
+    const done = db.getWorkJob(job.id)!;
+    expect(done.status).toBe("completed");
+    expect(done.lease_owner).toBeNull();
+    expect(JSON.parse(done.result_json!).summary).toBe("ok");
+  });
+
+  it("failing increments attempt_count and stores error", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:fail" });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
+    db.markWorkJobRunning(job.id, "worker-1");
+    db.failWorkJob(job.id, "timeout after 30s");
+    const failed = db.getWorkJob(job.id)!;
+    expect(failed.attempt_count).toBe(1);
+    expect(failed.error).toBe("timeout after 30s");
+  });
+
+  it("failed job with attempts remaining returns to pending", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:retry", max_attempts: 3 });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
+    db.markWorkJobRunning(job.id, "worker-1");
+    db.failWorkJob(job.id, "err");
+    expect(db.getWorkJob(job.id)!.status).toBe("pending");
+  });
+
+  it("failed job with attempts exhausted becomes failed permanently", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:exhaust", max_attempts: 1 });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
+    db.markWorkJobRunning(job.id, "worker-1");
+    db.failWorkJob(job.id, "fatal");
+    expect(db.getWorkJob(job.id)!.status).toBe("failed");
+  });
+});
+
+describe("recoverExpiredWorkJobs", () => {
+  it("returns expired running jobs to pending when attempts remain", () => {
+    db.createWorkJob({ task_type: "defect_scan", idempotency_key: "scan:recover", max_attempts: 2 });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 1)!;
+    db.markWorkJobRunning(job.id, "worker-1");
+    const past = new Date(Date.now() - 120_000).toISOString();
+    db.raw.prepare(`UPDATE work_jobs SET lease_expires_at = ? WHERE id = ?`).run(past, job.id);
+    const recovered = db.recoverExpiredWorkJobs(new Date().toISOString());
+    expect(recovered).toBe(1);
+    expect(db.getWorkJob(job.id)!.status).toBe("pending");
+  });
+});
+
+describe("cancelWorkJob", () => {
+  it("cancels a pending job", () => {
+    const job = db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:cancel" });
+    db.cancelWorkJob(job.id, "user request");
+    expect(db.getWorkJob(job.id)!.status).toBe("cancelled");
+  });
+});

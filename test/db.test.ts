@@ -569,3 +569,50 @@ describe("cancelWorkJob", () => {
     expect(db.getWorkJob(job.id)!.status).toBe("cancelled");
   });
 });
+
+// ── Security hardening: lease ownership + approval expiry ─────────────────────
+
+describe("resolveApproval — expiry enforcement", () => {
+  it("does not resolve an expired approval", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Exp", created_by: "user:1" });
+    const past = new Date(Date.now() - 5000).toISOString();
+    const appr = db.createApproval({ work_item_id: item.id, approval_type: "open_pr", requested_by: "worker", expires_at: past });
+    const result = db.resolveApproval(appr.id, "approved", "user:42");
+    // Expired approval should remain pending (or be marked expired), not approved
+    expect(result.status).not.toBe("approved");
+  });
+
+  it("resolves a non-expired approval normally", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Valid", created_by: "user:1" });
+    const future = new Date(Date.now() + 60_000).toISOString();
+    const appr = db.createApproval({ work_item_id: item.id, approval_type: "open_pr", requested_by: "worker", expires_at: future });
+    const result = db.resolveApproval(appr.id, "approved", "user:42");
+    expect(result.status).toBe("approved");
+  });
+});
+
+describe("lease ownership enforcement", () => {
+  it("markWorkJobRunning does not update if wrong owner", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:own1" });
+    const job = db.claimNextWorkJob("worker-A", new Date().toISOString(), 60)!;
+    db.markWorkJobRunning(job.id, "worker-B"); // wrong owner
+    // Should remain leased, not running
+    expect(db.getWorkJob(job.id)!.status).toBe("leased");
+  });
+
+  it("completeWorkJob does not update if wrong owner", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:own2" });
+    const job = db.claimNextWorkJob("worker-A", new Date().toISOString(), 60)!;
+    db.markWorkJobRunning(job.id, "worker-A");
+    db.completeWorkJob(job.id, { summary: "ok" }, "worker-B"); // wrong owner
+    expect(db.getWorkJob(job.id)!.status).toBe("running");
+  });
+
+  it("failWorkJob does not update if wrong owner", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:own3" });
+    const job = db.claimNextWorkJob("worker-A", new Date().toISOString(), 60)!;
+    db.markWorkJobRunning(job.id, "worker-A");
+    db.failWorkJob(job.id, "err", "worker-B"); // wrong owner
+    expect(db.getWorkJob(job.id)!.status).toBe("running");
+  });
+});

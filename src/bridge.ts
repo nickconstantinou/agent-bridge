@@ -58,6 +58,10 @@ export function buildModelsText(kind: string, { db, config }: { db: BridgeDb; co
   return `[${kind} model settings]\n\nCurrent: ${current}\nAvailable: ${available}\n\nSelect a model below:`;
 }
 
+export function parseModelPreference(raw: string | undefined): string[] {
+  return raw ? raw.split(",").map((s) => s.trim()).filter(Boolean) : [];
+}
+
 export { runCli, runCliAsync, parseCliResult, validateBridgeConfig, buildCliInvocation, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses, toUserMessage, resolveAntigravityConversationId, extractAntigravityConversationId, readAntigravityLastConversation, readLatestAntigravityConversationFromLogs, setAntigravityModel, toAntigravityModelLabel, scrubOutputDir };
 export { openDb, BridgeDb };
 export { buildTelegramCommands, handleCommand, isBridgeCommand } from "./commands.js";

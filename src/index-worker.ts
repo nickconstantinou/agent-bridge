@@ -13,6 +13,7 @@ import {
   openDb,
   isAuthorizedMessage,
   shutdownCliProcesses,
+  parseModelPreference,
 } from "./bridge.js";
 import { TelegramClient } from "./telegram.js";
 import { BridgeEngine } from "./engine.js";
@@ -42,10 +43,6 @@ const dbPath = process.env.DB_PATH || `${getBridgeProjectDir()}/.data/bridge.sql
 const pollIntervalMs = Number(process.env.POLL_INTERVAL_MS || 1000);
 const executionMode = (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") || "safe";
 const asyncEnabled = process.env.BRIDGE_ASYNC_ENABLED !== "false";
-
-function parseModelPreference(raw: string | undefined): string[] {
-  return raw ? raw.split(",").map((s) => s.trim()).filter(Boolean) : [];
-}
 
 const db = openDb(dbPath);
 const client = new TelegramClient(token, fetch, 45_000);

@@ -18,7 +18,7 @@ import { BridgeEngine } from "./engine.js";
 import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
-import { isAuthorizedMessage, extractPromptText } from "./bridge.js";
+import { isAuthorizedMessage, extractPromptText, parseModelPreference } from "./bridge.js";
 import {
   getUserCliPreference,
   setUserCliPreference,
@@ -49,10 +49,6 @@ const dbPath = process.env.DB_PATH || `${getBridgeProjectDir()}/.data/bridge.sql
 const pollIntervalMs = Number(process.env.POLL_INTERVAL_MS || 1000);
 const executionMode = (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") || "safe";
 const asyncEnabled = process.env.BRIDGE_ASYNC_ENABLED !== "false";
-
-function parseModelPreference(raw: string | undefined): string[] {
-  return raw ? raw.split(",").map((s) => s.trim()).filter(Boolean) : [];
-}
 
 const config: BridgeConfig = {
   allowedUserIds,

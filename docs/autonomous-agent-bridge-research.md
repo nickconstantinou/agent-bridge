@@ -2,14 +2,14 @@
 
 ## Status
 
-**Phase 0 complete. Phase 1 in progress.** Both new bots are deployed and running. Worker bot now routes plain messages through the CLI fallback chain.
+**Phases 0, 1, and 2 complete. Phase 3 in progress.** Both new bots are deployed and running. The SQLite database schema, lease operations, heartbeats, and recovery mechanisms are fully implemented and tested.
 
 | Phase | Status |
 |---|---|
 | Phase 0 — bot infrastructure | ✅ Complete |
-| Phase 1 — durable work schema | 🔄 In progress |
-| Phase 2 — job lease lifecycle | Not started |
-| Phase 3 — Telegram job commands | Not started |
+| Phase 1 — durable work schema | ✅ Complete |
+| Phase 2 — job lease lifecycle | ✅ Complete |
+| Phase 3 — Telegram job commands | 🔄 In progress |
 | Phase 4 — read-only defect scan | Not started |
 | Phase 5 — feature planning loop | Not started |
 | Phase 6 — GitHub issue creation | Not started |
@@ -2258,7 +2258,7 @@ Phase 0 scope for this bot: wire up the bot, implement `/switch` and `/cli` comm
 - Daily new PR cap per repository (suggested: 3).
 - Stale PR threshold before digest (suggested: 48 hours).
 
-### Phase 1: Durable work schema ✅ In progress
+### Phase 1: Durable work schema ✅ Complete
 
 Covers Slices 1–2 from the Detailed Agent Handoff Plan.
 
@@ -2282,7 +2282,7 @@ npm test
 npm run typecheck
 ```
 
-### Phase 2: Job lease lifecycle
+### Phase 2: Job lease lifecycle ✅ Complete
 
 Red tests:
 
@@ -2304,7 +2304,7 @@ npm test
 npm run typecheck
 ```
 
-### Phase 3: Telegram job commands
+### Phase 3: Telegram job commands 🔄 In progress
 
 Red tests:
 

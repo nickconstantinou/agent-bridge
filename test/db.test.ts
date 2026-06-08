@@ -515,7 +515,7 @@ describe("completeWorkJob / failWorkJob", () => {
     db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:done" });
     const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
     db.markWorkJobRunning(job.id, "worker-1");
-    db.completeWorkJob(job.id, { summary: "ok" });
+    db.completeWorkJob(job.id, { summary: "ok" }, "worker-1");
     const done = db.getWorkJob(job.id)!;
     expect(done.status).toBe("completed");
     expect(done.lease_owner).toBeNull();
@@ -526,7 +526,7 @@ describe("completeWorkJob / failWorkJob", () => {
     db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:fail" });
     const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
     db.markWorkJobRunning(job.id, "worker-1");
-    db.failWorkJob(job.id, "timeout after 30s");
+    db.failWorkJob(job.id, "timeout after 30s", "worker-1");
     const failed = db.getWorkJob(job.id)!;
     expect(failed.attempt_count).toBe(1);
     expect(failed.error).toBe("timeout after 30s");
@@ -536,7 +536,7 @@ describe("completeWorkJob / failWorkJob", () => {
     db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:retry", max_attempts: 3 });
     const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
     db.markWorkJobRunning(job.id, "worker-1");
-    db.failWorkJob(job.id, "err");
+    db.failWorkJob(job.id, "err", "worker-1");
     expect(db.getWorkJob(job.id)!.status).toBe("pending");
   });
 
@@ -544,7 +544,7 @@ describe("completeWorkJob / failWorkJob", () => {
     db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:exhaust", max_attempts: 1 });
     const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
     db.markWorkJobRunning(job.id, "worker-1");
-    db.failWorkJob(job.id, "fatal");
+    db.failWorkJob(job.id, "fatal", "worker-1");
     expect(db.getWorkJob(job.id)!.status).toBe("failed");
   });
 });

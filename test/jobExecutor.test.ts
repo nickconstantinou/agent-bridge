@@ -144,7 +144,7 @@ describe("executeNextJob", () => {
     });
 
     expect(notify).toHaveBeenCalledOnce();
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Found 2 potential issues."));
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Found 2 potential issues."), expect.anything());
   });
 
   it("calls notify with an error summary when the handler throws", async () => {

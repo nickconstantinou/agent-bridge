@@ -221,4 +221,40 @@ describe("createTddImplementationHandler", () => {
 
     expect(db.getWorkItem(item.id)!.status).toBe("in_progress");
   });
+
+  it("does not queue a pr_lifecycle job when item has no repository", async () => {
+    const stubs = makeStubs();
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Bug", created_by: "worker",
+    });
+
+    await createTddImplementationHandler(stubs)(
+      { work_item_id: item.id, repository_path: "/tmp/repo" },
+      { db, workerId: "w" },
+    );
+
+    const jobs = db.raw.prepare("SELECT * FROM work_jobs WHERE task_type = 'pr_lifecycle'").all();
+    expect(jobs).toHaveLength(0);
+  });
+
+  it("queues a pr_lifecycle job when item has a repository set", async () => {
+    const stubs = makeStubs();
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Bug", created_by: "worker",
+      repository: "owner/repo",
+    });
+
+    await createTddImplementationHandler(stubs)(
+      { work_item_id: item.id, repository_path: "/tmp/repo" },
+      { db, workerId: "w" },
+    );
+
+    const jobs = db.raw.prepare("SELECT * FROM work_jobs WHERE task_type = 'pr_lifecycle' AND work_item_id = ?").all(item.id) as any[];
+    expect(jobs).toHaveLength(1);
+    const parsed = JSON.parse(jobs[0].input_json);
+    expect(parsed.branch_name).toMatch(/^agent\/work-\d+/);
+    expect(parsed.repository).toBe("owner/repo");
+  });
 });

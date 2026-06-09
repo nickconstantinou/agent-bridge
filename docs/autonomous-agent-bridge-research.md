@@ -2,7 +2,7 @@
 
 ## Status
 
-**Phases 0–6 complete. Phase 7 in progress.** Both new bots are deployed and running. The SQLite schema, lease lifecycle, Telegram commands, callback handling, job executor loop, and defect scan handler are fully implemented and tested. `/review` now queues real defect_scan jobs that execute via the CLI and create proposed work_items.
+**All phases complete.** The full autonomous loop is live: `/review` → defect scan → proposed work items → human approval → TDD implementation branch → draft PR → human merge gate. 686 tests passing, TypeScript clean.
 
 | Phase | Status |
 |---|---|
@@ -13,8 +13,8 @@
 | Phase 4 — read-only defect scan | ✅ Complete |
 | Phase 5 — feature planning loop | ✅ Complete |
 | Phase 6 — GitHub issue creation | ✅ Complete |
-| Phase 7 — TDD implementation job | 🔄 In progress |
-| Phase 8 — PR lifecycle + merge gate | Not started |
+| Phase 7 — TDD implementation job | ✅ Complete |
+| Phase 8 — PR lifecycle + merge gate | ✅ Complete |
 
 This note reviews the proposed Agent Bridge evolution from a Telegram-driven CLI wrapper into an asynchronous, policy-gated engineering agent. It is intentionally specific enough for a later implementation agent to use, but it should be treated as a design document until each phase is converted into red-green-refactor work.
 

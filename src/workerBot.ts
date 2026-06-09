@@ -34,10 +34,11 @@ const WORKER_COMMANDS = new Set(["/jobs", "/issues", "/review", "/models", "/job
 
 export function buildWorkerCommands(): Array<{ command: string; description: string }> {
   return [
-    { command: "jobs",   description: "List active and pending jobs" },
-    { command: "issues", description: "List proposed work items" },
-    { command: "review", description: "Trigger a defect scan: /review [repo]" },
-    { command: "models", description: "Show CLI execution chain" },
+    { command: "jobs",    description: "List active and pending jobs" },
+    { command: "issues",  description: "List proposed work items" },
+    { command: "review",  description: "Trigger a defect scan: /review [repo]" },
+    { command: "feature", description: "Plan a new feature: /feature <brief description>" },
+    { command: "models",  description: "Show CLI execution chain" },
   ];
 }
 

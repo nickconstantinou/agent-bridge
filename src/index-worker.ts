@@ -26,6 +26,7 @@ import { startJobExecutorLoop } from "./jobExecutorLoop.js";
 import { createDefectScanHandler } from "./handlers/defectScan.js";
 import { createFeaturePlanHandler } from "./handlers/featurePlan.js";
 import { createGithubIssueHandler } from "./handlers/githubIssue.js";
+import { createTddImplementationHandler } from "./handlers/tddImplementation.js";
 import { runCli } from "./cli.js";
 import { execFileSync } from "node:child_process";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
@@ -148,6 +149,12 @@ const stopJobLoop = startJobExecutorLoop({
     feature_plan: createFeaturePlanHandler({
       runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd()),
       command: defectScanCommand,
+    }),
+    tdd_implementation: createTddImplementationHandler({
+      runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd()),
+      command: defectScanCommand,
+      runGit: (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8" }),
+      runVerify: (cwd) => execFileSync("npm", ["test"], { cwd, encoding: "utf8" }),
     }),
     open_github_issue: createGithubIssueHandler({
       runCommand: (binary, args) => new Promise((resolve, reject) => {

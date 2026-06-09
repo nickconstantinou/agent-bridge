@@ -17,8 +17,8 @@
     "verify:shared-memory": "tsx scripts/setup-shared-memory.ts --verify"
   },
   "dependencies": {
-    "@anthropic-ai/claude-code": "^2.1.168",
-    "@openai/codex": "^0.137.0",
+    "@anthropic-ai/claude-code": "^2.1.169",
+    "@openai/codex": "^0.138.0",
     "better-sqlite3": "^12.9.0",
     "dotenv": "^17.2.3",
     "tsx": "^4.21.0"

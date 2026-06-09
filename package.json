@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "^2.1.170",
-    "@openai/codex": "^0.138.0",
+    "@openai/codex": "^0.139.0",
     "better-sqlite3": "^12.9.0",
     "dotenv": "^17.2.3",
     "tsx": "^4.21.0"

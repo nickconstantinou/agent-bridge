@@ -121,4 +121,27 @@ describe("createFeaturePlanHandler", () => {
       handler({ plan_id: 9999 }, { db, workerId: "worker" })
     ).rejects.toThrow(/not found|missing/i);
   });
+
+  it("sets repository on the work_item when input.repository is provided", async () => {
+    const runCli = vi.fn().mockResolvedValue("## Plan\nReady.");
+    const handler = createFeaturePlanHandler({ runCli });
+
+    const plan = db.createFeaturePlan({ chatId: "chat-1", userId: "u", brief: "add caching layer" });
+    await handler({ plan_id: plan.id, repository: "my-repo" }, { db, workerId: "worker" });
+
+    const items = db.listWorkItems();
+    expect(items.length).toBe(1);
+    expect(items[0].repository).toBe("my-repo");
+  });
+
+  it("leaves repository null on the work_item when input.repository is not provided", async () => {
+    const runCli = vi.fn().mockResolvedValue("## Plan\nReady.");
+    const handler = createFeaturePlanHandler({ runCli });
+
+    const plan = db.createFeaturePlan({ chatId: "chat-1", userId: "u", brief: "add caching" });
+    await handler({ plan_id: plan.id }, { db, workerId: "worker" });
+
+    const items = db.listWorkItems();
+    expect(items[0].repository).toBeNull();
+  });
 });

@@ -276,5 +276,39 @@ describe("handleWorkerCommand /feature", () => {
     const plan = db.getActivePlanForChat("55");
     expect(plan!.brief).toBe("second idea");
   });
+
+  it("includes repository in feature_plan job input when defaultRepo is set", () => {
+    handleWorkerCommand("/feature add caching layer", {
+      workerEnabled: true, db, chatId: 42, userId: "u", defaultRepo: "agent-bridge",
+    });
+    const jobs = db.listWorkJobs();
+    const job = jobs.find((j: any) => j.task_type === "feature_plan");
+    expect(job).toBeDefined();
+    const input = JSON.parse(job!.input_json);
+    expect(input.repository).toBe("agent-bridge");
+  });
+
+  it("omits repository from feature_plan job input when defaultRepo is not set", () => {
+    handleWorkerCommand("/feature add dark mode", {
+      workerEnabled: true, db, chatId: 43, userId: "u",
+    });
+    const jobs = db.listWorkJobs();
+    const job = jobs.find((j: any) => j.task_type === "feature_plan");
+    expect(job).toBeDefined();
+    const input = JSON.parse(job!.input_json);
+    expect(input.repository).toBeUndefined();
+  });
+
+  it("includes start_message in feature_plan job input", () => {
+    handleWorkerCommand("/feature add search", {
+      workerEnabled: true, db, chatId: 44, userId: "u",
+    });
+    const jobs = db.listWorkJobs();
+    const job = jobs.find((j: any) => j.task_type === "feature_plan");
+    expect(job).toBeDefined();
+    const input = JSON.parse(job!.input_json);
+    expect(typeof input.start_message).toBe("string");
+    expect(input.start_message.toLowerCase()).toMatch(/plan|analys|draft/i);
+  });
 });
 

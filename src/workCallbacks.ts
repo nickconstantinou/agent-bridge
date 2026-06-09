@@ -226,6 +226,14 @@ export async function handleWorkerCallback(
       idempotency_key: `tdd:${item.id}`,
       work_item_id: item.id,
     });
+    if (item.repository) {
+      db.createWorkJob({
+        task_type: "open_github_issue",
+        idempotency_key: `gh_issue:${item.id}`,
+        work_item_id: item.id,
+        input_json: { work_item_id: item.id, repository: item.repository },
+      });
+    }
     
     await client.answerCallbackQuery({ callback_query_id: cbq.id });
     if (chatId && messageId) {

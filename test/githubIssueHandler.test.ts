@@ -25,13 +25,13 @@ describe("createGithubIssueHandler", () => {
   });
 
   it("returns a handler function", () => {
-    const handler = createGithubIssueHandler({ runShell: vi.fn() });
+    const handler = createGithubIssueHandler({ runCommand: vi.fn() });
     expect(typeof handler).toBe("function");
   });
 
-  it("calls runShell with a gh issue create command", async () => {
-    const runShell = vi.fn().mockResolvedValue("https://github.com/owner/repo/issues/42");
-    const handler = createGithubIssueHandler({ runShell });
+  it("calls runCommand with gh binary and issue create args", async () => {
+    const runCommand = vi.fn().mockResolvedValue("https://github.com/owner/repo/issues/42");
+    const handler = createGithubIssueHandler({ runCommand });
 
     const item = db.createWorkItem({
       kind: "defect", source: "telegram",
@@ -45,16 +45,18 @@ describe("createGithubIssueHandler", () => {
       { db, workerId: "test-worker" },
     );
 
-    expect(runShell).toHaveBeenCalledOnce();
-    const cmd: string = runShell.mock.calls[0][0];
-    expect(cmd).toContain("gh issue create");
-    expect(cmd).toContain("owner/repo");
-    expect(cmd).toContain("Fix race condition in lock.ts");
+    expect(runCommand).toHaveBeenCalledOnce();
+    const [binary, args]: [string, string[]] = runCommand.mock.calls[0];
+    expect(binary).toBe("gh");
+    expect(args).toContain("issue");
+    expect(args).toContain("create");
+    expect(args).toContain("owner/repo");
+    expect(args).toContain("Fix race condition in lock.ts");
   });
 
-  it("includes agent-proposed label in the gh command", async () => {
-    const runShell = vi.fn().mockResolvedValue("https://github.com/owner/repo/issues/1");
-    const handler = createGithubIssueHandler({ runShell });
+  it("includes agent-proposed label in the args", async () => {
+    const runCommand = vi.fn().mockResolvedValue("https://github.com/owner/repo/issues/1");
+    const handler = createGithubIssueHandler({ runCommand });
 
     const item = db.createWorkItem({
       kind: "feature", source: "telegram",
@@ -63,13 +65,13 @@ describe("createGithubIssueHandler", () => {
 
     await handler({ work_item_id: item.id, repository: "owner/repo" }, { db, workerId: "w" });
 
-    const cmd: string = runShell.mock.calls[0][0];
-    expect(cmd).toContain("agent-proposed");
+    const args: string[] = runCommand.mock.calls[0][1];
+    expect(args.some(a => a.includes("agent-proposed"))).toBe(true);
   });
 
   it("stores a github_link record after successful creation", async () => {
-    const runShell = vi.fn().mockResolvedValue("https://github.com/owner/repo/issues/99");
-    const handler = createGithubIssueHandler({ runShell });
+    const runCommand = vi.fn().mockResolvedValue("https://github.com/owner/repo/issues/99");
+    const handler = createGithubIssueHandler({ runCommand });
 
     const item = db.createWorkItem({
       kind: "defect", source: "defect_scan",
@@ -85,8 +87,8 @@ describe("createGithubIssueHandler", () => {
   });
 
   it("transitions the work_item status to 'in_progress' after issue creation", async () => {
-    const runShell = vi.fn().mockResolvedValue("https://github.com/owner/repo/issues/7");
-    const handler = createGithubIssueHandler({ runShell });
+    const runCommand = vi.fn().mockResolvedValue("https://github.com/owner/repo/issues/7");
+    const handler = createGithubIssueHandler({ runCommand });
 
     const item = db.createWorkItem({
       kind: "defect", source: "telegram",
@@ -101,8 +103,8 @@ describe("createGithubIssueHandler", () => {
 
   it("returns a summary containing the issue URL", async () => {
     const url = "https://github.com/owner/repo/issues/55";
-    const runShell = vi.fn().mockResolvedValue(url);
-    const handler = createGithubIssueHandler({ runShell });
+    const runCommand = vi.fn().mockResolvedValue(url);
+    const handler = createGithubIssueHandler({ runCommand });
 
     const item = db.createWorkItem({
       kind: "feature", source: "telegram",
@@ -118,16 +120,16 @@ describe("createGithubIssueHandler", () => {
   });
 
   it("throws if the work_item_id does not exist", async () => {
-    const handler = createGithubIssueHandler({ runShell: vi.fn() });
+    const handler = createGithubIssueHandler({ runCommand: vi.fn() });
 
     await expect(
       handler({ work_item_id: 9999, repository: "owner/repo" }, { db, workerId: "w" })
     ).rejects.toThrow(/not found|missing/i);
   });
 
-  it("throws if runShell returns no URL", async () => {
-    const runShell = vi.fn().mockResolvedValue("");
-    const handler = createGithubIssueHandler({ runShell });
+  it("throws if runCommand returns no URL", async () => {
+    const runCommand = vi.fn().mockResolvedValue("");
+    const handler = createGithubIssueHandler({ runCommand });
 
     const item = db.createWorkItem({
       kind: "defect", source: "telegram",
@@ -139,9 +141,9 @@ describe("createGithubIssueHandler", () => {
     ).rejects.toThrow(/url|issue/i);
   });
 
-  it("propagates shell errors", async () => {
-    const runShell = vi.fn().mockRejectedValue(new Error("gh: not logged in"));
-    const handler = createGithubIssueHandler({ runShell });
+  it("propagates command errors", async () => {
+    const runCommand = vi.fn().mockRejectedValue(new Error("gh: not logged in"));
+    const handler = createGithubIssueHandler({ runCommand });
 
     const item = db.createWorkItem({
       kind: "defect", source: "telegram",

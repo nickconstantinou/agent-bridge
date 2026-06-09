@@ -25,7 +25,9 @@ import { handleWorkerCallback } from "./workCallbacks.js";
 import { startJobExecutorLoop } from "./jobExecutorLoop.js";
 import { createDefectScanHandler } from "./handlers/defectScan.js";
 import { createFeaturePlanHandler } from "./handlers/featurePlan.js";
+import { createGithubIssueHandler } from "./handlers/githubIssue.js";
 import { runCli } from "./cli.js";
+import { execFileSync } from "node:child_process";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 
 dotenv.config({
@@ -146,6 +148,16 @@ const stopJobLoop = startJobExecutorLoop({
     feature_plan: createFeaturePlanHandler({
       runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd()),
       command: defectScanCommand,
+    }),
+    open_github_issue: createGithubIssueHandler({
+      runCommand: (binary, args) => new Promise((resolve, reject) => {
+        try {
+          const output = execFileSync(binary, args, { encoding: "utf8", env: { ...process.env } });
+          resolve(output.trim());
+        } catch (err: any) {
+          reject(new Error(err.stderr?.toString() ?? String(err)));
+        }
+      }),
     }),
   },
   sendMessage: async (chatId: number, text: string) => {

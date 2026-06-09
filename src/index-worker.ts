@@ -150,7 +150,7 @@ const stopJobLoop = startJobExecutorLoop({
       command: defectScanCommand,
     }),
     feature_plan: createFeaturePlanHandler({
-      runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd()),
+      runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd(), { timeoutMs: 20 * 60 * 1000 }),
       command: defectScanCommand,
     }),
     tdd_implementation: createTddImplementationHandler({
@@ -225,7 +225,7 @@ for (;;) {
 
         // Worker commands (/jobs, /issues, /review, /feature, /models) take priority
         if (isWorkerCommand(rawText)) {
-          const result = handleWorkerCommand(rawText, { workerEnabled, cliChain, db, chatId, userId });
+          const result = handleWorkerCommand(rawText, { workerEnabled, cliChain, db, chatId, userId, defaultRepo: process.env.WORKER_DEFAULT_REPO });
           if (result) {
             const body = result.kind === "keyboard_message"
               ? { text: result.text, reply_markup: result.reply_markup }

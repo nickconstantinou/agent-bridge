@@ -16,6 +16,7 @@ export interface WorkerCommandContext {
   db?: BridgeDb;
   chatId?: number;
   userId?: string;
+  defaultRepo?: string;
 }
 
 export interface WorkerMessageResult {
@@ -209,10 +210,16 @@ export function handleWorkerCommand(
       const chatKey = String(ctx.chatId);
       const userId = ctx.userId ?? "unknown";
       const plan = db.createFeaturePlan({ chatId: chatKey, userId, brief });
+      const jobInput: Record<string, unknown> = {
+        plan_id: plan.id,
+        notify_chat_id: ctx.chatId,
+        start_message: `Analysing codebase and drafting plan for **${brief}**... This takes 1–3 minutes.`,
+      };
+      if (ctx.defaultRepo) jobInput.repository = ctx.defaultRepo;
       db.createWorkJob({
         task_type: "feature_plan",
         idempotency_key: `feature_plan:${plan.id}`,
-        input_json: { plan_id: plan.id, notify_chat_id: ctx.chatId },
+        input_json: jobInput,
       });
       return {
         kind: "message",

@@ -83,6 +83,8 @@ export function createFeaturePlanHandler(deps: FeaturePlanDeps): JobHandler {
     ctx.db.updateFeaturePlanScope(planId, { plan_text: planText });
     ctx.db.updateFeaturePlanStatus(planId, "ready");
 
+    const repository = typeof input.repository === "string" ? input.repository : undefined;
+
     // Create a proposed work_item so the user can approve/close via /issues
     ctx.db.createWorkItem({
       kind: "feature",
@@ -90,7 +92,7 @@ export function createFeaturePlanHandler(deps: FeaturePlanDeps): JobHandler {
       title: `Feature: ${plan.brief}`,
       body: planText.slice(0, 4000),
       created_by: plan.user_id,
-      repository: undefined,
+      repository,
     });
 
     const summary = `Feature plan ready: **${plan.brief}**\n\nUse /issues to review and approve.`;

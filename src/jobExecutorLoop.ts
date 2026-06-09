@@ -25,20 +25,28 @@ export function startJobExecutorLoop(deps: JobExecutorLoopDeps): () => void {
       try {
         // Peek at next claimable job to get its input_json for notify routing
         const candidate = db.raw.prepare(
-          `SELECT input_json FROM work_jobs
+          `SELECT task_type, status, input_json FROM work_jobs
            WHERE status = 'pending'
               OR (status IN ('leased','running') AND datetime(lease_expires_at) <= datetime('now'))
            ORDER BY created_at ASC LIMIT 1`,
-        ).get() as { input_json: string } | undefined;
+        ).get() as { task_type: string; status: string; input_json: string } | undefined;
 
         let notifyChatId: number | null = null;
+        let startMessage: string | null = null;
         if (candidate) {
           try {
             const parsed = JSON.parse(candidate.input_json);
             if (typeof parsed.notify_chat_id === "number") {
               notifyChatId = parsed.notify_chat_id;
             }
+            if (candidate.status === "pending" && typeof parsed.start_message === "string") {
+              startMessage = parsed.start_message;
+            }
           } catch { /* non-fatal */ }
+        }
+
+        if (notifyChatId != null && startMessage != null) {
+          await sendMessage(notifyChatId, startMessage);
         }
 
         const notify = notifyChatId != null
@@ -56,7 +64,11 @@ export function startJobExecutorLoop(deps: JobExecutorLoopDeps): () => void {
             }
           : () => Promise.resolve();
 
-        await executeNextJob({ db, workerId, handlers, notify });
+        // Long-running tasks (feature_plan, tdd_implementation) need a longer lease
+        const LONG_RUNNING_TASKS = new Set(["feature_plan", "tdd_implementation"]);
+        const leaseSeconds = candidate && LONG_RUNNING_TASKS.has(candidate.task_type) ? 1800 : 300;
+
+        await executeNextJob({ db, workerId, handlers, notify, leaseSeconds });
       } catch (err) {
         console.error("[job-executor-loop] unhandled error", err);
       }

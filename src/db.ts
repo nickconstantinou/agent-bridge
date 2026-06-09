@@ -154,6 +154,40 @@ export function openDb(dbPath: string): BridgeDb {
   try {
     raw.exec(`ALTER TABLE bridge_state ADD COLUMN claude_session_created_at TEXT`);
   } catch { /* column already exists */ }
+  // Migrate work_jobs task_type CHECK constraint to include feature_plan and pr_lifecycle.
+  // SQLite cannot ALTER CHECK constraints, so we use rename-recreate.
+  try {
+    const hasFeaturePlan = (raw.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='work_jobs'`
+    ).get() as { sql: string } | undefined)?.sql?.includes("'feature_plan'");
+    if (!hasFeaturePlan) {
+      raw.exec(`
+        ALTER TABLE work_jobs RENAME TO work_jobs_old;
+        CREATE TABLE work_jobs (
+          id               INTEGER PRIMARY KEY AUTOINCREMENT,
+          work_item_id     INTEGER,
+          task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','pr_lifecycle')),
+          status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','leased','running','waiting_approval','completed','failed','cancelled')),
+          bot              TEXT CHECK (bot IN ('codex','antigravity','claude')),
+          lease_owner      TEXT,
+          lease_expires_at TEXT,
+          heartbeat_at     TEXT,
+          attempt_count    INTEGER NOT NULL DEFAULT 0,
+          max_attempts     INTEGER NOT NULL DEFAULT 2,
+          idempotency_key  TEXT NOT NULL UNIQUE,
+          input_json       TEXT NOT NULL DEFAULT '{}',
+          result_json      TEXT,
+          error            TEXT,
+          created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(work_item_id) REFERENCES work_items(id)
+        );
+        INSERT INTO work_jobs SELECT * FROM work_jobs_old;
+        DROP TABLE work_jobs_old;
+      `);
+    }
+  } catch (err) { console.warn('[db] work_jobs migration failed:', err); }
+
   // Clear any locks left held from a previous process that was killed mid-execution
   raw.exec(`UPDATE bridge_state SET active_execution_lock = 0 WHERE active_execution_lock = 1`);
   // Expire sessions older than 7 days — prevents a stale/corrupt session from

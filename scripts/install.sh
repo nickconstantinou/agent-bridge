@@ -71,7 +71,7 @@ seed_from_env_file() {
   local key value
   for key in BRIDGE_ROOT_DIR BRIDGE_PROJECT_DIR \
               TELEGRAM_ALLOWED_USER_IDS TELEGRAM_ALLOWED_USER_ID \
-              TELEGRAM_BOT_TOKEN_CODEX TELEGRAM_BOT_TOKEN_ANTIGRAVITY TELEGRAM_BOT_TOKEN_CLAUDE \
+              TELEGRAM_BOT_TOKEN_CODEX TELEGRAM_BOT_TOKEN_ANTIGRAVITY TELEGRAM_BOT_TOKEN_CLAUDE TELEGRAM_BOT_TOKEN_HEALTH \
               CODEX_COMMAND ANTIGRAVITY_COMMAND CLAUDE_COMMAND \
               CODEX_PROJECT_DIR ANTIGRAVITY_PROJECT_DIR CLAUDE_PROJECT_DIR \
               AGENT_BRIDGE_SKILLS AGENT_BRIDGE_SKILL_LINK_MODE \
@@ -158,6 +158,7 @@ prompt TELEGRAM_ALLOWED_USER_IDS  "Telegram allowed user IDs (comma-separated)"
 prompt TELEGRAM_BOT_TOKEN_CODEX       "Codex bot token"
 prompt TELEGRAM_BOT_TOKEN_ANTIGRAVITY "Antigravity bot token"
 prompt TELEGRAM_BOT_TOKEN_CLAUDE      "Claude bot token (leave blank to skip)"
+prompt TELEGRAM_BOT_TOKEN_HEALTH      "Health bot token (leave blank to skip)"
 prompt CODEX_COMMAND       "Codex command"       "$(command -v codex  2>/dev/null || true)"
 prompt ANTIGRAVITY_COMMAND "Antigravity command" "$(command -v agy    2>/dev/null || true)"
 prompt CLAUDE_COMMAND      "Claude command"      "$(command -v claude 2>/dev/null || true)"
@@ -302,6 +303,7 @@ _write_shared_defaults() {
     [[ -n "${HEALTH_SUGGEST_BOT:-}" ]]               && echo "HEALTH_SUGGEST_BOT=${HEALTH_SUGGEST_BOT}"
     echo "HEALTH_CONTENT_CRAWLER_ENABLED=${HEALTH_CONTENT_CRAWLER_ENABLED:-0}"
     [[ -n "${HEALTH_CONTENT_CRAWLER_SCRIPT:-}" ]]   && echo "HEALTH_CONTENT_CRAWLER_SCRIPT=${HEALTH_CONTENT_CRAWLER_SCRIPT}"
+    [[ -n "${TELEGRAM_BOT_TOKEN_HEALTH:-}" ]]        && echo "TELEGRAM_BOT_TOKEN_HEALTH=${TELEGRAM_BOT_TOKEN_HEALTH}"
   } | sudo tee "${dest}" > /dev/null
   echo "  wrote ${dest}"
 }
@@ -326,11 +328,20 @@ _write_systemd_defaults() {
 _write_shared_defaults
 _write_systemd_defaults codex       TELEGRAM_BOT_TOKEN_CODEX       CODEX_COMMAND       CODEX_PROJECT_DIR
 _write_systemd_defaults antigravity TELEGRAM_BOT_TOKEN_ANTIGRAVITY ANTIGRAVITY_COMMAND ANTIGRAVITY_PROJECT_DIR
+if [[ -n "${TELEGRAM_BOT_TOKEN_HEALTH:-}" ]]; then
+  _write_systemd_defaults health TELEGRAM_BOT_TOKEN_HEALTH HEALTH_CLI_COMMAND HEALTH_CLI_BOT
+fi
 
 install_unit agent-bridge-codex
 install_unit agent-bridge-antigravity
+if [[ -n "${TELEGRAM_BOT_TOKEN_HEALTH:-}" ]]; then
+  install_unit agent-bridge-health
+fi
 
 UNITS_TO_ENABLE="agent-bridge-codex agent-bridge-antigravity"
+if [[ -n "${TELEGRAM_BOT_TOKEN_HEALTH:-}" ]]; then
+  UNITS_TO_ENABLE="${UNITS_TO_ENABLE} agent-bridge-health"
+fi
 
 if [[ -n "${TELEGRAM_BOT_TOKEN_CLAUDE:-}" ]]; then
   _write_systemd_defaults claude TELEGRAM_BOT_TOKEN_CLAUDE CLAUDE_COMMAND CLAUDE_PROJECT_DIR

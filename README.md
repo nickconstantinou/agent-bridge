@@ -40,7 +40,7 @@ npm run setup:shared-memory
 sudo bash scripts/install.sh
 ```
 
-The installer prompts for bot tokens, user IDs, and paths, then writes `.env.codex`, `.env.antigravity`, and `.env.claude` from the example templates and installs the systemd services.
+The installer prompts for bot tokens, user IDs, and paths, then writes `.env.codex`, `.env.antigravity`, and `.env.claude` from the example templates and installs the systemd services. If you also provide `TELEGRAM_BOT_TOKEN_HEALTH`, it writes `/etc/default/agent-bridge-health` and installs `agent-bridge-health.service` too.
 
 The installer records the absolute Node binary path as `NODE_BIN` in each systemd defaults file and the service templates run `tsx` through that binary. This avoids systemd falling back to an older ambient `node` on the login shell path.
 
@@ -56,6 +56,7 @@ npm run setup:shared-memory
 
 Then fill in the relevant token(s) and paths in each file:
 - `TELEGRAM_BOT_TOKEN_*` — bot token from @BotFather
+- `TELEGRAM_BOT_TOKEN_HEALTH` — optional separate token for the health bot service
 - `TELEGRAM_ALLOWED_USER_IDS` — your Telegram numeric user ID
 - `BRIDGE_ROOT_DIR` / `BRIDGE_PROJECT_DIR` — deployment paths supplied by environment or installer
 - `*_COMMAND` — absolute path to each CLI binary (use `which codex`, `which agy`, `which claude`)

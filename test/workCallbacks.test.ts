@@ -180,4 +180,46 @@ describe("handleWorkerCallback (Slice 5)", () => {
     expect(row.status).toBe("rejected");
     expect(client.editMessageText).toHaveBeenCalled();
   });
+
+  it("queues an open_github_issue job on wi_appv when repository is set", async () => {
+    const item = db.createWorkItem({
+      kind: "defect", source: "defect_scan",
+      title: "Race condition", created_by: "worker",
+      repository: "owner/repo",
+    });
+    const cbq = {
+      id: "cb-gh",
+      data: `wi:${item.id}:appv`,
+      from: { id: 42 },
+      message: { message_id: 200, chat: { id: 10 } },
+    };
+
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+
+    const jobs = db.listWorkJobs();
+    const ghJob = jobs.find(j => j.task_type === "open_github_issue");
+    expect(ghJob).toBeDefined();
+    const input = JSON.parse(ghJob!.input_json);
+    expect(input.work_item_id).toBe(item.id);
+    expect(input.repository).toBe("owner/repo");
+  });
+
+  it("does not queue open_github_issue when repository is not set", async () => {
+    const item = db.createWorkItem({
+      kind: "defect", source: "defect_scan",
+      title: "Bug with no repo", created_by: "worker",
+    });
+    const cbq = {
+      id: "cb-no-gh",
+      data: `wi:${item.id}:appv`,
+      from: { id: 42 },
+      message: { message_id: 201, chat: { id: 10 } },
+    };
+
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+
+    const jobs = db.listWorkJobs();
+    const ghJob = jobs.find(j => j.task_type === "open_github_issue");
+    expect(ghJob).toBeUndefined();
+  });
 });

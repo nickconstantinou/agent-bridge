@@ -28,12 +28,13 @@ export interface ExecuteNextJobDeps {
   db: BridgeDb;
   workerId: string;
   handlers: Partial<Record<string, JobHandler>>;
-  notify: (message: string) => Promise<void> | void;
+  notify: (message: string, result?: JobHandlerResult) => Promise<void> | void;
   leaseSeconds?: number;
 }
 
 export interface ExecuteNextJobResult {
   jobId: number;
+  handlerResult?: JobHandlerResult;
 }
 
 const DEFAULT_LEASE_SECONDS = 300;
@@ -75,8 +76,8 @@ export async function executeNextJob(
   try {
     const result = await handler(input, { db, workerId });
     db.completeWorkJob(job.id, result, workerId);
-    await notify(result.summary);
-    return { jobId: job.id };
+    await notify(result.summary, result);
+    return { jobId: job.id, handlerResult: result };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     db.failWorkJob(job.id, message, workerId);

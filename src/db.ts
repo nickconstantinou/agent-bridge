@@ -70,7 +70,7 @@ export function openDb(dbPath: string): BridgeDb {
     CREATE TABLE IF NOT EXISTS work_jobs (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
       work_item_id     INTEGER,
-      task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation')),
+      task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','pr_lifecycle')),
       status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','leased','running','waiting_approval','completed','failed','cancelled')),
       bot              TEXT CHECK (bot IN ('codex','antigravity','claude')),
       lease_owner      TEXT,

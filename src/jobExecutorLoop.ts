@@ -6,13 +6,14 @@
  */
 
 import { executeNextJob, type JobHandler } from "./jobExecutor.js";
+import { buildPrMergeKeyboard } from "./prMergeGate.js";
 import type { BridgeDb } from "./db.js";
 
 export interface JobExecutorLoopDeps {
   db: BridgeDb;
   workerId: string;
   handlers: Partial<Record<string, JobHandler>>;
-  sendMessage: (chatId: number, text: string) => Promise<void> | void;
+  sendMessage: (chatId: number, text: string, replyMarkup?: object) => Promise<void> | void;
   intervalMs?: number;
 }
 
@@ -41,7 +42,18 @@ export function startJobExecutorLoop(deps: JobExecutorLoopDeps): () => void {
         }
 
         const notify = notifyChatId != null
-          ? (msg: string) => sendMessage(notifyChatId!, msg)
+          ? (msg: string, result?: import("./jobExecutor.js").JobHandlerResult) => {
+              const replyMarkup = result && typeof result.work_item_id === "number"
+                ? (() => {
+                    // Attach merge keyboard when PR lifecycle job completes
+                    if (typeof result.prUrl === "string") {
+                      return buildPrMergeKeyboard(result.work_item_id as number);
+                    }
+                    return undefined;
+                  })()
+                : undefined;
+              return sendMessage(notifyChatId!, msg, replyMarkup);
+            }
           : () => Promise.resolve();
 
         await executeNextJob({ db, workerId, handlers, notify });

@@ -4,10 +4,16 @@
  *   wi:<id>:view
  *   wi:<id>:appv
  *   wi:<id>:clse
+ *   wi:<id>:mrgpr
+ *   wi:<id>:clspr
  *   job:<id>:cncl
  *   ap:<id>:yes
  *   ap:<id>:no
  */
+
+import { parsePrMergeCallback, handlePrMergeCallback } from "./prMergeGate.js";
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 export type WorkCallbackAction =
   | { type: "wi_view"; id: number }
@@ -190,13 +196,48 @@ export async function handleWorkerCallback(
   }
 
   const parsed = parseWorkCallback(cbq.data || "");
+  const messageId = cbq.message?.message_id;
+  const chatId = cbq.message?.chat?.id;
+
+  // Check for merge-gate callbacks before falling through
   if (!parsed) {
+    const prAction = parsePrMergeCallback(cbq.data || "");
+    if (prAction) {
+      const tokenPath = process.env.GITHUB_TOKEN_FILE || `${process.env.HOME}/.secrets/GITHUB_TOKEN.TXT`;
+      const env = { ...process.env };
+      try { env.GH_TOKEN = readFileSync(tokenPath, "utf8").trim(); } catch {}
+
+      await handlePrMergeCallback(prAction, {
+        db,
+        runCommand: (binary, args) => new Promise((resolve, reject) => {
+          try {
+            const out = execFileSync(binary, args, { encoding: "utf8", env });
+            resolve(out.trim());
+          } catch (err: any) {
+            reject(new Error(err.stderr?.toString() ?? String(err)));
+          }
+        }),
+        answerCbq: (text?: string) =>
+          client.answerCallbackQuery({ callback_query_id: cbq.id, ...(text ? { text } : {}) }),
+        editMessage: (text: string, replyMarkup?: object) =>
+          chatId && messageId
+            ? client.editMessageText({
+                chat_id: chatId,
+                message_id: messageId,
+                text,
+                ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+              })
+            : Promise.resolve(),
+        chatId,
+        messageId,
+        userId,
+      });
+      return;
+    }
+
     await client.answerCallbackQuery({ callback_query_id: cbq.id });
     return;
   }
-
-  const messageId = cbq.message?.message_id;
-  const chatId = cbq.message?.chat?.id;
 
   if (parsed.type === "wi_view") {
     const item = db.getWorkItem(parsed.id);

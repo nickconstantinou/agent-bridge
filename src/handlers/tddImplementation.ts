@@ -102,6 +102,21 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
 
     ctx.db.updateWorkItemStatus(workItemId, "in_progress");
 
+    // Queue PR lifecycle job if item is linked to a repository
+    if (item.repository) {
+      ctx.db.createWorkJob({
+        task_type: "pr_lifecycle",
+        idempotency_key: `pr_lifecycle:${workItemId}`,
+        work_item_id: workItemId,
+        input_json: {
+          work_item_id: workItemId,
+          branch_name: branchName,
+          repository: item.repository,
+          repository_path: repoPath,
+        },
+      });
+    }
+
     const summary = `TDD implementation complete on **${branchName}**\n\n${verifyOutput}`;
     return { summary, branchName, verifyOutput };
   };

@@ -27,8 +27,10 @@ import { createDefectScanHandler } from "./handlers/defectScan.js";
 import { createFeaturePlanHandler } from "./handlers/featurePlan.js";
 import { createGithubIssueHandler } from "./handlers/githubIssue.js";
 import { createTddImplementationHandler } from "./handlers/tddImplementation.js";
+import { createPrLifecycleHandler } from "./handlers/prLifecycle.js";
 import { runCli } from "./cli.js";
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 
 dotenv.config({
@@ -166,9 +168,25 @@ const stopJobLoop = startJobExecutorLoop({
         }
       }),
     }),
+    pr_lifecycle: createPrLifecycleHandler({
+      runGit: (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8" }),
+      runCommand: (binary, args) => new Promise((resolve, reject) => {
+        try {
+          const env = { ...process.env };
+          const tokenPath = process.env.GITHUB_TOKEN_FILE || `${process.env.HOME}/.secrets/GITHUB_TOKEN.TXT`;
+          try { env.GH_TOKEN = readFileSync(tokenPath, "utf8").trim(); } catch {}
+          const output = execFileSync(binary, args, { encoding: "utf8", env });
+          resolve(output.trim());
+        } catch (err: any) {
+          reject(new Error(err.stderr?.toString() ?? String(err)));
+        }
+      }),
+    }),
   },
-  sendMessage: async (chatId: number, text: string) => {
-    await sendTelegramMessage({ client, kind: "worker-bot", chatId, body: { text } });
+  sendMessage: async (chatId: number, text: string, replyMarkup?: object) => {
+    const body: any = { text };
+    if (replyMarkup) body.reply_markup = replyMarkup;
+    await sendTelegramMessage({ client, kind: "worker-bot", chatId, body });
   },
   intervalMs: jobPollIntervalMs,
 });

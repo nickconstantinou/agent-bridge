@@ -6,6 +6,7 @@
  */
 
 import type { BridgeDb } from "./db.js";
+import { setPendingFeatureBrief } from "./featureBriefCapture.js";
 
 const DEFAULT_CLI_CHAIN = ["codex", "claude", "antigravity"];
 
@@ -197,9 +198,10 @@ export function handleWorkerCommand(
     const brief = parts.slice(1).join(" ").trim();
 
     if (!brief) {
+      if (ctx.chatId != null) setPendingFeatureBrief(String(ctx.chatId));
       return {
         kind: "message",
-        text: "Describe the feature you'd like to build. Example:\n`/feature add dark mode support to the dashboard`",
+        text: "Describe the feature you'd like to build. Your next message will be used as the brief.\n\nOr include it inline: `/feature add dark mode support to the dashboard`",
       };
     }
 

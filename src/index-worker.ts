@@ -28,6 +28,7 @@ import { createFeaturePlanHandler } from "./handlers/featurePlan.js";
 import { createGithubIssueHandler } from "./handlers/githubIssue.js";
 import { createTddImplementationHandler } from "./handlers/tddImplementation.js";
 import { createPrLifecycleHandler } from "./handlers/prLifecycle.js";
+import { captureFeatureBrief } from "./featureBriefCapture.js";
 import { runCli } from "./cli.js";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -229,6 +230,19 @@ for (;;) {
             const body = result.kind === "keyboard_message"
               ? { text: result.text, reply_markup: result.reply_markup }
               : { text: result.text };
+            await sendTelegramMessage({ client, kind: "worker-bot", chatId, body });
+          }
+          continue;
+        }
+
+        // Check if this plain message is a pending feature brief
+        const capturedBrief = captureFeatureBrief(chatKey, rawText);
+        if (capturedBrief) {
+          const briefResult = handleWorkerCommand(`/feature ${capturedBrief}`, { workerEnabled, cliChain, db, chatId, userId });
+          if (briefResult) {
+            const body = briefResult.kind === "keyboard_message"
+              ? { text: briefResult.text, reply_markup: briefResult.reply_markup }
+              : { text: briefResult.text };
             await sendTelegramMessage({ client, kind: "worker-bot", chatId, body });
           }
           continue;

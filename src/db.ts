@@ -514,7 +514,15 @@ export class BridgeDb {
     ).run(jobId, workerId);
   }
 
-  heartbeatWorkJob(jobId: number, workerId: string, now: string): void {
+  heartbeatWorkJob(jobId: number, workerId: string, now: string, leaseSeconds?: number): void {
+    if (leaseSeconds != null) {
+      const expiresAt = new Date(new Date(now).getTime() + leaseSeconds * 1000).toISOString();
+      this.raw.prepare(
+        `UPDATE work_jobs SET heartbeat_at = ?, lease_expires_at = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND lease_owner = ?`
+      ).run(now, expiresAt, jobId, workerId);
+      return;
+    }
     this.raw.prepare(
       `UPDATE work_jobs SET heartbeat_at = ?, updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND lease_owner = ?`

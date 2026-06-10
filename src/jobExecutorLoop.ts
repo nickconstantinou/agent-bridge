@@ -20,7 +20,13 @@ export interface JobExecutorLoopDeps {
 export function startJobExecutorLoop(deps: JobExecutorLoopDeps): () => void {
   const { db, workerId, handlers, sendMessage, intervalMs = 10_000 } = deps;
 
+  // Serialize ticks: a long-running job must not be joined by concurrent
+  // claims from later ticks in the same process.
+  let inFlight = false;
+
   const handle = setInterval(() => {
+    if (inFlight) return;
+    inFlight = true;
     void (async () => {
       try {
         // Peek at next claimable job to get its input_json for notify routing.
@@ -81,6 +87,8 @@ export function startJobExecutorLoop(deps: JobExecutorLoopDeps): () => void {
         });
       } catch (err) {
         console.error("[job-executor-loop] unhandled error", err);
+      } finally {
+        inFlight = false;
       }
     })();
   }, intervalMs);

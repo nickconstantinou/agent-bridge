@@ -30,6 +30,8 @@ export interface ExecuteNextJobDeps {
   handlers: Partial<Record<string, JobHandler>>;
   notify: (message: string, result?: JobHandlerResult) => Promise<void> | void;
   leaseSeconds?: number;
+  /** How often to extend the lease while the handler runs. */
+  heartbeatIntervalMs?: number;
   /** Pin execution to this job id; nothing else is claimed this call. */
   targetJobId?: number;
   /** Called with the claimed job after the lease is taken, before the handler runs. */
@@ -42,11 +44,17 @@ export interface ExecuteNextJobResult {
 }
 
 const DEFAULT_LEASE_SECONDS = 300;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
 
 export async function executeNextJob(
   deps: ExecuteNextJobDeps,
 ): Promise<ExecuteNextJobResult | null> {
-  const { db, workerId, handlers, notify, leaseSeconds = DEFAULT_LEASE_SECONDS, targetJobId, onStart } = deps;
+  const {
+    db, workerId, handlers, notify,
+    leaseSeconds = DEFAULT_LEASE_SECONDS,
+    heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS,
+    targetJobId, onStart,
+  } = deps;
 
   // Claim the next job (or the pinned target) atomically
   const now = new Date().toISOString();
@@ -72,6 +80,14 @@ export async function executeNextJob(
     // non-fatal — proceed with empty input
   }
 
+  // Keep the lease alive while the handler runs so a long job is never
+  // reclaimed (and duplicated) by another worker or a later tick.
+  const heartbeat = setInterval(() => {
+    try {
+      db.heartbeatWorkJob(job.id, workerId, new Date().toISOString(), leaseSeconds);
+    } catch { /* non-fatal */ }
+  }, heartbeatIntervalMs);
+
   try {
     const result = await handler(input, { db, workerId });
     db.completeWorkJob(job.id, result, workerId);
@@ -82,5 +98,7 @@ export async function executeNextJob(
     db.failWorkJob(job.id, message, workerId);
     await notify(`Job #${job.id} failed: ${message}`);
     return { jobId: job.id };
+  } finally {
+    clearInterval(heartbeat);
   }
 }

@@ -12,12 +12,25 @@ function makeDb() {
 }
 
 // ── Default stubs ────────────────────────────────────────────────────────────
+//
+// runGit answers `diff --cached --name-only` with test files for the red
+// phase and production files for the green phase. runTests fails once (red
+// verification) then passes (green verification).
 
 function makeStubs() {
+  let diffCalls = 0;
   return {
     runCli: vi.fn().mockResolvedValue("Done."),
-    runGit: vi.fn().mockReturnValue(""),
-    runVerify: vi.fn().mockReturnValue("Tests passed."),
+    runGit: vi.fn().mockImplementation((args: string[]) => {
+      if (args[0] === "diff" && args.includes("--cached")) {
+        diffCalls += 1;
+        return diffCalls === 1 ? "test/fix.test.ts\n" : "src/fix.ts\n";
+      }
+      return "";
+    }),
+    runTests: vi.fn()
+      .mockResolvedValueOnce({ ok: false, output: "1 failing" })
+      .mockResolvedValue({ ok: true, output: "Tests passed." }),
   };
 }
 
@@ -175,7 +188,7 @@ describe("createTddImplementationHandler", () => {
     expect(messages[1].toLowerCase()).toMatch(/fix|feat|implement/);
   });
 
-  it("calls runVerify after implementation commit", async () => {
+  it("runs the test suite twice — confirming red fails and green passes", async () => {
     const stubs = makeStubs();
     const item = db.createWorkItem({
       kind: "defect", source: "telegram",
@@ -187,12 +200,92 @@ describe("createTddImplementationHandler", () => {
       { db, workerId: "w" },
     );
 
-    expect(stubs.runVerify).toHaveBeenCalledOnce();
+    expect(stubs.runTests).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses to continue when the red tests do not fail", async () => {
+    const stubs = makeStubs();
+    stubs.runTests = vi.fn().mockResolvedValue({ ok: true, output: "All green" });
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Bug", created_by: "worker",
+    });
+
+    await expect(
+      createTddImplementationHandler(stubs)(
+        { work_item_id: item.id, repository_path: "/tmp/repo" },
+        { db, workerId: "w" },
+      )
+    ).rejects.toThrow(/did not fail|red/i);
+
+    // No test commit may exist when red verification was never observed
+    const commits = stubs.runGit.mock.calls.filter(([args]: [string[]]) => args[0] === "commit");
+    expect(commits).toHaveLength(0);
+  });
+
+  it("fails when the red pass stages production files", async () => {
+    const stubs = makeStubs();
+    stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
+      if (args[0] === "diff" && args.includes("--cached")) return "src/sneaky.ts\ntest/fix.test.ts\n";
+      return "";
+    });
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Bug", created_by: "worker",
+    });
+
+    await expect(
+      createTddImplementationHandler(stubs)(
+        { work_item_id: item.id, repository_path: "/tmp/repo" },
+        { db, workerId: "w" },
+      )
+    ).rejects.toThrow(/production|src\/sneaky\.ts/i);
+  });
+
+  it("fails when the green pass modifies test files", async () => {
+    const stubs = makeStubs();
+    let diffCalls = 0;
+    stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
+      if (args[0] === "diff" && args.includes("--cached")) {
+        diffCalls += 1;
+        return diffCalls === 1 ? "test/fix.test.ts\n" : "src/fix.ts\ntest/fix.test.ts\n";
+      }
+      return "";
+    });
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Bug", created_by: "worker",
+    });
+
+    await expect(
+      createTddImplementationHandler(stubs)(
+        { work_item_id: item.id, repository_path: "/tmp/repo" },
+        { db, workerId: "w" },
+      )
+    ).rejects.toThrow(/test file/i);
+  });
+
+  it("fails when final verification does not pass", async () => {
+    const stubs = makeStubs();
+    stubs.runTests = vi.fn().mockResolvedValue({ ok: false, output: "2 failing" });
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Bug", created_by: "worker",
+    });
+
+    await expect(
+      createTddImplementationHandler(stubs)(
+        { work_item_id: item.id, repository_path: "/tmp/repo" },
+        { db, workerId: "w" },
+      )
+    ).rejects.toThrow(/verification|failing/i);
   });
 
   it("returns a summary with branch name and verification result", async () => {
     const stubs = makeStubs();
-    stubs.runVerify.mockReturnValue("All 42 tests passed.");
+    stubs.runTests = vi.fn()
+      .mockResolvedValueOnce({ ok: false, output: "1 failing" })
+      .mockResolvedValue({ ok: true, output: "All 42 tests passed." });
     const item = db.createWorkItem({
       kind: "defect", source: "telegram",
       title: "Bug", created_by: "worker",
@@ -205,6 +298,70 @@ describe("createTddImplementationHandler", () => {
 
     expect(result.summary).toMatch(/agent\/work-\d+/);
     expect(result.summary).toContain("All 42 tests passed.");
+  });
+
+  it("prepares a workspace when repository_path is not provided", async () => {
+    const stubs = makeStubs();
+    const prepareWorkspace = vi.fn().mockResolvedValue("/ws/work-1");
+    const cleanupWorkspace = vi.fn();
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Bug", created_by: "worker",
+      repository: "owner/repo",
+    });
+
+    await createTddImplementationHandler({ ...stubs, prepareWorkspace, cleanupWorkspace })(
+      { work_item_id: item.id },
+      { db, workerId: "w" },
+    );
+
+    expect(prepareWorkspace).toHaveBeenCalledWith("owner/repo", item.id);
+    // All git work must happen inside the workspace
+    for (const call of stubs.runGit.mock.calls) {
+      expect(call[1]).toBe("/ws/work-1");
+    }
+    // Success keeps the workspace for the pr_lifecycle push
+    expect(cleanupWorkspace).not.toHaveBeenCalled();
+    const prJob = db.raw.prepare("SELECT * FROM work_jobs WHERE task_type = 'pr_lifecycle'").get() as any;
+    const input = JSON.parse(prJob.input_json);
+    expect(input.repository_path).toBe("/ws/work-1");
+    expect(input.workspace_dir).toBe("/ws/work-1");
+  });
+
+  it("cleans up the workspace when the job fails", async () => {
+    const stubs = makeStubs();
+    stubs.runTests = vi.fn().mockResolvedValue({ ok: true, output: "green" }); // red gate trips
+    const prepareWorkspace = vi.fn().mockResolvedValue("/ws/work-2");
+    const cleanupWorkspace = vi.fn();
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Bug", created_by: "worker",
+      repository: "owner/repo",
+    });
+
+    await expect(
+      createTddImplementationHandler({ ...stubs, prepareWorkspace, cleanupWorkspace })(
+        { work_item_id: item.id },
+        { db, workerId: "w" },
+      )
+    ).rejects.toThrow();
+
+    expect(cleanupWorkspace).toHaveBeenCalledWith("/ws/work-2");
+  });
+
+  it("throws when neither repository_path nor item repository is available", async () => {
+    const stubs = makeStubs();
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Bug", created_by: "worker",
+    });
+
+    await expect(
+      createTddImplementationHandler({ ...stubs, prepareWorkspace: vi.fn() })(
+        { work_item_id: item.id },
+        { db, workerId: "w" },
+      )
+    ).rejects.toThrow(/repository/i);
   });
 
   it("transitions the work_item status to 'in_progress'", async () => {

@@ -201,4 +201,48 @@ describe("createPrLifecycleHandler", () => {
     ).get(item.id) as any;
     expect(JSON.parse(approval.payload_json).head_sha).toBe("abc123def456");
   });
+
+  it("cleans up the workspace after the PR is opened", async () => {
+    const stubs = makeStubs();
+    const cleanupWorkspace = vi.fn();
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Bug", created_by: "worker",
+    });
+
+    await createPrLifecycleHandler({ ...stubs, cleanupWorkspace })(
+      {
+        work_item_id: item.id, branch_name: `agent/work-${item.id}`,
+        repository: "owner/repo", repository_path: "/ws/work-1", workspace_dir: "/ws/work-1",
+      },
+      { db, workerId: "w" },
+    );
+
+    expect(cleanupWorkspace).toHaveBeenCalledWith("/ws/work-1");
+  });
+
+  it("leaves the workspace in place when the push fails", async () => {
+    const stubs = makeStubs();
+    stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
+      if (args[0] === "push") throw new Error("remote rejected");
+      return "";
+    });
+    const cleanupWorkspace = vi.fn();
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Bug", created_by: "worker",
+    });
+
+    await expect(
+      createPrLifecycleHandler({ ...stubs, cleanupWorkspace })(
+        {
+          work_item_id: item.id, branch_name: `agent/work-${item.id}`,
+          repository: "owner/repo", repository_path: "/ws/work-2", workspace_dir: "/ws/work-2",
+        },
+        { db, workerId: "w" },
+      )
+    ).rejects.toThrow(/remote rejected/);
+
+    expect(cleanupWorkspace).not.toHaveBeenCalled();
+  });
 });

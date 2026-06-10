@@ -132,4 +132,27 @@ OVERALL: 2 potential issues found.`
     const command: string = runCli.mock.calls[0][0];
     expect(command).toBe("codex");
   });
+
+  it("runs the CLI inside the resolved repository path", async () => {
+    const runCli = vi.fn().mockResolvedValue("OVERALL: 0 potential issues found.");
+    const resolveRepoPath = vi.fn().mockReturnValue("/repos/content-crawler");
+    const handler = createDefectScanHandler({ runCli, resolveRepoPath });
+
+    await handler({ repository: "content-crawler" }, { db, workerId: "test-worker" });
+
+    expect(resolveRepoPath).toHaveBeenCalledWith("content-crawler");
+    expect(runCli.mock.calls[0][2]).toBe("/repos/content-crawler");
+  });
+
+  it("fails with a clear error when the repository cannot be resolved", async () => {
+    const runCli = vi.fn().mockResolvedValue("Done.");
+    const resolveRepoPath = vi.fn().mockReturnValue(null);
+    const handler = createDefectScanHandler({ runCli, resolveRepoPath });
+
+    await expect(
+      handler({ repository: "ghost-repo" }, { db, workerId: "test-worker" })
+    ).rejects.toThrow(/ghost-repo|no local checkout/i);
+    // Never scan the wrong directory while claiming to scan the target
+    expect(runCli).not.toHaveBeenCalled();
+  });
 });

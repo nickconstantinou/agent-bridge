@@ -204,6 +204,54 @@ describe("handleWorkerCallback (Slice 5)", () => {
     expect(input.repository).toBe("owner/repo");
   });
 
+  it("passes work_item_id and notify_chat_id in tdd_implementation input_json on wi_appv", async () => {
+    const item = db.createWorkItem({
+      kind: "defect", source: "defect_scan",
+      title: "Leaked handle", created_by: "worker",
+      repository: "owner/repo",
+    });
+    const cbq = {
+      id: "cb-input",
+      data: `wi:${item.id}:appv`,
+      from: { id: 42 },
+      message: { message_id: 300, chat: { id: 777 } },
+    };
+
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+
+    const tddJob = db.listWorkJobs().find(j => j.task_type === "tdd_implementation");
+    expect(tddJob).toBeDefined();
+    const input = JSON.parse(tddJob!.input_json);
+    expect(input.work_item_id).toBe(item.id);
+    expect(input.repository).toBe("owner/repo");
+    expect(input.notify_chat_id).toBe(777);
+  });
+
+  it("passes notify_chat_id in open_github_issue input_json and creates it before the tdd job", async () => {
+    const item = db.createWorkItem({
+      kind: "defect", source: "defect_scan",
+      title: "Race condition", created_by: "worker",
+      repository: "owner/repo",
+    });
+    const cbq = {
+      id: "cb-order",
+      data: `wi:${item.id}:appv`,
+      from: { id: 42 },
+      message: { message_id: 301, chat: { id: 888 } },
+    };
+
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+
+    const jobs = db.listWorkJobs();
+    const ghJob = jobs.find(j => j.task_type === "open_github_issue");
+    const tddJob = jobs.find(j => j.task_type === "tdd_implementation");
+    expect(ghJob).toBeDefined();
+    expect(tddJob).toBeDefined();
+    expect(JSON.parse(ghJob!.input_json).notify_chat_id).toBe(888);
+    // Issue job must be enqueued before the implementation job
+    expect(ghJob!.id).toBeLessThan(tddJob!.id);
+  });
+
   it("does not queue open_github_issue when repository is not set", async () => {
     const item = db.createWorkItem({
       kind: "defect", source: "defect_scan",

@@ -257,4 +257,22 @@ describe("createTddImplementationHandler", () => {
     expect(parsed.branch_name).toMatch(/^agent\/work-\d+/);
     expect(parsed.repository).toBe("owner/repo");
   });
+
+  it("propagates notify_chat_id into the queued pr_lifecycle job input", async () => {
+    const stubs = makeStubs();
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Bug", created_by: "worker",
+      repository: "owner/repo",
+    });
+
+    await createTddImplementationHandler(stubs)(
+      { work_item_id: item.id, repository_path: "/tmp/repo", notify_chat_id: 4242 },
+      { db, workerId: "w" },
+    );
+
+    const jobs = db.raw.prepare("SELECT * FROM work_jobs WHERE task_type = 'pr_lifecycle' AND work_item_id = ?").all(item.id) as any[];
+    expect(jobs).toHaveLength(1);
+    expect(JSON.parse(jobs[0].input_json).notify_chat_id).toBe(4242);
+  });
 });

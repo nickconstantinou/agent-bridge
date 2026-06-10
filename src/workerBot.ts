@@ -32,7 +32,7 @@ export interface WorkerKeyboardMessageResult {
 
 export type WorkerCommandResult = WorkerMessageResult | WorkerKeyboardMessageResult;
 
-const WORKER_COMMANDS = new Set(["/jobs", "/issues", "/review", "/models", "/job", "/issue", "/feature"]);
+const WORKER_COMMANDS = new Set(["/jobs", "/issues", "/review", "/models", "/job", "/issue", "/feature", "/approvals"]);
 
 export function buildWorkerCommands(): Array<{ command: string; description: string }> {
   return [
@@ -40,6 +40,7 @@ export function buildWorkerCommands(): Array<{ command: string; description: str
     { command: "issues",  description: "List proposed work items" },
     { command: "review",  description: "Trigger a defect scan: /review [repo]" },
     { command: "feature", description: "Plan a new feature: /feature <brief description>" },
+    { command: "approvals", description: "List pending approvals with their action buttons" },
     { command: "models",  description: "Show CLI execution chain" },
   ];
 }
@@ -231,6 +232,47 @@ export function handleWorkerCommand(
       kind: "message",
       text: `Feature plan received: **${brief}**\n\nUse /issues to track progress once the worker is active.`,
     };
+  }
+
+  if (cmd === "/approvals") {
+    if (!ctx.workerEnabled) {
+      return { kind: "message", text: "Worker is not yet active (WORKER_ENABLED=false)." };
+    }
+    if (!db) {
+      return { kind: "message", text: "Database not available." };
+    }
+    const pending = db.raw.prepare(
+      `SELECT * FROM approvals WHERE status = 'pending' ORDER BY id ASC`
+    ).all() as Array<{ id: number; approval_type: string; work_item_id: number | null; requested_at: string; payload_json: string }>;
+
+    if (pending.length === 0) {
+      return { kind: "message", text: "No pending approvals." };
+    }
+
+    let textOut = "⚖️ **Pending Approvals**\n\n";
+    const inline_keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
+    for (const appr of pending) {
+      let payload: { pr_url?: string } = {};
+      try { payload = JSON.parse(appr.payload_json); } catch { /* non-fatal */ }
+
+      textOut += `• **#${appr.id}** | \`${appr.approval_type}\``;
+      if (appr.work_item_id != null) textOut += ` | work item #${appr.work_item_id}`;
+      textOut += `\n  Requested: ${appr.requested_at}\n`;
+      if (payload.pr_url) textOut += `  ${payload.pr_url}\n`;
+
+      if (appr.approval_type === "merge_pr" && appr.work_item_id != null) {
+        inline_keyboard.push([
+          { text: `✅ Merge PR (wi #${appr.work_item_id})`, callback_data: `wi:${appr.work_item_id}:mrgpr` },
+          { text: `❌ Close PR (wi #${appr.work_item_id})`, callback_data: `wi:${appr.work_item_id}:clspr` },
+        ]);
+      } else {
+        inline_keyboard.push([
+          { text: `👍 Approve #${appr.id}`, callback_data: `ap:${appr.id}:yes` },
+          { text: `👎 Reject #${appr.id}`, callback_data: `ap:${appr.id}:no` },
+        ]);
+      }
+    }
+    return { kind: "keyboard_message", text: textOut.trim(), reply_markup: { inline_keyboard } };
   }
 
   if (cmd === "/models") {

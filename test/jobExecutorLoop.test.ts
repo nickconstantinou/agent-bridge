@@ -112,6 +112,38 @@ describe("startJobExecutorLoop", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("fails an unhandled task type with a notification instead of re-sending start_message forever", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+
+    const job = db.createWorkJob({
+      task_type: "ops_check",
+      idempotency_key: "ops:unhandled:1",
+      input_json: {
+        notify_chat_id: 999,
+        start_message: "Starting ops check...",
+      },
+    });
+
+    const stop = startJobExecutorLoop({
+      db,
+      workerId: "test-worker",
+      handlers: {}, // no handler registered for ops_check
+      sendMessage,
+      intervalMs: 1000,
+    });
+
+    await vi.runOnlyPendingTimersAsync(); // tick 1
+    await vi.runOnlyPendingTimersAsync(); // tick 2 — must not repeat anything
+    stop();
+
+    expect(db.getWorkJob(job.id)!.status).toBe("failed");
+    // Exactly one failure notification; the start_message must not be sent
+    const texts = sendMessage.mock.calls.map(c => c[1] as string);
+    expect(texts.some(t => t.includes("Starting ops check..."))).toBe(false);
+    const failureTexts = texts.filter(t => /no handler/i.test(t));
+    expect(failureTexts).toHaveLength(1);
+  });
+
   it("sends start_message before handler runs when set in input_json", async () => {
     const callOrder: string[] = [];
     const handler = vi.fn(async () => {

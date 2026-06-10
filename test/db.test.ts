@@ -490,6 +490,37 @@ describe("claimNextWorkJob", () => {
     expect(reclaimed).not.toBeNull();
     expect(reclaimed!.lease_owner).toBe("worker-2");
   });
+
+  it("claims the specific job when jobId is provided, skipping older jobs", () => {
+    db.createWorkJob({ task_type: "defect_scan", idempotency_key: "scan:older" });
+    const target = db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:target" });
+
+    const claimed = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60, target.id);
+
+    expect(claimed).not.toBeNull();
+    expect(claimed!.id).toBe(target.id);
+    const older = db.listWorkJobs().find(j => j.idempotency_key === "scan:older");
+    expect(older?.status).toBe("pending");
+  });
+
+  it("returns null when the requested jobId is not claimable", () => {
+    db.createWorkJob({ task_type: "defect_scan", idempotency_key: "scan:taken" });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
+    // Active lease — a pinned claim by another worker must fail
+    expect(db.claimNextWorkJob("worker-2", new Date().toISOString(), 60, job.id)).toBeNull();
+  });
+});
+
+describe("failWorkJobPermanently", () => {
+  it("marks the job failed even when attempts remain", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:perm", max_attempts: 5 });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
+    db.failWorkJobPermanently(job.id, "No handler registered", "worker-1");
+    const updated = db.getWorkJob(job.id)!;
+    expect(updated.status).toBe("failed");
+    expect(updated.error).toBe("No handler registered");
+    expect(updated.lease_owner).toBeNull();
+  });
 });
 
 describe("markWorkJobRunning / heartbeatWorkJob", () => {

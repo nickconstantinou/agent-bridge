@@ -534,7 +534,7 @@ export class BridgeDb {
       `UPDATE work_jobs
        SET status = 'completed', lease_owner = NULL, lease_expires_at = NULL,
            result_json = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND lease_owner = ?`
+       WHERE id = ? AND lease_owner = ? AND status != 'cancelled'`
     ).run(JSON.stringify(result), jobId, workerId);
   }
 
@@ -544,7 +544,7 @@ export class BridgeDb {
        SET attempt_count = attempt_count + 1,
            status = CASE WHEN attempt_count + 1 < max_attempts THEN 'pending' ELSE 'failed' END,
            error = ?, lease_owner = NULL, lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND lease_owner = ?`
+       WHERE id = ? AND lease_owner = ? AND status != 'cancelled'`
     ).run(error, jobId, workerId);
   }
 
@@ -553,7 +553,7 @@ export class BridgeDb {
       `UPDATE work_jobs
        SET status = 'failed', error = ?, lease_owner = NULL, lease_expires_at = NULL,
            updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND lease_owner = ?`
+       WHERE id = ? AND lease_owner = ? AND status != 'cancelled'`
     ).run(error, jobId, workerId);
   }
 

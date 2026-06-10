@@ -12,8 +12,7 @@
  */
 
 import { parsePrMergeCallback, handlePrMergeCallback } from "./prMergeGate.js";
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { createRunCommand } from "./runCommandAsync.js";
 
 export type WorkCallbackAction =
   | { type: "wi_view"; id: number }
@@ -203,20 +202,11 @@ export async function handleWorkerCallback(
   if (!parsed) {
     const prAction = parsePrMergeCallback(cbq.data || "");
     if (prAction) {
-      const tokenPath = process.env.GITHUB_TOKEN_FILE || `${process.env.HOME}/.secrets/GITHUB_TOKEN.TXT`;
-      const env = { ...process.env };
-      try { env.GH_TOKEN = readFileSync(tokenPath, "utf8").trim(); } catch {}
+      const runGhCommand = createRunCommand({ loadGhToken: true });
 
       await handlePrMergeCallback(prAction, {
         db,
-        runCommand: (binary, args) => new Promise((resolve, reject) => {
-          try {
-            const out = execFileSync(binary, args, { encoding: "utf8", env });
-            resolve(out.trim());
-          } catch (err: any) {
-            reject(new Error(err.stderr?.toString() ?? String(err)));
-          }
-        }),
+        runCommand: (binary, args) => runGhCommand(binary, args),
         answerCbq: (text?: string) =>
           client.answerCallbackQuery({ callback_query_id: cbq.id, ...(text ? { text } : {}) }),
         editMessage: (text: string, replyMarkup?: object) =>

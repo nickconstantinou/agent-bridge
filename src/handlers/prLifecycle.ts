@@ -8,7 +8,7 @@
 
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
 
-type RunGit = (args: string[], cwd?: string) => string;
+type RunGit = (args: string[], cwd?: string) => string | Promise<string>;
 type RunCommand = (binary: string, args: string[]) => Promise<string>;
 
 interface PrLifecycleDeps {
@@ -41,10 +41,10 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
     if (!item) throw new Error(`Work item ${workItemId} not found`);
 
     // Push branch to origin
-    runGit(["push", "--set-upstream", "origin", branchName], repoPath);
+    await runGit(["push", "--set-upstream", "origin", branchName], repoPath);
 
     // Capture the head SHA so the merge gate can detect a moved head later
-    const headSha = runGit(["rev-parse", "HEAD"], repoPath).trim();
+    const headSha = (await runGit(["rev-parse", "HEAD"], repoPath)).trim();
 
     // Open draft PR
     const prTitle = `[agent] ${item.title}`;

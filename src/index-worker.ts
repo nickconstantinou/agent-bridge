@@ -30,8 +30,7 @@ import { createTddImplementationHandler } from "./handlers/tddImplementation.js"
 import { createPrLifecycleHandler } from "./handlers/prLifecycle.js";
 import { captureFeatureBrief } from "./featureBriefCapture.js";
 import { runCli } from "./cli.js";
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { createRunCommand } from "./runCommandAsync.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 
 dotenv.config({
@@ -141,6 +140,10 @@ await client.setMyCommands({ commands: buildWorkerCommands() })
 
 // ── Background job executor loop ──────────────────────────────────────────────
 
+// Async runner: keeps the polling loop responsive during git/gh/npm children
+// and loads GH_TOKEN from the secrets file for gh API calls.
+const runWorkerCommand = createRunCommand({ loadGhToken: true });
+
 const stopJobLoop = startJobExecutorLoop({
   db,
   workerId: `worker-bot-${process.pid}`,
@@ -156,32 +159,15 @@ const stopJobLoop = startJobExecutorLoop({
     tdd_implementation: createTddImplementationHandler({
       runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd()),
       command: defectScanCommand,
-      runGit: (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8" }),
-      runVerify: (cwd) => execFileSync("npm", ["test"], { cwd, encoding: "utf8" }),
+      runGit: (args, cwd) => runWorkerCommand("git", args, { cwd }),
+      runVerify: (cwd) => runWorkerCommand("npm", ["test"], { cwd }),
     }),
     open_github_issue: createGithubIssueHandler({
-      runCommand: (binary, args) => new Promise((resolve, reject) => {
-        try {
-          const output = execFileSync(binary, args, { encoding: "utf8", env: { ...process.env } });
-          resolve(output.trim());
-        } catch (err: any) {
-          reject(new Error(err.stderr?.toString() ?? String(err)));
-        }
-      }),
+      runCommand: (binary, args) => runWorkerCommand(binary, args),
     }),
     pr_lifecycle: createPrLifecycleHandler({
-      runGit: (args, cwd) => execFileSync("git", args, { cwd, encoding: "utf8" }),
-      runCommand: (binary, args) => new Promise((resolve, reject) => {
-        try {
-          const env = { ...process.env };
-          const tokenPath = process.env.GITHUB_TOKEN_FILE || `${process.env.HOME}/.secrets/GITHUB_TOKEN.TXT`;
-          try { env.GH_TOKEN = readFileSync(tokenPath, "utf8").trim(); } catch {}
-          const output = execFileSync(binary, args, { encoding: "utf8", env });
-          resolve(output.trim());
-        } catch (err: any) {
-          reject(new Error(err.stderr?.toString() ?? String(err)));
-        }
-      }),
+      runGit: (args, cwd) => runWorkerCommand("git", args, { cwd }),
+      runCommand: (binary, args) => runWorkerCommand(binary, args),
     }),
   },
   sendMessage: async (chatId: number, text: string, replyMarkup?: object) => {

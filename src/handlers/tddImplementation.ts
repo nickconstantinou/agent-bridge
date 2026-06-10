@@ -9,8 +9,8 @@
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
 
 type RunCli = (command: string, args: string[], cwd?: string) => Promise<string>;
-type RunGit = (args: string[], cwd: string) => string;
-type RunVerify = (cwd: string) => string;
+type RunGit = (args: string[], cwd: string) => string | Promise<string>;
+type RunVerify = (cwd: string) => string | Promise<string>;
 
 interface TddImplementationDeps {
   runCli: RunCli;
@@ -68,21 +68,21 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
     if (!item) throw new Error(`Work item ${workItemId} not found`);
 
     // Pre-flight: repo must be clean
-    const status = runGit(["status", "--porcelain"], repoPath);
+    const status = await runGit(["status", "--porcelain"], repoPath);
     if (status.trim()) {
       throw new Error(`Repository has uncommitted changes (dirty working tree):\n${status}`);
     }
 
     // Create isolated agent branch
     const branchName = `agent/work-${workItemId}`;
-    runGit(["checkout", "-b", branchName], repoPath);
+    await runGit(["checkout", "-b", branchName], repoPath);
 
     // ── Red: write failing tests ──────────────────────────────────────────────
     const redPrompt = buildRedTestPrompt(item.title, item.body);
     await runCli(command, ["--print", "--output-format", "text", redPrompt], repoPath);
 
-    runGit(["add", "-A"], repoPath);
-    runGit(
+    await runGit(["add", "-A"], repoPath);
+    await runGit(
       ["commit", "-m", `test: failing coverage for ${item.title}`],
       repoPath,
     );
@@ -91,14 +91,14 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
     const greenPrompt = buildGreenImplementationPrompt(item.title, item.body);
     await runCli(command, ["--print", "--output-format", "text", greenPrompt], repoPath);
 
-    runGit(["add", "-A"], repoPath);
-    runGit(
+    await runGit(["add", "-A"], repoPath);
+    await runGit(
       ["commit", "-m", `fix: ${item.title}`],
       repoPath,
     );
 
     // ── Verify ────────────────────────────────────────────────────────────────
-    const verifyOutput = runVerify(repoPath);
+    const verifyOutput = await runVerify(repoPath);
 
     ctx.db.updateWorkItemStatus(workItemId, "in_progress");
 

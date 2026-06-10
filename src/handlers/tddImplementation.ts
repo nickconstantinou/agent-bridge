@@ -113,6 +113,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
           branch_name: branchName,
           repository: item.repository,
           repository_path: repoPath,
+          ...(typeof input.notify_chat_id === "number" ? { notify_chat_id: input.notify_chat_id } : {}),
         },
       });
     }

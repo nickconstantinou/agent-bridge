@@ -262,20 +262,30 @@ export async function handleWorkerCallback(
       return;
     }
     db.updateWorkItemStatus(item.id, "approved");
-    db.createWorkJob({
-      task_type: "tdd_implementation",
-      idempotency_key: `tdd:${item.id}`,
-      work_item_id: item.id,
-    });
+    // Issue job first so the GitHub issue exists before implementation starts
     if (item.repository) {
       db.createWorkJob({
         task_type: "open_github_issue",
         idempotency_key: `gh_issue:${item.id}`,
         work_item_id: item.id,
-        input_json: { work_item_id: item.id, repository: item.repository },
+        input_json: {
+          work_item_id: item.id,
+          repository: item.repository,
+          ...(chatId != null ? { notify_chat_id: chatId } : {}),
+        },
       });
     }
-    
+    db.createWorkJob({
+      task_type: "tdd_implementation",
+      idempotency_key: `tdd:${item.id}`,
+      work_item_id: item.id,
+      input_json: {
+        work_item_id: item.id,
+        ...(item.repository ? { repository: item.repository } : {}),
+        ...(chatId != null ? { notify_chat_id: chatId } : {}),
+      },
+    });
+
     await client.answerCallbackQuery({ callback_query_id: cbq.id });
     if (chatId && messageId) {
       const updatedItem = db.getWorkItem(item.id);

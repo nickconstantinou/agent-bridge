@@ -102,6 +102,26 @@ describe("handleWorkerCallback (Slice 5)", () => {
     );
   });
 
+  it("edits messages with Telegram entities instead of literal markdown markers", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "defect_scan", title: "Leak", created_by: "worker" });
+    const cbq = {
+      id: "cb-fmt",
+      data: `wi:${item.id}:view`,
+      from: { id: 42 },
+      message: { message_id: 100, chat: { id: 10 } },
+    };
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+
+    const params = client.editMessageText.mock.calls[0][0];
+    // No raw markers may reach Telegram
+    expect(params.text).not.toContain("**");
+    expect(params.text).not.toContain("`");
+    // Formatting arrives as native entities
+    const types = (params.entities ?? []).map((e: any) => e.type);
+    expect(types).toContain("bold");
+    expect(types).toContain("code");
+  });
+
   it("handles wi:id:appv by approving and creating exactly one job", async () => {
     const item = db.createWorkItem({ kind: "defect", source: "defect_scan", title: "Leak", created_by: "worker" });
     const cbq = {

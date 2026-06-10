@@ -13,6 +13,20 @@
 
 import { parsePrMergeCallback, handlePrMergeCallback } from "./prMergeGate.js";
 import { createRunCommand } from "./runCommandAsync.js";
+import { toTelegramEntitiesText } from "./render.js";
+
+/** Edit a message converting bold/code markdown markers to native Telegram entities. */
+function editWithEntities(
+  client: any,
+  params: { chat_id: number; message_id: number; text: string; reply_markup?: object },
+): Promise<unknown> {
+  const ep = toTelegramEntitiesText(params.text);
+  return client.editMessageText({
+    ...params,
+    text: ep.text,
+    ...(ep.entities.length > 0 ? { entities: ep.entities } : {}),
+  });
+}
 
 export type WorkCallbackAction =
   | { type: "wi_view"; id: number }
@@ -211,12 +225,12 @@ export async function handleWorkerCallback(
           client.answerCallbackQuery({ callback_query_id: cbq.id, ...(text ? { text } : {}) }),
         editMessage: (text: string, replyMarkup?: object) =>
           chatId && messageId
-            ? client.editMessageText({
+            ? editWithEntities(client, {
                 chat_id: chatId,
                 message_id: messageId,
                 text,
                 ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
-              })
+              }).then(() => undefined)
             : Promise.resolve(),
         chatId,
         messageId,
@@ -238,7 +252,7 @@ export async function handleWorkerCallback(
     const { text, inline_keyboard } = getWorkItemDetailsText(item);
     await client.answerCallbackQuery({ callback_query_id: cbq.id });
     if (chatId && messageId) {
-      await client.editMessageText({
+      await editWithEntities(client, {
         chat_id: chatId,
         message_id: messageId,
         text,
@@ -281,7 +295,7 @@ export async function handleWorkerCallback(
       const updatedItem = db.getWorkItem(item.id);
       const isList = cbq.message?.text && cbq.message.text.includes("Proposed Work Items");
       const { text, inline_keyboard } = isList ? getIssuesListText(db) : getWorkItemDetailsText(updatedItem);
-      await client.editMessageText({
+      await editWithEntities(client, {
         chat_id: chatId,
         message_id: messageId,
         text,
@@ -300,7 +314,7 @@ export async function handleWorkerCallback(
       const updatedItem = db.getWorkItem(item.id);
       const isList = cbq.message?.text && cbq.message.text.includes("Proposed Work Items");
       const { text, inline_keyboard } = isList ? getIssuesListText(db) : getWorkItemDetailsText(updatedItem);
-      await client.editMessageText({
+      await editWithEntities(client, {
         chat_id: chatId,
         message_id: messageId,
         text,
@@ -319,7 +333,7 @@ export async function handleWorkerCallback(
       const updatedJob = db.getWorkJob(job.id);
       const isList = cbq.message?.text && cbq.message.text.includes("Active and Pending Jobs");
       const { text, inline_keyboard } = isList ? (getJobsListText(db) || { text: "No active or pending jobs.", inline_keyboard: [] }) : getJobDetailsText(updatedJob);
-      await client.editMessageText({
+      await editWithEntities(client, {
         chat_id: chatId,
         message_id: messageId,
         text,
@@ -337,7 +351,7 @@ export async function handleWorkerCallback(
     if (chatId && messageId) {
       const updatedRow = db.raw.prepare(`SELECT * FROM approvals WHERE id = ?`).get(row.id);
       const { text, inline_keyboard } = getApprovalDetailsText(updatedRow);
-      await client.editMessageText({
+      await editWithEntities(client, {
         chat_id: chatId,
         message_id: messageId,
         text,
@@ -355,7 +369,7 @@ export async function handleWorkerCallback(
     if (chatId && messageId) {
       const updatedRow = db.raw.prepare(`SELECT * FROM approvals WHERE id = ?`).get(row.id);
       const { text, inline_keyboard } = getApprovalDetailsText(updatedRow);
-      await client.editMessageText({
+      await editWithEntities(client, {
         chat_id: chatId,
         message_id: messageId,
         text,

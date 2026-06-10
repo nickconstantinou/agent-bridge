@@ -540,6 +540,29 @@ describe("markWorkJobRunning / heartbeatWorkJob", () => {
     expect(db.getWorkJob(job.id)!.heartbeat_at).toBe(ts);
   });
 
+  it("completeWorkJob does not overwrite a cancelled job", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:cancel-complete" });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
+    db.markWorkJobRunning(job.id, "worker-1");
+
+    // User cancels while the handler is still running
+    db.cancelWorkJob(job.id, "user cancelled");
+    db.completeWorkJob(job.id, { summary: "finished anyway" }, "worker-1");
+
+    expect(db.getWorkJob(job.id)!.status).toBe("cancelled");
+  });
+
+  it("failWorkJob does not overwrite a cancelled job", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:cancel-fail" });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
+    db.markWorkJobRunning(job.id, "worker-1");
+
+    db.cancelWorkJob(job.id, "user cancelled");
+    db.failWorkJob(job.id, "late failure", "worker-1");
+
+    expect(db.getWorkJob(job.id)!.status).toBe("cancelled");
+  });
+
   it("heartbeat with leaseSeconds extends lease_expires_at", () => {
     db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:hb-ext" });
     const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;

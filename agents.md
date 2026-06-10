@@ -269,7 +269,7 @@ Configured via `*_MODEL_PREFERENCE` env var (comma-delimited):
 ```
 ANTIGRAVITY_MODEL_PREFERENCE=gemini-3.5-flash-high,gemini-3.5-flash-medium,gemini-3.1-pro-high,gemini-3.1-pro-low  # mapped to display labels for settings.json overrides
 CODEX_MODEL_PREFERENCE=gpt-5.5,gpt-5.5-mini,gpt-5.4,gpt-5.4-mini
-CLAUDE_MODEL_PREFERENCE=claude-opus-4-7,claude-sonnet-4-6
+CLAUDE_MODEL_PREFERENCE=claude-sonnet-4-6,claude-opus-4-8,claude-fable-5
 ```
 
 - `modelPreference[0]` = default passed to CLI

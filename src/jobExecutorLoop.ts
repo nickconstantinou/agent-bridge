@@ -23,31 +23,28 @@ export function startJobExecutorLoop(deps: JobExecutorLoopDeps): () => void {
   const handle = setInterval(() => {
     void (async () => {
       try {
-        // Peek at next claimable job to get its input_json for notify routing
+        // Peek at next claimable job to get its input_json for notify routing.
+        // The claim below is pinned to this id so peek and claim cannot diverge.
         const candidate = db.raw.prepare(
-          `SELECT task_type, status, input_json FROM work_jobs
+          `SELECT id, task_type, status, input_json FROM work_jobs
            WHERE status = 'pending'
               OR (status IN ('leased','running') AND datetime(lease_expires_at) <= datetime('now'))
-           ORDER BY created_at ASC LIMIT 1`,
-        ).get() as { task_type: string; status: string; input_json: string } | undefined;
+           ORDER BY created_at ASC, id ASC LIMIT 1`,
+        ).get() as { id: number; task_type: string; status: string; input_json: string } | undefined;
+
+        if (!candidate) return;
 
         let notifyChatId: number | null = null;
         let startMessage: string | null = null;
-        if (candidate) {
-          try {
-            const parsed = JSON.parse(candidate.input_json);
-            if (typeof parsed.notify_chat_id === "number") {
-              notifyChatId = parsed.notify_chat_id;
-            }
-            if (candidate.status === "pending" && typeof parsed.start_message === "string") {
-              startMessage = parsed.start_message;
-            }
-          } catch { /* non-fatal */ }
-        }
-
-        if (notifyChatId != null && startMessage != null) {
-          await sendMessage(notifyChatId, startMessage);
-        }
+        try {
+          const parsed = JSON.parse(candidate.input_json);
+          if (typeof parsed.notify_chat_id === "number") {
+            notifyChatId = parsed.notify_chat_id;
+          }
+          if (candidate.status === "pending" && typeof parsed.start_message === "string") {
+            startMessage = parsed.start_message;
+          }
+        } catch { /* non-fatal */ }
 
         const notify = notifyChatId != null
           ? (msg: string, result?: import("./jobExecutor.js").JobHandlerResult) => {
@@ -66,9 +63,22 @@ export function startJobExecutorLoop(deps: JobExecutorLoopDeps): () => void {
 
         // Long-running tasks (feature_plan, tdd_implementation) need a longer lease
         const LONG_RUNNING_TASKS = new Set(["feature_plan", "tdd_implementation"]);
-        const leaseSeconds = candidate && LONG_RUNNING_TASKS.has(candidate.task_type) ? 1800 : 300;
+        const leaseSeconds = LONG_RUNNING_TASKS.has(candidate.task_type) ? 1800 : 300;
 
-        await executeNextJob({ db, workerId, handlers, notify, leaseSeconds });
+        await executeNextJob({
+          db,
+          workerId,
+          handlers,
+          notify,
+          leaseSeconds,
+          targetJobId: candidate.id,
+          onStart: async () => {
+            // Sent only after a successful claim — a stuck job can never spam this
+            if (notifyChatId != null && startMessage != null) {
+              await sendMessage(notifyChatId, startMessage);
+            }
+          },
+        });
       } catch (err) {
         console.error("[job-executor-loop] unhandled error", err);
       }

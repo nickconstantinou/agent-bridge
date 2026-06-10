@@ -481,15 +481,21 @@ export class BridgeDb {
 
   // ── Job lease lifecycle ──────────────────────────────────────────────────
 
-  claimNextWorkJob(workerId: string, now: string, leaseSeconds: number): WorkJob | null {
+  claimNextWorkJob(workerId: string, now: string, leaseSeconds: number, jobId?: number): WorkJob | null {
     const expiresAt = new Date(new Date(now).getTime() + leaseSeconds * 1000).toISOString();
-    const job = this.raw.prepare(
-      `SELECT * FROM work_jobs
-       WHERE status = 'pending'
-          OR (status IN ('leased','running') AND lease_expires_at < ?)
-       ORDER BY created_at ASC
-       LIMIT 1`
-    ).get(now) as WorkJob | undefined;
+    const job = jobId != null
+      ? this.raw.prepare(
+          `SELECT * FROM work_jobs
+           WHERE id = ?
+             AND (status = 'pending' OR (status IN ('leased','running') AND lease_expires_at < ?))`
+        ).get(jobId, now) as WorkJob | undefined
+      : this.raw.prepare(
+          `SELECT * FROM work_jobs
+           WHERE status = 'pending'
+              OR (status IN ('leased','running') AND lease_expires_at < ?)
+           ORDER BY created_at ASC, id ASC
+           LIMIT 1`
+        ).get(now) as WorkJob | undefined;
     if (!job) return null;
     const { changes } = this.raw.prepare(
       `UPDATE work_jobs
@@ -530,6 +536,15 @@ export class BridgeDb {
        SET attempt_count = attempt_count + 1,
            status = CASE WHEN attempt_count + 1 < max_attempts THEN 'pending' ELSE 'failed' END,
            error = ?, lease_owner = NULL, lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND lease_owner = ?`
+    ).run(error, jobId, workerId);
+  }
+
+  failWorkJobPermanently(jobId: number, error: string, workerId: string): void {
+    this.raw.prepare(
+      `UPDATE work_jobs
+       SET status = 'failed', error = ?, lease_owner = NULL, lease_expires_at = NULL,
+           updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND lease_owner = ?`
     ).run(error, jobId, workerId);
   }

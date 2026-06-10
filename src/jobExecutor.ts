@@ -30,6 +30,10 @@ export interface ExecuteNextJobDeps {
   handlers: Partial<Record<string, JobHandler>>;
   notify: (message: string, result?: JobHandlerResult) => Promise<void> | void;
   leaseSeconds?: number;
+  /** Pin execution to this job id; nothing else is claimed this call. */
+  targetJobId?: number;
+  /** Called with the claimed job after the lease is taken, before the handler runs. */
+  onStart?: (job: { id: number; task_type: string; input_json: string }) => Promise<void> | void;
 }
 
 export interface ExecuteNextJobResult {
@@ -42,29 +46,24 @@ const DEFAULT_LEASE_SECONDS = 300;
 export async function executeNextJob(
   deps: ExecuteNextJobDeps,
 ): Promise<ExecuteNextJobResult | null> {
-  const { db, workerId, handlers, notify, leaseSeconds = DEFAULT_LEASE_SECONDS } = deps;
+  const { db, workerId, handlers, notify, leaseSeconds = DEFAULT_LEASE_SECONDS, targetJobId, onStart } = deps;
 
-  // Peek at the next claimable job without claiming it
+  // Claim the next job (or the pinned target) atomically
   const now = new Date().toISOString();
-  const candidate = db.raw.prepare(
-    `SELECT * FROM work_jobs
-     WHERE status = 'pending'
-        OR (status IN ('leased','running') AND datetime(lease_expires_at) <= datetime('now'))
-     ORDER BY created_at ASC
-     LIMIT 1`,
-  ).get() as { id: number; task_type: string } | undefined;
-
-  if (!candidate) return null;
-
-  // No handler registered — leave this job pending and return
-  const handler = handlers[candidate.task_type];
-  if (!handler) return null;
-
-  // Claim the job
-  const job = db.claimNextWorkJob(workerId, now, leaseSeconds);
+  const job = db.claimNextWorkJob(workerId, now, leaseSeconds, targetJobId);
   if (!job) return null;
 
+  // No handler registered — fail loudly so it never head-of-line blocks the queue
+  const handler = handlers[job.task_type];
+  if (!handler) {
+    const message = `No handler registered for task type: ${job.task_type}`;
+    db.failWorkJobPermanently(job.id, message, workerId);
+    await notify(`Job #${job.id} failed: ${message}`);
+    return { jobId: job.id };
+  }
+
   db.markWorkJobRunning(job.id, workerId);
+  if (onStart) await onStart(job);
 
   let input: JobHandlerInput = {};
   try {

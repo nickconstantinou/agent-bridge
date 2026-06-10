@@ -70,9 +70,15 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
     try { rmSync(dbPath); } catch {}
   });
 
-  it("resolves the merge_pr approval and merges via gh pr merge", async () => {
-    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+  /** runCommand stub that answers `gh pr view` with JSON and `gh pr merge` with text. */
+  function makeGhStub(view: object, mergeOutput = "Pull request #3 was merged") {
+    return vi.fn(async (_binary: string, args: string[]) => {
+      if (args.includes("view")) return JSON.stringify(view);
+      return mergeOutput;
+    });
+  }
 
+  function makeApprovedItem(payloadExtra: object = {}) {
     const item = db.createWorkItem({
       kind: "defect", source: "telegram", title: "Bug", created_by: "worker",
       repository: "owner/repo",
@@ -81,10 +87,23 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
       approval_type: "merge_pr",
       requested_by: "agent",
       work_item_id: item.id,
-      payload: { pr_url: "https://github.com/owner/repo/pull/3", pr_number: 3, branch_name: "agent/work-1", repository: "owner/repo" },
+      payload: {
+        pr_url: "https://github.com/owner/repo/pull/3", pr_number: 3,
+        branch_name: "agent/work-1", repository: "owner/repo",
+        ...payloadExtra,
+      },
     });
+    return { item, approval };
+  }
 
-    const runCommand = vi.fn().mockResolvedValue("Pull request #3 was merged");
+  it("resolves the merge_pr approval and merges when head SHA matches and checks pass", async () => {
+    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+    const { item, approval } = makeApprovedItem({ head_sha: "abc123" });
+
+    const runCommand = makeGhStub({
+      headRefOid: "abc123",
+      statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
+    });
     const answerCbq = vi.fn().mockResolvedValue(undefined);
     const editMessage = vi.fn().mockResolvedValue(undefined);
 
@@ -93,34 +112,111 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
       { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
     );
 
-    expect(runCommand).toHaveBeenCalledOnce();
-    const [binary, args]: [string, string[]] = runCommand.mock.calls[0];
-    expect(binary).toBe("gh");
-    expect(args).toContain("merge");
-    expect(args).toContain("--squash");
+    const mergeCall = runCommand.mock.calls.find(([, args]) => args.includes("merge"));
+    expect(mergeCall).toBeDefined();
+    expect(mergeCall![1]).toContain("--squash");
 
     const resolved = db.raw.prepare("SELECT * FROM approvals WHERE id = ?").get(approval.id) as any;
     expect(resolved.status).toBe("approved");
-
     expect(db.getWorkItem(item.id)!.status).toBe("resolved");
   });
 
-  it("throws if no pending merge_pr approval exists for the work item", async () => {
+  it("blocks merge when the PR head SHA does not match the approval payload", async () => {
+    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+    const { item, approval } = makeApprovedItem({ head_sha: "abc123" });
+
+    const runCommand = makeGhStub({
+      headRefOid: "ffff9999", // head moved since approval was requested
+      statusCheckRollup: [],
+    });
+    const answerCbq = vi.fn().mockResolvedValue(undefined);
+    const editMessage = vi.fn().mockResolvedValue(undefined);
+
+    await handlePrMergeCallback(
+      { type: "wi_mrgpr", id: item.id },
+      { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
+    );
+
+    const mergeCall = runCommand.mock.calls.find(([, args]) => args.includes("merge"));
+    expect(mergeCall).toBeUndefined();
+    expect(answerCbq).toHaveBeenCalled();
+    expect(editMessage).toHaveBeenCalledWith(expect.stringMatching(/head|changed/i), expect.anything());
+    // Approval stays pending so the user can re-review and retry
+    const row = db.raw.prepare("SELECT * FROM approvals WHERE id = ?").get(approval.id) as any;
+    expect(row.status).toBe("pending");
+    expect(db.getWorkItem(item.id)!.status).not.toBe("resolved");
+  });
+
+  it("blocks merge when CI checks are failing or incomplete", async () => {
+    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+
+    for (const rollup of [
+      [{ status: "COMPLETED", conclusion: "FAILURE" }],
+      [{ status: "IN_PROGRESS", conclusion: null }],
+      [{ state: "FAILURE" }],
+    ]) {
+      const { item } = makeApprovedItem({ head_sha: "abc123" });
+      const runCommand = makeGhStub({ headRefOid: "abc123", statusCheckRollup: rollup });
+      const answerCbq = vi.fn().mockResolvedValue(undefined);
+      const editMessage = vi.fn().mockResolvedValue(undefined);
+
+      await handlePrMergeCallback(
+        { type: "wi_mrgpr", id: item.id },
+        { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
+      );
+
+      const mergeCall = runCommand.mock.calls.find(([, args]) => args.includes("merge"));
+      expect(mergeCall).toBeUndefined();
+      expect(editMessage).toHaveBeenCalledWith(expect.stringMatching(/check/i), expect.anything());
+    }
+  });
+
+  it("reports merge command failure via the message instead of throwing", async () => {
+    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+    const { item, approval } = makeApprovedItem({ head_sha: "abc123" });
+
+    const runCommand = vi.fn(async (_binary: string, args: string[]) => {
+      if (args.includes("view")) {
+        return JSON.stringify({ headRefOid: "abc123", statusCheckRollup: [] });
+      }
+      throw new Error("GraphQL: Pull Request is still a draft");
+    });
+    const answerCbq = vi.fn().mockResolvedValue(undefined);
+    const editMessage = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      handlePrMergeCallback(
+        { type: "wi_mrgpr", id: item.id },
+        { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
+      )
+    ).resolves.toBeUndefined();
+
+    expect(answerCbq).toHaveBeenCalled();
+    expect(editMessage).toHaveBeenCalledWith(expect.stringMatching(/failed|draft/i), expect.anything());
+    // Approval must remain pending after a failed merge
+    const row = db.raw.prepare("SELECT * FROM approvals WHERE id = ?").get(approval.id) as any;
+    expect(row.status).toBe("pending");
+  });
+
+  it("answers the callback instead of throwing when no pending approval exists", async () => {
     const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
 
     const item = db.createWorkItem({
       kind: "defect", source: "telegram", title: "Bug", created_by: "worker",
     });
 
+    const answerCbq = vi.fn().mockResolvedValue(undefined);
     await expect(
       handlePrMergeCallback(
         { type: "wi_mrgpr", id: item.id },
         {
-          db, runCommand: vi.fn(), answerCbq: vi.fn(),
+          db, runCommand: vi.fn(), answerCbq,
           editMessage: vi.fn(), chatId: 1, messageId: 1, userId: "u"
         }
       )
-    ).rejects.toThrow(/approval|not found/i);
+    ).resolves.toBeUndefined();
+
+    expect(answerCbq).toHaveBeenCalledWith(expect.stringMatching(/no pending|already/i));
   });
 });
 

@@ -177,4 +177,28 @@ describe("createPrLifecycleHandler", () => {
     expect(approvals).toHaveLength(1);
     expect(approvals[0].status).toBe("pending");
   });
+
+  it("captures the branch head SHA in the merge_pr approval payload", async () => {
+    const stubs = makeStubs();
+    stubs.runGit.mockImplementation((args: string[]) => {
+      if (args[0] === "rev-parse") return "abc123def456\n";
+      return "";
+    });
+    stubs.runCommand.mockResolvedValue("https://github.com/owner/repo/pull/9");
+
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Bug", created_by: "worker",
+    });
+
+    await createPrLifecycleHandler(stubs)(
+      { work_item_id: item.id, branch_name: `agent/work-${item.id}`, repository: "owner/repo" },
+      { db, workerId: "w" },
+    );
+
+    const approval = db.raw.prepare(
+      "SELECT * FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr'"
+    ).get(item.id) as any;
+    expect(JSON.parse(approval.payload_json).head_sha).toBe("abc123def456");
+  });
 });

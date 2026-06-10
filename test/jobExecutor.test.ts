@@ -184,6 +184,76 @@ describe("executeNextJob", () => {
     expect(older?.status).toBe("pending");
   });
 
+  it("extends the lease while a long-running handler is in flight", async () => {
+    vi.useFakeTimers();
+    try {
+      const job = db.createWorkJob({
+        task_type: "defect_scan",
+        idempotency_key: "scan:heartbeat:1",
+      });
+
+      let release!: () => void;
+      const handler = vi.fn(
+        () => new Promise<{ summary: string }>((res) => {
+          release = () => res({ summary: "ok" });
+        }),
+      );
+
+      const startMs = Date.now();
+      const pending = executeNextJob({
+        db,
+        workerId: "test-worker",
+        handlers: { defect_scan: handler },
+        notify: vi.fn(),
+        leaseSeconds: 10,
+        heartbeatIntervalMs: 1000,
+      });
+
+      // Run past the original 10s lease while the handler is still working
+      await vi.advanceTimersByTimeAsync(12_000);
+
+      const during = db.getWorkJob(job.id)!;
+      expect(during.heartbeat_at).not.toBeNull();
+      // The lease must have been pushed past its original expiry
+      expect(new Date(during.lease_expires_at!).getTime()).toBeGreaterThan(startMs + 10_000);
+      // And the job must not be claimable by anyone else right now
+      expect(db.claimNextWorkJob("rival-worker", new Date().toISOString(), 60)).toBeNull();
+
+      release();
+      await pending;
+      expect(db.getWorkJob(job.id)!.status).toBe("completed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops heartbeating after the handler completes", async () => {
+    vi.useFakeTimers();
+    try {
+      const job = db.createWorkJob({
+        task_type: "defect_scan",
+        idempotency_key: "scan:heartbeat:2",
+      });
+
+      const handler = vi.fn().mockResolvedValue({ summary: "ok" });
+      await executeNextJob({
+        db,
+        workerId: "test-worker",
+        handlers: { defect_scan: handler },
+        notify: vi.fn(),
+        leaseSeconds: 10,
+        heartbeatIntervalMs: 1000,
+      });
+
+      const after = db.getWorkJob(job.id)!.heartbeat_at;
+      await vi.advanceTimersByTimeAsync(5_000);
+      // No further heartbeats once the job is done
+      expect(db.getWorkJob(job.id)!.heartbeat_at).toBe(after);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("calls onStart with the claimed job before the handler runs", async () => {
     const job = db.createWorkJob({
       task_type: "defect_scan",

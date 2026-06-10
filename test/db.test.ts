@@ -539,6 +539,20 @@ describe("markWorkJobRunning / heartbeatWorkJob", () => {
     db.heartbeatWorkJob(job.id, "worker-1", ts);
     expect(db.getWorkJob(job.id)!.heartbeat_at).toBe(ts);
   });
+
+  it("heartbeat with leaseSeconds extends lease_expires_at", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:hb-ext" });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
+    db.markWorkJobRunning(job.id, "worker-1");
+
+    const later = new Date(Date.now() + 120_000).toISOString();
+    db.heartbeatWorkJob(job.id, "worker-1", later, 60);
+
+    const updated = db.getWorkJob(job.id)!;
+    expect(updated.heartbeat_at).toBe(later);
+    // Lease must now expire 60s after the heartbeat, not the original claim
+    expect(new Date(updated.lease_expires_at!).getTime()).toBe(new Date(later).getTime() + 60_000);
+  });
 });
 
 describe("completeWorkJob / failWorkJob", () => {

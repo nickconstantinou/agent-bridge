@@ -112,6 +112,38 @@ describe("startJobExecutorLoop", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("does not start a second job while one is still in flight", async () => {
+    const resolvers: Array<(v: { summary: string }) => void> = [];
+    const handler = vi.fn(
+      () => new Promise<{ summary: string }>((res) => resolvers.push(res)),
+    );
+
+    db.createWorkJob({ task_type: "defect_scan", idempotency_key: "scan:serial:1" });
+    db.createWorkJob({ task_type: "defect_scan", idempotency_key: "scan:serial:2" });
+
+    const stop = startJobExecutorLoop({
+      db,
+      workerId: "test-worker",
+      handlers: { defect_scan: handler },
+      sendMessage: vi.fn(),
+      intervalMs: 1000,
+    });
+
+    await vi.advanceTimersByTimeAsync(1000); // tick 1 — claims job 1
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(2000); // ticks 2-3 — job 1 still running
+    expect(handler).toHaveBeenCalledTimes(1);
+
+    resolvers[0]({ summary: "done" }); // finish job 1
+    await vi.advanceTimersByTimeAsync(1000); // next tick — job 2 may start
+    expect(handler).toHaveBeenCalledTimes(2);
+
+    resolvers[1]({ summary: "done" });
+    await vi.advanceTimersByTimeAsync(0);
+    stop();
+  });
+
   it("fails an unhandled task type with a notification instead of re-sending start_message forever", async () => {
     const sendMessage = vi.fn().mockResolvedValue(undefined);
 

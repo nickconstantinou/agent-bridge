@@ -81,6 +81,34 @@ If the bot becomes unresponsive after a bad restart, send `/reset` to the affect
 
 ---
 
+# Autonomous Worker Loop — invariants
+
+When working on the worker lane (`src/index-worker.ts`, `src/jobExecutor*.ts`,
+`src/handlers/`, `src/workspace.ts`, `src/prMergeGate.ts`, `src/workCallbacks.ts`):
+
+- Implementation jobs run **only in per-job workspace clones** (`src/workspace.ts`),
+  never in live checkouts or the worker's cwd. Workspace cleanup must stay
+  restricted to `$WORKER_WORKSPACE_DIR`.
+- The TDD handler enforces the red/green split mechanically: red commits stage
+  test files only and the red run must fail; green commits must not touch test
+  files and verification must pass. Do not weaken these guards.
+- The merge gate verifies head SHA and CI checks via `gh pr view` before any
+  merge. Never add a merge path that skips it. Approvals stay pending on every
+  blocked path, and every Telegram callback must be answered.
+- Jobs with unregistered task types fail permanently — never leave them
+  pending (head-of-line blocking).
+- `cancelWorkJob` is final; complete/fail must not overwrite `cancelled`.
+- Child processes in the worker use the async runner (`src/runCommandAsync.ts`)
+  — no `execFileSync` in the polling process.
+- New job-queue Telegram output: messages go through `sendTelegramMessage`,
+  message edits through the entity-converting helper in `src/workCallbacks.ts`
+  (raw `**`/backticks must not reach Telegram).
+
+User guide: `docs/WORKER-GUIDE.md`. Phase 9 plan:
+`docs/autonomous-agent-bridge-research.md`.
+
+---
+
 # Health Monitoring System
 
 **Active** — enabled via `HEALTH_MONITOR_ENABLED=true` in `.env.shared` or `.env.health`.

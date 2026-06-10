@@ -375,6 +375,52 @@ Two-way file exchange is fully wired. Users can send photos or documents to any 
 
 ---
 
+## Autonomous Worker Lane
+
+Alongside the interactive bots, `agent-bridge-worker-bot.service` runs
+`src/index-worker.ts`: a separate Telegram bot plus a background job executor
+over a durable SQLite queue (`work_items`, `work_jobs`, `approvals`,
+`github_links`).
+
+```text
+Telegram command → work item / job row → executor loop (10s poll)
+   → handler (defect_scan | feature_plan | tdd_implementation |
+              open_github_issue | pr_lifecycle)
+   → Telegram notification (+ merge keyboard when a PR opens)
+```
+
+Key mechanics:
+
+- **Claim/lease lifecycle** — `claimNextWorkJob` takes a lease (300s standard,
+  1800s for `feature_plan`/`tdd_implementation`); the executor heartbeats the
+  lease while a handler runs so long jobs are never reclaimed mid-flight.
+  Loop ticks are serialized (one job in flight per process). Unhandled task
+  types fail permanently instead of blocking the queue head.
+- **Per-job workspaces** (`src/workspace.ts`) — implementation jobs clone the
+  local checkout under `$WORKER_REPO_ROOT` into
+  `$WORKER_WORKSPACE_DIR/work-<id>`, repoint `origin` at the real remote, and
+  never touch live checkouts. Failed jobs delete their workspace; the
+  `pr_lifecycle` handler deletes it after the branch is pushed and the draft
+  PR exists.
+- **TDD enforcement** (`src/handlers/tddImplementation.ts`) — red commit may
+  stage test files only; the red run must fail before tests are committed;
+  green commit may not touch test files; verification must pass before the
+  implementation commit.
+- **Merge gate** (`src/prMergeGate.ts`) — the `merge_pr` approval payload pins
+  the branch head SHA. The Merge button runs `gh pr view` and blocks when the
+  head moved, checks are failing/incomplete, or PR state cannot be verified.
+  Approval stays pending on every blocked path; all callbacks are answered.
+- **Async exec** (`src/runCommandAsync.ts`) — all git/gh/npm children run via
+  `execFile`, keeping Telegram polling responsive; `GH_TOKEN` is loaded from
+  `$GITHUB_TOKEN_FILE` for gh API calls.
+- **Cancellation** — `cancelWorkJob` is final: complete/fail cannot overwrite
+  a cancelled status.
+
+Operator docs: `docs/WORKER-GUIDE.md`. Design and phase plan:
+`docs/autonomous-agent-bridge-research.md`.
+
+---
+
 ## Key File Structure
 
 ```

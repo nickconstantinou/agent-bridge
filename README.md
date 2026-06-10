@@ -91,6 +91,23 @@ Important:
 
 All other text is forwarded to the CLI as a prompt.
 
+## Autonomous worker loop
+
+A separate worker bot (`agent-bridge-worker-bot.service`, `src/index-worker.ts`)
+runs background engineering jobs over a durable SQLite queue: defect scans
+(`/review`), feature planning (`/feature`), TDD implementation of approved work
+items, and draft-PR creation — with a Telegram merge gate as the only routine
+human approval. Implementation jobs run in disposable git clones, never in
+live checkouts, and merges are blocked unless the PR head SHA still matches
+the approval and CI checks are green.
+
+Worker commands: `/review`, `/feature`, `/issues`, `/issue`, `/jobs`, `/job`,
+`/approvals`, `/models`.
+
+Full guide: `docs/WORKER-GUIDE.md`. Architecture: `agents.md` → "Autonomous
+Worker Lane". Design history and Phase 9 plan:
+`docs/autonomous-agent-bridge-research.md`.
+
 ## Configuration
 
 Each service reads its own `.env` file. Only the token for that service's bot is required.

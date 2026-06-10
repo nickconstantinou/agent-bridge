@@ -43,6 +43,9 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
     // Push branch to origin
     runGit(["push", "--set-upstream", "origin", branchName], repoPath);
 
+    // Capture the head SHA so the merge gate can detect a moved head later
+    const headSha = runGit(["rev-parse", "HEAD"], repoPath).trim();
+
     // Open draft PR
     const prTitle = `[agent] ${item.title}`;
     const prBody = [
@@ -82,7 +85,13 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
       approval_type: "merge_pr",
       requested_by: "agent",
       work_item_id: workItemId,
-      payload: { pr_url: prUrl, pr_number: prNumber, branch_name: branchName, repository },
+      payload: {
+        pr_url: prUrl,
+        pr_number: prNumber,
+        branch_name: branchName,
+        repository,
+        ...(headSha ? { head_sha: headSha } : {}),
+      },
     });
 
     // Transition item to blocked — awaiting human merge gate

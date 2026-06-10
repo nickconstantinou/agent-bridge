@@ -45,6 +45,27 @@ interface PrMergeCallbackCtx {
   userId?: string;
 }
 
+/** Conclusions/states that mean a check did not succeed. */
+const FAILING_CHECK_VALUES = new Set(["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE"]);
+const PENDING_CHECK_STATES = new Set(["PENDING", "EXPECTED", "IN_PROGRESS", "QUEUED", "WAITING", "REQUESTED"]);
+
+interface PrViewState {
+  headRefOid?: string;
+  statusCheckRollup?: Array<{ status?: string | null; conclusion?: string | null; state?: string | null }>;
+}
+
+/** Returns a human-readable blocker, or null when the rollup is mergeable. */
+function findCheckBlocker(rollup: PrViewState["statusCheckRollup"]): string | null {
+  for (const check of rollup ?? []) {
+    const conclusion = (check.conclusion ?? check.state ?? "").toUpperCase();
+    if (FAILING_CHECK_VALUES.has(conclusion)) return "CI checks are failing";
+    const status = (check.status ?? "").toUpperCase();
+    if (status && status !== "COMPLETED") return "CI checks have not completed";
+    if (PENDING_CHECK_STATES.has(conclusion)) return "CI checks have not completed";
+  }
+  return null;
+}
+
 export async function handlePrMergeCallback(
   action: PrMergeCallbackAction,
   ctx: PrMergeCallbackCtx,
@@ -56,26 +77,64 @@ export async function handlePrMergeCallback(
   ).get(action.id) as { id: number; payload_json: string } | undefined;
 
   if (!approval) {
-    throw new Error(`No pending merge_pr approval found for work item ${action.id}`);
+    await answerCbq(`No pending merge approval for work item #${action.id} — already handled?`);
+    return;
   }
 
-  let payload: { pr_url?: string; pr_number?: number; repository?: string } = {};
+  let payload: { pr_url?: string; pr_number?: number; repository?: string; head_sha?: string } = {};
   try { payload = JSON.parse(approval.payload_json); } catch { /* non-fatal */ }
 
   const repo = payload.repository ?? "";
   const prNumber = payload.pr_number;
+  const prRef: string[] = prNumber != null
+    ? [String(prNumber)]
+    : payload.pr_url ? [payload.pr_url] : [];
+  const repoFlag = repo ? ["--repo", repo] : [];
 
   if (action.type === "wi_mrgpr") {
-    // Execute squash merge
-    const mergeArgs = ["pr", "merge", "--squash", "--delete-branch"];
-    if (repo) mergeArgs.push("--repo", repo);
-    if (prNumber != null) {
-      mergeArgs.push(String(prNumber));
-    } else if (payload.pr_url) {
-      mergeArgs.push(payload.pr_url);
+    // Verify head SHA and CI state before merging — never merge blind
+    const keyboard = buildPrMergeKeyboard(action.id);
+    let view: PrViewState;
+    try {
+      const viewOut = await runCommand("gh", ["pr", "view", ...repoFlag, ...prRef, "--json", "headRefOid,statusCheckRollup"]);
+      view = JSON.parse(viewOut) as PrViewState;
+    } catch (err) {
+      await answerCbq();
+      await editMessage(
+        `Merge blocked: could not verify PR state (${err instanceof Error ? err.message : String(err)}). Approval kept pending.`,
+        keyboard,
+      );
+      return;
     }
 
-    await runCommand("gh", mergeArgs);
+    if (payload.head_sha && view.headRefOid && view.headRefOid !== payload.head_sha) {
+      await answerCbq();
+      await editMessage(
+        `Merge blocked: PR head has changed since approval was requested (expected ${payload.head_sha.slice(0, 12)}, found ${view.headRefOid.slice(0, 12)}). Re-review before merging.`,
+        keyboard,
+      );
+      return;
+    }
+
+    const checkBlocker = findCheckBlocker(view.statusCheckRollup);
+    if (checkBlocker) {
+      await answerCbq();
+      await editMessage(`Merge blocked: ${checkBlocker}. Retry once checks are green.`, keyboard);
+      return;
+    }
+
+    // Execute squash merge
+    const mergeArgs = ["pr", "merge", "--squash", "--delete-branch", ...repoFlag, ...prRef];
+    try {
+      await runCommand("gh", mergeArgs);
+    } catch (err) {
+      await answerCbq();
+      await editMessage(
+        `Merge failed: ${err instanceof Error ? err.message : String(err)}. Approval kept pending.`,
+        keyboard,
+      );
+      return;
+    }
 
     db.resolveApproval(approval.id, "approved", ctx.userId ?? "user");
     db.updateWorkItemStatus(action.id, "resolved");

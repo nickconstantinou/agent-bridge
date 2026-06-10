@@ -15,6 +15,7 @@
 | Phase 6 — GitHub issue creation | ✅ Complete |
 | Phase 7 — TDD implementation job | ✅ Complete |
 | Phase 8 — PR lifecycle + merge gate | ✅ Complete |
+| Phase 9 — PR lifecycle completion (caps, CI reaction, stale digest) | 📝 Planned — see "Phase 9" section |
 
 This note reviews the proposed Agent Bridge evolution from a Telegram-driven CLI wrapper into an asynchronous, policy-gated engineering agent. It is intentionally specific enough for a later implementation agent to use, but it should be treated as a design document until each phase is converted into red-green-refactor work.
 
@@ -2459,6 +2460,153 @@ Verification:
 npm test
 npm run typecheck
 ```
+
+## Phase 9 — PR Lifecycle Completion (Planned)
+
+Phase 8 shipped one slice of the designed lifecycle: push → draft PR → merge
+approval. This phase completes the loop described in "PR Lifecycle Management":
+caps, update-over-create, CI reaction, stale handling, and held state. Each
+slice follows the global TDD rules (separate test and implementation commits).
+
+Current gaps this phase closes:
+
+- retrying `pr_lifecycle` calls `gh pr create` again and fails instead of
+  reusing the existing PR
+- nothing enforces the open-PR or daily-PR caps
+- nothing reacts to CI failing after the draft PR opens
+- nothing notices a PR going stale; abandoned drafts accumulate
+- no held state — every open PR is treated identically forever
+
+### Slice 18: PR state on `github_links`
+
+Files: `src/db.ts`, `test/db.test.ts`
+
+- migration adds `pr_state TEXT NOT NULL DEFAULT 'draft'` and
+  `last_activity_at TEXT` to `github_links`
+- allowed states: `draft`, `ci_failed`, `refreshing`, `ready_to_merge`,
+  `held`, `stale`, `merged`, `closed`
+- methods: `updatePrState(linkId, state)`, `listOpenAgentPrs(repository)`,
+  `touchPrActivity(linkId, ts)`
+
+Red tests: migration adds columns on fresh and existing DBs; state transitions
+persist; `listOpenAgentPrs` excludes `merged`/`closed`.
+
+Commit sequence: `test: failing pr state schema coverage` →
+`feat: add pr state tracking to github_links`.
+
+### Slice 19: Idempotent create-or-update in `pr_lifecycle`
+
+Files: `src/handlers/prLifecycle.ts`, `test/prLifecycleHandler.test.ts`
+
+- before `gh pr create`, look up `github_links` for `(repository, branch)`;
+  when a PR exists: push, refresh head SHA in the pending merge approval
+  payload (or create one if missing), skip creation
+- `gh pr create` failure containing "already exists" resolves the existing PR
+  number via `gh pr view --json number` and records the link instead of failing
+
+Red tests: existing link → no second create call; approval payload head_sha
+updated on re-run; "already exists" error path records link and completes.
+
+Commit sequence: `test: failing idempotent pr update coverage` →
+`fix: pr_lifecycle reuses existing PRs instead of failing on retry`.
+
+### Slice 20: PR caps
+
+Files: `src/handlers/prLifecycle.ts`, `src/db.ts`, tests
+
+- env: `WORKER_MAX_OPEN_PRS` (default 3), `WORKER_MAX_DAILY_PRS` (default 3)
+- before creating a *new* PR: count open agent PRs for the repository and PRs
+  created today; exceeding either cap fails the job with a clear queue-hold
+  message (job retries are pointless here — use permanent failure) and
+  notifies with the list of open PRs blocking the slot
+- updating an existing PR is never blocked by caps
+
+Red tests: cap blocks creation with explanatory error; update path bypasses
+caps; counts ignore merged/closed links.
+
+Commit sequence: `test: failing pr cap coverage` → `feat: enforce open and
+daily agent PR caps`.
+
+### Slice 21: `pr_watch` task — CI reaction and readiness
+
+Files: `src/handlers/prWatch.ts`, `src/index-worker.ts`, `src/db.ts`, tests
+
+- new fast task type `pr_watch` (add to CHECK constraint + lane docs);
+  enqueued on an interval by the worker entry point with idempotency key
+  `pr_watch:<date-hour>` so at most one runs per hour
+- for each open agent PR: `gh pr view --json headRefOid,statusCheckRollup,
+  mergeable,updatedAt`
+  - checks failing → state `ci_failed`; enqueue at most one auto-fix job with
+    idempotency key `ci_fix:<repo>:<pr>:<head_sha>` (TDD handler in a
+    workspace clone of the PR branch); notify once
+  - checks green and state not `held`/`stale` → state `ready_to_merge`;
+    ensure a pending merge approval exists with the current head SHA; notify
+    with the merge keyboard
+  - `updatedAt` older than `WORKER_PR_STALE_HOURS` (default 72) → state `stale`
+- watch never merges, closes, or force-pushes
+
+Red tests: failing rollup enqueues exactly one fix job per head SHA; green
+rollup creates/refreshes merge approval; stale threshold flips state; held
+PRs are skipped entirely.
+
+Commit sequence: `test: failing pr watch coverage` → `feat: add pr_watch
+task reacting to CI state and staleness`.
+
+### Slice 22: Stale digest and hold/refresh/close decisions
+
+Files: `src/workerBot.ts`, `src/workCallbacks.ts`, `src/prMergeGate.ts`, tests
+
+- `pr_watch` sends one digest per run listing PRs newly marked `stale`
+  (never one message per PR) with buttons per PR:
+  `pr:<link_id>:rfsh`, `pr:<link_id>:hold`, `pr:<link_id>:clse`
+- `hold` → state `held`; skipped by watch until released via the same digest
+  (`pr:<link_id>:rels`)
+- `clse` → routes through the existing close path (gh pr close + work item
+  closed); non-trivial PRs keep requiring this explicit decision
+- callback grammar stays ≤ 64 bytes and references `github_links.id` only
+
+Red tests: digest batches multiple stale PRs into one message; hold state
+round-trips; close button closes PR and work item; callbacks validate user.
+
+Commit sequence: `test: failing stale digest coverage` → `feat: stale PR
+digest with refresh/hold/close decisions`.
+
+### Slice 23: Non-destructive refresh executor
+
+Files: `src/handlers/prRefresh.ts`, tests
+
+- task type `pr_refresh` (heavy lane): workspace clone of the branch,
+  `git fetch origin && git merge origin/<base>` (merge, not rebase — never
+  rewrite pushed history without approval), run the test suite, push
+- merge conflict or failing tests → state `needs_human`… map to `ci_failed`
+  with error detail; never auto-resolve conflicts
+- success → push, update head SHA in the pending merge approval, state back
+  to `draft` (watch will re-evaluate readiness)
+
+Red tests: clean merge pushes and updates approval head SHA; conflict marks
+failure without pushing; force-push is never invoked.
+
+Commit sequence: `test: failing pr refresh coverage` → `feat: non-destructive
+pr refresh executor`.
+
+### Slice 24: Health and docs
+
+Files: `src/health/plugins/self.ts` (or worker health plugin), `docs/PRD.md`,
+`CLAUDE.md`, tests
+
+- health gauges: open agent PRs, stale PRs, pending merge approvals, fix-job
+  retries consumed
+- document env knobs (`WORKER_MAX_OPEN_PRS`, `WORKER_MAX_DAILY_PRS`,
+  `WORKER_PR_STALE_HOURS`, `WORKER_PR_WATCH_INTERVAL`) and lane mapping for
+  `pr_watch`/`pr_refresh`
+
+Phase 9 acceptance:
+
+- retried pr_lifecycle jobs never fail on "PR already exists"
+- caps hold new PRs while allowing updates
+- CI failure produces at most one fix attempt per head SHA
+- stale PRs surface in a single digest with working hold/refresh/close
+- merge still happens only through the head-SHA-pinned, checks-gated approval
 
 ## Operational Readiness Checklist
 

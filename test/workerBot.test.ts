@@ -312,3 +312,86 @@ describe("handleWorkerCommand /feature", () => {
   });
 });
 
+
+// ── /approvals — re-surface pending approvals with their keyboards ───────────
+
+describe("handleWorkerCommand /approvals", () => {
+  let db: ReturnType<typeof import("../src/db.js").openDb>;
+
+  beforeEach(async () => {
+    const { openDb } = await import("../src/db.js");
+    db = openDb(":memory:");
+  });
+
+  afterEach(() => db.close());
+
+  it("isWorkerCommand recognises /approvals", () => {
+    expect(isWorkerCommand("/approvals")).toBe(true);
+  });
+
+  it("buildWorkerCommands includes approvals", () => {
+    expect(buildWorkerCommands().some(c => c.command === "approvals")).toBe(true);
+  });
+
+  it("reports when there are no pending approvals", () => {
+    const result = handleWorkerCommand("/approvals", { workerEnabled: true, db });
+    expect(result).not.toBeNull();
+    expect(result!.kind).toBe("message");
+    expect(result!.text.toLowerCase()).toMatch(/no pending approvals/i);
+  });
+
+  it("lists a pending merge_pr approval with merge/close buttons re-attached", () => {
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram", title: "Fix leak", created_by: "worker",
+      repository: "owner/repo",
+    });
+    db.createApproval({
+      approval_type: "merge_pr",
+      requested_by: "agent",
+      work_item_id: item.id,
+      payload: { pr_url: "https://github.com/owner/repo/pull/12", pr_number: 12, repository: "owner/repo" },
+    });
+
+    const result = handleWorkerCommand("/approvals", { workerEnabled: true, db }) as WorkerKeyboardMessageResult;
+    expect(result.kind).toBe("keyboard_message");
+    expect(result.text).toContain("merge_pr");
+    expect(result.text).toContain("https://github.com/owner/repo/pull/12");
+
+    const buttons = result.reply_markup.inline_keyboard.flat().map(b => b.callback_data);
+    expect(buttons).toContain(`wi:${item.id}:mrgpr`);
+    expect(buttons).toContain(`wi:${item.id}:clspr`);
+  });
+
+  it("lists other pending approvals with approve/reject buttons", () => {
+    const item = db.createWorkItem({
+      kind: "ops", source: "telegram", title: "Restart svc", created_by: "worker",
+    });
+    const appr = db.createApproval({
+      approval_type: "restart_service",
+      requested_by: "agent",
+      work_item_id: item.id,
+    });
+
+    const result = handleWorkerCommand("/approvals", { workerEnabled: true, db }) as WorkerKeyboardMessageResult;
+    expect(result.kind).toBe("keyboard_message");
+    const buttons = result.reply_markup.inline_keyboard.flat().map(b => b.callback_data);
+    expect(buttons).toContain(`ap:${appr.id}:yes`);
+    expect(buttons).toContain(`ap:${appr.id}:no`);
+  });
+
+  it("does not list resolved approvals", () => {
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram", title: "Done already", created_by: "worker",
+    });
+    const appr = db.createApproval({
+      approval_type: "merge_pr",
+      requested_by: "agent",
+      work_item_id: item.id,
+    });
+    db.resolveApproval(appr.id, "approved", "u1");
+
+    const result = handleWorkerCommand("/approvals", { workerEnabled: true, db });
+    expect(result!.kind).toBe("message");
+    expect(result!.text.toLowerCase()).toMatch(/no pending approvals/i);
+  });
+});

@@ -12,6 +12,8 @@ type RunCli = (command: string, args: string[], cwd?: string) => Promise<string>
 interface DefectScanDeps {
   runCli: RunCli;
   command?: string;
+  /** Map a repository name to its local checkout; null when unknown. */
+  resolveRepoPath?: (repository: string) => string | null;
 }
 
 interface DefectFinding {
@@ -83,16 +85,28 @@ function extractSummaryLine(output: string): string {
 }
 
 export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
-  const { runCli, command = "claude" } = deps;
+  const { runCli, command = "claude", resolveRepoPath } = deps;
 
   return async function defectScanHandler(
     input: JobHandlerInput,
     ctx: JobHandlerContext,
   ): Promise<JobHandlerResult> {
     const repository = typeof input.repository === "string" ? input.repository : "unknown";
+
+    // Scan must run inside the target repo — never report findings for one
+    // repo while actually inspecting another directory.
+    let scanCwd: string | undefined;
+    if (resolveRepoPath) {
+      const resolved = resolveRepoPath(repository);
+      if (!resolved) {
+        throw new Error(`No local checkout found for repository '${repository}' — cannot scan`);
+      }
+      scanCwd = resolved;
+    }
+
     const prompt = buildPrompt(repository);
 
-    const rawOutput = await runCli(command, ["--print", "--output-format", "text", prompt]);
+    const rawOutput = await runCli(command, ["--print", "--output-format", "text", prompt], scanCwd);
 
     const findings = parseFindings(rawOutput);
     const summaryLine = extractSummaryLine(rawOutput);

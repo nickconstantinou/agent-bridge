@@ -31,6 +31,7 @@ import { createPrLifecycleHandler } from "./handlers/prLifecycle.js";
 import { captureFeatureBrief } from "./featureBriefCapture.js";
 import { runCli } from "./cli.js";
 import { createRunCommand } from "./runCommandAsync.js";
+import { prepareWorkspace, createWorkspaceCleanup, resolveLocalRepoPath } from "./workspace.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 
 dotenv.config({
@@ -144,6 +145,21 @@ await client.setMyCommands({ commands: buildWorkerCommands() })
 // and loads GH_TOKEN from the secrets file for gh API calls.
 const runWorkerCommand = createRunCommand({ loadGhToken: true });
 
+// Per-job workspaces: implementation jobs clone the local checkout instead of
+// mutating it in place. Cleanup only ever deletes inside the workspace base.
+const cleanupWorkspace = createWorkspaceCleanup();
+
+// Test runner returning pass/fail rather than throwing — the TDD handler
+// needs a red run to fail and a green run to pass.
+const runTests = async (cwd: string): Promise<{ ok: boolean; output: string }> => {
+  try {
+    const output = await runWorkerCommand("npm", ["test"], { cwd });
+    return { ok: true, output };
+  } catch (err) {
+    return { ok: false, output: err instanceof Error ? err.message : String(err) };
+  }
+};
+
 const stopJobLoop = startJobExecutorLoop({
   db,
   workerId: `worker-bot-${process.pid}`,
@@ -151,6 +167,7 @@ const stopJobLoop = startJobExecutorLoop({
     defect_scan: createDefectScanHandler({
       runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd()),
       command: defectScanCommand,
+      resolveRepoPath: (repository) => resolveLocalRepoPath(repository),
     }),
     feature_plan: createFeaturePlanHandler({
       runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd(), { timeoutMs: 20 * 60 * 1000 }),
@@ -160,7 +177,9 @@ const stopJobLoop = startJobExecutorLoop({
       runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd()),
       command: defectScanCommand,
       runGit: (args, cwd) => runWorkerCommand("git", args, { cwd }),
-      runVerify: (cwd) => runWorkerCommand("npm", ["test"], { cwd }),
+      runTests,
+      prepareWorkspace: (repository, workItemId) => prepareWorkspace({ repository, workItemId }),
+      cleanupWorkspace,
     }),
     open_github_issue: createGithubIssueHandler({
       runCommand: (binary, args) => runWorkerCommand(binary, args),
@@ -168,6 +187,7 @@ const stopJobLoop = startJobExecutorLoop({
     pr_lifecycle: createPrLifecycleHandler({
       runGit: (args, cwd) => runWorkerCommand("git", args, { cwd }),
       runCommand: (binary, args) => runWorkerCommand(binary, args),
+      cleanupWorkspace,
     }),
   },
   sendMessage: async (chatId: number, text: string, replyMarkup?: object) => {

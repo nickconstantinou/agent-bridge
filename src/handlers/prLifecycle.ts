@@ -14,6 +14,8 @@ type RunCommand = (binary: string, args: string[]) => Promise<string>;
 interface PrLifecycleDeps {
   runGit: RunGit;
   runCommand: RunCommand;
+  /** Remove a per-job workspace once the branch is safely on the remote. */
+  cleanupWorkspace?: (dir: string) => void;
 }
 
 function parsePrNumber(url: string): number | null {
@@ -22,7 +24,7 @@ function parsePrNumber(url: string): number | null {
 }
 
 export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
-  const { runGit, runCommand } = deps;
+  const { runGit, runCommand, cleanupWorkspace } = deps;
 
   return async function prLifecycleHandler(
     input: JobHandlerInput,
@@ -97,7 +99,11 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
     // Transition item to blocked — awaiting human merge gate
     ctx.db.updateWorkItemStatus(workItemId, "blocked");
 
-    const summary = `Draft PR opened: ${prUrl}\n\nApprove merge via /wi_merge or the inline keyboard.`;
+    // Branch is on the remote — the per-job workspace has served its purpose
+    const workspaceDir = typeof input.workspace_dir === "string" ? input.workspace_dir : null;
+    if (workspaceDir && cleanupWorkspace) cleanupWorkspace(workspaceDir);
+
+    const summary = `Draft PR opened: ${prUrl}\n\nUse the inline keyboard or /approvals to merge or close.`;
     return { summary, prUrl };
   };
 }

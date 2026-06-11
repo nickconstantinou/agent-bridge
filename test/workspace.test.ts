@@ -130,3 +130,43 @@ describe("createWorkspaceCleanup", () => {
     }
   });
 });
+
+describe("prepareWorkspace dependency install", () => {
+  let root: string;
+  let baseDir: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "ws-root-"));
+    baseDir = mkdtempSync(join(tmpdir(), "ws-base-"));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(baseDir, { recursive: true, force: true });
+  });
+
+  it("runs installDeps in the clone when package.json exists", async () => {
+    const dir = makeSourceRepo(root, "node-repo");
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "x", scripts: { test: "true" } }));
+    git(["add", "-A"], dir);
+    git(["commit", "-q", "-m", "add package.json"], dir);
+
+    const calls: string[] = [];
+    const ws = await prepareWorkspace({
+      repository: "node-repo", workItemId: 21, repoRoot: root, baseDir,
+      installDeps: (d) => { calls.push(d); },
+    });
+
+    expect(calls).toEqual([ws]);
+  });
+
+  it("skips installDeps when the repo has no package.json", async () => {
+    makeSourceRepo(root, "plain-repo");
+    const calls: string[] = [];
+    await prepareWorkspace({
+      repository: "plain-repo", workItemId: 22, repoRoot: root, baseDir,
+      installDeps: (d) => { calls.push(d); },
+    });
+
+    expect(calls).toEqual([]);
+  });
+});

@@ -433,3 +433,31 @@ describe("createTddImplementationHandler", () => {
     expect(JSON.parse(jobs[0].input_json).notify_chat_id).toBe(4242);
   });
 });
+
+describe("createTddImplementationHandler CLI invocation", () => {
+  let db: ReturnType<typeof openDb>;
+  let dbPath: string;
+
+  beforeEach(() => { ({ db, dbPath } = makeDb()); });
+  afterEach(() => { db.close(); try { rmSync(dbPath); } catch {} });
+
+  it("passes cliExtraArgs to both CLI invocations before the prompt", async () => {
+    const stubs = makeStubs();
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Bug", created_by: "worker",
+    });
+
+    await createTddImplementationHandler({ ...stubs, cliExtraArgs: ["--permission-mode", "acceptEdits"] })(
+      { work_item_id: item.id, repository_path: "/tmp/repo" },
+      { db, workerId: "w" },
+    );
+
+    for (const call of stubs.runCli.mock.calls) {
+      const args: string[] = call[1];
+      expect(args).toContain("--permission-mode");
+      expect(args.indexOf("acceptEdits")).toBeLessThan(args.length - 1); // prompt stays last
+      expect(args.at(-1)!.length).toBeGreaterThan(50); // prompt is the final arg
+    }
+  });
+});

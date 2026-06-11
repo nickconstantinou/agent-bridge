@@ -404,8 +404,25 @@ export async function handleWorkerCallback(
     db.updatePrState(parsed.id, "draft");
     await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "PR released — watch will re-evaluate it." });
   } else if (parsed.type === "pr_rfsh") {
-    // pr_refresh handler enqueued by Slice 23; accept the callback but defer action
-    await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "Refresh enqueued." });
+    const link = db.raw.prepare("SELECT * FROM github_links WHERE id = ?").get(parsed.id) as any;
+    if (!link) {
+      await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "PR link not found." });
+      return;
+    }
+    db.createWorkJob({
+      task_type: "pr_refresh",
+      idempotency_key: `pr_rfsh:${link.id}:${Date.now()}`,
+      work_item_id: link.work_item_id,
+      input_json: {
+        work_item_id: link.work_item_id,
+        repository: link.repository,
+        branch_name: link.branch_name,
+        base_branch: "main",
+        ...(chatId != null ? { notify_chat_id: chatId } : {}),
+      },
+      max_attempts: 1,
+    });
+    await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "Refresh job enqueued." });
   } else if (parsed.type === "pr_clse") {
     const link = db.raw.prepare("SELECT * FROM github_links WHERE id = ?").get(parsed.id) as any;
     if (!link) {

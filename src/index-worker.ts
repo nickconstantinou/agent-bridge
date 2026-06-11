@@ -29,6 +29,7 @@ import { createGithubIssueHandler } from "./handlers/githubIssue.js";
 import { createTddImplementationHandler } from "./handlers/tddImplementation.js";
 import { createPrLifecycleHandler } from "./handlers/prLifecycle.js";
 import { createPrWatchHandler } from "./handlers/prWatch.js";
+import { createPrRefreshHandler } from "./handlers/prRefresh.js";
 import { captureFeatureBrief } from "./featureBriefCapture.js";
 import { runCli } from "./cli.js";
 import { createRunCommand } from "./runCommandAsync.js";
@@ -205,6 +206,28 @@ const stopJobLoop = startJobExecutorLoop({
     pr_watch: createPrWatchHandler({
       runCommand: (binary, args) => runWorkerCommand(binary, args),
       staleHours: prStaleHours,
+      notifyStale: async (stalePrs) => {
+        const notifyChatId = Number(process.env.WORKER_NOTIFY_CHAT_ID);
+        if (!notifyChatId) return;
+        const lines = stalePrs.map(p =>
+          `PR #${p.pr_number} in \`${p.repository}\` is stale`
+        ).join("\n");
+        const buttons = stalePrs.map(p => [
+          { text: "🔄 Refresh", callback_data: `pr:${p.id}:rfsh` },
+          { text: "⏸ Hold", callback_data: `pr:${p.id}:hold` },
+          { text: "✗ Close", callback_data: `pr:${p.id}:clse` },
+        ]);
+        await sendTelegramMessage({
+          client, kind: "worker-bot", chatId: notifyChatId,
+          body: { text: `Stale PR digest:\n${lines}`, reply_markup: { inline_keyboard: buttons } },
+        });
+      },
+    }),
+    pr_refresh: createPrRefreshHandler({
+      runGit: (args, cwd) => runWorkerCommand("git", args, { cwd }),
+      runCommand: (binary, args) => runWorkerCommand(binary, args),
+      runTests,
+      cleanupWorkspace,
     }),
   },
   sendMessage: async (chatId: number, text: string, replyMarkup?: object) => {

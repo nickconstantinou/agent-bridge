@@ -290,6 +290,35 @@ describe("handleWorkerCallback (Slice 5)", () => {
     const ghJob = jobs.find(j => j.task_type === "open_github_issue");
     expect(ghJob).toBeUndefined();
   });
+
+  it("cancels pending jobs linked to the work item on wi:id:clse", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "defect_scan", title: "Pending Cancel", created_by: "worker" });
+    const job = db.createWorkJob({ task_type: "tdd_implementation", idempotency_key: "tdd:cancel-test", work_item_id: item.id });
+    const cbq = {
+      id: "cb-clse-cancel",
+      data: `wi:${item.id}:clse`,
+      from: { id: 42 },
+      message: { message_id: 100, chat: { id: 10 } },
+    };
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+    expect(db.getWorkItem(item.id)!.status).toBe("closed");
+    expect(db.getWorkJob(job.id)!.status).toBe("cancelled");
+  });
+
+  it("does not cancel running jobs linked to the work item on wi:id:clse", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "defect_scan", title: "Running Skip", created_by: "worker" });
+    const job = db.createWorkJob({ task_type: "tdd_implementation", idempotency_key: "tdd:cancel-running", work_item_id: item.id });
+    db.raw.prepare(`UPDATE work_jobs SET status = 'running' WHERE id = ?`).run(job.id);
+    const cbq = {
+      id: "cb-clse-running",
+      data: `wi:${item.id}:clse`,
+      from: { id: 42 },
+      message: { message_id: 100, chat: { id: 10 } },
+    };
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+    expect(db.getWorkItem(item.id)!.status).toBe("closed");
+    expect(db.getWorkJob(job.id)!.status).toBe("running");
+  });
 });
 
 // ── Phase 9 Slice 22: stale PR hold/release/close callbacks ──────────────────

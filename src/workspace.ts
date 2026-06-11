@@ -72,6 +72,11 @@ export async function prepareWorkspace(opts: PrepareWorkspaceOptions): Promise<s
     await gitAsync(["remote", "set-url", "origin", originUrl], dir);
   }
 
+  // Repo-local identity: the service account has no global git config, and
+  // commits in the workspace must not depend on it.
+  await gitAsync(["config", "user.name", process.env.WORKER_GIT_NAME || "agent-bridge worker"], dir);
+  await gitAsync(["config", "user.email", process.env.WORKER_GIT_EMAIL || "agent-bridge-worker@users.noreply.github.com"], dir);
+
   // A clone without dependencies cannot run its test suite — install them so
   // red/green verification actually verifies something.
   if (opts.installDeps && existsSync(join(dir, "package.json"))) {

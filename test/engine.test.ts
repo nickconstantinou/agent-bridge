@@ -518,5 +518,52 @@ describe("BridgeEngine", () => {
       expect(promptArg).toContain("Assistant: Hello there! I am Claude.");
       expect(promptArg).toContain("help me");
     });
+    it("falls back to the next model in preference list and retries with context and null sessionId on capacity error", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+
+      const runCli = vi.fn()
+        .mockResolvedValueOnce("Hello there! I am Claude Sonnet.")
+        .mockRejectedValueOnce(new Error("CLI exited with code 1: You've hit your session limit · resets 1pm (Europe/London)"))
+        .mockResolvedValueOnce("Successful fallback model retry result");
+
+      const client = makeMockClient();
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: {
+            command: "claude",
+            modelPreference: ["claude-sonnet-4-6", "claude-opus-4-7"]
+          },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      db.setSession("100", "claude", "session-sonnet-123");
+
+      await engine.handleMessages([makeMessage("do something")]);
+
+      expect(runCli).toHaveBeenCalledTimes(3);
+
+      const thirdCallArgs = runCli.mock.calls[2][1];
+      const modelIdx = thirdCallArgs.indexOf("--model");
+      expect(modelIdx).not.toBe(-1);
+      expect(thirdCallArgs[modelIdx + 1]).toBe("claude-opus-4-7");
+      expect(thirdCallArgs.indexOf("--resume")).toBe(-1);
+
+      const promptArg = thirdCallArgs[thirdCallArgs.length - 1];
+      expect(promptArg).toContain("[Context from previous conversation]");
+      expect(promptArg).toContain("User: hello");
+      expect(promptArg).toContain("Assistant: Hello there! I am Claude Sonnet.");
+      expect(promptArg).toContain("do something");
+    });
   });
 });

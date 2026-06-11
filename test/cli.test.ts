@@ -113,6 +113,15 @@ describe("model fallback", () => {
     expect(isCapacityExhaustedError(
       new Error("CLI exited with code 1: MODEL_CAPACITY_EXHAUSTED")
     )).toBe(true);
+    expect(isCapacityExhaustedError(
+      new Error("CLI exited with code 1: You've hit your limit · resets 2:40am (Europe/London)")
+    )).toBe(true);
+    expect(isCapacityExhaustedError(
+      new Error("CLI exited with code 1: You've hit your usage limit. Upgrade to Pro...")
+    )).toBe(true);
+    expect(isCapacityExhaustedError(
+      new Error(`CLI exited with code 1: {"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"You've hit your limit · resets 2:40am (Europe/London)"}`)
+    )).toBe(true);
     expect(isCapacityExhaustedError(new Error("CLI hard timeout after 120000ms"))).toBe(false);
     expect(isCapacityExhaustedError(new Error("Network error"))).toBe(false);
   });

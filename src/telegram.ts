@@ -197,6 +197,7 @@ interface BufferEntry {
   timer: NodeJS.Timeout | undefined;
   messages: TelegramMessage[];
   flushing: boolean;
+  resolves: (() => void)[];
 }
 
 export class MediaGroupBuffer {
@@ -210,13 +211,12 @@ export class MediaGroupBuffer {
     this.groups = new Map();
   }
 
-  push(message: TelegramMessage): void {
+  push(message: TelegramMessage): Promise<void> {
     const groupId = message.media_group_id;
     if (!groupId) {
-      Promise.resolve(this.onFlush(null, [message])).catch((err) => {
+      return Promise.resolve(this.onFlush(null, [message])).catch((err) => {
         console.error("[MediaGroupBuffer] onFlush error", err);
       });
-      return;
     }
 
     let entry = this.groups.get(groupId);
@@ -224,18 +224,30 @@ export class MediaGroupBuffer {
     if (entry && !entry.flushing) {
       clearTimeout(entry.timer);
     } else {
-      entry = { timer: undefined, messages: [], flushing: false };
+      entry = { timer: undefined, messages: [], flushing: false, resolves: [] };
       this.groups.set(groupId, entry);
     }
 
     entry.messages.push(message);
+    const p = new Promise<void>((resolve) => {
+      entry!.resolves.push(resolve);
+    });
+
     entry.timer = setTimeout(() => {
       entry!.flushing = true;
       const messages = [...entry!.messages]; // snapshot before delete
+      const resolves = [...entry!.resolves];
       this.groups.delete(groupId);
-      Promise.resolve(this.onFlush(groupId, messages)).catch((err) => {
-        console.error("[MediaGroupBuffer] onFlush error", err);
-      });
+      Promise.resolve(this.onFlush(groupId, messages))
+        .then(() => {
+          resolves.forEach((r) => r());
+        })
+        .catch((err) => {
+          console.error("[MediaGroupBuffer] onFlush error", err);
+          resolves.forEach((r) => r());
+        });
     }, this.timeoutMs);
+
+    return p;
   }
 }

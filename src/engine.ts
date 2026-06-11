@@ -257,7 +257,7 @@ export class BridgeEngine {
       return;
     }
 
-    this.mediaBuffer.push(message);
+    await this.mediaBuffer.push(message);
   }
 
   async handleMessages(messages: TelegramMessage[]): Promise<void> {

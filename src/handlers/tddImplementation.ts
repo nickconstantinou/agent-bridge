@@ -17,6 +17,8 @@ interface TddImplementationDeps {
   runGit: RunGit;
   runTests: RunTests;
   command?: string;
+  /** Extra CLI flags inserted before the prompt (e.g. permission mode). */
+  cliExtraArgs?: string[];
   /** Clone the repository into a disposable per-job directory. */
   prepareWorkspace?: (repository: string, workItemId: number) => Promise<string>;
   /** Remove a workspace directory (no-op outside the workspace base). */
@@ -67,7 +69,7 @@ Do not modify test files. Do not commit — just stage the production files.`;
 }
 
 export function createTddImplementationHandler(deps: TddImplementationDeps): JobHandler {
-  const { runCli, runGit, runTests, command = "claude", prepareWorkspace, cleanupWorkspace } = deps;
+  const { runCli, runGit, runTests, command = "claude", cliExtraArgs = [], prepareWorkspace, cleanupWorkspace } = deps;
 
   return async function tddImplementationHandler(
     input: JobHandlerInput,
@@ -111,7 +113,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
 
       // ── Red: write failing tests ────────────────────────────────────────────
       const redPrompt = buildRedTestPrompt(item.title, item.body);
-      await runCli(command, ["--print", "--output-format", "text", redPrompt], repoPath);
+      await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, redPrompt], repoPath);
 
       await runGit(["add", "-A"], repoPath);
       const redStaged = await readStaged();
@@ -135,7 +137,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
 
       // ── Green: implement the fix ────────────────────────────────────────────
       const greenPrompt = buildGreenImplementationPrompt(item.title, item.body);
-      await runCli(command, ["--print", "--output-format", "text", greenPrompt], repoPath);
+      await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, greenPrompt], repoPath);
 
       await runGit(["add", "-A"], repoPath);
       const greenStaged = await readStaged();

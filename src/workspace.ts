@@ -44,6 +44,8 @@ export interface PrepareWorkspaceOptions {
   workItemId: number;
   repoRoot?: string;
   baseDir?: string;
+  /** Install project dependencies in the clone (called when package.json exists). */
+  installDeps?: (dir: string) => Promise<void> | void;
 }
 
 /**
@@ -68,6 +70,12 @@ export async function prepareWorkspace(opts: PrepareWorkspaceOptions): Promise<s
   const originUrl = await gitAsync(["remote", "get-url", "origin"], source).catch(() => "");
   if (originUrl) {
     await gitAsync(["remote", "set-url", "origin", originUrl], dir);
+  }
+
+  // A clone without dependencies cannot run its test suite — install them so
+  // red/green verification actually verifies something.
+  if (opts.installDeps && existsSync(join(dir, "package.json"))) {
+    await opts.installDeps(dir);
   }
 
   return dir;

@@ -174,11 +174,17 @@ const stopJobLoop = startJobExecutorLoop({
       command: defectScanCommand,
     }),
     tdd_implementation: createTddImplementationHandler({
-      runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd()),
+      runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd(), { timeoutMs: 15 * 60 * 1000 }),
       command: defectScanCommand,
+      // File edits only — bash stays gated; the handler runs tests itself
+      cliExtraArgs: ["--permission-mode", "acceptEdits"],
       runGit: (args, cwd) => runWorkerCommand("git", args, { cwd }),
       runTests,
-      prepareWorkspace: (repository, workItemId) => prepareWorkspace({ repository, workItemId }),
+      prepareWorkspace: (repository, workItemId) => prepareWorkspace({
+        repository,
+        workItemId,
+        installDeps: (dir) => runWorkerCommand("npm", ["ci", "--no-audit", "--no-fund"], { cwd: dir }).then(() => undefined),
+      }),
       cleanupWorkspace,
     }),
     open_github_issue: createGithubIssueHandler({

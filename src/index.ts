@@ -57,7 +57,7 @@ const config: BridgeConfig = {
     },
     antigravity: {
       token: process.env.TELEGRAM_BOT_TOKEN_ANTIGRAVITY || process.env.TELEGRAM_BOT_TOKEN_GEMINI,
-      command: process.env.ANTIGRAVITY_COMMAND || process.env.GEMINI_COMMAND || "agy",
+      command: process.env.ANTIGRAVITY_COMMAND || "agy",
       modelPreference: parseModelPreference(process.env.ANTIGRAVITY_MODEL_PREFERENCE || process.env.GEMINI_MODEL_PREFERENCE),
     },
     claude: {

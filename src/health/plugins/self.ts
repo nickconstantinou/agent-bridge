@@ -169,9 +169,11 @@ export class SelfPlugin implements HealthPlugin {
         const outdated = outdatedStdout && outdatedStdout.trim()
           ? JSON.parse(outdatedStdout)
           : {};
-        const cliNames = ["@anthropic-ai/claude-code", "@openai/codex"];
+        const cliNames = ["@anthropic-ai/claude-code", "@openai/codex", "@google/agy-cli"];
         for (const cli of cliNames) {
-          const checkName = `cli-update-${cli.split("/").pop()}`;
+          let nameToken = cli.split("/").pop()!;
+          if (nameToken === "agy-cli") nameToken = "antigravity";
+          const checkName = `cli-update-${nameToken}`;
           if (outdated[cli]) {
             checks.push({
               name: checkName,
@@ -192,51 +194,6 @@ export class SelfPlugin implements HealthPlugin {
       }
     }
 
-    // Antigravity (agy) CLI update check
-    try {
-      const localVersion = execSync("agy --version", { stdio: ["ignore", "pipe", "ignore"], timeout: 2000 }).toString().trim();
-      if (localVersion) {
-        const remoteVersion = await new Promise<string | null>((resolve) => {
-          const CHANGELOG_URL = "https://raw.githubusercontent.com/google-antigravity/antigravity-cli/refs/heads/main/CHANGELOG.md";
-          const req = https.get(CHANGELOG_URL, { timeout: 5000 }, (res) => {
-            if (res.statusCode !== 200) {
-              resolve(null);
-              return;
-            }
-            let data = "";
-            res.on("data", (chunk) => { data += chunk; });
-            res.on("end", () => {
-              const match = data.match(/^##\s+([0-9]+\.[0-9]+\.[0-9]+)/m);
-              resolve(match ? match[1] : null);
-            });
-          });
-          req.on("error", () => resolve(null));
-          req.on("timeout", () => {
-            req.destroy();
-            resolve(null);
-          });
-        });
-
-        if (remoteVersion) {
-          const checkName = "cli-update-agy";
-          if (localVersion === remoteVersion) {
-            checks.push({
-              name: checkName,
-              status: "green",
-              message: `Antigravity CLI is up to date (${localVersion})`,
-            });
-          } else {
-            checks.push({
-              name: checkName,
-              status: "amber",
-              message: `Antigravity CLI update available: ${localVersion} -> ${remoteVersion}`,
-            });
-          }
-        }
-      }
-    } catch {
-      // Ignore errors gracefully
-    }
 
     const worst = checks.some(c => c.status === "red") ? "red"
                 : checks.some(c => c.status === "amber") ? "amber"

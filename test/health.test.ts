@@ -853,6 +853,11 @@ describe("SelfPlugin — extended checks", () => {
             "current": "0.135.0",
             "wanted": "0.137.0",
             "latest": "0.137.0"
+          },
+          "@google/agy-cli": {
+            "current": "1.0.6",
+            "wanted": "1.0.7",
+            "latest": "1.0.7"
           }
         }));
         throw err;
@@ -873,6 +878,11 @@ describe("SelfPlugin — extended checks", () => {
     expect(codexCheck).toBeDefined();
     expect(codexCheck?.status).toBe("amber");
     expect(codexCheck?.message).toContain("0.135.0 -> 0.137.0");
+
+    const antigravityCheck = report.checks.find(c => c.name === "cli-update-antigravity");
+    expect(antigravityCheck).toBeDefined();
+    expect(antigravityCheck?.status).toBe("amber");
+    expect(antigravityCheck?.message).toContain("1.0.6 -> 1.0.7");
   });
 
   it("reports green status when agent CLIs are up to date", async () => {
@@ -896,6 +906,11 @@ describe("SelfPlugin — extended checks", () => {
     expect(codexCheck).toBeDefined();
     expect(codexCheck?.status).toBe("green");
     expect(codexCheck?.message).toContain("up to date");
+
+    const antigravityCheck = report.checks.find(c => c.name === "cli-update-antigravity");
+    expect(antigravityCheck).toBeDefined();
+    expect(antigravityCheck?.status).toBe("green");
+    expect(antigravityCheck?.message).toContain("up to date");
   });
 
   it("handles npm outdated errors gracefully without failing the entire plugin", async () => {
@@ -914,107 +929,6 @@ describe("SelfPlugin — extended checks", () => {
     expect(report.status).toBe("green");
     const claudeCheck = report.checks.find(c => c.name === "cli-update-claude-code");
     expect(claudeCheck).toBeUndefined();
-  });
-
-  it("reports green status when agy is up to date", async () => {
-    (globalThis as any).__mockExecSync = (cmd: string) => {
-      if (cmd.includes("npm outdated --json")) {
-        return "";
-      }
-      if (cmd.includes("agy --version")) {
-        return "1.0.6";
-      }
-      return undefined;
-    };
-
-    const mockResponse = {
-      statusCode: 200,
-      on: (event: string, callback: any) => {
-        if (event === "data") {
-          callback(Buffer.from("## 1.0.6\n- Changelog entry"));
-        } else if (event === "end") {
-          callback();
-        }
-      }
-    };
-    const httpsSpy = vi.spyOn(https, "get").mockImplementation((url: any, options: any, callback: any) => {
-      const cb = typeof options === "function" ? options : callback;
-      cb(mockResponse);
-      return { on: () => {} } as any;
-    });
-
-    try {
-      const { SelfPlugin } = await import("../src/health/plugins/self.js");
-      const plugin = new SelfPlugin(db as any, dbPath);
-      const report = await plugin.check();
-
-      const agyCheck = report.checks.find(c => c.name === "cli-update-agy");
-      expect(agyCheck).toBeDefined();
-      expect(agyCheck?.status).toBe("green");
-      expect(agyCheck?.message).toContain("Antigravity CLI is up to date (1.0.6)");
-    } finally {
-      httpsSpy.mockRestore();
-    }
-  });
-
-  it("reports amber status when agy update is available", async () => {
-    (globalThis as any).__mockExecSync = (cmd: string) => {
-      if (cmd.includes("npm outdated --json")) {
-        return "";
-      }
-      if (cmd.includes("agy --version")) {
-        return "1.0.5";
-      }
-      return undefined;
-    };
-
-    const mockResponse = {
-      statusCode: 200,
-      on: (event: string, callback: any) => {
-        if (event === "data") {
-          callback(Buffer.from("## 1.0.6\n- Changelog entry"));
-        } else if (event === "end") {
-          callback();
-        }
-      }
-    };
-    const httpsSpy = vi.spyOn(https, "get").mockImplementation((url: any, options: any, callback: any) => {
-      const cb = typeof options === "function" ? options : callback;
-      cb(mockResponse);
-      return { on: () => {} } as any;
-    });
-
-    try {
-      const { SelfPlugin } = await import("../src/health/plugins/self.js");
-      const plugin = new SelfPlugin(db as any, dbPath);
-      const report = await plugin.check();
-
-      const agyCheck = report.checks.find(c => c.name === "cli-update-agy");
-      expect(agyCheck).toBeDefined();
-      expect(agyCheck?.status).toBe("amber");
-      expect(agyCheck?.message).toContain("Antigravity CLI update available: 1.0.5 -> 1.0.6");
-    } finally {
-      httpsSpy.mockRestore();
-    }
-  });
-
-  it("handles agy version checks and https errors gracefully", async () => {
-    (globalThis as any).__mockExecSync = (cmd: string) => {
-      if (cmd.includes("npm outdated --json")) {
-        return "";
-      }
-      if (cmd.includes("agy --version")) {
-        throw new Error("Command failed");
-      }
-      return undefined;
-    };
-
-    const { SelfPlugin } = await import("../src/health/plugins/self.js");
-    const plugin = new SelfPlugin(db as any, dbPath);
-    const report = await plugin.check();
-
-    const agyCheck = report.checks.find(c => c.name === "cli-update-agy");
-    expect(agyCheck).toBeUndefined();
   });
 });
 

@@ -17,7 +17,8 @@
     "verify:shared-memory": "tsx scripts/setup-shared-memory.ts --verify"
   },
   "dependencies": {
-    "@anthropic-ai/claude-code": "^2.1.172",
+    "@anthropic-ai/claude-code": "^2.1.173",
+    "@google/agy-cli": "file:.data/mock-agy-cli",
     "@openai/codex": "^0.139.0",
     "better-sqlite3": "^12.9.0",
     "dotenv": "^17.2.3",

@@ -59,7 +59,7 @@ function parseHealthCliBot(value: string | undefined): BotKind {
 
 function defaultHealthCliCommand(bot: BotKind): string {
   if (bot === "codex") return process.env.CODEX_COMMAND || "codex";
-  if (bot === "antigravity") return process.env.ANTIGRAVITY_COMMAND || process.env.GEMINI_COMMAND || "agy";
+  if (bot === "antigravity") return process.env.ANTIGRAVITY_COMMAND || "agy";
   return process.env.CLAUDE_COMMAND || "claude";
 }
 

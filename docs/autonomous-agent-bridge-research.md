@@ -2223,7 +2223,7 @@ CLI preference is per-user, stored in SQLite, and changeable mid-session:
 
 Default preference order: `codex` first. On explicit `/switch`, the chosen CLI becomes the active one for that user's session (persisted across restarts).
 
-No automatic fallback in the interactive bot — a rate-limited CLI surfaces an error and prompts the user to `/switch` manually. Silent fallback in an interactive session loses conversation context, which is worse than a transparent error.
+Automatic fallback is supported in the interactive bot (implemented Jun 2026). When a capacity error occurs, the bot automatically switches to the next CLI in the preference chain (customizable via INTERACTIVE_CLI_CHAIN), persists the switch to the user's DB preferences, notifies the user, and retries the prompt with a context preamble (last 3 turns) to preserve conversation context.
 
 Config in `.env.interactive`:
 

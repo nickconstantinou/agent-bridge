@@ -123,17 +123,25 @@ The response is prepended with a warning notice when a fallback is used.
 
 > **Antigravity note**: Agy does not accept a `--model` CLI flag. Model selection (including fallback) is applied by mapping the chosen model ID (e.g. `gemini-3.5-flash-high`) to its display label (e.g. `Gemini 3.5 Flash (High)`) and writing that value into `~/.gemini/antigravity-cli/settings.json` before the process is spawned. Resetting to default removes the `model` key so Agy falls back to its own default.
 
-### 4.5 Concurrency Lock & Message Queue
+### 4.5 Interactive Bot CLI-to-CLI Fallback
+
+In the unified interactive bot (switchable CLI), if all model fallbacks of the user's preferred CLI are exhausted and the bot encounters a capacity/rate-limit error (e.g. `session limit` or `resets`), it automatically:
+1. Advances to the next CLI in the preference chain (default order: `codex` → `claude` → `antigravity`, configurable via `INTERACTIVE_CLI_CHAIN` in environment variables).
+2. Updates the user's CLI preference in SQLite (`interactive_cli_preference` column in `bridge_state` table).
+3. Notifies the user of the switch and updates the Telegram commands menu to match the active CLI.
+4. Prepends a context preamble (containing the last 3 message turns) to the prompt and retries the execution on the fallback CLI engine.
+
+### 4.6 Concurrency Lock & Message Queue
 
 `db.tryLock(chatId)` is an atomic SQLite `UPDATE … WHERE active_execution_lock = 0` — only one execution per chat at a time. Lock is released in a `finally` block which also calls `drainQueue(chatKey)`.
 
 If a chat is busy, the incoming message is queued (max `MAX_QUEUE_DEPTH = 5`). The user receives a position notice. When execution finishes, `drainQueue` pops the next item via `setImmediate` and calls `handleMessages` with a synthetic message. If the queue is full, the user receives "⏳ Queue is full."
 
-### 4.6 Rate Limit Handling
+### 4.7 Rate Limit Handling
 
 `TelegramClient.call()` retries automatically on HTTP 429 up to 2 times, sleeping `retry_after` seconds between attempts.
 
-### 4.7 MediaGroup Batching
+### 4.8 MediaGroup Batching
 
 Photos sent as an album share a `media_group_id`. `MediaGroupBuffer` collects messages for 1500ms, then flushes them as a single `handleMessages` call so the agent sees the full context.
 

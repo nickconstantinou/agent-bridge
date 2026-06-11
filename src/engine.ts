@@ -176,7 +176,7 @@ export class BridgeEngine {
     this.mediaBuffer = new MediaGroupBuffer({
       timeoutMs: 1500,
       onFlush: (_groupId, messages) => {
-        this.handleMessages(messages).catch((err) => {
+        return this.handleMessages(messages).catch((err) => {
           console.error(`[${this.kind}] mediaBuffer flush error`, err);
         });
       },

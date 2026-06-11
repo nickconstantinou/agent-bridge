@@ -254,11 +254,21 @@ export function isCapacityExhaustedError(err: Error): boolean {
          msg.includes("No capacity available") ||
          msg.includes("rateLimitExceeded") ||           // Antigravity / Gemini APIs
          msg.includes("overloaded_error") ||            // Claude
-         msg.includes("Overloaded");
+         msg.includes("Overloaded") ||
+         msg.includes("RESOURCE_EXHAUSTED") ||
+         msg.includes("quota reached") ||
+         msg.includes("quota exceeded") ||
+         msg.includes("hit your limit") ||
+         msg.includes("session limit") ||
+         msg.includes("usage limit") ||
+         msg.includes("resets") ||
+         msg.includes("api_error_status\":429");
 }
 ```
 
-When triggered, `getNextFallbackModel(currentModel, modelPreference[])` picks the next entry in the preference list for **any bot** that has multiple models configured. If no fallback remains the error propagates and is shown to the user.
+When triggered, model fallback picks the next entry in the model preference list. If all model options of the active CLI are exhausted, the bridge initiates a CLI-to-CLI fallback:
+- **Worker Bot**: Advances the worker fallback chain (`codex` → `claude` → `antigravity`) and retries the execution with a context preamble.
+- **Interactive Bot**: Advances the interactive fallback chain, updates the user's SQLite preference (`interactive_cli_preference`), notifies the user, and retries the execution with a context preamble (last 3 turns).
 
 ---
 

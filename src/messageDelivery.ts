@@ -1,5 +1,5 @@
 import { splitTelegramText, toTelegramEntitiesText } from "./render.js";
-import { toUserMessage } from "./cli.js";
+import { toUserMessage, isCapacityExhaustedError } from "./cli.js";
 import type { TelegramClient } from "./telegram.js";
 import type { CliResult } from "./types.js";
 import { type as eventType } from "./events/types.js";
@@ -210,6 +210,9 @@ export async function sendMessageWithProgress({
     return { ...result, onProgress: wrappedOnProgress };
   } catch (err: any) {
     clearInterval(typingInterval);
+    if (isCapacityExhaustedError(err instanceof Error ? err : new Error(String(err)))) {
+      throw err;
+    }
     const errorText = `❌ ${toUserMessage(err instanceof Error ? err : new Error(String(err)))}`;
     validateParity({
       kind,

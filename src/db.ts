@@ -160,6 +160,9 @@ export function openDb(dbPath: string): BridgeDb {
   try {
     raw.exec(`ALTER TABLE github_links ADD COLUMN last_activity_at TEXT`);
   } catch { /* column already exists */ }
+  try {
+    raw.exec(`ALTER TABLE github_links ADD COLUMN proof_comment_sha TEXT`);
+  } catch { /* column already exists */ }
   // Migrate work_jobs task_type CHECK constraint to include feature_plan, pr_lifecycle,
   // pr_watch, and pr_refresh. SQLite cannot ALTER CHECK constraints; use rename-recreate.
   // We disable FK enforcement and legacy-alter-table mode to prevent SQLite 3.26+ from
@@ -673,6 +676,12 @@ export class BridgeDb {
     ).run(ts, linkId);
   }
 
+  setProofCommentSha(linkId: number, sha: string): void {
+    this.raw.prepare(
+      `UPDATE github_links SET proof_comment_sha = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(sha, linkId);
+  }
+
   countDailyAgentPrs(repository: string): number {
     const row = this.raw.prepare(
       `SELECT COUNT(*) AS n FROM github_links
@@ -783,6 +792,7 @@ export interface GithubLink {
   remote_url: string | null;
   pr_state: string;
   last_activity_at: string | null;
+  proof_comment_sha: string | null;
   created_at: string;
   updated_at: string;
 }

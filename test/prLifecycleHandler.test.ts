@@ -78,8 +78,11 @@ describe("createPrLifecycleHandler", () => {
       { db, workerId: "w" },
     );
 
-    expect(stubs.runCommand).toHaveBeenCalledOnce();
-    const [binary, args]: [string, string[]] = stubs.runCommand.mock.calls[0];
+    const createCall = stubs.runCommand.mock.calls.find(([, args]: [string, string[]]) =>
+      args.includes("create")
+    );
+    expect(createCall).toBeDefined();
+    const [binary, args]: [string, string[]] = createCall!;
     expect(binary).toBe("gh");
     expect(args).toContain("pr");
     expect(args).toContain("create");
@@ -435,5 +438,187 @@ describe("createPrLifecycleHandler — PR caps", () => {
         { db, workerId: "w" },
       )
     ).resolves.toBeDefined();
+  });
+});
+
+// ── Phase 9 Slice 25: owner decision brief ────────────────────────────────────
+
+describe("createPrLifecycleHandler — decision brief", () => {
+  let db: ReturnType<typeof openDb>;
+  let dbPath: string;
+
+  beforeEach(() => { ({ db, dbPath } = makeDb()); });
+  afterEach(() => { db.close(); try { rmSync(dbPath); } catch {} });
+
+  it("stores commit subjects in the merge approval payload", async () => {
+    const stubs = makeStubs();
+    stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
+      if (args[0] === "rev-parse") return "abc123\n";
+      if (args[0] === "log") return "fix: green impl\ntest: red test\n";
+      return "";
+    });
+    stubs.runCommand.mockResolvedValue("https://github.com/owner/repo/pull/50");
+
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Bug", created_by: "w" });
+    await createPrLifecycleHandler(stubs)(
+      { work_item_id: item.id, branch_name: `agent/work-${item.id}`, repository: "owner/repo" },
+      { db, workerId: "w" },
+    );
+
+    const appr = db.raw.prepare(
+      "SELECT payload_json FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr'"
+    ).get(item.id) as any;
+    const payload = JSON.parse(appr.payload_json);
+    expect(payload.commit_subjects).toEqual(["fix: green impl", "test: red test"]);
+  });
+
+  it("stores files_summary from git diff --stat in the approval payload", async () => {
+    const stubs = makeStubs();
+    stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
+      if (args[0] === "rev-parse") return "abc123\n";
+      if (args[0] === "diff") return " src/foo.ts | 10 ++++\n 1 file changed, 10 insertions(+)\n";
+      return "";
+    });
+    stubs.runCommand.mockResolvedValue("https://github.com/owner/repo/pull/51");
+
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Bug", created_by: "w" });
+    await createPrLifecycleHandler(stubs)(
+      { work_item_id: item.id, branch_name: `agent/work-${item.id}`, repository: "owner/repo" },
+      { db, workerId: "w" },
+    );
+
+    const appr = db.raw.prepare(
+      "SELECT payload_json FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr'"
+    ).get(item.id) as any;
+    const payload = JSON.parse(appr.payload_json);
+    expect(payload.files_summary).toContain("src/foo.ts");
+  });
+
+  it("stores verify_tail from input in the approval payload", async () => {
+    const stubs = makeStubs();
+    stubs.runCommand.mockResolvedValue("https://github.com/owner/repo/pull/52");
+
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Bug", created_by: "w" });
+    await createPrLifecycleHandler(stubs)(
+      {
+        work_item_id: item.id, branch_name: `agent/work-${item.id}`,
+        repository: "owner/repo", verify_output: "42 passed",
+      },
+      { db, workerId: "w" },
+    );
+
+    const appr = db.raw.prepare(
+      "SELECT payload_json FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr'"
+    ).get(item.id) as any;
+    const payload = JSON.parse(appr.payload_json);
+    expect(payload.verify_tail).toContain("42 passed");
+  });
+
+  it("falls back gracefully when git log/diff fail", async () => {
+    const stubs = makeStubs();
+    stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
+      if (args[0] === "push") return "";
+      if (args[0] === "rev-parse") return "sha\n";
+      throw new Error("git not available");
+    });
+    stubs.runCommand.mockResolvedValue("https://github.com/owner/repo/pull/53");
+
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Bug", created_by: "w" });
+    await expect(
+      createPrLifecycleHandler(stubs)(
+        { work_item_id: item.id, branch_name: `agent/work-${item.id}`, repository: "owner/repo" },
+        { db, workerId: "w" },
+      )
+    ).resolves.toBeDefined(); // does not throw
+  });
+});
+
+// ── Phase 9 Slice 26: PR proof comment ────────────────────────────────────────
+
+describe("createPrLifecycleHandler — proof comment", () => {
+  let db: ReturnType<typeof openDb>;
+  let dbPath: string;
+
+  beforeEach(() => { ({ db, dbPath } = makeDb()); });
+  afterEach(() => { db.close(); try { rmSync(dbPath); } catch {} });
+
+  it("posts a proof comment to the PR after opening", async () => {
+    const stubs = makeStubs();
+    stubs.runCommand
+      .mockResolvedValueOnce("https://github.com/owner/repo/pull/60")
+      .mockResolvedValue(""); // subsequent calls (comment)
+
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Bug", created_by: "w" });
+    await createPrLifecycleHandler(stubs)(
+      { work_item_id: item.id, branch_name: `agent/work-${item.id}`, repository: "owner/repo" },
+      { db, workerId: "w" },
+    );
+
+    const commentCall = stubs.runCommand.mock.calls.find(([bin, args]: [string, string[]]) =>
+      bin === "gh" && args.includes("comment")
+    );
+    expect(commentCall).toBeDefined();
+  });
+
+  it("includes verify_output in the proof comment body", async () => {
+    const stubs = makeStubs();
+    stubs.runCommand
+      .mockResolvedValueOnce("https://github.com/owner/repo/pull/61")
+      .mockResolvedValue("");
+
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Bug", created_by: "w" });
+    await createPrLifecycleHandler(stubs)(
+      {
+        work_item_id: item.id, branch_name: `agent/work-${item.id}`,
+        repository: "owner/repo", verify_output: "42 tests passed",
+      },
+      { db, workerId: "w" },
+    );
+
+    const commentCall = stubs.runCommand.mock.calls.find(([bin, args]: [string, string[]]) =>
+      bin === "gh" && args.includes("comment")
+    );
+    expect(commentCall).toBeDefined();
+    const bodyIdx = (commentCall![1] as string[]).indexOf("--body");
+    const body = (commentCall![1] as string[])[bodyIdx + 1];
+    expect(body).toContain("42 tests passed");
+  });
+
+  it("skips the proof comment on idempotent retry when head SHA has not changed", async () => {
+    const stubs = makeStubs();
+    stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
+      if (args[0] === "rev-parse") return "fixedsha\n";
+      return "";
+    });
+    stubs.runCommand
+      .mockResolvedValueOnce("https://github.com/owner/repo/pull/62")
+      .mockResolvedValue("");
+
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Bug", created_by: "w" });
+    const branch = `agent/work-${item.id}`;
+
+    // First call: new PR, comment posted
+    await createPrLifecycleHandler(stubs)(
+      { work_item_id: item.id, branch_name: branch, repository: "owner/repo" },
+      { db, workerId: "w" },
+    );
+
+    const firstCommentCalls = stubs.runCommand.mock.calls.filter(([bin, args]: [string, string[]]) =>
+      bin === "gh" && args.includes("comment")
+    ).length;
+    expect(firstCommentCalls).toBe(1);
+
+    // Second call: same branch → existingLink, same head SHA → skip comment
+    stubs.runCommand.mockClear();
+    stubs.runCommand.mockResolvedValue("");
+    await createPrLifecycleHandler(stubs)(
+      { work_item_id: item.id, branch_name: branch, repository: "owner/repo" },
+      { db, workerId: "w" },
+    );
+
+    const secondCommentCalls = stubs.runCommand.mock.calls.filter(([bin, args]: [string, string[]]) =>
+      bin === "gh" && args.includes("comment")
+    ).length;
+    expect(secondCommentCalls).toBe(0);
   });
 });

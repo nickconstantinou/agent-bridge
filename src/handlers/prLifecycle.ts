@@ -28,6 +28,20 @@ function parsePrNumber(url: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+function buildProofCommentBody(headSha: string, verifyOutput: string): string {
+  const lines: string[] = [
+    `<!-- agent-proof sha:${headSha} -->`,
+    `**Agent proof — head \`${headSha.slice(0, 7)}\`**`,
+    "",
+    "Automated TDD implementation. All tests passed before this PR was opened.",
+    "Human merge approval required before squash-merge.",
+  ];
+  if (verifyOutput.trim()) {
+    lines.push("", "**Verification output:**", "```", verifyOutput.trim(), "```");
+  }
+  return lines.join("\n");
+}
+
 export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
   const { runGit, runCommand, cleanupWorkspace, maxOpenPrs = 3, maxDailyPrs = 3 } = deps;
 
@@ -76,6 +90,16 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
         ctx.db.raw
           .prepare("UPDATE approvals SET payload_json = ? WHERE id = ?")
           .run(JSON.stringify(payload), pendingApproval.id);
+      }
+
+      // Post a new proof comment only if the head SHA has changed (idempotent)
+      if (existingLink.proof_comment_sha !== headSha && existingLink.pr_number !== null) {
+        const verifyText = typeof input.verify_output === "string" ? input.verify_output.slice(-500) : "";
+        const commentBody = buildProofCommentBody(headSha, verifyText);
+        try {
+          await runCommand("gh", ["pr", "comment", String(existingLink.pr_number), "--repo", repository, "--body", commentBody]);
+          ctx.db.setProofCommentSha(existingLink.id, headSha);
+        } catch {}
       }
 
       ctx.db.updateWorkItemStatus(workItemId, "blocked");
@@ -138,15 +162,39 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
       prNumber = Number(m[2]);
     }
 
-    // Record github link
+    // Record github link and post proof comment
     if (prNumber !== null) {
-      ctx.db.linkGithubPr({
+      const newLink = ctx.db.linkGithubPr({
         work_item_id: workItemId,
         repository,
         pr_number: prNumber,
         branch_name: branchName,
       });
+      const verifyText = typeof input.verify_output === "string" ? input.verify_output.slice(-500) : "";
+      const commentBody = buildProofCommentBody(headSha, verifyText);
+      try {
+        await runCommand("gh", ["pr", "comment", String(prNumber), "--repo", repository, "--body", commentBody]);
+        ctx.db.setProofCommentSha(newLink.id, headSha);
+      } catch {}
     }
+
+    // ── Owner decision brief ──────────────────────────────────────────────────
+    let commit_subjects: string[] | undefined;
+    let files_summary: string | undefined;
+    const verify_tail = typeof input.verify_output === "string" && input.verify_output
+      ? input.verify_output.slice(-500)
+      : undefined;
+
+    try {
+      const logOut = String(await runGit(["log", "--format=%s", "-10", "HEAD"], repoPath));
+      const subjects = logOut.split("\n").map(s => s.trim()).filter(Boolean);
+      if (subjects.length) commit_subjects = subjects;
+    } catch {}
+
+    try {
+      const diffOut = String(await runGit(["diff", "--stat"], repoPath));
+      if (diffOut.trim()) files_summary = diffOut;
+    } catch {}
 
     // Create merge_pr approval record
     ctx.db.createApproval({
@@ -159,6 +207,9 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
         branch_name: branchName,
         repository,
         ...(headSha ? { head_sha: headSha } : {}),
+        ...(commit_subjects ? { commit_subjects } : {}),
+        ...(files_summary ? { files_summary } : {}),
+        ...(verify_tail ? { verify_tail } : {}),
       },
     });
 

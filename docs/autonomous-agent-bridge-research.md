@@ -2608,6 +2608,69 @@ Phase 9 acceptance:
 - stale PRs surface in a single digest with working hold/refresh/close
 - merge still happens only through the head-SHA-pinned, checks-gated approval
 
+### Slice 25: Owner decision brief for merge approvals
+
+Source pattern: https://github.com/steipete/agent-scripts/blob/main/skills/maintainer-orchestrator/SKILL.md
+("Owner Decision Briefs" — never ask for a decision with only a URL or status label).
+
+Files: `src/handlers/prLifecycle.ts`, `src/prMergeGate.ts`, tests
+
+- the merge-gate notification must include: PR title + URL, work item id,
+  files-changed summary (`git diff --stat` between base and head), red/green
+  commit subjects, verification result tail, and the exact choices offered
+- data comes from the tdd job result and the workspace before cleanup
+
+Red tests: merge approval message contains files summary, commit subjects,
+verification tail, and PR URL; falls back gracefully when fields are missing.
+
+### Slice 26: PR proof comment
+
+Source pattern: https://github.com/steipete/agent-scripts/blob/main/skills/github-project-triage/SKILL.md
+(post exactly how the change was tested on every landed PR).
+
+Files: `src/handlers/prLifecycle.ts`, tests
+
+- after opening/updating the draft PR, post one comment: verification command,
+  test output tail, red and green commit SHAs, and any caveats
+- idempotent per head SHA (skip when the comment for this SHA already exists)
+
+Red tests: comment posted with proof content; not duplicated on retry.
+
+### Triage card fields (folded into existing slices)
+
+Source pattern: https://github.com/steipete/agent-scripts/blob/main/skills/github-project-triage/SKILL.md
+(item cards: URL-first, Fit/Risk/Proof/Blocker/Next).
+
+Defect-scan findings and `/issues` rendering gain `next_action` and
+`verification` fields so approval decisions are made from decision-ready
+cards, not bare titles. Implemented alongside Slices 18–22 where the
+rendering already changes.
+
+## Phase 9.5 — Maintainer Queue Triage (Planned)
+
+Source patterns:
+- https://github.com/steipete/agent-scripts/blob/main/skills/github-project-triage/SKILL.md
+- https://github.com/steipete/agent-scripts/blob/main/skills/maintainer-orchestrator/SKILL.md
+
+Extends the loop from "self-found defects" to a maintainer queue processor.
+
+### Slice 27: `queue_triage` task type
+
+- scans open GitHub issues/PRs for an allowlisted repository via `gh`
+- classifies each item `Autonomous` / `Needs owner` / `Defer-close-supersede`
+  (taxonomy from github-project-triage)
+- creates proposed work_items for Autonomous candidates with URL-first card
+  bodies (Fit / Risk / Proof / Blocker / Next)
+- owner comments on the item are authoritative routing — never override them
+- read-only: no comments, closes, or merges from triage itself
+
+### Slice 28: authorization tiers
+
+Formalize the standing policy from this document as per-repo policy rows
+(maintainer-orchestrator "Authorization" section): triage, implement, push,
+merge, and release are separate permissions; the worker stops at the last
+authorized boundary and reports the exact next action.
+
 ## Operational Readiness Checklist
 
 Before enabling scheduled autonomous scans:

@@ -7,6 +7,7 @@
  */
 
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
+import { PermanentJobFailureError } from "../jobExecutor.js";
 
 type RunGit = (args: string[], cwd?: string) => string | Promise<string>;
 type RunCommand = (binary: string, args: string[]) => Promise<string>;
@@ -16,6 +17,10 @@ interface PrLifecycleDeps {
   runCommand: RunCommand;
   /** Remove a per-job workspace once the branch is safely on the remote. */
   cleanupWorkspace?: (dir: string) => void;
+  /** Maximum simultaneous open agent PRs per repository (default 3). */
+  maxOpenPrs?: number;
+  /** Maximum new agent PRs opened in the current UTC calendar day (default 3). */
+  maxDailyPrs?: number;
 }
 
 function parsePrNumber(url: string): number | null {
@@ -24,7 +29,7 @@ function parsePrNumber(url: string): number | null {
 }
 
 export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
-  const { runGit, runCommand, cleanupWorkspace } = deps;
+  const { runGit, runCommand, cleanupWorkspace, maxOpenPrs = 3, maxDailyPrs = 3 } = deps;
 
   return async function prLifecycleHandler(
     input: JobHandlerInput,
@@ -78,6 +83,23 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
 
       const summary = `Existing PR refreshed with latest head (${headSha.slice(0, 7)}): ${existingPrUrl}\n\nUse /approvals to merge or close.`;
       return { summary, prUrl: existingPrUrl };
+    }
+
+    // ── PR caps — only applies to new PR creation ────────────────────────────
+    const openPrs = ctx.db.listOpenAgentPrs(repository);
+    if (openPrs.length >= maxOpenPrs) {
+      const list = openPrs.map(l => `#${l.pr_number}`).join(", ");
+      throw new PermanentJobFailureError(
+        `Open PR cap reached (${openPrs.length}/${maxOpenPrs}) for ${repository}. ` +
+        `Open PRs blocking the slot: ${list}. Merge or close existing PRs before opening new ones.`
+      );
+    }
+    const dailyCount = ctx.db.countDailyAgentPrs(repository);
+    if (dailyCount >= maxDailyPrs) {
+      throw new PermanentJobFailureError(
+        `Daily PR cap reached (${dailyCount}/${maxDailyPrs}) for ${repository}. ` +
+        `No more agent PRs will be opened today. Try again tomorrow.`
+      );
     }
 
     // Open draft PR

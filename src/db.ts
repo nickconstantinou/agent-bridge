@@ -654,6 +654,15 @@ export class BridgeDb {
     ).run(ts, linkId);
   }
 
+  countDailyAgentPrs(repository: string): number {
+    const row = this.raw.prepare(
+      `SELECT COUNT(*) AS n FROM github_links
+       WHERE repository = ? AND pr_number IS NOT NULL
+         AND DATE(created_at) = DATE('now')`
+    ).get(repository) as { n: number };
+    return row.n;
+  }
+
   // ── Feature plans ────────────────────────────────────────────────────────
 
   createFeaturePlan(input: { chatId: string; userId: string; brief: string }): FeaturePlan {

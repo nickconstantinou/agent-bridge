@@ -7,6 +7,14 @@
 
 import type { BridgeDb } from "./db.js";
 
+/** Thrown by a handler to signal that retrying this job is pointless. */
+export class PermanentJobFailureError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PermanentJobFailureError";
+  }
+}
+
 export type JobHandlerInput = Record<string, unknown>;
 
 export interface JobHandlerContext {
@@ -95,7 +103,11 @@ export async function executeNextJob(
     return { jobId: job.id, handlerResult: result };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    db.failWorkJob(job.id, message, workerId);
+    if (err instanceof PermanentJobFailureError) {
+      db.failWorkJobPermanently(job.id, message, workerId);
+    } else {
+      db.failWorkJob(job.id, message, workerId);
+    }
     await notify(`Job #${job.id} failed: ${message}`);
     return { jobId: job.id };
   } finally {

@@ -246,3 +246,194 @@ describe("createPrLifecycleHandler", () => {
     expect(cleanupWorkspace).not.toHaveBeenCalled();
   });
 });
+
+// ── Phase 9 Slice 19: idempotent create-or-update ────────────────────────────
+
+describe("createPrLifecycleHandler — idempotent retries", () => {
+  let db: ReturnType<typeof openDb>;
+  let dbPath: string;
+
+  beforeEach(() => { ({ db, dbPath } = makeDb()); });
+  afterEach(() => { db.close(); try { rmSync(dbPath); } catch {} });
+
+  it("reuses an existing PR link instead of calling gh pr create again", async () => {
+    const stubs = makeStubs();
+    stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
+      if (args[0] === "rev-parse") return "newsha999\n";
+      return "";
+    });
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram", title: "Bug", created_by: "worker",
+    });
+    db.linkGithubPr({
+      work_item_id: item.id, repository: "owner/repo",
+      pr_number: 3, branch_name: `agent/work-${item.id}`,
+    });
+    // Pending approval from the first attempt
+    db.createApproval({
+      approval_type: "merge_pr", requested_by: "agent", work_item_id: item.id,
+      payload: { pr_number: 3, repository: "owner/repo", head_sha: "oldsha111" },
+    });
+
+    const result = await createPrLifecycleHandler(stubs)(
+      {
+        work_item_id: item.id, branch_name: `agent/work-${item.id}`,
+        repository: "owner/repo", repository_path: "/ws/x",
+      },
+      { db, workerId: "w" },
+    );
+
+    // No second create call
+    const createCall = stubs.runCommand.mock.calls.find(([, args]: [string, string[]]) => args.includes("create"));
+    expect(createCall).toBeUndefined();
+    // Branch still pushed
+    const pushCall = stubs.runGit.mock.calls.find(([args]: [string[]]) => args[0] === "push");
+    expect(pushCall).toBeDefined();
+    // Approval head_sha refreshed to the new head
+    const appr = db.raw.prepare(
+      "SELECT payload_json FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr' AND status = 'pending'"
+    ).all(item.id) as any[];
+    expect(appr).toHaveLength(1); // no duplicate approvals
+    expect(JSON.parse(appr[0].payload_json).head_sha).toBe("newsha999");
+    expect(result.summary).toMatch(/refreshed|updated|existing/i);
+  });
+
+  it("recovers the PR number when gh pr create says one already exists", async () => {
+    const stubs = makeStubs();
+    stubs.runCommand = vi.fn().mockRejectedValue(new Error(
+      'a pull request for branch "agent/work-9" into branch "main" already exists:\nhttps://github.com/owner/repo/pull/7'
+    ));
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram", title: "Bug", created_by: "worker",
+    });
+
+    const result = await createPrLifecycleHandler(stubs)(
+      {
+        work_item_id: item.id, branch_name: "agent/work-9",
+        repository: "owner/repo", repository_path: "/ws/x",
+      },
+      { db, workerId: "w" },
+    );
+
+    // Link recorded from the URL in the error message
+    const link = db.raw.prepare(
+      "SELECT * FROM github_links WHERE repository = 'owner/repo' AND pr_number = 7"
+    ).get() as any;
+    expect(link).toBeDefined();
+    // Approval exists and job completes rather than failing
+    const appr = db.raw.prepare(
+      "SELECT * FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr' AND status = 'pending'"
+    ).all(item.id) as any[];
+    expect(appr).toHaveLength(1);
+    expect(result.summary).toContain("pull/7");
+  });
+});
+
+// ── Phase 9 Slice 20: PR caps ─────────────────────────────────────────────────
+
+import { PermanentJobFailureError } from "../src/jobExecutor.js";
+
+describe("createPrLifecycleHandler — PR caps", () => {
+  let db: ReturnType<typeof openDb>;
+  let dbPath: string;
+
+  beforeEach(() => { ({ db, dbPath } = makeDb()); });
+  afterEach(() => { db.close(); try { rmSync(dbPath); } catch {} });
+
+  function seedOpenLink(workItemId: number, prNum: number) {
+    db.linkGithubPr({
+      work_item_id: workItemId, repository: "owner/repo",
+      pr_number: prNum, branch_name: `agent/work-other-${prNum}`,
+    });
+  }
+
+  it("throws PermanentJobFailureError when open PR count reaches maxOpenPrs", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Cap test", created_by: "worker" });
+    // seed two open PRs — both remain in default 'draft' state (open)
+    const a = db.createWorkItem({ kind: "defect", source: "telegram", title: "A", created_by: "worker" });
+    const b = db.createWorkItem({ kind: "defect", source: "telegram", title: "B", created_by: "worker" });
+    seedOpenLink(a.id, 10);
+    seedOpenLink(b.id, 11);
+
+    await expect(
+      createPrLifecycleHandler({ ...makeStubs(), maxOpenPrs: 2 })(
+        { work_item_id: item.id, branch_name: `agent/work-${item.id}`, repository: "owner/repo" },
+        { db, workerId: "w" },
+      )
+    ).rejects.toThrow(PermanentJobFailureError);
+  });
+
+  it("error message lists the blocking open PRs", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Cap test", created_by: "worker" });
+    const a = db.createWorkItem({ kind: "defect", source: "telegram", title: "A", created_by: "worker" });
+    seedOpenLink(a.id, 10);
+
+    const err = await createPrLifecycleHandler({ ...makeStubs(), maxOpenPrs: 1 })(
+      { work_item_id: item.id, branch_name: `agent/work-${item.id}`, repository: "owner/repo" },
+      { db, workerId: "w" },
+    ).catch(e => e);
+
+    expect(err).toBeInstanceOf(PermanentJobFailureError);
+    expect(err.message).toMatch(/open PR cap|open.*cap|cap.*open/i);
+    expect(err.message).toContain("#10");
+  });
+
+  it("update path (existing link for this branch) bypasses open cap", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Bug", created_by: "worker" });
+    const a = db.createWorkItem({ kind: "defect", source: "telegram", title: "A", created_by: "worker" });
+    const b = db.createWorkItem({ kind: "defect", source: "telegram", title: "B", created_by: "worker" });
+    seedOpenLink(a.id, 10);
+    seedOpenLink(b.id, 11);
+    // existing link for THIS branch — puts us on the update path
+    db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 7, branch_name: `agent/work-${item.id}` });
+    db.createApproval({ approval_type: "merge_pr", requested_by: "agent", work_item_id: item.id,
+      payload: { pr_number: 7, head_sha: "old" } });
+
+    const stubs = { ...makeStubs(), maxOpenPrs: 2 };
+    stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
+      if (args[0] === "rev-parse") return "newsha\n";
+      return "";
+    });
+
+    await expect(
+      createPrLifecycleHandler(stubs)(
+        { work_item_id: item.id, branch_name: `agent/work-${item.id}`, repository: "owner/repo" },
+        { db, workerId: "w" },
+      )
+    ).resolves.toBeDefined();
+  });
+
+  it("throws PermanentJobFailureError when daily PR count reaches maxDailyPrs", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Daily cap test", created_by: "worker" });
+    // seed two links for today
+    const a = db.createWorkItem({ kind: "defect", source: "telegram", title: "A", created_by: "worker" });
+    const b = db.createWorkItem({ kind: "defect", source: "telegram", title: "B", created_by: "worker" });
+    db.linkGithubPr({ work_item_id: a.id, repository: "owner/repo", pr_number: 20, branch_name: "agent/work-a" });
+    db.linkGithubPr({ work_item_id: b.id, repository: "owner/repo", pr_number: 21, branch_name: "agent/work-b" });
+    // close them so they don't affect open-cap count but still count for daily
+    db.raw.prepare("UPDATE github_links SET pr_state = 'closed' WHERE pr_number IN (20, 21)").run();
+
+    await expect(
+      createPrLifecycleHandler({ ...makeStubs(), maxDailyPrs: 2 })(
+        { work_item_id: item.id, branch_name: `agent/work-${item.id}`, repository: "owner/repo" },
+        { db, workerId: "w" },
+      )
+    ).rejects.toThrow(PermanentJobFailureError);
+  });
+
+  it("daily count ignores links from previous days", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Old link", created_by: "worker" });
+    const old = db.createWorkItem({ kind: "defect", source: "telegram", title: "Old", created_by: "worker" });
+    db.linkGithubPr({ work_item_id: old.id, repository: "owner/repo", pr_number: 30, branch_name: "agent/old" });
+    // backdate the link
+    db.raw.prepare("UPDATE github_links SET created_at = datetime('now', '-1 day') WHERE pr_number = 30").run();
+
+    // maxDailyPrs=1 but the only link is from yesterday — should not block
+    await expect(
+      createPrLifecycleHandler({ ...makeStubs(), maxDailyPrs: 1 })(
+        { work_item_id: item.id, branch_name: `agent/work-${item.id}`, repository: "owner/repo" },
+        { db, workerId: "w" },
+      )
+    ).resolves.toBeDefined();
+  });
+});

@@ -196,6 +196,8 @@ const stopJobLoop = startJobExecutorLoop({
       runGit: (args, cwd) => runWorkerCommand("git", args, { cwd }),
       runCommand: (binary, args) => runWorkerCommand(binary, args),
       cleanupWorkspace,
+      maxOpenPrs: Number(process.env.WORKER_MAX_OPEN_PRS || 3),
+      maxDailyPrs: Number(process.env.WORKER_MAX_DAILY_PRS || 3),
     }),
   },
   sendMessage: async (chatId: number, text: string, replyMarkup?: object) => {

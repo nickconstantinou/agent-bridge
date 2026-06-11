@@ -1,0 +1,184 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
+import { openDb } from "../src/db.js";
+import { createPrWatchHandler } from "../src/handlers/prWatch.js";
+
+function makeDb() {
+  const dbPath = join(tmpdir(), `pr-watch-test-${Date.now()}-${Math.random()}.sqlite`);
+  const db = openDb(dbPath);
+  return { db, dbPath };
+}
+
+function makeRunCommand(responses: Record<string, string> = {}) {
+  return vi.fn().mockImplementation((_binary: string, args: string[]) => {
+    const prNum = args[args.indexOf("view") + 1];
+    const key = String(prNum);
+    if (key in responses) return Promise.resolve(responses[key]);
+    return Promise.resolve(JSON.stringify({
+      headRefOid: "abc123",
+      statusCheckRollup: [],
+      mergeable: "MERGEABLE",
+      updatedAt: new Date().toISOString(),
+    }));
+  });
+}
+
+function prViewPayload(opts: {
+  headRefOid?: string;
+  failing?: boolean;
+  passing?: boolean;
+  updatedAt?: string;
+} = {}) {
+  const { headRefOid = "abc123", failing = false, passing = false, updatedAt = new Date().toISOString() } = opts;
+  const rollup = failing
+    ? [{ __typename: "CheckRun", conclusion: "FAILURE", name: "ci/test" }]
+    : passing
+    ? [{ __typename: "CheckRun", conclusion: "SUCCESS", name: "ci/test" }]
+    : [];
+  return JSON.stringify({ headRefOid, statusCheckRollup: rollup, mergeable: "MERGEABLE", updatedAt });
+}
+
+describe("createPrWatchHandler", () => {
+  let db: ReturnType<typeof openDb>;
+  let dbPath: string;
+
+  beforeEach(() => { ({ db, dbPath } = makeDb()); });
+  afterEach(() => { db.close(); try { rmSync(dbPath); } catch {} });
+
+  it("returns a handler function", () => {
+    expect(typeof createPrWatchHandler({ runCommand: makeRunCommand() })).toBe("function");
+  });
+
+  it("returns early when there are no open agent PRs", async () => {
+    const runCommand = makeRunCommand();
+    const handler = createPrWatchHandler({ runCommand });
+    const result = await handler({}, { db, workerId: "w" });
+    expect(runCommand).not.toHaveBeenCalled();
+    expect(result.summary).toMatch(/no open/i);
+  });
+
+  it("skips held PRs without calling gh pr view", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 5, branch_name: "agent/work-5" });
+    db.updatePrState(link.id, "held");
+
+    const runCommand = makeRunCommand();
+    await createPrWatchHandler({ runCommand })({}, { db, workerId: "w" });
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it("marks a PR stale when updatedAt exceeds staleHours", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 6, branch_name: "agent/work-6" });
+
+    const staleDate = new Date(Date.now() - 73 * 60 * 60 * 1000).toISOString(); // 73h ago
+    const runCommand = makeRunCommand({ "6": prViewPayload({ updatedAt: staleDate }) });
+
+    await createPrWatchHandler({ runCommand, staleHours: 72 })({}, { db, workerId: "w" });
+
+    const updated = db.raw.prepare("SELECT pr_state FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(updated.pr_state).toBe("stale");
+  });
+
+  it("does not mark a recently updated PR as stale", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 7, branch_name: "agent/work-7" });
+
+    const recentDate = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString(); // 1h ago
+    const runCommand = makeRunCommand({ "7": prViewPayload({ updatedAt: recentDate }) });
+
+    await createPrWatchHandler({ runCommand, staleHours: 72 })({}, { db, workerId: "w" });
+
+    const updated = db.raw.prepare("SELECT pr_state FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(updated.pr_state).not.toBe("stale");
+  });
+
+  it("marks PR ci_failed and enqueues a fix job when checks fail", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 8, branch_name: "agent/work-8" });
+
+    const runCommand = makeRunCommand({ "8": prViewPayload({ failing: true, headRefOid: "sha111" }) });
+    await createPrWatchHandler({ runCommand })({}, { db, workerId: "w" });
+
+    const updated = db.raw.prepare("SELECT pr_state FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(updated.pr_state).toBe("ci_failed");
+
+    const jobs = db.raw.prepare(
+      "SELECT * FROM work_jobs WHERE idempotency_key = ?"
+    ).all(`ci_fix:owner/repo:8:sha111`) as any[];
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].task_type).toBe("tdd_implementation");
+  });
+
+  it("does not enqueue a duplicate fix job for the same head SHA", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 9, branch_name: "agent/work-9" });
+
+    const runCommand = makeRunCommand({ "9": prViewPayload({ failing: true, headRefOid: "sha222" }) });
+    const handler = createPrWatchHandler({ runCommand });
+    await handler({}, { db, workerId: "w" });
+    await handler({}, { db, workerId: "w" });
+
+    const jobs = db.raw.prepare(
+      "SELECT * FROM work_jobs WHERE idempotency_key = ?"
+    ).all("ci_fix:owner/repo:9:sha222") as any[];
+    expect(jobs).toHaveLength(1);
+  });
+
+  it("marks PR ready_to_merge and creates a merge approval when CI passes", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 12, branch_name: "agent/work-12" });
+
+    const runCommand = makeRunCommand({ "12": prViewPayload({ passing: true, headRefOid: "greensha" }) });
+    await createPrWatchHandler({ runCommand })({}, { db, workerId: "w" });
+
+    const updated = db.raw.prepare("SELECT pr_state FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(updated.pr_state).toBe("ready_to_merge");
+
+    const approvals = db.raw.prepare(
+      "SELECT * FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr' AND status = 'pending'"
+    ).all(item.id) as any[];
+    expect(approvals).toHaveLength(1);
+    expect(JSON.parse(approvals[0].payload_json).head_sha).toBe("greensha");
+  });
+
+  it("refreshes head_sha in existing pending approval when CI passes", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 13, branch_name: "agent/work-13" });
+    db.createApproval({
+      approval_type: "merge_pr", requested_by: "agent", work_item_id: item.id,
+      payload: { pr_number: 13, head_sha: "oldsha" },
+    });
+
+    const runCommand = makeRunCommand({ "13": prViewPayload({ passing: true, headRefOid: "newsha" }) });
+    await createPrWatchHandler({ runCommand })({}, { db, workerId: "w" });
+
+    const approvals = db.raw.prepare(
+      "SELECT * FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr' AND status = 'pending'"
+    ).all(item.id) as any[];
+    expect(approvals).toHaveLength(1);
+    expect(JSON.parse(approvals[0].payload_json).head_sha).toBe("newsha");
+  });
+
+  it("does not create duplicate approvals when PR is already ready_to_merge", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 14, branch_name: "agent/work-14" });
+    db.updatePrState(link.id, "ready_to_merge");
+    db.createApproval({
+      approval_type: "merge_pr", requested_by: "agent", work_item_id: item.id,
+      payload: { pr_number: 14, head_sha: "sha" },
+    });
+
+    const runCommand = makeRunCommand({ "14": prViewPayload({ passing: true, headRefOid: "sha" }) });
+    const handler = createPrWatchHandler({ runCommand });
+    await handler({}, { db, workerId: "w" });
+    await handler({}, { db, workerId: "w" });
+
+    const approvals = db.raw.prepare(
+      "SELECT * FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr' AND status = 'pending'"
+    ).all(item.id) as any[];
+    expect(approvals).toHaveLength(1);
+  });
+});

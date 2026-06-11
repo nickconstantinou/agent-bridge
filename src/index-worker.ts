@@ -28,6 +28,7 @@ import { createFeaturePlanHandler } from "./handlers/featurePlan.js";
 import { createGithubIssueHandler } from "./handlers/githubIssue.js";
 import { createTddImplementationHandler } from "./handlers/tddImplementation.js";
 import { createPrLifecycleHandler } from "./handlers/prLifecycle.js";
+import { createPrWatchHandler } from "./handlers/prWatch.js";
 import { captureFeatureBrief } from "./featureBriefCapture.js";
 import { runCli } from "./cli.js";
 import { createRunCommand } from "./runCommandAsync.js";
@@ -49,6 +50,8 @@ const allowedUserIds = new Set(
 
 const workerEnabled = process.env.WORKER_ENABLED === "true";
 const jobPollIntervalMs = Number(process.env.WORKER_JOB_POLL_INTERVAL_MS || 10_000);
+const prWatchIntervalMs = Number(process.env.WORKER_PR_WATCH_INTERVAL || 3_600_000); // 1h default
+const prStaleHours = Number(process.env.WORKER_PR_STALE_HOURS || 72);
 const defectScanCommand = process.env.DEFECT_SCAN_CLI_COMMAND || "claude";
 const cliChain = (process.env.WORKER_CLI_CHAIN || "codex,claude,antigravity")
   .split(",").map(s => s.trim()).filter(Boolean);
@@ -199,6 +202,10 @@ const stopJobLoop = startJobExecutorLoop({
       maxOpenPrs: Number(process.env.WORKER_MAX_OPEN_PRS || 3),
       maxDailyPrs: Number(process.env.WORKER_MAX_DAILY_PRS || 3),
     }),
+    pr_watch: createPrWatchHandler({
+      runCommand: (binary, args) => runWorkerCommand(binary, args),
+      staleHours: prStaleHours,
+    }),
   },
   sendMessage: async (chatId: number, text: string, replyMarkup?: object) => {
     const body: any = { text };
@@ -210,6 +217,14 @@ const stopJobLoop = startJobExecutorLoop({
 
 process.once("SIGTERM", stopJobLoop);
 process.once("SIGINT", stopJobLoop);
+
+// Enqueue a pr_watch job once per hour (idempotency key prevents duplicates within the window)
+function enqueuePrWatch() {
+  const dateHour = new Date().toISOString().slice(0, 13); // e.g. "2026-06-11T19"
+  db.createWorkJob({ task_type: "pr_watch", idempotency_key: `pr_watch:${dateHour}`, max_attempts: 1 });
+}
+enqueuePrWatch();
+setInterval(enqueuePrWatch, prWatchIntervalMs);
 
 console.log(`[worker-bot] starting (workerEnabled=${workerEnabled}, cliChain=${cliChain.join(",")}, jobPollIntervalMs=${jobPollIntervalMs})`);
 

@@ -160,39 +160,49 @@ export function openDb(dbPath: string): BridgeDb {
   try {
     raw.exec(`ALTER TABLE github_links ADD COLUMN last_activity_at TEXT`);
   } catch { /* column already exists */ }
-  // Migrate work_jobs task_type CHECK constraint to include feature_plan and pr_lifecycle.
-  // SQLite cannot ALTER CHECK constraints, so we use rename-recreate.
+  // Migrate work_jobs task_type CHECK constraint to include feature_plan, pr_lifecycle,
+  // pr_watch, and pr_refresh. SQLite cannot ALTER CHECK constraints; use rename-recreate.
+  // We disable FK enforcement and legacy-alter-table mode to prevent SQLite 3.26+ from
+  // auto-rewriting FK references in other tables (e.g. approvals.job_id) during the
+  // rename, which would otherwise cause the DROP TABLE to fail.
   try {
-    const hasFeaturePlan = (raw.prepare(
+    const hasPrWatch = (raw.prepare(
       `SELECT sql FROM sqlite_master WHERE type='table' AND name='work_jobs'`
-    ).get() as { sql: string } | undefined)?.sql?.includes("'feature_plan'");
-    if (!hasFeaturePlan) {
-      raw.exec(`
-        ALTER TABLE work_jobs RENAME TO work_jobs_old;
-        CREATE TABLE work_jobs (
-          id               INTEGER PRIMARY KEY AUTOINCREMENT,
-          work_item_id     INTEGER,
-          task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','pr_lifecycle')),
-          status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','leased','running','waiting_approval','completed','failed','cancelled')),
-          bot              TEXT CHECK (bot IN ('codex','antigravity','claude')),
-          lease_owner      TEXT,
-          lease_expires_at TEXT,
-          heartbeat_at     TEXT,
-          attempt_count    INTEGER NOT NULL DEFAULT 0,
-          max_attempts     INTEGER NOT NULL DEFAULT 2,
-          idempotency_key  TEXT NOT NULL UNIQUE,
-          input_json       TEXT NOT NULL DEFAULT '{}',
-          result_json      TEXT,
-          error            TEXT,
-          created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-          FOREIGN KEY(work_item_id) REFERENCES work_items(id)
-        );
-        INSERT INTO work_jobs SELECT * FROM work_jobs_old;
-        DROP TABLE work_jobs_old;
-      `);
+    ).get() as { sql: string } | undefined)?.sql?.includes("'pr_watch'");
+    if (!hasPrWatch) {
+      raw.pragma("foreign_keys = OFF");
+      raw.pragma("legacy_alter_table = ON");
+      try {
+        raw.exec(`
+          ALTER TABLE work_jobs RENAME TO work_jobs_migrate_tmp;
+          CREATE TABLE work_jobs (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            work_item_id     INTEGER,
+            task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','pr_lifecycle','pr_watch','pr_refresh')),
+            status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','leased','running','waiting_approval','completed','failed','cancelled')),
+            bot              TEXT CHECK (bot IN ('codex','antigravity','claude')),
+            lease_owner      TEXT,
+            lease_expires_at TEXT,
+            heartbeat_at     TEXT,
+            attempt_count    INTEGER NOT NULL DEFAULT 0,
+            max_attempts     INTEGER NOT NULL DEFAULT 2,
+            idempotency_key  TEXT NOT NULL UNIQUE,
+            input_json       TEXT NOT NULL DEFAULT '{}',
+            result_json      TEXT,
+            error            TEXT,
+            created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(work_item_id) REFERENCES work_items(id)
+          );
+          INSERT INTO work_jobs SELECT * FROM work_jobs_migrate_tmp;
+          DROP TABLE work_jobs_migrate_tmp;
+        `);
+      } finally {
+        raw.pragma("legacy_alter_table = OFF");
+        raw.pragma("foreign_keys = ON");
+      }
     }
-  } catch (err) { console.warn('[db] work_jobs migration failed:', err); }
+  } catch (err) { console.warn('[db] work_jobs pr_watch migration failed:', err); }
 
   // Clear any locks left held from a previous process that was killed mid-execution
   raw.exec(`UPDATE bridge_state SET active_execution_lock = 0 WHERE active_execution_lock = 1`);
@@ -648,6 +658,15 @@ export class BridgeDb {
     ).all(repository) as GithubLink[];
   }
 
+  listAllOpenAgentPrs(): GithubLink[] {
+    return this.raw.prepare(
+      `SELECT * FROM github_links
+       WHERE pr_number IS NOT NULL
+         AND pr_state NOT IN ('merged','closed')
+       ORDER BY id ASC`
+    ).all() as GithubLink[];
+  }
+
   touchPrActivity(linkId: number, ts: string): void {
     this.raw.prepare(
       `UPDATE github_links SET last_activity_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
@@ -762,6 +781,8 @@ export interface GithubLink {
   branch_name: string | null;
   commit_sha: string | null;
   remote_url: string | null;
+  pr_state: string;
+  last_activity_at: string | null;
   created_at: string;
   updated_at: string;
 }

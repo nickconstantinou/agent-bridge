@@ -24,6 +24,13 @@ export class WorkerFallbackChain {
     return this.chain[Math.min(idx, this.chain.length - 1)];
   }
 
+  setActiveCli(chatKey: string, cli: string): void {
+    const idx = this.chain.indexOf(cli);
+    if (idx !== -1) {
+      this.chatActiveIdx.set(chatKey, idx);
+    }
+  }
+
   /** Advance to the next CLI. Returns the new active CLI, or null if already at the last. */
   advance(chatKey: string): string | null {
     const currentIdx = this.chatActiveIdx.get(chatKey) ?? 0;

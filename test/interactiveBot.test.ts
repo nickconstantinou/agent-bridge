@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { openDb } from "../src/db.js";
 import type { BridgeDb } from "../src/db.js";
 import type { TelegramUpdate } from "../src/types.js";
+import { WorkerFallbackChain } from "../src/workerFallback.js";
 import {
   getUserCliPreference,
   setUserCliPreference,
@@ -15,6 +16,7 @@ import {
   resolveUpdateChatKey,
   isAuthorizedInteractiveUpdate,
   buildInteractiveCommands,
+  dispatchInteractiveWithFallback,
   type CliKind,
 } from "../src/interactiveBot.js";
 
@@ -270,3 +272,77 @@ describe("handleCliSwitchCallback", () => {
     expect(handleCliSwitchCallback("")).toBeNull();
   });
 });
+
+// ── dispatchInteractiveWithFallback ───────────────────────────────────────────
+
+describe("dispatchInteractiveWithFallback", () => {
+  let db: BridgeDb;
+  let codex: { handleUpdate: any; handleCount: number };
+  let claude: { handleUpdate: any; handleCount: number };
+  let antigravity: { handleUpdate: any; handleCount: number };
+  let fallbackChain: WorkerFallbackChain;
+  let exhaustedChats: Set<string>;
+  let contextPreambles: Map<string, string>;
+  let sentMessages: string[];
+  let onCliSwitchedCalls: CliKind[];
+
+  beforeEach(() => {
+    db = openDb(":memory:");
+    codex = { handleCount: 0, handleUpdate: async () => { codex.handleCount++; } };
+    claude = { handleCount: 0, handleUpdate: async () => { claude.handleCount++; } };
+    antigravity = { handleCount: 0, handleUpdate: async () => { antigravity.handleCount++; } };
+    fallbackChain = new WorkerFallbackChain(["codex", "claude", "antigravity"]);
+    exhaustedChats = new Set();
+    contextPreambles = new Map();
+    sentMessages = [];
+    onCliSwitchedCalls = [];
+  });
+
+  const deps = () => ({
+    engines: { codex, claude, antigravity },
+    fallbackChain,
+    exhaustedChats,
+    contextPreambles,
+    db,
+    notify: (msg: string) => { sentMessages.push(msg); },
+    onCliSwitched: async (newCli: CliKind) => { onCliSwitchedCalls.push(newCli); },
+  });
+
+  it("routes to the user's preferred CLI from DB", async () => {
+    setUserCliPreference(db, "chat:1", "claude");
+    await dispatchInteractiveWithFallback({ update_id: 1, message: { text: "hello", chat: { id: 1 } } } as any, "chat:1", deps());
+    expect(claude.handleCount).toBe(1);
+    expect(codex.handleCount).toBe(0);
+  });
+
+  it("automatically falls back to the next CLI and updates DB when exhausted", async () => {
+    setUserCliPreference(db, "chat:1", "codex");
+    codex.handleUpdate = async () => {
+      codex.handleCount++;
+      exhaustedChats.add("chat:1");
+    };
+
+    await dispatchInteractiveWithFallback({ update_id: 1, message: { text: "hello", chat: { id: 1 } } } as any, "chat:1", deps());
+
+    expect(codex.handleCount).toBe(1);
+    expect(claude.handleCount).toBe(1);
+    expect(getUserCliPreference(db, "chat:1")).toBe("claude");
+    expect(sentMessages).toContain("Switching to claude (codex at capacity)");
+    expect(onCliSwitchedCalls).toContain("claude");
+  });
+
+  it("sets context preamble when falling back", async () => {
+    setUserCliPreference(db, "chat:1", "codex");
+    fallbackChain.addTurn("chat:1", "user", "previous question");
+    codex.handleUpdate = async () => {
+      codex.handleCount++;
+      exhaustedChats.add("chat:1");
+    };
+
+    await dispatchInteractiveWithFallback({ update_id: 1, message: { text: "hello", chat: { id: 1 } } } as any, "chat:1", deps());
+
+    expect(contextPreambles.has("chat:1")).toBe(true);
+    expect(contextPreambles.get("chat:1")).toContain("previous question");
+  });
+});
+

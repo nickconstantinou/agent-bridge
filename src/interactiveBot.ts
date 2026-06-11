@@ -7,6 +7,7 @@
 import type { BridgeDb } from "./db.js";
 import type { TelegramUpdate } from "./types.js";
 import { buildTelegramCommands } from "./commands.js";
+import { WorkerFallbackChain } from "./workerFallback.js";
 
 export type CliKind = "codex" | "claude" | "antigravity";
 
@@ -112,4 +113,54 @@ export function isAuthorizedInteractiveUpdate(
 
 function isValidCliKind(value: unknown): value is CliKind {
   return VALID_CLI_KINDS.includes(value as CliKind);
+}
+
+// ── Interactive Dispatch with Fallback ────────────────────────────────────────
+
+export interface InteractiveDispatchEngine {
+  handleUpdate(update: TelegramUpdate): Promise<void>;
+}
+
+export interface InteractiveDispatchDeps {
+  engines: Record<string, InteractiveDispatchEngine>;
+  fallbackChain: WorkerFallbackChain;
+  exhaustedChats: Set<string>;
+  contextPreambles: Map<string, string>;
+  db: BridgeDb;
+  notify: (msg: string) => Promise<void> | void;
+  onCliSwitched?: (newCli: CliKind) => Promise<void> | void;
+}
+
+export async function dispatchInteractiveWithFallback(
+  update: TelegramUpdate,
+  chatKey: string,
+  deps: InteractiveDispatchDeps,
+): Promise<void> {
+  const { engines, fallbackChain, exhaustedChats, contextPreambles, db, notify, onCliSwitched } = deps;
+
+  exhaustedChats.delete(chatKey);
+
+  const pref = getUserCliPreference(db, chatKey);
+  fallbackChain.setActiveCli(chatKey, pref);
+
+  const activeCli = fallbackChain.getActiveCli(chatKey) as CliKind;
+  await engines[activeCli].handleUpdate(update);
+
+  if (exhaustedChats.has(chatKey)) {
+    exhaustedChats.delete(chatKey);
+    const next = fallbackChain.advance(chatKey) as CliKind | null;
+    if (next) {
+      contextPreambles.set(chatKey, fallbackChain.buildContextPreamble(chatKey));
+      setUserCliPreference(db, chatKey, next);
+
+      await notify(`Switching to ${next} (${activeCli} at capacity)`);
+      if (onCliSwitched) {
+        await onCliSwitched(next);
+      }
+
+      await dispatchInteractiveWithFallback(update, chatKey, deps);
+    } else {
+      await notify("All CLIs are currently unavailable. Please try again later.");
+    }
+  }
 }

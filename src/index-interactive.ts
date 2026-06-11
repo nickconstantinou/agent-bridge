@@ -19,6 +19,7 @@ import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
 import { isAuthorizedMessage, extractPromptText, parseModelPreference } from "./bridge.js";
+import { WorkerFallbackChain } from "./workerFallback.js";
 import {
   getUserCliPreference,
   setUserCliPreference,
@@ -28,6 +29,7 @@ import {
   buildInteractiveCommands,
   resolveUpdateChatKey,
   isAuthorizedInteractiveUpdate,
+  dispatchInteractiveWithFallback,
   type CliKind,
 } from "./interactiveBot.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
@@ -86,6 +88,13 @@ if (soulContext) console.log(`[interactive] loaded SOUL.md context (${soulContex
 const db = openDb(dbPath);
 const client = new TelegramClient(token, fetch, 45_000);
 
+// Fallback chain state
+const cliChain = (process.env.INTERACTIVE_CLI_CHAIN || process.env.WORKER_CLI_CHAIN || "codex,claude,antigravity")
+  .split(",").map(s => s.trim()).filter(Boolean);
+const fallbackChain = new WorkerFallbackChain(cliChain);
+const exhaustedChats = new Set<string>();
+const contextPreambles = new Map<string, string>();
+
 // Build one engine per CLI kind — none polls; we dispatch handleUpdate manually.
 const CLI_KINDS: CliKind[] = ["codex", "claude", "antigravity"];
 const engines = Object.fromEntries(
@@ -103,6 +112,19 @@ const engines = Object.fromEntries(
           pollIntervalMs,
           soulContext,
           fullConfig: config,
+          hooks: {
+            onCapacityExhausted: async (chatKey: string) => {
+              exhaustedChats.add(chatKey);
+            },
+            onBeforeExecute: async (prompt: string, ctx: { chatKey: string }) => {
+              const preamble = contextPreambles.get(ctx.chatKey);
+              if (preamble) {
+                contextPreambles.delete(ctx.chatKey);
+                return preamble + prompt;
+              }
+              return prompt;
+            },
+          },
         },
         db,
         client,
@@ -175,10 +197,37 @@ for (;;) {
           }
         }
 
-        // Route to the user's preferred engine, resolved from message or callback_query
+        // Route to the user's preferred engine with fallback support
         const chatKey = resolveUpdateChatKey(update as TelegramUpdate);
-        const pref = chatKey ? getUserCliPreference(db, chatKey) : "codex";
-        await engines[pref].handleUpdate(update as TelegramUpdate);
+        if (chatKey) {
+          const messageText = (update as TelegramUpdate).message?.text?.trim() || "";
+          if (messageText) {
+            fallbackChain.addTurn(chatKey, "user", messageText);
+          }
+          const chatId = (update as TelegramUpdate).message?.chat?.id ?? (update as TelegramUpdate).callback_query?.message?.chat?.id;
+          if (chatId != null) {
+            await dispatchInteractiveWithFallback(update as TelegramUpdate, chatKey, {
+              engines,
+              fallbackChain,
+              exhaustedChats,
+              contextPreambles,
+              db,
+              notify: async (msg) => {
+                await sendTelegramMessage({ client, kind: "interactive", chatId, body: { text: msg } });
+              },
+              onCliSwitched: async (newCli) => {
+                await client.setMyCommands({ commands: buildInteractiveCommands(newCli) })
+                  .catch((err: unknown) => console.warn("[interactive] setMyCommands failed during fallback", err));
+              },
+            });
+          } else {
+            const pref = getUserCliPreference(db, chatKey);
+            await engines[pref].handleUpdate(update as TelegramUpdate);
+          }
+        } else {
+          const pref = "codex";
+          await engines[pref].handleUpdate(update as TelegramUpdate);
+        }
       } catch (err) {
         console.error("[interactive] update handling failed", err);
       }

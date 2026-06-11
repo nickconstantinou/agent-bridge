@@ -183,7 +183,9 @@ const stopJobLoop = startJobExecutorLoop({
       prepareWorkspace: (repository, workItemId) => prepareWorkspace({
         repository,
         workItemId,
-        installDeps: (dir) => runWorkerCommand("npm", ["ci", "--no-audit", "--no-fund"], { cwd: dir }).then(() => undefined),
+        // --include=dev: the service runs with NODE_ENV=production, which would
+        // otherwise omit devDependencies — and the test runner lives there
+        installDeps: (dir) => runWorkerCommand("npm", ["ci", "--no-audit", "--no-fund", "--include=dev"], { cwd: dir }).then(() => undefined),
       }),
       cleanupWorkspace,
     }),

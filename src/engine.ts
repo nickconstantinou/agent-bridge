@@ -437,7 +437,11 @@ export class BridgeEngine {
       if (isCapacityExhaustedError(error instanceof Error ? error : new Error(String(error))) && this.hooks.onCapacityExhausted) {
         await this.hooks.onCapacityExhausted(chatKey);
       } else {
-        const userText = toUserMessage(error instanceof Error ? error : new Error(String(error)));
+        let userText = toUserMessage(error instanceof Error ? error : new Error(String(error)));
+        if (isCapacityExhaustedError(error instanceof Error ? error : new Error(String(error)))) {
+          const suggestions = ["codex", "claude", "antigravity"].filter((k) => k !== this.kind);
+          userText += `\n\n💡 All models for ${this.kind} are exhausted. You can switch to ${suggestions.join(" or ")} using /cli.`;
+        }
         await sendTelegramMessage({
           client: this.client,
           kind: this._deliveryKind(),

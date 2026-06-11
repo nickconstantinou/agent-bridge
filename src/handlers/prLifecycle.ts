@@ -48,6 +48,38 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
     // Capture the head SHA so the merge gate can detect a moved head later
     const headSha = (await runGit(["rev-parse", "HEAD"], repoPath)).trim();
 
+    const workspaceDir = typeof input.workspace_dir === "string" ? input.workspace_dir : null;
+
+    // ── Idempotent: reuse an existing PR rather than opening a second one ───────
+    const existingLink = ctx.db.raw
+      .prepare("SELECT * FROM github_links WHERE repository = ? AND branch_name = ?")
+      .get(repository, branchName) as { id: number; pr_number: number } | undefined;
+
+    if (existingLink) {
+      const existingPrUrl = `https://github.com/${repository}/pull/${existingLink.pr_number}`;
+
+      // Refresh head_sha in any pending merge_pr approval for this work item
+      const pendingApproval = ctx.db.raw
+        .prepare(
+          "SELECT id, payload_json FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr' AND status = 'pending'"
+        )
+        .get(workItemId) as { id: number; payload_json: string } | undefined;
+
+      if (pendingApproval) {
+        const payload = JSON.parse(pendingApproval.payload_json);
+        payload.head_sha = headSha;
+        ctx.db.raw
+          .prepare("UPDATE approvals SET payload_json = ? WHERE id = ?")
+          .run(JSON.stringify(payload), pendingApproval.id);
+      }
+
+      ctx.db.updateWorkItemStatus(workItemId, "blocked");
+      if (workspaceDir && cleanupWorkspace) cleanupWorkspace(workspaceDir);
+
+      const summary = `Existing PR refreshed with latest head (${headSha.slice(0, 7)}): ${existingPrUrl}\n\nUse /approvals to merge or close.`;
+      return { summary, prUrl: existingPrUrl };
+    }
+
     // Open draft PR
     const prTitle = `[agent] ${item.title}`;
     const prBody = [
@@ -68,9 +100,21 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
       "--head", branchName,
     ];
 
-    const prOutput = await runCommand("gh", prArgs);
-    const prUrl = prOutput.trim().split("\n").pop()?.trim() ?? prOutput.trim();
-    const prNumber = parsePrNumber(prUrl);
+    let prUrl: string;
+    let prNumber: number | null;
+
+    try {
+      const prOutput = await runCommand("gh", prArgs);
+      prUrl = prOutput.trim().split("\n").pop()?.trim() ?? prOutput.trim();
+      prNumber = parsePrNumber(prUrl);
+    } catch (err) {
+      // gh pr create reports "already exists" — recover by parsing the URL from the error
+      const msg = err instanceof Error ? err.message : String(err);
+      const m = msg.match(/already exists[:\s\n]*(https:\/\/github\.com\/[^\s]+\/pull\/(\d+))/i);
+      if (!m) throw err;
+      prUrl = m[1];
+      prNumber = Number(m[2]);
+    }
 
     // Record github link
     if (prNumber !== null) {
@@ -100,7 +144,6 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
     ctx.db.updateWorkItemStatus(workItemId, "blocked");
 
     // Branch is on the remote — the per-job workspace has served its purpose
-    const workspaceDir = typeof input.workspace_dir === "string" ? input.workspace_dir : null;
     if (workspaceDir && cleanupWorkspace) cleanupWorkspace(workspaceDir);
 
     const summary = `Draft PR opened: ${prUrl}\n\nUse the inline keyboard or /approvals to merge or close.`;

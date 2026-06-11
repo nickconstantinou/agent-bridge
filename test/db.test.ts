@@ -749,3 +749,46 @@ describe("feature_plans CRUD", () => {
     expect(active!.brief).toBe("Second brief");
   });
 });
+
+// ── Phase 9 Slice 18: PR state tracking on github_links ─────────────────────
+
+describe("github_links pr_state", () => {
+  it("new links default to pr_state draft with last_activity_at column present", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "X", created_by: "u" });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "o/r", pr_number: 9, branch_name: "agent/work-9" });
+    const row = db.raw.prepare("SELECT pr_state, last_activity_at FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(row.pr_state).toBe("draft");
+    expect(row.last_activity_at === null || typeof row.last_activity_at === "string").toBe(true);
+  });
+
+  it("updatePrState persists a new state", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "X", created_by: "u" });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "o/r", pr_number: 10 });
+    db.updatePrState(link.id, "ready_to_merge");
+    const row = db.raw.prepare("SELECT pr_state FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(row.pr_state).toBe("ready_to_merge");
+  });
+
+  it("listOpenAgentPrs excludes merged and closed links", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "X", created_by: "u" });
+    const a = db.linkGithubPr({ work_item_id: item.id, repository: "o/r", pr_number: 11 });
+    const b = db.linkGithubPr({ work_item_id: item.id, repository: "o/r", pr_number: 12 });
+    const c = db.linkGithubPr({ work_item_id: item.id, repository: "o/r", pr_number: 13 });
+    db.updatePrState(b.id, "merged");
+    db.updatePrState(c.id, "closed");
+
+    const open = db.listOpenAgentPrs("o/r");
+    expect(open.map((l: any) => l.id)).toEqual([a.id]);
+    // other repositories are not included
+    expect(db.listOpenAgentPrs("other/repo")).toEqual([]);
+  });
+
+  it("touchPrActivity sets last_activity_at", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "X", created_by: "u" });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "o/r", pr_number: 14 });
+    const ts = new Date().toISOString();
+    db.touchPrActivity(link.id, ts);
+    const row = db.raw.prepare("SELECT last_activity_at FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(row.last_activity_at).toBe(ts);
+  });
+});

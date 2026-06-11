@@ -476,12 +476,11 @@ describe("BridgeEngine", () => {
 
       expect(exhaustedCalled).not.toHaveBeenCalled();
     });
-    it("clears session ID and retries with fresh session on invalid session error", async () => {
+    it("clears session ID, remembers recent turns, and retries with context on invalid session error", async () => {
       const { BridgeEngine } = await import("../src/engine.js");
 
-      db.setSession("100", "claude", "invalid-session-id-123");
-
       const runCli = vi.fn()
+        .mockResolvedValueOnce("Hello there! I am Claude.")
         .mockRejectedValueOnce(new Error("CLI exited with code 1: No conversation found with session ID: invalid-session-id-123"))
         .mockResolvedValueOnce("Successful fresh retry result");
 
@@ -503,10 +502,21 @@ describe("BridgeEngine", () => {
 
       await engine.handleMessages([makeMessage("hello")]);
 
+      db.setSession("100", "claude", "invalid-session-id-123");
+
+      await engine.handleMessages([makeMessage("help me")]);
+
       expect(db.getSession("100", "claude")).toBeNull();
-      expect(runCli).toHaveBeenCalledTimes(2);
-      expect(client.sendMessage).toHaveBeenCalledOnce();
-      expect(client.sendMessage.mock.calls[0][0].text).toContain("Successful fresh retry result");
+      expect(runCli).toHaveBeenCalledTimes(3);
+      expect(client.sendMessage).toHaveBeenCalledTimes(2);
+      expect(client.sendMessage.mock.calls[1][0].text).toContain("Successful fresh retry result");
+
+      const thirdCallArgs = runCli.mock.calls[2][1];
+      const promptArg = thirdCallArgs[thirdCallArgs.length - 1];
+      expect(promptArg).toContain("[Context from previous conversation]");
+      expect(promptArg).toContain("User: hello");
+      expect(promptArg).toContain("Assistant: Hello there! I am Claude.");
+      expect(promptArg).toContain("help me");
     });
   });
 });

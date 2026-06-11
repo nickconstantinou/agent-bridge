@@ -599,7 +599,7 @@ export class BridgeEngine {
       if (result?.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
       if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
       result.text = scrubOutputDir(result.text, outDir);
-      if (executionKind === "antigravity" && isAgentKind(this.kind)) {
+      if (isAgentKind(this.kind)) {
         this._rememberTurn(chatKey, prompt, result.text);
       }
       await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
@@ -630,7 +630,8 @@ export class BridgeEngine {
       if (sessionId && /No conversation found with session ID|thread not found|session not found|conversation not found/i.test((error as Error).message ?? "")) {
         console.warn(`[${this.kind}] session ID invalid, retrying with fresh session...`);
         if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
-        return this.executePromptAsync(prompt, null, chatId, body, onProgress, attachments, eventContext, runId, collect);
+        const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
+        return this.executePromptAsync(retryPrompt, null, chatId, body, onProgress, attachments, eventContext, runId, collect);
       }
       if (executionKind === "antigravity" && isAntigravityPrintTimeoutError(error as Error)) {
         if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
@@ -720,7 +721,7 @@ export class BridgeEngine {
       if (result.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
       if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
       result.text = scrubOutputDir(result.text, outDir);
-      if (executionKind === "antigravity" && isAgentKind(this.kind)) {
+      if (isAgentKind(this.kind)) {
         this._rememberTurn(chatKey, prompt, result.text);
       }
       await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
@@ -747,7 +748,8 @@ export class BridgeEngine {
       if (sessionId && /No conversation found with session ID|thread not found|session not found|conversation not found/i.test((error as Error).message ?? "")) {
         console.warn(`[${this.kind}] session ID invalid, retrying with fresh session...`);
         if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
-        return this.executePrompt(prompt, null, chatId, body, attachments, eventContext, runId, collect);
+        const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
+        return this.executePrompt(retryPrompt, null, chatId, body, attachments, eventContext, runId, collect);
       }
       if (executionKind === "antigravity" && isAntigravityPrintTimeoutError(error as Error)) {
         if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);

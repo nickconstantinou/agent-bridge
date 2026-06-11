@@ -154,6 +154,12 @@ export function openDb(dbPath: string): BridgeDb {
   try {
     raw.exec(`ALTER TABLE bridge_state ADD COLUMN claude_session_created_at TEXT`);
   } catch { /* column already exists */ }
+  try {
+    raw.exec(`ALTER TABLE github_links ADD COLUMN pr_state TEXT NOT NULL DEFAULT 'draft'`);
+  } catch { /* column already exists */ }
+  try {
+    raw.exec(`ALTER TABLE github_links ADD COLUMN last_activity_at TEXT`);
+  } catch { /* column already exists */ }
   // Migrate work_jobs task_type CHECK constraint to include feature_plan and pr_lifecycle.
   // SQLite cannot ALTER CHECK constraints, so we use rename-recreate.
   try {
@@ -625,6 +631,27 @@ export class BridgeDb {
        VALUES (?, ?, ?, ?, ?)
        RETURNING *`
     ).get(work_item_id, repository, pr_number, branch_name, commit_sha) as GithubLink;
+  }
+
+  updatePrState(linkId: number, state: string): void {
+    this.raw.prepare(
+      `UPDATE github_links SET pr_state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(state, linkId);
+  }
+
+  listOpenAgentPrs(repository: string): GithubLink[] {
+    return this.raw.prepare(
+      `SELECT * FROM github_links
+       WHERE repository = ? AND pr_number IS NOT NULL
+         AND pr_state NOT IN ('merged','closed')
+       ORDER BY id ASC`
+    ).all(repository) as GithubLink[];
+  }
+
+  touchPrActivity(linkId: number, ts: string): void {
+    this.raw.prepare(
+      `UPDATE github_links SET last_activity_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(ts, linkId);
   }
 
   // ── Feature plans ────────────────────────────────────────────────────────

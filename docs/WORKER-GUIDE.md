@@ -87,13 +87,20 @@ Set in the worker's env file (`.env.worker` or the systemd default file):
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN_WORKER` | — | Worker bot token (required) |
 | `WORKER_ENABLED` | `false` | Master switch for job commands |
-| `WORKER_JOB_POLL_INTERVAL_MS` | `10000` | Queue poll interval |
+| `WORKER_JOB_POLL_INTERVAL_MS` | `10000` | Queue poll interval (ms) |
 | `WORKER_CLI_CHAIN` | `codex,claude,antigravity` | CLI fallback order |
 | `WORKER_DEFAULT_REPO` | — | Repository attached to `/feature` plans |
 | `WORKER_REPO_ROOT` | `$HOME` | Where repo names resolve to local checkouts |
 | `WORKER_WORKSPACE_DIR` | `~/.agent-bridge/workspaces` | Per-job clone location |
 | `DEFECT_SCAN_CLI_COMMAND` | `claude` | CLI used for scans/plans/implementation |
 | `GITHUB_TOKEN_FILE` | `~/.secrets/GITHUB_TOKEN.TXT` | Token for `gh` API calls |
+| `WORKER_MAX_OPEN_PRS` | `3` | Max simultaneous open agent PRs per repo |
+| `WORKER_MAX_DAILY_PRS` | `3` | Max new agent PRs opened per UTC calendar day |
+| `WORKER_PR_STALE_HOURS` | `72` | Hours of inactivity before a PR is marked stale |
+| `WORKER_PR_WATCH_INTERVAL` | `3600000` | How often (ms) to enqueue a `pr_watch` job |
+| `WORKER_NOTIFY_CHAT_ID` | — | Telegram chat ID for stale PR digest messages |
+| `WORKER_GIT_NAME` | `agent-bridge worker` | Git author name used in workspace commits |
+| `WORKER_GIT_EMAIL` | `agent-bridge-worker@...` | Git author email used in workspace commits |
 
 Repository names resolve to `$WORKER_REPO_ROOT/<name>` (the part after `/` for
 `owner/name` forms). The directory must be a git checkout; workspaces clone

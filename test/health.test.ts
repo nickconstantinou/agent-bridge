@@ -1348,3 +1348,86 @@ describe("parseHealthCliConfig", () => {
     expect(config.modelPreference).toHaveLength(2);
   });
 });
+
+// ── Phase 9 Slice 24: PR lifecycle health gauges ──────────────────────────────
+
+describe("SelfPlugin — PR lifecycle gauges", () => {
+  it("includes pr-open-count gauge showing number of open agent PRs", async () => {
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const { openDb } = await import("../src/db.js");
+    const dbPath = join(tmpdir(), `health-gauge-test-${Date.now()}.sqlite`);
+    const db = openDb(dbPath);
+
+    try {
+      const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+      db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 1, branch_name: "agent/x" });
+
+      const plugin = new SelfPlugin(db, dbPath);
+      const report = await plugin.check();
+      const gauge = report.checks.find(c => c.name === "pr-open-count");
+      expect(gauge).toBeDefined();
+      expect(gauge!.message).toMatch(/1/);
+    } finally {
+      db.close(); try { rmSync(dbPath); } catch {}
+    }
+  });
+
+  it("includes pr-stale-count gauge", async () => {
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const { openDb } = await import("../src/db.js");
+    const dbPath = join(tmpdir(), `health-gauge-test-${Date.now()}.sqlite`);
+    const db = openDb(dbPath);
+
+    try {
+      const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+      const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 2, branch_name: "agent/y" });
+      db.updatePrState(link.id, "stale");
+
+      const plugin = new SelfPlugin(db, dbPath);
+      const report = await plugin.check();
+      const gauge = report.checks.find(c => c.name === "pr-stale-count");
+      expect(gauge).toBeDefined();
+      expect(gauge!.message).toMatch(/1/);
+    } finally {
+      db.close(); try { rmSync(dbPath); } catch {}
+    }
+  });
+
+  it("includes pending-merge-approvals gauge", async () => {
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const { openDb } = await import("../src/db.js");
+    const dbPath = join(tmpdir(), `health-gauge-test-${Date.now()}.sqlite`);
+    const db = openDb(dbPath);
+
+    try {
+      const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+      db.createApproval({ approval_type: "merge_pr", requested_by: "agent", work_item_id: item.id, payload: {} });
+
+      const plugin = new SelfPlugin(db, dbPath);
+      const report = await plugin.check();
+      const gauge = report.checks.find(c => c.name === "pending-merge-approvals");
+      expect(gauge).toBeDefined();
+      expect(gauge!.message).toMatch(/1/);
+    } finally {
+      db.close(); try { rmSync(dbPath); } catch {}
+    }
+  });
+
+  it("gauges are green when counts are within normal bounds", async () => {
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const { openDb } = await import("../src/db.js");
+    const dbPath = join(tmpdir(), `health-gauge-test-${Date.now()}.sqlite`);
+    const db = openDb(dbPath);
+
+    try {
+      const plugin = new SelfPlugin(db, dbPath);
+      const report = await plugin.check();
+      const openGauge = report.checks.find(c => c.name === "pr-open-count");
+      const staleGauge = report.checks.find(c => c.name === "pr-stale-count");
+      expect(openGauge!.status).toBe("green");
+      expect(staleGauge!.status).toBe("green");
+    } finally {
+      db.close(); try { rmSync(dbPath); } catch {}
+    }
+  });
+});

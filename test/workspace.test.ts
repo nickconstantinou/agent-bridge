@@ -95,6 +95,23 @@ describe("prepareWorkspace", () => {
     expect(existsSync(join(dir, "README.md"))).toBe(true);
   });
 
+  it("sets a local git identity in the clone so commits work without global config", async () => {
+    makeSourceRepo(root, "agent-bridge");
+    const dir = await prepareWorkspace({ repository: "agent-bridge", workItemId: 11, repoRoot: root, baseDir });
+
+    // Repo-local identity must exist regardless of the service account's global config
+    const name = git(["config", "--local", "user.name"], dir).trim();
+    const email = git(["config", "--local", "user.email"], dir).trim();
+    expect(name.length).toBeGreaterThan(0);
+    expect(email).toContain("@");
+
+    // And a commit must actually succeed in the clone
+    writeFileSync(join(dir, "new-file.txt"), "x\n");
+    git(["add", "-A"], dir);
+    git(["commit", "-q", "-m", "identity check"], dir);
+    expect(git(["log", "--oneline", "-1"], dir)).toContain("identity check");
+  });
+
   it("throws a clear error when no local checkout exists for the repository", async () => {
     await expect(
       prepareWorkspace({ repository: "ghost-repo", workItemId: 10, repoRoot: root, baseDir }),

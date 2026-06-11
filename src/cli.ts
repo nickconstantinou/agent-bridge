@@ -621,8 +621,10 @@ export function isCapacityExhaustedError(err: Error): boolean {
     msg.includes("RESOURCE_EXHAUSTED") ||
     msg.includes("quota reached") ||
     msg.includes("quota exceeded") ||
-    msg.includes("You've hit your limit") ||
-    msg.includes("You've hit your usage limit") ||
+    msg.includes("hit your limit") ||
+    msg.includes("session limit") ||
+    msg.includes("usage limit") ||
+    msg.includes("resets") ||
     msg.includes("api_error_status\":429")
   );
 }

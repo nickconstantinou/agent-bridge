@@ -117,6 +117,9 @@ describe("model fallback", () => {
       new Error("CLI exited with code 1: You've hit your limit · resets 2:40am (Europe/London)")
     )).toBe(true);
     expect(isCapacityExhaustedError(
+      new Error("CLI exited with code 1: You've hit your session limit · resets 1pm (Europe/London)")
+    )).toBe(true);
+    expect(isCapacityExhaustedError(
       new Error("CLI exited with code 1: You've hit your usage limit. Upgrade to Pro...")
     )).toBe(true);
     expect(isCapacityExhaustedError(

@@ -627,6 +627,11 @@ export class BridgeEngine {
     } catch (error) {
       if (logFile) { try { rmSync(logFile); } catch {} }
       await uploadOutputFiles(outDir, chatId, this.client).catch(() => {});
+      if (sessionId && /No conversation found with session ID|thread not found|session not found|conversation not found/i.test((error as Error).message ?? "")) {
+        console.warn(`[${this.kind}] session ID invalid, retrying with fresh session...`);
+        if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
+        return this.executePromptAsync(prompt, null, chatId, body, onProgress, attachments, eventContext, runId, collect);
+      }
       if (executionKind === "antigravity" && isAntigravityPrintTimeoutError(error as Error)) {
         if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
         const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
@@ -739,6 +744,11 @@ export class BridgeEngine {
     } catch (error) {
       if (logFile) { try { rmSync(logFile); } catch {} }
       await uploadOutputFiles(outDir, chatId, this.client).catch(() => {});
+      if (sessionId && /No conversation found with session ID|thread not found|session not found|conversation not found/i.test((error as Error).message ?? "")) {
+        console.warn(`[${this.kind}] session ID invalid, retrying with fresh session...`);
+        if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
+        return this.executePrompt(prompt, null, chatId, body, attachments, eventContext, runId, collect);
+      }
       if (executionKind === "antigravity" && isAntigravityPrintTimeoutError(error as Error)) {
         if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
         const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
@@ -927,13 +937,18 @@ export class BridgeEngine {
 
   private _handleCircuitBreaker(error: Error, chatKey: string): void {
     if (!isAgentKind(this.kind)) return;
-    if (/timeout|killed by signal/i.test(error.message ?? "")) {
+    const msg = error.message ?? "";
+    if (/timeout|killed by signal/i.test(msg)) {
       const failures = this.db.incrementFailures(chatKey, this.kind);
       if (failures >= 2) {
         console.warn(`[${this.kind}] clearing session after ${failures} consecutive failures for ${chatKey}`);
         db_setSession(this.db, chatKey, this.kind, null);
         this.db.resetFailures(chatKey, this.kind);
       }
+    } else if (/No conversation found with session ID|thread not found|session not found|conversation not found/i.test(msg)) {
+      console.warn(`[${this.kind}] clearing invalid session ID for ${chatKey}`);
+      db_setSession(this.db, chatKey, this.kind, null);
+      this.db.resetFailures(chatKey, this.kind);
     }
   }
 

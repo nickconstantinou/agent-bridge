@@ -9,6 +9,7 @@
  */
 
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
+import type { GithubLink } from "../db.js";
 
 type RunCommand = (binary: string, args: string[]) => Promise<string>;
 
@@ -16,6 +17,8 @@ interface PrWatchDeps {
   runCommand: RunCommand;
   /** Hours without activity before a PR is considered stale (default 72). */
   staleHours?: number;
+  /** Called once per run with the list of PRs newly marked stale (if any). */
+  notifyStale?: (stalePrs: GithubLink[]) => Promise<void> | void;
 }
 
 interface GhPrView {
@@ -34,7 +37,7 @@ function isRollupPassing(rollup: GhPrView["statusCheckRollup"]): boolean {
 }
 
 export function createPrWatchHandler(deps: PrWatchDeps): JobHandler {
-  const { runCommand, staleHours = 72 } = deps;
+  const { runCommand, staleHours = 72, notifyStale } = deps;
   const staleThresholdMs = staleHours * 60 * 60 * 1000;
 
   return async function prWatchHandler(
@@ -46,6 +49,7 @@ export function createPrWatchHandler(deps: PrWatchDeps): JobHandler {
 
     const now = Date.now();
     const lines: string[] = [];
+    const newlyStale: GithubLink[] = [];
 
     for (const link of openPrs) {
       if (link.pr_state === "held") continue;
@@ -63,6 +67,7 @@ export function createPrWatchHandler(deps: PrWatchDeps): JobHandler {
       const updatedAtMs = new Date(updatedAt).getTime();
       if (now - updatedAtMs > staleThresholdMs) {
         ctx.db.updatePrState(link.id, "stale");
+        newlyStale.push(link);
         lines.push(`#${link.pr_number} (${link.repository}): marked stale`);
         continue;
       }
@@ -116,6 +121,8 @@ export function createPrWatchHandler(deps: PrWatchDeps): JobHandler {
         lines.push(`#${link.pr_number} (${link.repository}): CI passing, ready to merge`);
       }
     }
+
+    if (newlyStale.length > 0 && notifyStale) await notifyStale(newlyStale);
 
     return { summary: lines.length > 0 ? lines.join("\n") : "All open PRs healthy." };
   };

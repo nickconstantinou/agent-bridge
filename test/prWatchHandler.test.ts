@@ -182,3 +182,47 @@ describe("createPrWatchHandler", () => {
     expect(approvals).toHaveLength(1);
   });
 });
+
+// ── Phase 9 Slice 22: stale digest ────────────────────────────────────────────
+
+import type { GithubLink } from "../src/db.js";
+
+describe("createPrWatchHandler — stale digest", () => {
+  let db: ReturnType<typeof openDb>;
+  let dbPath: string;
+
+  beforeEach(() => { ({ db, dbPath } = makeDb()); });
+  afterEach(() => { db.close(); try { rmSync(dbPath); } catch {} });
+
+  it("calls notifyStale once with all newly-stale PRs", async () => {
+    const notifyStale = vi.fn().mockResolvedValue(undefined);
+
+    // Two PRs that are both past the stale threshold
+    const staleDate = new Date(Date.now() - 73 * 60 * 60 * 1000).toISOString();
+    const item1 = db.createWorkItem({ kind: "defect", source: "telegram", title: "A", created_by: "w" });
+    const item2 = db.createWorkItem({ kind: "defect", source: "telegram", title: "B", created_by: "w" });
+    db.linkGithubPr({ work_item_id: item1.id, repository: "owner/repo", pr_number: 20, branch_name: "agent/a" });
+    db.linkGithubPr({ work_item_id: item2.id, repository: "owner/repo", pr_number: 21, branch_name: "agent/b" });
+
+    const runCommand = vi.fn().mockResolvedValue(
+      JSON.stringify({ headRefOid: "s", statusCheckRollup: [], mergeable: "MERGEABLE", updatedAt: staleDate })
+    );
+    await createPrWatchHandler({ runCommand, staleHours: 72, notifyStale })({}, { db, workerId: "w" });
+
+    expect(notifyStale).toHaveBeenCalledOnce();
+    const [stalePrs]: [GithubLink[]] = notifyStale.mock.calls[0];
+    expect(stalePrs.map((p: GithubLink) => p.pr_number).sort()).toEqual([20, 21]);
+  });
+
+  it("does not call notifyStale when no PRs are newly stale", async () => {
+    const notifyStale = vi.fn().mockResolvedValue(undefined);
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 22, branch_name: "agent/c" });
+
+    const recentDate = new Date(Date.now() - 1 * 60 * 60 * 1000).toISOString();
+    const runCommand = vi.fn().mockResolvedValue(prViewPayload({ updatedAt: recentDate }));
+    await createPrWatchHandler({ runCommand, staleHours: 72, notifyStale })({}, { db, workerId: "w" });
+
+    expect(notifyStale).not.toHaveBeenCalled();
+  });
+});

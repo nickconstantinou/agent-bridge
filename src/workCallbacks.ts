@@ -34,7 +34,11 @@ export type WorkCallbackAction =
   | { type: "wi_clse"; id: number }
   | { type: "job_cncl"; id: number }
   | { type: "ap_yes"; id: number }
-  | { type: "ap_no"; id: number };
+  | { type: "ap_no"; id: number }
+  | { type: "pr_hold"; id: number }
+  | { type: "pr_rels"; id: number }
+  | { type: "pr_rfsh"; id: number }
+  | { type: "pr_clse"; id: number };
 
 export function parseWorkCallback(data: string): WorkCallbackAction | null {
   if (data.length > 64) return null;
@@ -55,6 +59,12 @@ export function parseWorkCallback(data: string): WorkCallbackAction | null {
   if (prefix === "ap") {
     if (action === "yes") return { type: "ap_yes", id };
     if (action === "no") return { type: "ap_no", id };
+  }
+  if (prefix === "pr") {
+    if (action === "hold") return { type: "pr_hold", id };
+    if (action === "rels") return { type: "pr_rels", id };
+    if (action === "rfsh") return { type: "pr_rfsh", id };
+    if (action === "clse") return { type: "pr_clse", id };
   }
   return null;
 }
@@ -197,7 +207,8 @@ export async function handleWorkerCallback(
   cbq: any,
   db: any,
   client: any,
-  allowedUserIds: Set<string>
+  allowedUserIds: Set<string>,
+  extra?: { runCommand?: (binary: string, args: string[]) => Promise<string> }
 ): Promise<void> {
   const userId = cbq.from ? String(cbq.from.id) : "";
   if (!allowedUserIds.has(userId)) {
@@ -375,6 +386,41 @@ export async function handleWorkerCallback(
         text,
         reply_markup: inline_keyboard.length > 0 ? { inline_keyboard } : undefined,
       });
+    }
+  } else if (parsed.type === "pr_hold") {
+    const link = db.raw.prepare("SELECT * FROM github_links WHERE id = ?").get(parsed.id);
+    if (!link) {
+      await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "PR link not found." });
+      return;
+    }
+    db.updatePrState(parsed.id, "held");
+    await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "PR held — watch will skip until released." });
+  } else if (parsed.type === "pr_rels") {
+    const link = db.raw.prepare("SELECT * FROM github_links WHERE id = ?").get(parsed.id);
+    if (!link) {
+      await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "PR link not found." });
+      return;
+    }
+    db.updatePrState(parsed.id, "draft");
+    await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "PR released — watch will re-evaluate it." });
+  } else if (parsed.type === "pr_rfsh") {
+    // pr_refresh handler enqueued by Slice 23; accept the callback but defer action
+    await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "Refresh enqueued." });
+  } else if (parsed.type === "pr_clse") {
+    const link = db.raw.prepare("SELECT * FROM github_links WHERE id = ?").get(parsed.id) as any;
+    if (!link) {
+      await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "PR link not found." });
+      return;
+    }
+    const runCommand = extra?.runCommand ?? createRunCommand({ loadGhToken: true });
+    try {
+      await runCommand("gh", ["pr", "close", String(link.pr_number), "--repo", link.repository]);
+      db.updatePrState(parsed.id, "closed");
+      if (link.work_item_id) db.updateWorkItemStatus(link.work_item_id, "closed");
+      await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `PR #${link.pr_number} closed.` });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `Failed to close: ${msg.slice(0, 200)}` });
     }
   }
 }

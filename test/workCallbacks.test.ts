@@ -291,3 +291,98 @@ describe("handleWorkerCallback (Slice 5)", () => {
     expect(ghJob).toBeUndefined();
   });
 });
+
+// ── Phase 9 Slice 22: stale PR hold/release/close callbacks ──────────────────
+
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
+
+describe("stale PR callbacks — pr:<id>:hold/rels/clse", () => {
+  let db2: ReturnType<typeof openDb>;
+  let dbPath2: string;
+
+  beforeEach(() => {
+    dbPath2 = join(tmpdir(), `wcb-stale-test-${Date.now()}-${Math.random()}.sqlite`);
+    db2 = openDb(dbPath2);
+  });
+  afterEach(() => { db2.close(); try { rmSync(dbPath2); } catch {} });
+
+  const allowedIds = new Set(["77"]);
+
+  function makeClient() {
+    return {
+      answerCallbackQuery: vi.fn().mockResolvedValue({}),
+      editMessageText: vi.fn().mockResolvedValue({}),
+      sendMessage: vi.fn().mockResolvedValue({}),
+    };
+  }
+
+  it("hold callback sets pr_state to held", async () => {
+    const item = db2.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    const link = db2.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 5, branch_name: "agent/x" });
+
+    const cl = makeClient();
+    await handleWorkerCallback(
+      { id: "cb1", data: `pr:${link.id}:hold`, from: { id: 77 }, message: { message_id: 1, chat: { id: 10 } } } as any,
+      db2, cl as any, allowedIds,
+    );
+
+    const row = db2.raw.prepare("SELECT pr_state FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(row.pr_state).toBe("held");
+    expect(cl.answerCallbackQuery).toHaveBeenCalled();
+  });
+
+  it("release callback sets pr_state back to draft", async () => {
+    const item = db2.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    const link = db2.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 6, branch_name: "agent/y" });
+    db2.updatePrState(link.id, "held");
+
+    const cl = makeClient();
+    await handleWorkerCallback(
+      { id: "cb2", data: `pr:${link.id}:rels`, from: { id: 77 }, message: { message_id: 1, chat: { id: 10 } } } as any,
+      db2, cl as any, allowedIds,
+    );
+
+    const row = db2.raw.prepare("SELECT pr_state FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(row.pr_state).toBe("draft");
+    expect(cl.answerCallbackQuery).toHaveBeenCalled();
+  });
+
+  it("close callback calls gh pr close and closes the work item", async () => {
+    const item = db2.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    const link = db2.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 7, branch_name: "agent/z" });
+
+    const cl = makeClient();
+    const runCommand = vi.fn().mockResolvedValue("");
+    await handleWorkerCallback(
+      { id: "cb3", data: `pr:${link.id}:clse`, from: { id: 77 }, message: { message_id: 1, chat: { id: 10 } } } as any,
+      db2, cl as any, allowedIds,
+      { runCommand },
+    );
+
+    expect(runCommand).toHaveBeenCalledWith(
+      "gh",
+      expect.arrayContaining(["pr", "close", "7", "--repo", "owner/repo"]),
+    );
+    const updatedItem = db2.getWorkItem(item.id)!;
+    expect(updatedItem.status).toBe("closed");
+  });
+
+  it("rejects unauthorized user", async () => {
+    const item = db2.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    const link = db2.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 8, branch_name: "agent/w" });
+
+    const cl = makeClient();
+    await handleWorkerCallback(
+      { id: "cb4", data: `pr:${link.id}:hold`, from: { id: 999 }, message: { message_id: 1, chat: { id: 10 } } } as any,
+      db2, cl as any, allowedIds,
+    );
+
+    const row = db2.raw.prepare("SELECT pr_state FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(row.pr_state).toBe("draft"); // unchanged
+    expect(cl.answerCallbackQuery).toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringMatching(/unauthorized/i) })
+    );
+  });
+});

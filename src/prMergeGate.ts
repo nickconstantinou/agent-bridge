@@ -5,7 +5,7 @@
  * NEIGHBORS: src/workCallbacks.ts, src/handlers/prLifecycle.ts, src/db.ts
  */
 
-import type { BridgeDb } from "./db.js";
+import type { BridgeDb, GithubLink } from "./db.js";
 
 export type PrMergeCallbackAction =
   | { type: "wi_mrgpr"; id: number }
@@ -51,6 +51,7 @@ const PENDING_CHECK_STATES = new Set(["PENDING", "EXPECTED", "IN_PROGRESS", "QUE
 
 interface PrViewState {
   headRefOid?: string;
+  isDraft?: boolean;
   statusCheckRollup?: Array<{ status?: string | null; conclusion?: string | null; state?: string | null }>;
 }
 
@@ -64,6 +65,36 @@ function findCheckBlocker(rollup: PrViewState["statusCheckRollup"]): string | nu
     if (PENDING_CHECK_STATES.has(conclusion)) return "CI checks have not completed";
   }
   return null;
+}
+
+function enqueueMergeFixJob(
+  db: BridgeDb,
+  workItemId: number,
+  prNumber: number,
+  repo: string,
+  branchName: string,
+  headSha: string,
+): void {
+  const link = db.raw.prepare(
+    "SELECT id FROM github_links WHERE work_item_id = ? AND pr_number = ?"
+  ).get(workItemId, prNumber) as GithubLink | undefined;
+  if (link) {
+    db.updatePrState(link.id, "ci_failed");
+  }
+
+  const fixKey = `ci_fix:${repo}:${prNumber}:${headSha}`;
+  db.createWorkJob({
+    task_type: "tdd_implementation",
+    idempotency_key: fixKey,
+    work_item_id: workItemId,
+    input_json: {
+      work_item_id: workItemId,
+      repository: repo,
+      branch_name: branchName,
+      ci_fix: true,
+    },
+    max_attempts: 1,
+  });
 }
 
 export async function handlePrMergeCallback(
@@ -81,7 +112,7 @@ export async function handlePrMergeCallback(
     return;
   }
 
-  let payload: { pr_url?: string; pr_number?: number; repository?: string; head_sha?: string } = {};
+  let payload: { pr_url?: string; pr_number?: number; repository?: string; head_sha?: string; branch_name?: string } = {};
   try { payload = JSON.parse(approval.payload_json); } catch { /* non-fatal */ }
 
   const repo = payload.repository ?? "";
@@ -96,7 +127,7 @@ export async function handlePrMergeCallback(
     const keyboard = buildPrMergeKeyboard(action.id);
     let view: PrViewState;
     try {
-      const viewOut = await runCommand("gh", ["pr", "view", ...repoFlag, ...prRef, "--json", "headRefOid,statusCheckRollup"]);
+      const viewOut = await runCommand("gh", ["pr", "view", ...repoFlag, ...prRef, "--json", "headRefOid,statusCheckRollup,isDraft"]);
       view = JSON.parse(viewOut) as PrViewState;
     } catch (err) {
       await answerCbq();
@@ -116,10 +147,26 @@ export async function handlePrMergeCallback(
       return;
     }
 
+    if (view.isDraft) {
+      try {
+        await runCommand("gh", ["pr", "ready", ...repoFlag, ...prRef]);
+      } catch (err) {
+        await answerCbq();
+        await editMessage(
+          `Merge failed: could not mark PR as ready for review (${err instanceof Error ? err.message : String(err)}). Approval kept pending.`,
+          keyboard,
+        );
+        return;
+      }
+    }
+
     const checkBlocker = findCheckBlocker(view.statusCheckRollup);
     if (checkBlocker) {
+      const branch = payload.branch_name || `agent/work-${action.id}`;
+      const sha = view.headRefOid || payload.head_sha || "unknown";
+      enqueueMergeFixJob(db, action.id, prNumber || 0, repo, branch, sha);
       await answerCbq();
-      await editMessage(`Merge blocked: ${checkBlocker}. Retry once checks are green.`, keyboard);
+      await editMessage(`Merge blocked: ${checkBlocker}. Enqueued a fix job to resolve issues.`, keyboard);
       return;
     }
 
@@ -128,9 +175,12 @@ export async function handlePrMergeCallback(
     try {
       await runCommand("gh", mergeArgs);
     } catch (err) {
+      const branch = payload.branch_name || `agent/work-${action.id}`;
+      const sha = view.headRefOid || payload.head_sha || "unknown";
+      enqueueMergeFixJob(db, action.id, prNumber || 0, repo, branch, sha);
       await answerCbq();
       await editMessage(
-        `Merge failed: ${err instanceof Error ? err.message : String(err)}. Approval kept pending.`,
+        `Merge failed: ${err instanceof Error ? err.message : String(err)}. Enqueued a fix job to resolve issues.`,
         keyboard,
       );
       return;

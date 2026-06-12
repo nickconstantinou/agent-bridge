@@ -109,7 +109,14 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
 
       // Create isolated agent branch
       const branchName = `agent/work-${workItemId}`;
-      await runGit(["checkout", "-b", branchName], repoPath);
+      if (input.ci_fix) {
+        await Promise.resolve(runGit(["fetch", "origin", branchName], repoPath)).catch(() => {});
+        await Promise.resolve(runGit(["checkout", branchName], repoPath)).catch(async () => {
+          await Promise.resolve(runGit(["checkout", "-b", branchName, `origin/${branchName}`], repoPath));
+        });
+      } else {
+        await runGit(["checkout", "-b", branchName], repoPath);
+      }
 
       // ── Red: write failing tests ────────────────────────────────────────────
       const redPrompt = buildRedTestPrompt(item.title, item.body);

@@ -45,6 +45,13 @@ export async function dispatchWithFallback(
   }
 }
 
+export function getCliCommandForKind(kind: string): string {
+  if (kind === "codex") return process.env.CODEX_COMMAND || "codex";
+  if (kind === "antigravity") return process.env.ANTIGRAVITY_COMMAND || "agy";
+  if (kind === "claude") return process.env.CLAUDE_COMMAND || "claude";
+  return kind;
+}
+
 // Wrapper that retries execution using the worker CLI chain if capacity is exhausted
 export async function runCliWithFallback(
   command: string,
@@ -53,18 +60,27 @@ export async function runCliWithFallback(
   cliChain: string[],
   options?: any,
 ): Promise<string> {
-  let currentCmd = command;
+  const resolvedChain = cliChain.map(getCliCommandForKind);
+
+  let currentIdx = resolvedChain.indexOf(command);
+  if (currentIdx === -1) {
+    currentIdx = cliChain.indexOf(command);
+  }
+
+  let nextIdx = currentIdx !== -1 ? currentIdx + 1 : 0;
+  let currentCmd = currentIdx !== -1 ? resolvedChain[currentIdx] : command;
+
   for (;;) {
     try {
       return await runCli(currentCmd, args, cwd, options);
     } catch (err: any) {
       if (isCapacityExhaustedError(err instanceof Error ? err : new Error(String(err)))) {
-        const currentIdx = cliChain.indexOf(currentCmd);
-        const nextIdx = currentIdx !== -1 ? currentIdx + 1 : 0;
-        if (nextIdx < cliChain.length) {
-          const nextCmd = cliChain[nextIdx];
-          console.warn(`[worker-fallback] command ${currentCmd} exhausted, falling back to ${nextCmd}`);
+        if (nextIdx < resolvedChain.length) {
+          const nextCmd = resolvedChain[nextIdx];
+          const nextKind = cliChain[nextIdx];
+          console.warn(`[worker-fallback] command ${currentCmd} exhausted, falling back to ${nextKind} (${nextCmd})`);
           currentCmd = nextCmd;
+          nextIdx++;
           continue;
         }
       }

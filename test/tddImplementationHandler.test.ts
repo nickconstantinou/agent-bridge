@@ -100,6 +100,31 @@ describe("createTddImplementationHandler", () => {
     expect(branchName).toMatch(/^agent\/work-\d+/);
   });
 
+  it("checks out existing branch if ci_fix is true", async () => {
+    const stubs = makeStubs();
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Fix timeout bug", created_by: "worker",
+    });
+
+    await createTddImplementationHandler(stubs)(
+      { work_item_id: item.id, repository_path: "/tmp/repo", ci_fix: true },
+      { db, workerId: "w" },
+    );
+
+    const fetchCall = stubs.runGit.mock.calls.find(
+      ([args]: [string[]]) => args[0] === "fetch"
+    );
+    expect(fetchCall).toBeDefined();
+    expect(fetchCall![0][2]).toBe(`agent/work-${item.id}`);
+
+    const checkoutCall = stubs.runGit.mock.calls.find(
+      ([args]: [string[]]) => args[0] === "checkout" && !args.includes("-b")
+    );
+    expect(checkoutCall).toBeDefined();
+    expect(checkoutCall![0][1]).toBe(`agent/work-${item.id}`);
+  });
+
   it("calls runCli twice — once for red tests, once for implementation", async () => {
     const stubs = makeStubs();
     const item = db.createWorkItem({

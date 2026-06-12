@@ -83,6 +83,13 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
       kind: "defect", source: "telegram", title: "Bug", created_by: "worker",
       repository: "owner/repo",
     });
+    const link = db.linkGithubPr({
+      work_item_id: item.id,
+      repository: "owner/repo",
+      pr_number: 3,
+      branch_name: "agent/work-1",
+      commit_sha: "abc123"
+    });
     const approval = db.createApproval({
       approval_type: "merge_pr",
       requested_by: "agent",
@@ -93,7 +100,7 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
         ...payloadExtra,
       },
     });
-    return { item, approval };
+    return { item, approval, link };
   }
 
   it("resolves the merge_pr approval and merges when head SHA matches and checks pass", async () => {
@@ -119,6 +126,39 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
     const resolved = db.raw.prepare("SELECT * FROM approvals WHERE id = ?").get(approval.id) as any;
     expect(resolved.status).toBe("approved");
     expect(db.getWorkItem(item.id)!.status).toBe("resolved");
+  });
+
+  it("marks draft PRs as ready before merging", async () => {
+    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+    const { item, approval } = makeApprovedItem({ head_sha: "abc123" });
+
+    const runCommand = vi.fn(async (_binary: string, args: string[]) => {
+      if (args.includes("view")) {
+        return JSON.stringify({
+          headRefOid: "abc123",
+          isDraft: true,
+          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
+        });
+      }
+      return "success";
+    });
+    const answerCbq = vi.fn().mockResolvedValue(undefined);
+    const editMessage = vi.fn().mockResolvedValue(undefined);
+
+    await handlePrMergeCallback(
+      { type: "wi_mrgpr", id: item.id },
+      { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
+    );
+
+    const readyCall = runCommand.mock.calls.find(([, args]) => args.includes("ready"));
+    expect(readyCall).toBeDefined();
+    expect(readyCall![1]).toContain("ready");
+
+    const mergeCall = runCommand.mock.calls.find(([, args]) => args.includes("merge"));
+    expect(mergeCall).toBeDefined();
+
+    const resolved = db.raw.prepare("SELECT * FROM approvals WHERE id = ?").get(approval.id) as any;
+    expect(resolved.status).toBe("approved");
   });
 
   it("blocks merge when the PR head SHA does not match the approval payload", async () => {
@@ -155,7 +195,7 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
       [{ status: "IN_PROGRESS", conclusion: null }],
       [{ state: "FAILURE" }],
     ]) {
-      const { item } = makeApprovedItem({ head_sha: "abc123" });
+      const { item, link } = makeApprovedItem({ head_sha: "abc123" });
       const runCommand = makeGhStub({ headRefOid: "abc123", statusCheckRollup: rollup });
       const answerCbq = vi.fn().mockResolvedValue(undefined);
       const editMessage = vi.fn().mockResolvedValue(undefined);
@@ -168,12 +208,32 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
       const mergeCall = runCommand.mock.calls.find(([, args]) => args.includes("merge"));
       expect(mergeCall).toBeUndefined();
       expect(editMessage).toHaveBeenCalledWith(expect.stringMatching(/check/i), expect.anything());
+
+      // Verify that pr_state was updated and tdd_implementation job was enqueued
+      const updatedLink = db.raw.prepare("SELECT * FROM github_links WHERE id = ?").get(link.id) as any;
+      expect(updatedLink.pr_state).toBe("ci_failed");
+
+      const jobs = db.listWorkJobs({ status: "pending" });
+      const fixJob = jobs.find(j => j.task_type === "tdd_implementation");
+      expect(fixJob).toBeDefined();
+      expect(JSON.parse(fixJob!.input_json)).toEqual({
+        work_item_id: item.id,
+        repository: "owner/repo",
+        branch_name: "agent/work-1",
+        ci_fix: true,
+      });
+
+      // Clear database state for next loop iteration
+      db.raw.exec("DELETE FROM work_jobs");
+      db.raw.exec("DELETE FROM github_links");
+      db.raw.exec("DELETE FROM approvals");
+      db.raw.exec("DELETE FROM work_items");
     }
   });
 
   it("reports merge command failure via the message instead of throwing", async () => {
     const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
-    const { item, approval } = makeApprovedItem({ head_sha: "abc123" });
+    const { item, approval, link } = makeApprovedItem({ head_sha: "abc123" });
 
     const runCommand = vi.fn(async (_binary: string, args: string[]) => {
       if (args.includes("view")) {
@@ -196,6 +256,20 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
     // Approval must remain pending after a failed merge
     const row = db.raw.prepare("SELECT * FROM approvals WHERE id = ?").get(approval.id) as any;
     expect(row.status).toBe("pending");
+
+    // Verify that pr_state was updated and tdd_implementation job was enqueued
+    const updatedLink = db.raw.prepare("SELECT * FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(updatedLink.pr_state).toBe("ci_failed");
+
+    const jobs = db.listWorkJobs({ status: "pending" });
+    const fixJob = jobs.find(j => j.task_type === "tdd_implementation");
+    expect(fixJob).toBeDefined();
+    expect(JSON.parse(fixJob!.input_json)).toEqual({
+      work_item_id: item.id,
+      repository: "owner/repo",
+      branch_name: "agent/work-1",
+      ci_fix: true,
+    });
   });
 
   it("answers the callback instead of throwing when no pending approval exists", async () => {

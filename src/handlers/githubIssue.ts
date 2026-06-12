@@ -27,7 +27,8 @@ export function createGithubIssueHandler(deps: GithubIssueHandlerDeps): JobHandl
     ctx: JobHandlerContext,
   ): Promise<JobHandlerResult> {
     const workItemId = typeof input.work_item_id === "number" ? input.work_item_id : null;
-    const repository = typeof input.repository === "string" ? input.repository : null;
+    const rawRepository = typeof input.repository === "string" ? input.repository : null;
+    const repository = rawRepository && !rawRepository.includes("/") ? `nickconstantinou/${rawRepository}` : rawRepository;
 
     if (workItemId === null) throw new Error("input.work_item_id is required");
     if (!repository) throw new Error("input.repository is required");

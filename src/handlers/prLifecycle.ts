@@ -51,7 +51,8 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
   ): Promise<JobHandlerResult> {
     const workItemId = typeof input.work_item_id === "number" ? input.work_item_id : null;
     const branchName = typeof input.branch_name === "string" ? input.branch_name : null;
-    const repository = typeof input.repository === "string" ? input.repository : null;
+    const rawRepository = typeof input.repository === "string" ? input.repository : null;
+    const repository = rawRepository && !rawRepository.includes("/") ? `nickconstantinou/${rawRepository}` : rawRepository;
     const repoPath = typeof input.repository_path === "string" ? input.repository_path : undefined;
 
     if (workItemId === null) throw new Error("input.work_item_id is required");
@@ -69,10 +70,28 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
 
     const workspaceDir = typeof input.workspace_dir === "string" ? input.workspace_dir : null;
 
+    // ── Owner decision brief ──────────────────────────────────────────────────
+    let commit_subjects: string[] | undefined;
+    let files_summary: string | undefined;
+    const verify_tail = typeof input.verify_output === "string" && input.verify_output
+      ? input.verify_output.slice(-500)
+      : undefined;
+
+    try {
+      const logOut = String(await runGit(["log", "--format=%s", "-10", "HEAD"], repoPath));
+      const subjects = logOut.split("\n").map(s => s.trim()).filter(Boolean);
+      if (subjects.length) commit_subjects = subjects;
+    } catch {}
+
+    try {
+      const diffOut = String(await runGit(["diff", "--stat"], repoPath));
+      if (diffOut.trim()) files_summary = diffOut;
+    } catch {}
+
     // ── Idempotent: reuse an existing PR rather than opening a second one ───────
     const existingLink = ctx.db.raw
       .prepare("SELECT * FROM github_links WHERE repository = ? AND branch_name = ?")
-      .get(repository, branchName) as { id: number; pr_number: number } | undefined;
+      .get(repository, branchName) as { id: number; pr_number: number; proof_comment_sha?: string | null } | undefined;
 
     if (existingLink) {
       const existingPrUrl = `https://github.com/${repository}/pull/${existingLink.pr_number}`;
@@ -90,6 +109,23 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
         ctx.db.raw
           .prepare("UPDATE approvals SET payload_json = ? WHERE id = ?")
           .run(JSON.stringify(payload), pendingApproval.id);
+      } else {
+        // Create missing merge_pr approval record so user is not stuck on retry/refresh
+        ctx.db.createApproval({
+          approval_type: "merge_pr",
+          requested_by: "agent",
+          work_item_id: workItemId,
+          payload: {
+            pr_url: existingPrUrl,
+            pr_number: existingLink.pr_number,
+            branch_name: branchName,
+            repository,
+            ...(headSha ? { head_sha: headSha } : {}),
+            ...(commit_subjects ? { commit_subjects } : {}),
+            ...(files_summary ? { files_summary } : {}),
+            ...(verify_tail ? { verify_tail } : {}),
+          },
+        });
       }
 
       // Post a new proof comment only if the head SHA has changed (idempotent)
@@ -177,24 +213,6 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
         ctx.db.setProofCommentSha(newLink.id, headSha);
       } catch {}
     }
-
-    // ── Owner decision brief ──────────────────────────────────────────────────
-    let commit_subjects: string[] | undefined;
-    let files_summary: string | undefined;
-    const verify_tail = typeof input.verify_output === "string" && input.verify_output
-      ? input.verify_output.slice(-500)
-      : undefined;
-
-    try {
-      const logOut = String(await runGit(["log", "--format=%s", "-10", "HEAD"], repoPath));
-      const subjects = logOut.split("\n").map(s => s.trim()).filter(Boolean);
-      if (subjects.length) commit_subjects = subjects;
-    } catch {}
-
-    try {
-      const diffOut = String(await runGit(["diff", "--stat"], repoPath));
-      if (diffOut.trim()) files_summary = diffOut;
-    } catch {}
 
     // Create merge_pr approval record
     ctx.db.createApproval({

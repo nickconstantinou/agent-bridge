@@ -17,7 +17,13 @@ export interface JobExecutorLoopDeps {
   intervalMs?: number;
 }
 
-export function startJobExecutorLoop(deps: JobExecutorLoopDeps): () => void {
+export interface JobExecutorStopFn {
+  (): void;
+  stop: () => void;
+  isIdle: () => boolean;
+}
+
+export function startJobExecutorLoop(deps: JobExecutorLoopDeps): JobExecutorStopFn {
   const { db, workerId, handlers, sendMessage, intervalMs = 10_000 } = deps;
 
   // Serialize ticks: a long-running job must not be joined by concurrent
@@ -93,5 +99,8 @@ export function startJobExecutorLoop(deps: JobExecutorLoopDeps): () => void {
     })();
   }, intervalMs);
 
-  return () => clearInterval(handle);
+  const stopFn = () => clearInterval(handle);
+  (stopFn as any).stop = stopFn;
+  (stopFn as any).isIdle = () => !inFlight;
+  return stopFn as unknown as JobExecutorStopFn;
 }

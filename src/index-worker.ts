@@ -164,7 +164,7 @@ const runTests = async (cwd: string): Promise<{ ok: boolean; output: string }> =
   }
 };
 
-const stopJobLoop = startJobExecutorLoop({
+const jobExecutor = startJobExecutorLoop({
   db,
   workerId: `worker-bot-${process.pid}`,
   handlers: {
@@ -238,8 +238,27 @@ const stopJobLoop = startJobExecutorLoop({
   intervalMs: jobPollIntervalMs,
 });
 
-process.once("SIGTERM", stopJobLoop);
-process.once("SIGINT", stopJobLoop);
+let shouldExit = false;
+
+const handleShutdown = () => {
+  console.log("[worker-bot] SIGTERM/SIGINT received. Stopping job claims...");
+  shouldExit = true;
+  jobExecutor.stop();
+
+  const checkExit = () => {
+    if (jobExecutor.isIdle()) {
+      console.log("[worker-bot] Idle. Exiting process.");
+      process.exit(0);
+    } else {
+      console.log("[worker-bot] Job in progress. Waiting to exit...");
+      setTimeout(checkExit, 1000);
+    }
+  };
+  checkExit();
+};
+
+process.once("SIGTERM", handleShutdown);
+process.once("SIGINT", handleShutdown);
 
 // Enqueue a pr_watch job once per hour (idempotency key prevents duplicates within the window)
 function enqueuePrWatch() {
@@ -254,6 +273,7 @@ console.log(`[worker-bot] starting (workerEnabled=${workerEnabled}, cliChain=${c
 let offset = 0;
 
 for (;;) {
+  if (shouldExit) break;
   try {
     const updates = await client.getUpdates({ offset, timeout: 30, allowed_updates: ["message", "callback_query"] });
 

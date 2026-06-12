@@ -621,4 +621,44 @@ describe("createPrLifecycleHandler — proof comment", () => {
     ).length;
     expect(secondCommentCalls).toBe(0);
   });
+
+  it("creates a missing merge_pr approval on idempotent retry if none exists", async () => {
+    const stubs = makeStubs();
+    stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
+      if (args[0] === "rev-parse") return "fixedsha\n";
+      return "";
+    });
+    stubs.runCommand.mockResolvedValue("https://github.com/owner/repo/pull/62");
+
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Bug", created_by: "w" });
+    const branch = `agent/work-${item.id}`;
+
+    // Seed the github link manually (as if created by a previous interrupted run)
+    db.linkGithubPr({
+      work_item_id: item.id,
+      repository: "owner/repo",
+      pr_number: 62,
+      branch_name: branch,
+    });
+
+    // Verify approvals is currently empty
+    const initialApprovals = db.raw.prepare(
+      "SELECT * FROM approvals WHERE work_item_id = ?"
+    ).all(item.id);
+    expect(initialApprovals).toHaveLength(0);
+
+    // Act: execute the handler (idempotent path)
+    await createPrLifecycleHandler(stubs)(
+      { work_item_id: item.id, branch_name: branch, repository: "owner/repo" },
+      { db, workerId: "w" },
+    );
+
+    // Assert: it should have created the approval record!
+    const finalApprovals = db.raw.prepare(
+      "SELECT * FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr'"
+    ).all(item.id) as any[];
+    expect(finalApprovals).toHaveLength(1);
+    expect(finalApprovals[0].status).toBe("pending");
+  });
 });
+

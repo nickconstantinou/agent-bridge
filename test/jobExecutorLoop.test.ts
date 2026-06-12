@@ -38,6 +38,21 @@ describe("startJobExecutorLoop", () => {
     stop();
   });
 
+  it("returns a stop function that is also a JobExecutorStopFn with isIdle property", () => {
+    const stop = startJobExecutorLoop({
+      db,
+      workerId: "test-worker",
+      handlers: {},
+      sendMessage: vi.fn(),
+      intervalMs: 5000,
+    });
+    expect(typeof stop).toBe("function");
+    expect(typeof (stop as any).stop).toBe("function");
+    expect(typeof (stop as any).isIdle).toBe("function");
+    expect((stop as any).isIdle()).toBe(true);
+    (stop as any).stop();
+  });
+
   it("calls executeNextJob after the interval fires", async () => {
     const handler = vi.fn().mockResolvedValue({ summary: "done" });
 

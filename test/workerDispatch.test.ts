@@ -6,7 +6,16 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { WorkerFallbackChain } from "../src/workerFallback.js";
-import { dispatchWithFallback } from "../src/workerDispatch.js";
+import { dispatchWithFallback, runCliWithFallback } from "../src/workerDispatch.js";
+import { runCli } from "../src/cli.js";
+
+vi.mock("../src/cli.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/cli.js")>();
+  return {
+    ...actual,
+    runCli: vi.fn(),
+  };
+});
 
 // ── Minimal engine stub ───────────────────────────────────────────────────────
 
@@ -124,3 +133,54 @@ describe("dispatchWithFallback", () => {
     expect(sentMessages.some(m => m.toLowerCase().includes("exhausted") || m.toLowerCase().includes("unavailable"))).toBe(true);
   });
 });
+
+// ── runCliWithFallback ────────────────────────────────────────────────────────
+
+describe("runCliWithFallback", () => {
+  beforeEach(() => {
+    vi.mocked(runCli).mockReset();
+  });
+
+  it("succeeds directly if the command succeeds", async () => {
+    vi.mocked(runCli).mockResolvedValue("successful scan output");
+    const result = await runCliWithFallback("claude", ["args"], "cwd", ["codex", "claude", "antigravity"]);
+    expect(result).toBe("successful scan output");
+    expect(runCli).toHaveBeenCalledOnce();
+    expect(runCli).toHaveBeenCalledWith("claude", ["args"], "cwd", undefined);
+  });
+
+  it("retries with the next CLI in the chain when encountering capacity exhaustion", async () => {
+    vi.mocked(runCli)
+      .mockRejectedValueOnce(new Error("rateLimitExceeded"))
+      .mockResolvedValueOnce("fallback successful output");
+
+    const result = await runCliWithFallback("claude", ["args"], "cwd", ["codex", "claude", "antigravity"]);
+    expect(result).toBe("fallback successful output");
+    expect(runCli).toHaveBeenCalledTimes(2);
+    expect(runCli).toHaveBeenNthCalledWith(1, "claude", ["args"], "cwd", undefined);
+    expect(runCli).toHaveBeenNthCalledWith(2, "antigravity", ["args"], "cwd", undefined);
+  });
+
+  it("throws the final error if the fallback chain is exhausted", async () => {
+    vi.mocked(runCli)
+      .mockRejectedValueOnce(new Error("rateLimitExceeded"))
+      .mockRejectedValueOnce(new Error("quota reached"));
+
+    await expect(
+      runCliWithFallback("codex", ["args"], "cwd", ["codex", "claude"])
+    ).rejects.toThrow("quota reached");
+
+    expect(runCli).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws immediately for non-capacity errors", async () => {
+    vi.mocked(runCli).mockRejectedValue(new Error("standard command failed"));
+
+    await expect(
+      runCliWithFallback("claude", ["args"], "cwd", ["codex", "claude", "antigravity"])
+    ).rejects.toThrow("standard command failed");
+
+    expect(runCli).toHaveBeenCalledOnce();
+  });
+});
+

@@ -6,7 +6,7 @@
  * LOGIC: Provides interface checks, text extraction helpers, inline keyboard markup setups, and path resolves.
  */
 
-import { runCli, runCliAsync, parseCliResult, buildCliInvocation, validateBridgeConfig, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses, toUserMessage, resolveAntigravityConversationId, extractAntigravityConversationId, readAntigravityLastConversation, readLatestAntigravityConversationFromLogs, setAntigravityModel, toAntigravityModelLabel, scrubOutputDir } from "./cli.js";
+import { runCli, runCliAsync, parseCliResult, buildCliInvocation, validateBridgeConfig, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses, toUserMessage, resolveAntigravityConversationId, extractAntigravityConversationId, readAntigravityLastConversation, readLatestAntigravityConversationFromLogs, setAntigravityModel, toAntigravityModelLabel, scrubOutputDir, normalizeCliArgs } from "./cli.js";
 import { openDb, BridgeDb } from "./db.js";
 import type { TelegramMessage, BridgeConfig } from "./types.js";
 
@@ -62,6 +62,6 @@ export function parseModelPreference(raw: string | undefined): string[] {
   return raw ? raw.split(",").map((s) => s.trim()).filter(Boolean) : [];
 }
 
-export { runCli, runCliAsync, parseCliResult, validateBridgeConfig, buildCliInvocation, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses, toUserMessage, resolveAntigravityConversationId, extractAntigravityConversationId, readAntigravityLastConversation, readLatestAntigravityConversationFromLogs, setAntigravityModel, toAntigravityModelLabel, scrubOutputDir };
+export { runCli, runCliAsync, parseCliResult, validateBridgeConfig, buildCliInvocation, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses, toUserMessage, resolveAntigravityConversationId, extractAntigravityConversationId, readAntigravityLastConversation, readLatestAntigravityConversationFromLogs, setAntigravityModel, toAntigravityModelLabel, scrubOutputDir, normalizeCliArgs };
 export { openDb, BridgeDb };
 export { buildTelegramCommands, handleCommand, isBridgeCommand } from "./commands.js";

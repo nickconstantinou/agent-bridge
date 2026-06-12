@@ -902,3 +902,8 @@ export async function runCliAsync(
     });
   });
 }
+
+export function normalizeCliArgs(command: string, args: string[]): string[] {
+  return args;
+}
+

@@ -465,3 +465,34 @@ describe("redactArgs — spawn log prompt redaction", () => {
     expect(redactArgs([arg])[0]).toMatch(/^\[prompt:/);
   });
 });
+
+describe("normalizeCliArgs — CLI argument translator", () => {
+  it("keeps arguments unchanged for Claude commands", async () => {
+    const { normalizeCliArgs } = await import("../src/cli.js");
+    const args = ["--print", "--output-format", "text", "--permission-mode", "acceptEdits", "hello"];
+    expect(normalizeCliArgs("claude", args)).toEqual(args);
+    expect(normalizeCliArgs("/path/to/claude-cli", args)).toEqual(args);
+  });
+
+  it("normalizes arguments for Antigravity command", async () => {
+    const { normalizeCliArgs } = await import("../src/cli.js");
+    const args = ["--print", "--output-format", "text", "--permission-mode", "acceptEdits", "hello"];
+    expect(normalizeCliArgs("agy", args)).toEqual(["--dangerously-skip-permissions", "--print", "hello"]);
+    expect(normalizeCliArgs("/usr/local/bin/antigravity", args)).toEqual(["--dangerously-skip-permissions", "--print", "hello"]);
+  });
+
+  it("normalizes arguments for Codex command", async () => {
+    const { normalizeCliArgs } = await import("../src/cli.js");
+    const args = ["--print", "--output-format", "text", "--permission-mode", "acceptEdits", "hello"];
+    expect(normalizeCliArgs("codex", args)).toEqual(["exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "hello"]);
+    expect(normalizeCliArgs("/opt/codex/bin/codex", args)).toEqual(["exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "hello"]);
+  });
+
+  it("handles basic arguments without permissions", async () => {
+    const { normalizeCliArgs } = await import("../src/cli.js");
+    const args = ["--print", "--output-format", "text", "hello"];
+    expect(normalizeCliArgs("agy", args)).toEqual(["--print", "hello"]);
+    expect(normalizeCliArgs("codex", args)).toEqual(["exec", "--skip-git-repo-check", "hello"]);
+  });
+});
+

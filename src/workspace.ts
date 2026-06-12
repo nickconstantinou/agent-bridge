@@ -25,7 +25,7 @@ export function defaultRepoRoot(): string {
 }
 
 export function defaultWorkspaceBaseDir(): string {
-  return process.env.WORKER_WORKSPACE_DIR || join(homedir(), ".agent-bridge", "workspaces");
+  return process.env.WORKER_WORKSPACE_DIR || join(homedir(), "agent-bridge-workspaces");
 }
 
 /**

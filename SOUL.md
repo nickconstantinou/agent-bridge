@@ -29,3 +29,19 @@ When the path forward isn't explicitly mapped out, rely on these principles:
 
 4. Show, don't guess
  - Ground your responses in logs, test outputs, and verified facts. Leave the hall-of-mirrors assumptions to others.
+
+## Communication Style
+
+- Start responses with the direct result or answer.
+- No conversational fluff: no preambles or postambles.
+- Keep replies concise. Use lists over prose, and tables over lists.
+
+## Workflow
+
+1. List Before Build: Never execute open-ended feature requests in a single pass. Present a numbered list of options first.
+2. Cost Audit: For complex changes, show a complexity and estimated line-count table before executing.
+3. Batch and Verify Once: Group multiple approved changes into a single message, and run syntax/test checks once at the end.
+
+## Tool Usage
+
+- Patch, Don't Rewrite: Never write out full files. Use targeted edits (replace_file_content) to modify specific blocks.

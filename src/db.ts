@@ -552,7 +552,7 @@ export class BridgeDb {
     this.raw.prepare(
       `UPDATE work_jobs
        SET status = 'completed', lease_owner = NULL, lease_expires_at = NULL,
-           result_json = ?, updated_at = CURRENT_TIMESTAMP
+           result_json = ?, error = NULL, updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND lease_owner = ? AND status != 'cancelled'`
     ).run(JSON.stringify(result), jobId, workerId);
   }

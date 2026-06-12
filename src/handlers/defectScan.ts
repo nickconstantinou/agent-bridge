@@ -54,22 +54,23 @@ Important constraints:
 
 function parseFindings(output: string): DefectFinding[] {
   const findings: DefectFinding[] = [];
-  // Match blocks starting with "- Title:"
-  const blockRegex = /- Title:\s*(.+?)(?=\n- Title:|\nOVERALL:|$)/gs;
+  // Match blocks starting with Title, allowing optional surrounding asterisks
+  const blockRegex = /- \*{0,2}Title\*{0,2}:\s*(.+?)(?=\n- \*{0,2}Title\*{0,2}:|\nOVERALL:|$)/gs;
   for (const match of output.matchAll(blockRegex)) {
     const block = match[1] + (match[0].slice(match[0].indexOf(match[1]) + match[1].length));
-    const title = match[1].trim();
+    const titleMatch = match[0].match(/- \*{0,2}Title\*{0,2}:\s*\*{0,2}\s*(.+?)\s*(?:\r?\n|$)/i);
+    const title = (titleMatch?.[1] ?? match[1]).replace(/^\*+|\*+$/g, "").trim();
     if (!title) continue;
 
-    const impactMatch = block.match(/Impact:\s*(.+)/i);
-    const confidenceMatch = block.match(/Confidence:\s*(.+)/i);
-    const evidenceMatch = block.match(/Evidence:\s*(.+)/i);
+    const impactMatch = block.match(/\*{0,2}Impact\*{0,2}:\s*\*{0,2}\s*(.+?)\s*(?:\r?\n|$)/i);
+    const confidenceMatch = block.match(/\*{0,2}Confidence\*{0,2}:\s*\*{0,2}\s*(.+?)\s*(?:\r?\n|$)/i);
+    const evidenceMatch = block.match(/\*{0,2}Evidence\*{0,2}:\s*\*{0,2}\s*(.+?)\s*(?:\r?\n|$)/i);
 
     findings.push({
       title,
-      impact: impactMatch?.[1].trim(),
-      confidence: confidenceMatch?.[1].trim().toLowerCase(),
-      evidence: evidenceMatch?.[1].trim(),
+      impact: impactMatch?.[1]?.replace(/^\*+|\*+$/g, "")?.trim(),
+      confidence: confidenceMatch?.[1]?.replace(/^\*+|\*+$/g, "")?.trim()?.toLowerCase(),
+      evidence: evidenceMatch?.[1]?.replace(/^\*+|\*+$/g, "")?.trim(),
     });
   }
   return findings;

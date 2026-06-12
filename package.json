@@ -14,7 +14,8 @@
     "agent-memory": "tsx scripts/agent-memory.ts",
     "skills": "tsx scripts/skill-manager.ts",
     "setup:shared-memory": "tsx scripts/setup-shared-memory.ts",
-    "verify:shared-memory": "tsx scripts/setup-shared-memory.ts --verify"
+    "verify:shared-memory": "tsx scripts/setup-shared-memory.ts --verify",
+    "scan-token-savings": "tsx scripts/scan-token-savings.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "^2.1.175",

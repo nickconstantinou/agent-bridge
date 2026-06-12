@@ -423,10 +423,9 @@ describe("ServerPlugin", () => {
 
   it("supports configurable CPU load thresholds", async () => {
     const { ServerPlugin } = await import("../src/health/plugins/server.js");
-    
-    // Set custom multipliers/thresholds that force it to be flagged
-    process.env.HEALTH_CPU_LOAD_AMBER_MULTIPLIER = "0.001";
-    process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER = "0.002";
+    // Set custom multipliers/thresholds that force it to be flagged (even if load is 0)
+    process.env.HEALTH_CPU_LOAD_AMBER_MULTIPLIER = "-1.0";
+    process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER = "-0.5";
 
     try {
       const plugin = new ServerPlugin();

@@ -51,7 +51,8 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
   ): Promise<JobHandlerResult> {
     const workItemId = typeof input.work_item_id === "number" ? input.work_item_id : null;
     const branchName = typeof input.branch_name === "string" ? input.branch_name : null;
-    const repository = typeof input.repository === "string" ? input.repository : null;
+    const rawRepository = typeof input.repository === "string" ? input.repository : null;
+    const repository = rawRepository && !rawRepository.includes("/") ? `nickconstantinou/${rawRepository}` : rawRepository;
     const repoPath = typeof input.repository_path === "string" ? input.repository_path : undefined;
 
     if (workItemId === null) throw new Error("input.work_item_id is required");

@@ -56,7 +56,7 @@ export function createPrWatchHandler(deps: PrWatchDeps): JobHandler {
 
       const viewOutput = await runCommand("gh", [
         "pr", "view", String(link.pr_number),
-        "--repo", link.repository,
+        "--repo", link.repository.includes("/") ? link.repository : `nickconstantinou/${link.repository}`,
         "--json", "headRefOid,statusCheckRollup,mergeable,updatedAt",
       ]);
 

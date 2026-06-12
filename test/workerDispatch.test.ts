@@ -6,7 +6,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { WorkerFallbackChain } from "../src/workerFallback.js";
-import { dispatchWithFallback, runCliWithFallback } from "../src/workerDispatch.js";
+import { dispatchWithFallback, runCliWithFallback, getCliCommandForKind } from "../src/workerDispatch.js";
 import { runCli } from "../src/cli.js";
 
 vi.mock("../src/cli.js", async (importOriginal) => {
@@ -158,7 +158,7 @@ describe("runCliWithFallback", () => {
     expect(result).toBe("fallback successful output");
     expect(runCli).toHaveBeenCalledTimes(2);
     expect(runCli).toHaveBeenNthCalledWith(1, "claude", ["args"], "cwd", undefined);
-    expect(runCli).toHaveBeenNthCalledWith(2, "antigravity", ["args"], "cwd", undefined);
+    expect(runCli).toHaveBeenNthCalledWith(2, getCliCommandForKind("antigravity"), ["args"], "cwd", undefined);
   });
 
   it("throws the final error if the fallback chain is exhausted", async () => {

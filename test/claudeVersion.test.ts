@@ -16,7 +16,7 @@ describe("Claude dependency version", () => {
     if (parts[0] === 2) {
       expect(parts[1]).toBeGreaterThanOrEqual(1);
       if (parts[1] === 1) {
-        expect(parts[2]).toBeGreaterThanOrEqual(172);
+        expect(parts[2]).toBeGreaterThanOrEqual(175);
       }
     }
   });

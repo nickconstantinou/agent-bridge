@@ -94,6 +94,32 @@ OVERALL: 2 potential issues found.`
     expect(items.some(i => i.title.toLowerCase().includes("race condition"))).toBe(true);
   });
 
+  it("creates proposed work_items in the DB when findings use Markdown bold formatting", async () => {
+    const runCli = vi.fn().mockResolvedValue(
+      `DEFECT FINDINGS:
+- **Title:** Race condition in lock.ts
+  **Impact:** High
+  **Confidence:** high
+  **Evidence:** lock is released without checking owner
+
+- **Title:** Missing error handler in engine.ts
+  **Impact:** Medium
+  **Confidence:** medium
+  **Evidence:** uncaught rejection path
+
+OVERALL: 2 potential issues found.`
+    );
+
+    const handler = createDefectScanHandler({ runCli });
+
+    await handler({ repository: "agent-bridge" }, { db, workerId: "test-worker" });
+
+    const items = db.listWorkItems();
+    expect(items.length).toBeGreaterThanOrEqual(2);
+    expect(items.some(i => i.title.toLowerCase().includes("race condition"))).toBe(true);
+    expect(items.some(i => i.title.toLowerCase().includes("missing error handler"))).toBe(true);
+  });
+
   it("handles empty CLI output gracefully", async () => {
     const runCli = vi.fn().mockResolvedValue("");
     const handler = createDefectScanHandler({ runCli });

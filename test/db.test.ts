@@ -615,6 +615,21 @@ describe("completeWorkJob / failWorkJob", () => {
     db.failWorkJob(job.id, "fatal", "worker-1");
     expect(db.getWorkJob(job.id)!.status).toBe("failed");
   });
+
+  it("completing clears a previous failed attempt's error message", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:clear-error", max_attempts: 2 });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
+    db.markWorkJobRunning(job.id, "worker-1");
+    db.failWorkJob(job.id, "temporary error", "worker-1");
+
+    const job2 = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
+    db.markWorkJobRunning(job2.id, "worker-1");
+    db.completeWorkJob(job2.id, { summary: "ok on second try" }, "worker-1");
+
+    const done = db.getWorkJob(job.id)!;
+    expect(done.status).toBe("completed");
+    expect(done.error).toBeNull();
+  });
 });
 
 describe("recoverExpiredWorkJobs", () => {

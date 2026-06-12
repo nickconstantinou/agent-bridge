@@ -914,19 +914,43 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
     return args;
   }
 
-  // Parse original args to extract prompt and permissions
+  // Parse original args to extract prompt, permissions, and output-format
   let prompt = "";
-  if (args.length > 0) {
-    prompt = args[args.length - 1];
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg.startsWith("-")) {
+      const hasValue = [
+        "--model",
+        "--resume",
+        "--permission-mode",
+        "--output-format",
+        "--input-format",
+        "--settings",
+        "--log-file",
+        "-i",
+      ].includes(arg);
+      if (hasValue) {
+        i++;
+      }
+    } else {
+      prompt = arg;
+    }
   }
 
   let hasPermissionBypass = false;
+  let hasJsonOutput = false;
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--dangerously-skip-permissions") {
       hasPermissionBypass = true;
     }
     if (args[i] === "--permission-mode" && args[i + 1] === "acceptEdits") {
       hasPermissionBypass = true;
+    }
+    if (args[i] === "--output-format" && args[i + 1] === "json") {
+      hasJsonOutput = true;
+    }
+    if (args[i] === "--output-format=json") {
+      hasJsonOutput = true;
     }
   }
 
@@ -944,7 +968,11 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
     if (hasPermissionBypass) {
       newArgs.push("--dangerously-bypass-approvals-and-sandbox");
     }
-    newArgs.push("--skip-git-repo-check", prompt);
+    newArgs.push("--skip-git-repo-check");
+    if (hasJsonOutput) {
+      newArgs.push("--json");
+    }
+    newArgs.push(prompt);
     return newArgs;
   }
 

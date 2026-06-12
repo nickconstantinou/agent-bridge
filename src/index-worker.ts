@@ -20,7 +20,7 @@ import { BridgeEngine } from "./engine.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
 import { handleWorkerCommand, isWorkerCommand, buildWorkerCommands } from "./workerBot.js";
 import { WorkerFallbackChain } from "./workerFallback.js";
-import { dispatchWithFallback } from "./workerDispatch.js";
+import { dispatchWithFallback, runCliWithFallback } from "./workerDispatch.js";
 import { handleWorkerCallback } from "./workCallbacks.js";
 import { startJobExecutorLoop } from "./jobExecutorLoop.js";
 import { createDefectScanHandler } from "./handlers/defectScan.js";
@@ -169,16 +169,16 @@ const stopJobLoop = startJobExecutorLoop({
   workerId: `worker-bot-${process.pid}`,
   handlers: {
     defect_scan: createDefectScanHandler({
-      runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd()),
+      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), cliChain),
       command: defectScanCommand,
       resolveRepoPath: (repository) => resolveLocalRepoPath(repository),
     }),
     feature_plan: createFeaturePlanHandler({
-      runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd(), { timeoutMs: 20 * 60 * 1000 }),
+      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), cliChain, { timeoutMs: 20 * 60 * 1000 }),
       command: defectScanCommand,
     }),
     tdd_implementation: createTddImplementationHandler({
-      runCli: (cmd, args, cwd) => runCli(cmd, args, cwd ?? process.cwd(), { timeoutMs: 15 * 60 * 1000 }),
+      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), cliChain, { timeoutMs: 15 * 60 * 1000 }),
       command: defectScanCommand,
       // File edits only — bash stays gated; the handler runs tests itself
       cliExtraArgs: ["--permission-mode", "acceptEdits"],

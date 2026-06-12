@@ -6,6 +6,7 @@
  */
 
 import { WorkerFallbackChain } from "./workerFallback.js";
+import { runCli, isCapacityExhaustedError } from "./cli.js";
 
 export interface DispatchEngine {
   handleUpdate(update: any): Promise<void>;
@@ -40,6 +41,34 @@ export async function dispatchWithFallback(
       await dispatchWithFallback(update, chatKey, deps);
     } else {
       await notify("All CLIs are currently unavailable. Please try again later.");
+    }
+  }
+}
+
+// Wrapper that retries execution using the worker CLI chain if capacity is exhausted
+export async function runCliWithFallback(
+  command: string,
+  args: string[],
+  cwd: string,
+  cliChain: string[],
+  options?: any,
+): Promise<string> {
+  let currentCmd = command;
+  for (;;) {
+    try {
+      return await runCli(currentCmd, args, cwd, options);
+    } catch (err: any) {
+      if (isCapacityExhaustedError(err instanceof Error ? err : new Error(String(err)))) {
+        const currentIdx = cliChain.indexOf(currentCmd);
+        const nextIdx = currentIdx !== -1 ? currentIdx + 1 : 0;
+        if (nextIdx < cliChain.length) {
+          const nextCmd = cliChain[nextIdx];
+          console.warn(`[worker-fallback] command ${currentCmd} exhausted, falling back to ${nextCmd}`);
+          currentCmd = nextCmd;
+          continue;
+        }
+      }
+      throw err;
     }
   }
 }

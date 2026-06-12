@@ -9,7 +9,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, dirname } from "node:path";
+import { join, dirname, basename } from "node:path";
 import type { CliOptions, CliResult, BotKind } from "./types.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { renderSoulContract } from "./soul.js";
@@ -680,8 +680,9 @@ export async function runCli(command: string, args: string[], cwd: string, optio
   };
 
   return new Promise((resolve, reject) => {
-    console.log(formatSpawnLog(command, args, cwd, options.chatId, options.stdin));
-    const child = spawn(command, args, { cwd, shell: false, env: buildSafeChildEnv() });
+    const normalizedArgs = normalizeCliArgs(command, args);
+    console.log(formatSpawnLog(command, normalizedArgs, cwd, options.chatId, options.stdin));
+    const child = spawn(command, normalizedArgs, { cwd, shell: false, env: buildSafeChildEnv() });
     if (options.stdin) {
       child.stdin?.write(options.stdin);
     }
@@ -808,9 +809,10 @@ export async function runCliAsync(
     }
   };
 
+  const normalizedArgs = normalizeCliArgs(command, args);
   return new Promise((resolve, reject) => {
-    console.log(formatSpawnLog(command, args, cwd, options.chatId, options.stdin));
-    const child = spawn(command, args, { cwd, shell: false, detached: true, env: buildSafeChildEnv() });
+    console.log(formatSpawnLog(command, normalizedArgs, cwd, options.chatId, options.stdin));
+    const child = spawn(command, normalizedArgs, { cwd, shell: false, detached: true, env: buildSafeChildEnv() });
     if (options.stdin) {
       child.stdin?.write(options.stdin);
     }
@@ -904,6 +906,48 @@ export async function runCliAsync(
 }
 
 export function normalizeCliArgs(command: string, args: string[]): string[] {
+  const cmdName = basename(command).toLowerCase();
+  const isAgy = cmdName.includes("agy") || cmdName.includes("antigravity");
+  const isCodex = cmdName.includes("codex");
+
+  if (!isAgy && !isCodex) {
+    return args;
+  }
+
+  // Parse original args to extract prompt and permissions
+  let prompt = "";
+  if (args.length > 0) {
+    prompt = args[args.length - 1];
+  }
+
+  let hasPermissionBypass = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--dangerously-skip-permissions") {
+      hasPermissionBypass = true;
+    }
+    if (args[i] === "--permission-mode" && args[i + 1] === "acceptEdits") {
+      hasPermissionBypass = true;
+    }
+  }
+
+  if (isAgy) {
+    const newArgs: string[] = [];
+    if (hasPermissionBypass) {
+      newArgs.push("--dangerously-skip-permissions");
+    }
+    newArgs.push("--print", prompt);
+    return newArgs;
+  }
+
+  if (isCodex) {
+    const newArgs: string[] = ["exec"];
+    if (hasPermissionBypass) {
+      newArgs.push("--dangerously-bypass-approvals-and-sandbox");
+    }
+    newArgs.push("--skip-git-repo-check", prompt);
+    return newArgs;
+  }
+
   return args;
 }
 

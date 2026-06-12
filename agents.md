@@ -41,50 +41,56 @@ All future path-related changes must be machine agnostic. Prefer explicit enviro
 
 ## Shared Memory
 
-The bridge now uses a local shell-callable `agent-memory` CLI backed by SQLite.
+The bridge utilizes two tiers of shared memory for agents to maintain context across tasks and sessions:
 
-- Default storage: SQLite
-- Default path: `$HOME/.agent-bridge/shared-memory/agent-memory.sqlite`
-- Wrapper command: `$HOME/.local/bin/agent-memory`
-- Managed configs:
+### 1. Persistent memory (`agent-memory`)
+A local shell-callable CLI named `agent-memory` backed by SQLite. Used by agents to store project-specific decisions, architecture context, conventions, and outstanding tasks.
+
+- **Default SQLite path**: `$HOME/.agent-bridge/shared-memory/agent-memory.sqlite`
+- **Wrapper command**: `$HOME/.local/bin/agent-memory`
+- **Managed configs**:
   - `~/AGENTS.md`
   - `~/GEMINI.md`
   - `~/CLAUDE.md`
 
-Bootstrap:
+#### Handshake & Rules:
+- Before making architectural decisions or modifying important behaviour, run:
+  ```bash
+  agent-memory recall --query "<short query>" --scope project --limit 10
+  ```
+- When learning a durable fact, bug fix, or convention, save it:
+  ```bash
+  agent-memory add --type decision --scope project --text "<concise memory>"
+  ```
+- Do not save secrets, passwords, transient logs, or private data.
 
+### 2. Shared Knowledge Graph (`knowledge-graph`)
+A shared SQLite database used for durable observations and context queries across the workspace.
+
+- **Shared SQLite path**: `$HOME/.agent-bridge/shared-memory/knowledgegraph.sqlite`
+- **Rules & conventions**:
+  - Use `search_knowledge` at the start of each task when prior project context may matter.
+  - Always include `project_id: "server"` when reading or writing shared memory.
+  - Record durable project facts and architectural decisions with `add_observations`.
+  - Do not store ephemeral chat noise or temporary brainstorm notes.
+
+---
+
+### Setup & Administration
+
+#### Bootstrap:
 ```bash
 npm run setup:shared-memory
 ```
+Run this as the target user, not with `sudo`. The setup script writes the `agent-memory` wrapper and updates the instruction files to write the memory handshake prompts as a managed markdown block so they can be updated without replacing other home-level configs.
 
-Run this as the target user, not with `sudo`. The systemd install step is separate.
-
-The setup script writes the `agent-memory` wrapper and updates the instruction files so agents recall before important decisions and store durable facts after learning them.
-
-Verify:
-
+#### Verify:
 ```bash
 npm run verify:shared-memory
 ```
 
-Memory handshake prompt:
-
-```text
-On startup, check shared memory for relevant project facts and prior architectural decisions.
-Record durable project facts in the local SQLite memory store.
-Do not store ephemeral chat noise, tentative brainstorming, or repeated status updates.
-Prefer updating existing memories over creating duplicates.
-```
-
-The setup script writes this as a managed markdown block so it can be updated later without replacing the rest of your home-level instruction files.
-
-Smoke test:
-
-```text
-/memory
-```
-
-This runs a live CLI-path check by asking the bridged agent to use `agent-memory` and report whether the shared-memory tools are available.
+#### Smoke test:
+Send the `/memory` slash command to the bridged agent. This asks the agent to run a live CLI path check on `agent-memory` and report if the tools are accessible.
 
 ---
 

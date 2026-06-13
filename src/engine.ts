@@ -612,7 +612,7 @@ export class BridgeEngine {
         this._rememberTurn(chatKey, prompt, result.text);
       }
       if (this.hooks.onAfterExecute) {
-        await this.hooks.onAfterExecute(prompt, result.text, { chatKey });
+        await this.hooks.onAfterExecute(prompt, result.text, { chatId, chatKey });
       }
       await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
         console.error(`[${this.kind}] output file upload failed`, err)
@@ -651,7 +651,7 @@ export class BridgeEngine {
         const retryResult = await this._runFreshAntigravityRetry(retryPrompt, chatId, chatKey, outDir, onProgress, attachments, "async", eventContext, runId, collect);
         this._rememberTurn(chatKey, prompt, retryResult.text);
         if (this.hooks.onAfterExecute) {
-          await this.hooks.onAfterExecute(prompt, retryResult.text, { chatKey });
+          await this.hooks.onAfterExecute(prompt, retryResult.text, { chatId, chatKey });
         }
         return retryResult;
       }
@@ -740,7 +740,7 @@ export class BridgeEngine {
         this._rememberTurn(chatKey, prompt, result.text);
       }
       if (this.hooks.onAfterExecute) {
-        await this.hooks.onAfterExecute(prompt, result.text, { chatKey });
+        await this.hooks.onAfterExecute(prompt, result.text, { chatId, chatKey });
       }
       await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
         console.error(`[${this.kind}] output file upload failed`, err)
@@ -775,7 +775,7 @@ export class BridgeEngine {
         const retryResult = await this._runFreshAntigravityRetry(retryPrompt, chatId, chatKey, outDir, () => {}, attachments, "sync", eventContext, runId, collect);
         this._rememberTurn(chatKey, prompt, retryResult.text);
         if (this.hooks.onAfterExecute) {
-          await this.hooks.onAfterExecute(prompt, retryResult.text, { chatKey });
+          await this.hooks.onAfterExecute(prompt, retryResult.text, { chatId, chatKey });
         }
         return retryResult;
       }
@@ -956,7 +956,7 @@ export class BridgeEngine {
         this._rememberTurn(chatKey, prompt, finalResult.text);
       }
       if (this.hooks.onAfterExecute) {
-        await this.hooks.onAfterExecute(prompt, finalResult.text, { chatKey });
+        await this.hooks.onAfterExecute(prompt, finalResult.text, { chatId, chatKey });
       }
       return finalResult;
     } catch (fallbackError) {

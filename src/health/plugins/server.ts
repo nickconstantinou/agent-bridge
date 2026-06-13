@@ -86,27 +86,37 @@ export class ServerPlugin implements HealthPlugin {
     let swapStatus: "green" | "amber" | "red" = "green";
     let swapMsg = "Swap disabled";
     let swapPct: number | undefined = undefined;
+    const swapMonitorEnabled = process.env.HEALTH_SWAP_MONITOR_ENABLED !== "0" && process.env.HEALTH_SWAP_MONITOR_ENABLED !== "false";
+    const swapAmberPct = process.env.HEALTH_SWAP_AMBER_PCT ? Number(process.env.HEALTH_SWAP_AMBER_PCT) : 80;
+    const swapRedPct = process.env.HEALTH_SWAP_RED_PCT ? Number(process.env.HEALTH_SWAP_RED_PCT) : 95;
     try {
-      if (existsSync("/proc/meminfo")) {
-        const content = readFileSync("/proc/meminfo", "utf8");
-        const totalMatch = content.match(/^SwapTotal:\s+(\d+)\s+kB/m);
-        const freeMatch = content.match(/^SwapFree:\s+(\d+)\s+kB/m);
-        if (totalMatch && freeMatch) {
-          const total = Number(totalMatch[1]);
-          const free = Number(freeMatch[1]);
-          if (total > 0) {
-            const used = total - free;
-            swapPct = (used / total) * 100;
-            const usedMB = (used / 1024).toFixed(0);
-            const totalMB = (total / 1024).toFixed(0);
-            swapMsg = `Swap usage: ${swapPct.toFixed(1)}% (${usedMB} MB of ${totalMB} MB used)`;
-            if (swapPct >= 95) {
-              swapStatus = "red";
-            } else if (swapPct >= 80) {
-              swapStatus = "amber";
+      if (swapMonitorEnabled) {
+        if (existsSync("/proc/meminfo")) {
+          const content = readFileSync("/proc/meminfo", "utf8");
+          const totalMatch = content.match(/^SwapTotal:\s+(\d+)\s+kB/m);
+          const freeMatch = content.match(/^SwapFree:\s+(\d+)\s+kB/m);
+          if (totalMatch && freeMatch) {
+            const total = Number(totalMatch[1]);
+            const free = Number(freeMatch[1]);
+            if (total > 0) {
+              const used = total - free;
+              swapPct = (used / total) * 100;
+              const usedMB = (used / 1024).toFixed(0);
+              const totalMB = (total / 1024).toFixed(0);
+              swapMsg = `Swap usage: ${swapPct.toFixed(1)}% (${usedMB} MB of ${totalMB} MB used)`;
+              if (swapPct >= swapRedPct) {
+                swapStatus = "red";
+              } else if (swapPct >= swapAmberPct) {
+                // To avoid false positives, only flag swap usage as amber if RAM usage is also under pressure
+                if (memStatus !== "green") {
+                  swapStatus = "amber";
+                }
+              }
             }
           }
         }
+      } else {
+        swapMsg = "Swap monitoring disabled";
       }
     } catch (err) {
       swapStatus = "amber";

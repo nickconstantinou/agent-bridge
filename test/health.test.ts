@@ -440,6 +440,83 @@ describe("ServerPlugin", () => {
       delete process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER;
     }
   });
+
+  it("supports disabling swap check via HEALTH_SWAP_MONITOR_ENABLED", async () => {
+    const { ServerPlugin } = await import("../src/health/plugins/server.js");
+    process.env.HEALTH_SWAP_MONITOR_ENABLED = "false";
+    try {
+      const plugin = new ServerPlugin();
+      const report = await plugin.check();
+      const swapCheck = report.checks.find(c => c.name === "swap-usage");
+      expect(swapCheck).toBeDefined();
+      expect(swapCheck?.status).toBe("green");
+      expect(swapCheck?.message).toBe("Swap monitoring disabled");
+    } finally {
+      delete process.env.HEALTH_SWAP_MONITOR_ENABLED;
+    }
+  });
+
+  it("keeps swap green when swap usage is above amber threshold but RAM usage is healthy", async () => {
+    const { ServerPlugin } = await import("../src/health/plugins/server.js");
+    process.env.HEALTH_MEMORY_AMBER_PCT = "101";
+    process.env.HEALTH_SWAP_AMBER_PCT = "1";
+    process.env.HEALTH_SWAP_RED_PCT = "101";
+    
+    const oldMockExists = (globalThis as any).__mockExistsSync;
+    const oldMockRead = (globalThis as any).__mockReadFileSync;
+    (globalThis as any).__mockExistsSync = (path: string) => path === "/proc/meminfo" ? true : undefined;
+    (globalThis as any).__mockReadFileSync = (path: string) => {
+      if (path === "/proc/meminfo") {
+        return "SwapTotal:      1000000 kB\nSwapFree:        500000 kB";
+      }
+      return undefined;
+    };
+
+    try {
+      const plugin = new ServerPlugin();
+      const report = await plugin.check();
+      const swapCheck = report.checks.find(c => c.name === "swap-usage");
+      expect(swapCheck?.status).toBe("green");
+    } finally {
+      delete process.env.HEALTH_MEMORY_AMBER_PCT;
+      delete process.env.HEALTH_SWAP_AMBER_PCT;
+      delete process.env.HEALTH_SWAP_RED_PCT;
+      (globalThis as any).__mockExistsSync = oldMockExists;
+      (globalThis as any).__mockReadFileSync = oldMockRead;
+    }
+  });
+
+  it("flags swap amber when swap usage is above amber threshold and RAM usage is not healthy", async () => {
+    const { ServerPlugin } = await import("../src/health/plugins/server.js");
+    process.env.HEALTH_MEMORY_AMBER_PCT = "1";
+    process.env.HEALTH_MEMORY_RED_PCT = "101";
+    process.env.HEALTH_SWAP_AMBER_PCT = "10";
+    process.env.HEALTH_SWAP_RED_PCT = "101";
+    
+    const oldMockExists = (globalThis as any).__mockExistsSync;
+    const oldMockRead = (globalThis as any).__mockReadFileSync;
+    (globalThis as any).__mockExistsSync = (path: string) => path === "/proc/meminfo" ? true : undefined;
+    (globalThis as any).__mockReadFileSync = (path: string) => {
+      if (path === "/proc/meminfo") {
+        return "SwapTotal:      1000000 kB\nSwapFree:        500000 kB";
+      }
+      return undefined;
+    };
+
+    try {
+      const plugin = new ServerPlugin();
+      const report = await plugin.check();
+      const swapCheck = report.checks.find(c => c.name === "swap-usage");
+      expect(swapCheck?.status).toBe("amber");
+    } finally {
+      delete process.env.HEALTH_MEMORY_AMBER_PCT;
+      delete process.env.HEALTH_MEMORY_RED_PCT;
+      delete process.env.HEALTH_SWAP_AMBER_PCT;
+      delete process.env.HEALTH_SWAP_RED_PCT;
+      (globalThis as any).__mockExistsSync = oldMockExists;
+      (globalThis as any).__mockReadFileSync = oldMockRead;
+    }
+  });
 });
 
 // ── HealthScheduler ───────────────────────────────────────────────────────────
@@ -837,7 +914,7 @@ describe("SelfPlugin — extended checks", () => {
     expect(report.summary).toMatch(/db-file/);
   });
 
-  it("reports amber status when agent CLI updates are available", async () => {
+  it("reports appropriate status for agent CLI updates based on version distance thresholds", async () => {
     (globalThis as any).__mockExecSync = (cmd: string) => {
       if (cmd.includes("npm outdated --json")) {
         const err = new Error("Command failed");
@@ -855,11 +932,23 @@ describe("SelfPlugin — extended checks", () => {
           },
           "@google/agy-cli": {
             "current": "1.0.6",
-            "wanted": "1.0.7",
-            "latest": "1.0.7"
+            "wanted": "1.0.9",
+            "latest": "1.0.9"
           }
         }));
         throw err;
+      }
+      if (cmd.includes("npm view @anthropic-ai/claude-code versions --json")) {
+        return JSON.stringify([
+          "2.1.158", "2.1.159", "2.1.160", "2.1.161", "2.1.162",
+          "2.1.163", "2.1.164", "2.1.165", "2.1.166", "2.1.167", "2.1.168"
+        ]);
+      }
+      if (cmd.includes("npm view @openai/codex versions --json")) {
+        return JSON.stringify(["0.135.0", "0.136.0", "0.137.0"]);
+      }
+      if (cmd.includes("npm view @google/agy-cli versions --json")) {
+        return JSON.stringify(["1.0.6", "1.0.7", "1.0.8", "1.0.9"]);
       }
       return undefined;
     };
@@ -870,18 +959,18 @@ describe("SelfPlugin — extended checks", () => {
 
     const claudeCheck = report.checks.find(c => c.name === "cli-update-claude-code");
     expect(claudeCheck).toBeDefined();
-    expect(claudeCheck?.status).toBe("amber");
+    expect(claudeCheck?.status).toBe("red"); // 10 versions behind
     expect(claudeCheck?.message).toContain("2.1.158 -> 2.1.168");
 
     const codexCheck = report.checks.find(c => c.name === "cli-update-codex");
     expect(codexCheck).toBeDefined();
-    expect(codexCheck?.status).toBe("amber");
+    expect(codexCheck?.status).toBe("green"); // 2 versions behind
     expect(codexCheck?.message).toContain("0.135.0 -> 0.137.0");
 
     const antigravityCheck = report.checks.find(c => c.name === "cli-update-antigravity");
     expect(antigravityCheck).toBeDefined();
-    expect(antigravityCheck?.status).toBe("amber");
-    expect(antigravityCheck?.message).toContain("1.0.6 -> 1.0.7");
+    expect(antigravityCheck?.status).toBe("amber"); // 3 versions behind
+    expect(antigravityCheck?.message).toContain("1.0.6 -> 1.0.9");
   });
 
   it("reports green status when agent CLIs are up to date", async () => {

@@ -175,10 +175,21 @@ export class SelfPlugin implements HealthPlugin {
           if (nameToken === "agy-cli") nameToken = "antigravity";
           const checkName = `cli-update-${nameToken}`;
           if (outdated[cli]) {
+            const current = outdated[cli].current;
+            const latest = outdated[cli].latest;
+            const behind = getVersionsBehind(cli, current, latest);
+
+            let status: "green" | "amber" | "red" = "green";
+            if (behind >= 10) {
+              status = "red";
+            } else if (behind >= 3) {
+              status = "amber";
+            }
+
             checks.push({
               name: checkName,
-              status: "amber",
-              message: `${cli} update available: ${outdated[cli].current} -> ${outdated[cli].latest}`,
+              status: status,
+              message: `${cli} update available: ${current} -> ${latest} (${behind} version${behind === 1 ? "" : "s"} behind)`,
             });
           } else {
             const version = getInstalledVersion(cli);
@@ -261,3 +272,48 @@ function getInstalledVersion(packageName: string): string | null {
     }
   }
 }
+
+function getVersionsBehind(cliName: string, current: string, latest: string): number {
+  if (current === latest) return 0;
+  try {
+    const stdout = execSync(`npm view ${cliName} versions --json`, {
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5000,
+    }).toString();
+    const versions = JSON.parse(stdout);
+    if (Array.isArray(versions)) {
+      const currentIndex = versions.indexOf(current);
+      const latestIndex = versions.indexOf(latest);
+      if (currentIndex !== -1 && latestIndex !== -1) {
+        return Math.max(0, latestIndex - currentIndex);
+      }
+    }
+  } catch {
+    // ignore/fallback
+  }
+
+  // Fallback estimation using semver components
+  try {
+    const pCurrent = current.split(".").map(Number);
+    const pLatest = latest.split(".").map(Number);
+    if (pCurrent.length === 3 && pLatest.length === 3 && pCurrent.every(n => !isNaN(n)) && pLatest.every(n => !isNaN(n))) {
+      if (pLatest[0] > pCurrent[0]) {
+        return 10; // Major version behind -> red (>= 10)
+      }
+      if (pLatest[1] > pCurrent[1]) {
+        // Minor version behind -> at least amber (>= 3)
+        const minorDiff = pLatest[1] - pCurrent[1];
+        if (minorDiff === 1) {
+          return 3 + Math.max(0, pLatest[2] - pCurrent[2]);
+        }
+        return Math.max(3, minorDiff * 3);
+      }
+      return Math.max(0, pLatest[2] - pCurrent[2]);
+    }
+  } catch {
+    // fallback
+  }
+
+  return 1; // default fallback if we cannot determine
+}
+

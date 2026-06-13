@@ -270,8 +270,21 @@ The bridge runs a built-in `HealthScheduler` that polls plugins at a configurabl
 | `HEALTH_CPU_LOAD_RED_MULTIPLIER` | `1.5` | Threshold multiplier for CPU load critical (e.g. `1.5` * CPU count) |
 | `HEALTH_CPU_LOAD_AMBER_THRESHOLD` | — | Override to set absolute CPU load warning threshold |
 | `HEALTH_CPU_LOAD_RED_THRESHOLD` | — | Override to set absolute CPU load critical threshold |
+| `HEALTH_SWAP_MONITOR_ENABLED` | `true` | Set to `false` to disable the built-in swap check |
+| `HEALTH_SWAP_AMBER_PCT` | `80` | Swap warning threshold percentage |
+| `HEALTH_SWAP_RED_PCT` | `95` | Swap critical threshold percentage |
 | `HEALTH_CONTENT_CRAWLER_ENABLED` | `0` | Set to `1` to enable the content-crawler external plugin |
 | `HEALTH_CONTENT_CRAWLER_SCRIPT` | `~/content-crawler/scripts/health_check.py` | Override the script path |
+
+### Additional Health Check Behaviors
+
+- **Smart Swap Warnings**: To reduce false alerts, swap usage is only flagged as `amber` if RAM usage (memory status) is also not healthy (`green`). Critical status (`red`) is flagged unconditionally if swap usage exceeds `HEALTH_SWAP_RED_PCT` (default: 95%).
+- **Version-Distance CLI Update Status**: Instead of reporting every update as a warning, updates report status based on how many versions behind the installed CLI is:
+  - `>= 10` versions behind: `red` (critical)
+  - `>= 3` versions behind: `amber` (warning)
+  - `< 3` versions behind: `green` (nominal)
+  The check message includes the version difference details.
+
 
 ### Suggest mode
 

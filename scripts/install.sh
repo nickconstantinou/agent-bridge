@@ -79,7 +79,9 @@ seed_from_env_file() {
               AGENT_MEMORY_DB_PATH AGENT_BRIDGE_SOUL_PATH AGENT_BRIDGE_SOUL_MODE \
               HEALTH_MONITOR_ENABLED HEALTH_MONITOR_CADENCE_SECONDS HEALTH_MONITOR_AUTONOMY \
               HEALTH_MONITOR_CHAT_ID HEALTH_SUGGEST_BOT \
-              HEALTH_CONTENT_CRAWLER_ENABLED HEALTH_CONTENT_CRAWLER_SCRIPT; do
+              HEALTH_CONTENT_CRAWLER_ENABLED HEALTH_CONTENT_CRAWLER_SCRIPT \
+              DISCORD_BOT_TOKEN DISCORD_APPLICATION_ID DISCORD_GUILD_ID DISCORD_ALLOWED_USER_IDS \
+              DISCORD_CLI CLI_COMMAND CLI_MODEL_PREFERENCE INTERACTIVE_DEFAULT_CLI INTERACTIVE_CLI_CHAIN; do
     value="$(env_file_get "${file}" "${key}")"
     if [[ -n "${value}" && -z "${!key:-}" ]]; then
       export "${key}=${value}"
@@ -88,6 +90,9 @@ seed_from_env_file() {
   # Normalise singular alias → plural
   if [[ -z "${TELEGRAM_ALLOWED_USER_IDS:-}" && -n "${TELEGRAM_ALLOWED_USER_ID:-}" ]]; then
     export TELEGRAM_ALLOWED_USER_IDS="${TELEGRAM_ALLOWED_USER_ID}"
+  fi
+  if [[ -z "${DISCORD_ALLOWED_USER_IDS:-}" && -n "${DISCORD_ALLOWED_USER_ID:-}" ]]; then
+    export DISCORD_ALLOWED_USER_IDS="${DISCORD_ALLOWED_USER_ID}"
   fi
 }
 
@@ -120,6 +125,8 @@ seed_from_env_file "${REPO_DIR}/.env.shared"
 seed_from_env_file "${REPO_DIR}/.env.codex"
 seed_from_env_file "${REPO_DIR}/.env.antigravity"
 seed_from_env_file "${REPO_DIR}/.env.claude"
+seed_from_env_file "${REPO_DIR}/.env.discord"
+seed_from_env_file "${REPO_DIR}/.env.discord-interactive"
 
 prompt() {
   local var="$1" label="$2" default="${3:-}"
@@ -159,6 +166,10 @@ prompt TELEGRAM_BOT_TOKEN_CODEX       "Codex bot token"
 prompt TELEGRAM_BOT_TOKEN_ANTIGRAVITY "Antigravity bot token"
 prompt TELEGRAM_BOT_TOKEN_CLAUDE      "Claude bot token (leave blank to skip)"
 prompt TELEGRAM_BOT_TOKEN_HEALTH      "Health bot token (leave blank to skip)"
+prompt DISCORD_BOT_TOKEN              "Discord bot token (leave blank to skip)"
+prompt DISCORD_APPLICATION_ID         "Discord application ID (leave blank to skip)"
+prompt DISCORD_ALLOWED_USER_IDS       "Discord allowed user IDs (leave blank to skip)"
+prompt DISCORD_GUILD_ID               "Discord guild ID (optional, leave blank for global commands)"
 prompt CODEX_COMMAND       "Codex command"       "$(command -v codex  2>/dev/null || true)"
 prompt ANTIGRAVITY_COMMAND "Antigravity command" "$(command -v agy    2>/dev/null || true)"
 prompt CLAUDE_COMMAND      "Claude command"      "$(command -v claude 2>/dev/null || true)"
@@ -280,6 +291,10 @@ write_env_file "${REPO_DIR}/.env.antigravity.example" "${REPO_DIR}/.env.antigrav
 if [[ -n "${TELEGRAM_BOT_TOKEN_CLAUDE:-}" ]]; then
   write_env_file "${REPO_DIR}/.env.claude.example"    "${REPO_DIR}/.env.claude"
 fi
+if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
+  write_env_file "${REPO_DIR}/.env.discord.example"    "${REPO_DIR}/.env.discord"
+  write_env_file "${REPO_DIR}/.env.discord-interactive.example" "${REPO_DIR}/.env.discord-interactive"
+fi
 
 # Write shared defaults loaded by all services
 _write_shared_defaults() {
@@ -332,6 +347,31 @@ if [[ -n "${TELEGRAM_BOT_TOKEN_HEALTH:-}" ]]; then
   _write_systemd_defaults health TELEGRAM_BOT_TOKEN_HEALTH HEALTH_CLI_COMMAND HEALTH_CLI_BOT
 fi
 
+_write_discord_defaults() {
+  local bot="$1"
+  local dest="${DEFAULTS_DIR}/agent-bridge-${bot}"
+
+  {
+    echo "BRIDGE_ENV_FILE=${dest}"
+    echo "DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN:-}"
+    echo "DISCORD_APPLICATION_ID=${DISCORD_APPLICATION_ID:-}"
+    [[ -n "${DISCORD_GUILD_ID:-}" ]] && echo "DISCORD_GUILD_ID=${DISCORD_GUILD_ID}"
+    [[ -n "${DISCORD_ALLOWED_USER_IDS:-}" ]] && echo "DISCORD_ALLOWED_USER_IDS=${DISCORD_ALLOWED_USER_IDS}"
+    if [[ "${bot}" == "discord" ]]; then
+      echo "DISCORD_CLI=${DISCORD_CLI:-claude}"
+      echo "CLI_COMMAND=${CLI_COMMAND:-claude}"
+      [[ -n "${CLI_MODEL_PREFERENCE:-}" ]] && echo "CLI_MODEL_PREFERENCE=${CLI_MODEL_PREFERENCE}"
+    else
+      echo "INTERACTIVE_DEFAULT_CLI=${INTERACTIVE_DEFAULT_CLI:-codex}"
+      echo "INTERACTIVE_CLI_CHAIN=${INTERACTIVE_CLI_CHAIN:-codex,claude,antigravity}"
+      echo "CODEX_COMMAND=${CODEX_COMMAND:-codex}"
+      echo "CLAUDE_COMMAND=${CLAUDE_COMMAND:-claude}"
+      echo "ANTIGRAVITY_COMMAND=${ANTIGRAVITY_COMMAND:-agy}"
+    fi
+  } | sudo tee "${dest}" > /dev/null
+  echo "  wrote ${dest}"
+}
+
 install_unit agent-bridge-codex
 install_unit agent-bridge-antigravity
 if [[ -n "${TELEGRAM_BOT_TOKEN_HEALTH:-}" ]]; then
@@ -347,6 +387,14 @@ if [[ -n "${TELEGRAM_BOT_TOKEN_CLAUDE:-}" ]]; then
   _write_systemd_defaults claude TELEGRAM_BOT_TOKEN_CLAUDE CLAUDE_COMMAND CLAUDE_PROJECT_DIR
   install_unit agent-bridge-claude
   UNITS_TO_ENABLE="${UNITS_TO_ENABLE} agent-bridge-claude"
+fi
+
+if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
+  _write_discord_defaults discord
+  _write_discord_defaults discord-interactive
+  install_unit agent-bridge-discord
+  install_unit agent-bridge-discord-interactive
+  UNITS_TO_ENABLE="${UNITS_TO_ENABLE} agent-bridge-discord agent-bridge-discord-interactive"
 fi
 
 sudo systemctl daemon-reload

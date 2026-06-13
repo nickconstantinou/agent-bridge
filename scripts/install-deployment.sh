@@ -130,6 +130,20 @@ if [[ -f "${CLAUDE_DEFAULTS}" ]]; then
   UNITS_TO_ENABLE="${UNITS_TO_ENABLE} agent-bridge-claude"
 fi
 
+DISCORD_DEFAULTS="/etc/default/agent-bridge-discord"
+if [[ -f "${DISCORD_DEFAULTS}" ]]; then
+  install_unit agent-bridge-discord
+  ensure_node_default "${DISCORD_DEFAULTS}"
+  UNITS_TO_ENABLE="${UNITS_TO_ENABLE} agent-bridge-discord"
+fi
+
+DISCORD_INT_DEFAULTS="/etc/default/agent-bridge-discord-interactive"
+if [[ -f "${DISCORD_INT_DEFAULTS}" ]]; then
+  install_unit agent-bridge-discord-interactive
+  ensure_node_default "${DISCORD_INT_DEFAULTS}"
+  UNITS_TO_ENABLE="${UNITS_TO_ENABLE} agent-bridge-discord-interactive"
+fi
+
 sudo systemctl daemon-reload
 # shellcheck disable=SC2086
 sudo systemctl enable --now ${UNITS_TO_ENABLE}

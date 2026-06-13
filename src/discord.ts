@@ -119,12 +119,15 @@ export class DiscordClient implements MessagingPlatform {
     interaction_token?: string;
     text?: string;
     type?: number;
+    /** Full Discord interaction response data — takes precedence over `text` when provided. */
+    data?: Record<string, any>;
   }): Promise<any> {
     if (body.interaction_id && body.interaction_token) {
       const responseType = body.type ?? 4; // CHANNEL_MESSAGE_WITH_SOURCE
+      const responseData = body.data ?? (body.text ? { content: truncate(body.text) } : {});
       return this._restPost(
         `/interactions/${body.interaction_id}/${body.interaction_token}/callback`,
-        { type: responseType, data: body.text ? { content: truncate(body.text) } : {} },
+        { type: responseType, data: responseData },
       );
     }
     return null;
@@ -135,13 +138,14 @@ export class DiscordClient implements MessagingPlatform {
    * Uses guild commands when guildId is configured (instant); otherwise global (~1h).
    */
   async setMyCommands(body: {
-    commands: Array<{ command: string; description: string }>;
+    commands: Array<{ command?: string; name?: string; description: string; type?: number; options?: any[] }>;
     [key: string]: any;
   }): Promise<any> {
     const discordCommands = (body.commands ?? []).map((c) => ({
-      name: c.command.replace(/^\//, ""),
+      name: (c.name || c.command || "").replace(/^\//, ""),
       description: c.description || "No description",
-      type: 1,
+      type: c.type ?? 1,
+      options: c.options,
     }));
     const path = this.opts.guildId
       ? `/applications/${this.opts.applicationId}/guilds/${this.opts.guildId}/commands`

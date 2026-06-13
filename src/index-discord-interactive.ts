@@ -1,0 +1,367 @@
+/**
+ * PURPOSE: Interactive Discord bot — a single bot that routes messages to the
+ * user's preferred CLI (codex | claude | antigravity) per channel, with
+ * one-tap switching via Discord button components.
+ *
+ * Mirrors src/index-interactive.ts for Telegram, adapted for Discord's
+ * push-based WebSocket transport and component interaction model.
+ *
+ * Environment variables (see .env.discord-interactive.example):
+ *   DISCORD_BOT_TOKEN            — required
+ *   DISCORD_APPLICATION_ID       — required
+ *   DISCORD_GUILD_ID             — optional; instant slash command propagation
+ *   DISCORD_ALLOWED_USER_IDS     — comma-separated Discord snowflake user IDs
+ *   INTERACTIVE_CLI_CHAIN        — comma-separated fallback order (default: codex,claude,antigravity)
+ *   CODEX_COMMAND / CLAUDE_COMMAND / ANTIGRAVITY_COMMAND — CLI binary paths
+ *   DB_PATH                      — SQLite for session/lock/CLI-preference state
+ *   BRIDGE_EXECUTION_MODE        — "safe" | "trusted"
+ *   BRIDGE_ASYNC_ENABLED         — "true" | "false"
+ */
+
+import dotenv from "dotenv";
+import { getBridgeProjectDir, openDb, shutdownCliProcesses, parseModelPreference } from "./bridge.js";
+import { DiscordClient, type DiscordUpdate } from "./discord.js";
+import { BridgeEngine } from "./engine.js";
+import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
+import { WorkerFallbackChain } from "./workerFallback.js";
+import {
+  getUserCliPreference,
+  setUserCliPreference,
+  buildCliStatusText,
+  handleCliSwitchCallback,
+  dispatchInteractiveWithFallback,
+  type CliKind,
+} from "./interactiveBot.js";
+import type { BridgeConfig, BotKind, TelegramUpdate, TelegramMessage } from "./types.js";
+
+dotenv.config({
+  path: process.env.BRIDGE_ENV_FILE || ".env.discord-interactive",
+  override: false,
+});
+
+// ── Config ───────────────────────────────────────────────────────────────────
+
+const token = process.env.DISCORD_BOT_TOKEN;
+if (!token) throw new Error("DISCORD_BOT_TOKEN is required");
+
+const applicationId = process.env.DISCORD_APPLICATION_ID;
+if (!applicationId) throw new Error("DISCORD_APPLICATION_ID is required");
+
+const allowedUserIds = new Set(
+  (process.env.DISCORD_ALLOWED_USER_IDS || "")
+    .split(",").map((s) => s.trim()).filter(Boolean),
+);
+
+const dbPath = process.env.DB_PATH || `${getBridgeProjectDir()}/.data/discord-interactive.sqlite`;
+const executionMode = (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") || "safe";
+const asyncEnabled = process.env.BRIDGE_ASYNC_ENABLED !== "false";
+
+const config: BridgeConfig = {
+  allowedUserIds,
+  serviceEnvFile: null,
+  serviceKind: null,
+  pollIntervalMs: 1_000,
+  executionMode,
+  asyncEnabled,
+  dbPath,
+  bots: {
+    codex:       { token: undefined, command: process.env.CODEX_COMMAND || "codex",             modelPreference: parseModelPreference(process.env.CODEX_MODEL_PREFERENCE) },
+    antigravity: { token: undefined, command: process.env.ANTIGRAVITY_COMMAND || "agy",         modelPreference: parseModelPreference(process.env.ANTIGRAVITY_MODEL_PREFERENCE) },
+    claude:      { token: undefined, command: process.env.CLAUDE_COMMAND || "claude",           modelPreference: parseModelPreference(process.env.CLAUDE_MODEL_PREFERENCE) },
+  },
+};
+
+const soulContext = loadSoulContext({
+  mode: normalizeSoulMode(process.env.AGENT_BRIDGE_SOUL_MODE),
+  path: process.env.AGENT_BRIDGE_SOUL_PATH || defaultSoulPath(getBridgeProjectDir()),
+});
+if (soulContext) console.log(`[discord-interactive] loaded SOUL.md context (${soulContext.length} chars)`);
+
+const db = openDb(dbPath);
+
+// ── Fallback chain ────────────────────────────────────────────────────────────
+
+const cliChain = (process.env.INTERACTIVE_CLI_CHAIN || "codex,claude,antigravity")
+  .split(",").map((s) => s.trim()).filter(Boolean);
+const fallbackChain = new WorkerFallbackChain(cliChain);
+const exhaustedChats = new Set<string>();
+const contextPreambles = new Map<string, string>();
+
+// ── DiscordClient ─────────────────────────────────────────────────────────────
+
+const client = new DiscordClient({
+  token,
+  applicationId,
+  guildId: process.env.DISCORD_GUILD_ID,
+  onUpdate: (update: DiscordUpdate) => {
+    handleDiscordUpdate(update).catch((err) =>
+      console.error("[discord-interactive] update error", err),
+    );
+  },
+  onReady: () => {
+    console.log("[discord-interactive] gateway ready");
+    registerCommands().catch((err) =>
+      console.warn("[discord-interactive] command registration failed", err),
+    );
+  },
+  onError: (err) => console.error("[discord-interactive] gateway error", err),
+});
+
+// ── Engines ───────────────────────────────────────────────────────────────────
+
+const CLI_KINDS: CliKind[] = ["codex", "claude", "antigravity"];
+const engines = Object.fromEntries(
+  CLI_KINDS.map((kind) => [
+    kind,
+    new BridgeEngine(
+      {
+        kind,
+        botConfig: { ...config.bots[kind as BotKind], token },
+        allowedUserIds,
+        executionMode,
+        asyncEnabled,
+        pollIntervalMs: 1_000,
+        soulContext,
+        fullConfig: config,
+        hooks: {
+          onCapacityExhausted: async (chatKey: string) => {
+            exhaustedChats.add(chatKey);
+          },
+          onBeforeExecute: async (prompt: string, ctx: { chatKey: string }) => {
+            const preamble = contextPreambles.get(ctx.chatKey);
+            if (preamble) {
+              contextPreambles.delete(ctx.chatKey);
+              return preamble + prompt;
+            }
+            return prompt;
+          },
+          onAfterExecute: async (_prompt: string, resultText: string, ctx: { chatKey: string }) => {
+            fallbackChain.addTurn(ctx.chatKey, "assistant", resultText);
+          },
+        },
+      },
+      db,
+      client,
+    ),
+  ]),
+) as Record<CliKind, BridgeEngine>;
+
+// ── Slash command registration ────────────────────────────────────────────────
+
+async function registerCommands(): Promise<void> {
+  await client.setMyCommands({
+    commands: buildDiscordInteractiveCommands(),
+  });
+}
+
+function buildDiscordInteractiveCommands() {
+  return [
+    {
+      name: "cli",
+      description: "Show the active CLI or switch to another",
+      type: 1,
+      options: [{
+        name: "to",
+        description: "CLI to switch to",
+        type: 3, // STRING
+        required: false,
+        choices: [
+          { name: "codex", value: "codex" },
+          { name: "claude", value: "claude" },
+          { name: "antigravity", value: "antigravity" },
+        ],
+      }],
+    },
+    { name: "reset",  description: "Reset the current CLI session",   type: 1 },
+    { name: "models", description: "Show available models",            type: 1 },
+    { name: "stop",   description: "Abort the running CLI execution",  type: 1 },
+  ];
+}
+
+// ── Button components ─────────────────────────────────────────────────────────
+
+function buildCliComponents(activeCli: CliKind) {
+  return [{
+    type: 1, // ACTION_ROW
+    components: CLI_KINDS.map((cli) => ({
+      type: 2, // BUTTON
+      label: cli === activeCli ? `✓ ${cli}` : cli,
+      style: cli === activeCli ? 1 : 2, // 1=PRIMARY (blue), 2=SECONDARY (grey)
+      custom_id: `cli:${cli}`,
+      disabled: cli === activeCli,
+    })),
+  }];
+}
+
+// ── Update router ─────────────────────────────────────────────────────────────
+
+async function handleDiscordUpdate(update: DiscordUpdate): Promise<void> {
+  if (update.type === "MESSAGE_CREATE") {
+    await handleMessage(update.data);
+    return;
+  }
+  if (update.type === "INTERACTION_CREATE") {
+    await handleInteraction(update.data);
+    return;
+  }
+}
+
+// ── Message handler ───────────────────────────────────────────────────────────
+
+async function handleMessage(d: any): Promise<void> {
+  const authorId = String(d.author?.id ?? "");
+  if (!allowedUserIds.has(authorId) || d.author?.bot) return;
+
+  const content = String(d.content ?? "").trim();
+  if (!content) return;
+
+  const channelId = String(d.channel_id ?? "");
+  const chatKey = channelId; // Discord: channel IS the conversation unit
+
+  const chatId = numericId(channelId);
+  const userId = numericId(authorId);
+
+  if (content) fallbackChain.addTurn(chatKey, "user", content);
+
+  const update: TelegramUpdate = {
+    update_id: numericId(d.id ?? "0"),
+    message: {
+      message_id: numericId(d.id ?? "0"),
+      chat: { id: chatId, type: d.guild_id ? "supergroup" : "private" },
+      from: { id: userId, first_name: d.author?.username ?? "User" },
+      text: content,
+    } satisfies TelegramMessage,
+  };
+
+  await dispatchInteractiveWithFallback(update, chatKey, {
+    engines,
+    fallbackChain,
+    exhaustedChats,
+    contextPreambles,
+    db,
+    notify: async (msg) => {
+      await client.sendMessage({ chat_id: channelId, text: msg });
+    },
+    onCliSwitched: async (_newCli) => {
+      // Slash command list doesn't change per-CLI on Discord — no-op
+    },
+  });
+}
+
+// ── Interaction handler ───────────────────────────────────────────────────────
+
+async function handleInteraction(d: any): Promise<void> {
+  const interactionType = d.type as number; // 2=APPLICATION_COMMAND, 3=MESSAGE_COMPONENT
+
+  // ── Button click (CLI switch) ─────────────────────────────────────────────
+  if (interactionType === 3) {
+    const customId = String(d.data?.custom_id ?? "");
+    const newCli = handleCliSwitchCallback(customId);
+    if (!newCli) return;
+
+    const userId = String(d.member?.user?.id ?? d.user?.id ?? "");
+    if (!allowedUserIds.has(userId)) return;
+
+    const channelId = String(d.channel_id ?? "");
+    setUserCliPreference(db, channelId, newCli);
+    fallbackChain.setActiveCli(channelId, newCli);
+    const preamble = fallbackChain.buildContextPreamble(channelId);
+    if (preamble) contextPreambles.set(channelId, preamble);
+
+    // UPDATE_MESSAGE (type 7) — edit the /cli message in-place
+    await client.answerCallbackQuery({
+      interaction_id: d.id,
+      interaction_token: d.token,
+      type: 7,
+      data: {
+        content: buildCliStatusText(newCli),
+        components: buildCliComponents(newCli),
+      },
+    }).catch((err) => console.warn("[discord-interactive] button ACK failed", err));
+    return;
+  }
+
+  // ── Slash command ─────────────────────────────────────────────────────────
+  if (interactionType === 2) {
+    const commandName = String(d.data?.name ?? "");
+    const userId = String(d.member?.user?.id ?? d.user?.id ?? "");
+    if (!allowedUserIds.has(userId)) return;
+
+    const channelId = String(d.channel_id ?? "");
+
+    if (commandName === "cli") {
+      const toOption = d.data?.options?.find((o: any) => o.name === "to")?.value as string | undefined;
+      if (toOption) {
+        const newCli = handleCliSwitchCallback(`cli:${toOption}`);
+        if (newCli) {
+          setUserCliPreference(db, channelId, newCli);
+          fallbackChain.setActiveCli(channelId, newCli);
+          const preamble = fallbackChain.buildContextPreamble(channelId);
+          if (preamble) contextPreambles.set(channelId, preamble);
+        }
+      }
+      const pref = getUserCliPreference(db, channelId);
+      // CHANNEL_MESSAGE_WITH_SOURCE (type 4)
+      await client.answerCallbackQuery({
+        interaction_id: d.id,
+        interaction_token: d.token,
+        type: 4,
+        data: {
+          content: buildCliStatusText(pref),
+          components: buildCliComponents(pref),
+        },
+      }).catch((err) => console.warn("[discord-interactive] /cli ACK failed", err));
+      return;
+    }
+
+    // Other commands → forward to the active CLI engine as a TelegramUpdate
+    // ACK immediately with deferred response (3-second window)
+    await client.answerCallbackQuery({
+      interaction_id: d.id,
+      interaction_token: d.token,
+      type: 5, // DEFERRED_CHANNEL_MESSAGE_WITH_SOURCE
+    }).catch((err) => console.warn("[discord-interactive] slash ACK failed", err));
+
+    const promptText = d.data?.options?.[0]?.value as string | undefined ?? commandName;
+    const chatId = numericId(channelId);
+    const numUserId = numericId(userId);
+    const chatKey = channelId;
+
+    const update: TelegramUpdate = {
+      update_id: numericId(d.id ?? "0"),
+      message: {
+        message_id: numericId(d.id ?? "0"),
+        chat: { id: chatId, type: d.guild_id ? "supergroup" : "private" },
+        from: { id: numUserId, first_name: d.member?.user?.username ?? d.user?.username ?? "User" },
+        text: `/${promptText}`,
+      } satisfies TelegramMessage,
+    };
+
+    await engines[getUserCliPreference(db, chatKey)].handleUpdate(update);
+  }
+}
+
+// ── Start ─────────────────────────────────────────────────────────────────────
+
+const shutdown = (signal: string) => {
+  console.log(`[discord-interactive] ${signal} received, shutting down...`);
+  client.destroy();
+  shutdownCliProcesses();
+  db.close();
+  process.exit(0);
+};
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+console.log("[discord-interactive] connecting gateway...");
+client.connect();
+
+await new Promise(() => {}); // keep process alive — gateway drives everything
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+
+function numericId(snowflake: string): number {
+  const n = BigInt(snowflake || "0");
+  return Number(n % BigInt(Number.MAX_SAFE_INTEGER));
+}

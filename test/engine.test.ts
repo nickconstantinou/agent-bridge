@@ -566,4 +566,338 @@ describe("BridgeEngine", () => {
       expect(promptArg).toContain("do something");
     });
   });
+
+  // ── Topic-aware /stop and session storage ───────────────────────────────────
+
+  function makeGroupMessage(text: string, userId = 42, chatId = 100, threadId = 7): TelegramMessage {
+    return {
+      message_id: Math.floor(Math.random() * 10000),
+      chat: { id: chatId, type: "supergroup" },
+      from: { id: userId, first_name: "Test" },
+      message_thread_id: threadId,
+      text,
+    };
+  }
+
+  describe("/stop in a supergroup thread", () => {
+    it("clears the pending queue for the thread-aware key so the next queued message gets position 1", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      // chatId=100, threadId=7 → topic-aware key is "100:7"
+      const threadKey = "100:7";
+      db.tryLock(threadKey); // hold lock to force queueing
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        {},
+      );
+
+      // Queue first message → position 1
+      await engine.handleMessages([makeGroupMessage("first message")]);
+      const firstQ = client.sendMessage.mock.calls.find((c: any[]) => c[0]?.text?.includes("position 1"));
+      expect(firstQ).toBeDefined();
+
+      client.sendMessage.mockClear();
+
+      // /stop should clear the topic-aware queue
+      await engine.handleUpdate({ update_id: 2, message: makeGroupMessage("/stop") });
+
+      client.sendMessage.mockClear();
+
+      // Next queued message must show position 1 again — not 2 — proving queue was cleared
+      await engine.handleMessages([makeGroupMessage("second message")]);
+      const secondQ = client.sendMessage.mock.calls.find((c: any[]) => c[0]?.text?.includes("Queued"));
+      expect(secondQ).toBeDefined();
+      expect(secondQ![0].text).toContain("position 1");
+    });
+
+    it("sends the abort confirmation into the correct thread", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        {},
+      );
+
+      await engine.handleUpdate({ update_id: 1, message: makeGroupMessage("/stop") });
+
+      expect(client.sendMessage).toHaveBeenCalledOnce();
+      const body = client.sendMessage.mock.calls[0][0];
+      expect(body.text).toContain("aborted");
+      expect(body.message_thread_id).toBe(7);
+    });
+  });
+
+  // ── Thread vs non-thread parity ──────────────────────────────────────────────
+
+  describe("thread vs non-thread parity", () => {
+    it("stores session under flat chatId for private chat messages", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      const rawOutput = JSON.stringify({ result: "done", session_id: "private-session-xyz" });
+
+      const runCliAsync = vi.fn().mockImplementation(async (
+        _command: string,
+        _args: string[],
+        _cwd: string,
+        options: any,
+      ) => {
+        const ctx = options.eventContext;
+        options.onEvent?.(eventType.runStarted({ ...ctx, command: "claude", cwd: "/", model: null }));
+        options.onEvent?.(eventType.textDelta({ ...ctx, text: rawOutput, source: "stdout" }));
+        options.onEvent?.(eventType.runCompleted({ ...ctx, text: rawOutput, sessionId: null }));
+        return { text: rawOutput };
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: true,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCliAsync },
+      );
+
+      // Private chat: makeMessage uses chat.type = "private", no message_thread_id
+      await engine.handleMessages([makeMessage("hello from private")]);
+
+      const flatKey = "100";
+      expect(db.getSession(flatKey, "claude")).toBe("private-session-xyz");
+      // No thread-scoped key must be set
+      expect(db.getSession("100:undefined:42", "claude")).toBeNull();
+    });
+
+    it("private chat /stop clears the queue for the flat chat key", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      const flatKey = "100";
+      db.tryLock(flatKey); // hold lock to force queueing
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        {},
+      );
+
+      // Queue a private-chat message — should sit at position 1
+      await engine.handleMessages([makeMessage("first message")]);
+      const firstQ = client.sendMessage.mock.calls.find((c: any[]) => c[0]?.text?.includes("position 1"));
+      expect(firstQ).toBeDefined();
+
+      client.sendMessage.mockClear();
+
+      // /stop in the same private chat clears the queue
+      await engine.handleUpdate({ update_id: 2, message: makeMessage("/stop") });
+
+      client.sendMessage.mockClear();
+
+      // Next message after stop must show position 1, not 2
+      await engine.handleMessages([makeMessage("second message")]);
+      const secondQ = client.sendMessage.mock.calls.find((c: any[]) => c[0]?.text?.includes("Queued"));
+      expect(secondQ).toBeDefined();
+      expect(secondQ![0].text).toContain("position 1");
+    });
+
+    it("two messages in the same thread queue behind each other", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      const threadKey = "100:7";
+      db.tryLock(threadKey); // hold lock
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        {},
+      );
+
+      // First message in thread 7 → queued at position 1
+      await engine.handleMessages([makeGroupMessage("msg one", 42, 100, 7)]);
+      const firstQ = client.sendMessage.mock.calls.find((c: any[]) => c[0]?.text?.includes("position 1"));
+      expect(firstQ).toBeDefined();
+
+      // Second message in the same thread 7 → queued at position 2
+      await engine.handleMessages([makeGroupMessage("msg two", 42, 100, 7)]);
+      const secondQ = client.sendMessage.mock.calls.find((c: any[]) => c[0]?.text?.includes("position 2"));
+      expect(secondQ).toBeDefined();
+    });
+
+    it("a message in a different thread is not blocked by a lock held in thread 7", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      // Hold lock only for thread 7
+      const thread7Key = "100:7";
+      db.tryLock(thread7Key);
+
+      const runCliAsync = vi.fn().mockImplementation(async (
+        _command: string,
+        _args: string[],
+        _cwd: string,
+        options: any,
+      ) => {
+        const ctx = options.eventContext;
+        options.onEvent?.(eventType.runStarted({ ...ctx, command: "claude", cwd: "/", model: null }));
+        options.onEvent?.(eventType.textDelta({ ...ctx, text: "hi", source: "stdout" }));
+        options.onEvent?.(eventType.runCompleted({ ...ctx, text: "hi", sessionId: null }));
+        return { text: "hi" };
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: true,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCliAsync },
+      );
+
+      // Message in thread 8 has a different key ("100:8") — should NOT be queued
+      await engine.handleMessages([makeGroupMessage("msg in thread 8", 42, 100, 8)]);
+
+      // runCli must have been called (not queued)
+      expect(runCliAsync).toHaveBeenCalledOnce();
+
+      // No "Queued" message should have been sent
+      const queuedMsg = client.sendMessage.mock.calls.find((c: any[]) => c[0]?.text?.includes("Queued"));
+      expect(queuedMsg).toBeUndefined();
+    });
+  });
+
+  describe("session stored under topic-aware key after execution", () => {
+    it("stores session under chatId:threadId for supergroup topic messages", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      // Claude --output-format json produces { result, session_id }
+      const rawOutput = JSON.stringify({ result: "done", session_id: "thread-session-abc" });
+
+      const runCliAsync = vi.fn().mockImplementation(async (
+        _command: string,
+        _args: string[],
+        _cwd: string,
+        options: any,
+      ) => {
+        const ctx = options.eventContext;
+        options.onEvent?.(eventType.runStarted({ ...ctx, command: "claude", cwd: "/", model: null }));
+        options.onEvent?.(eventType.textDelta({ ...ctx, text: rawOutput, source: "stdout" }));
+        options.onEvent?.(eventType.runCompleted({ ...ctx, text: rawOutput, sessionId: null }));
+        return { text: rawOutput };
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: true,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCliAsync },
+      );
+
+      await engine.handleMessages([makeGroupMessage("hello from thread")]);
+
+      // Session must be stored under topic-aware key, not flat chatId
+      const threadKey = "100:7";
+      const flatKey = "100";
+      expect(db.getSession(threadKey, "claude")).toBe("thread-session-abc");
+      expect(db.getSession(flatKey, "claude")).toBeNull();
+    });
+
+    it("drains queued supergroup topic messages with the original topic key", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+      const rawOutput = JSON.stringify({ result: "done", session_id: "queued-topic-session" });
+      const runCliAsync = vi.fn().mockImplementation(async (
+        _command: string,
+        _args: string[],
+        _cwd: string,
+        options: any,
+      ) => {
+        const ctx = options.eventContext;
+        options.onEvent?.(eventType.runStarted({ ...ctx, command: "claude", cwd: "/", model: null }));
+        options.onEvent?.(eventType.textDelta({ ...ctx, text: rawOutput, source: "stdout" }));
+        options.onEvent?.(eventType.runCompleted({ ...ctx, text: rawOutput, sessionId: null }));
+        return { text: rawOutput };
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: true,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCliAsync },
+      );
+
+      const topicKey = "100:7";
+      db.tryLock(topicKey);
+      await engine.handleMessages([makeGroupMessage("queued topic message", 42, 100, 7)]);
+
+      db.unlock(topicKey);
+      (engine as any)._drainQueue(topicKey);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+
+      expect(runCliAsync).toHaveBeenCalledOnce();
+      expect(db.getSession(topicKey, "claude")).toBe("queued-topic-session");
+      expect(db.getSession("100", "claude")).toBeNull();
+    });
+  });
 });

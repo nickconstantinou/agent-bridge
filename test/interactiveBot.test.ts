@@ -14,6 +14,7 @@ import {
   buildCliKeyboard,
   handleCliSwitchCallback,
   resolveUpdateChatKey,
+  resolveMessageThreadId,
   isAuthorizedInteractiveUpdate,
   buildInteractiveCommands,
   dispatchInteractiveWithFallback,
@@ -106,6 +107,122 @@ describe("resolveUpdateChatKey", () => {
       },
     };
     expect(resolveUpdateChatKey(update)).toBe("111");
+  });
+
+  it("includes thread id for group messages with message_thread_id", () => {
+    const update: TelegramUpdate = {
+      update_id: 5,
+      message: {
+        message_id: 20,
+        chat: { id: 100, type: "supergroup" },
+        from: { id: 99, first_name: "A" },
+        text: "hi",
+        message_thread_id: 42,
+      },
+    };
+    expect(resolveUpdateChatKey(update)).toBe("100:42");
+  });
+
+  it("returns plain chat id for private messages even if message_thread_id were set", () => {
+    const update: TelegramUpdate = {
+      update_id: 6,
+      message: {
+        message_id: 21,
+        chat: { id: 200, type: "private" },
+        from: { id: 99, first_name: "A" },
+        text: "hi",
+        message_thread_id: 7,
+      },
+    };
+    expect(resolveUpdateChatKey(update)).toBe("200");
+  });
+
+  it("returns plain chat id for group messages without a thread", () => {
+    const update: TelegramUpdate = {
+      update_id: 7,
+      message: {
+        message_id: 22,
+        chat: { id: 300, type: "group" },
+        from: { id: 99, first_name: "A" },
+        text: "hi",
+      },
+    };
+    expect(resolveUpdateChatKey(update)).toBe("300");
+  });
+
+  it("includes thread id for callback_query in a supergroup thread", () => {
+    const update: TelegramUpdate = {
+      update_id: 8,
+      callback_query: {
+        id: "cbq3",
+        from: { id: 99, first_name: "A" },
+        message: { message_id: 30, chat: { id: 500, type: "supergroup" }, message_thread_id: 77 },
+        data: "cli:claude",
+      },
+    };
+    expect(resolveUpdateChatKey(update)).toBe("500:77");
+  });
+
+  it("returns plain chat id for callback_query without a thread", () => {
+    const update: TelegramUpdate = {
+      update_id: 9,
+      callback_query: {
+        id: "cbq4",
+        from: { id: 99, first_name: "A" },
+        message: { message_id: 31, chat: { id: 600, type: "supergroup" } },
+        data: "cli:codex",
+      },
+    };
+    expect(resolveUpdateChatKey(update)).toBe("600");
+  });
+});
+
+// ── resolveMessageThreadId ────────────────────────────────────────────────────
+
+describe("resolveMessageThreadId", () => {
+  it("returns message_thread_id from a group message", () => {
+    const update: TelegramUpdate = {
+      update_id: 1,
+      message: {
+        message_id: 1,
+        chat: { id: 100, type: "supergroup" },
+        from: { id: 99, first_name: "A" },
+        text: "hi",
+        message_thread_id: 42,
+      },
+    };
+    expect(resolveMessageThreadId(update)).toBe(42);
+  });
+
+  it("returns undefined for a private message", () => {
+    const update: TelegramUpdate = {
+      update_id: 2,
+      message: {
+        message_id: 2,
+        chat: { id: 200, type: "private" },
+        from: { id: 99, first_name: "A" },
+        text: "hi",
+      },
+    };
+    expect(resolveMessageThreadId(update)).toBeUndefined();
+  });
+
+  it("returns message_thread_id from callback_query message in a group thread", () => {
+    const update: TelegramUpdate = {
+      update_id: 3,
+      callback_query: {
+        id: "cbq1",
+        from: { id: 99, first_name: "A" },
+        message: { message_id: 5, chat: { id: 300, type: "supergroup" }, message_thread_id: 99 },
+        data: "cli:claude",
+      },
+    };
+    expect(resolveMessageThreadId(update)).toBe(99);
+  });
+
+  it("returns undefined when no update has a thread", () => {
+    const update: TelegramUpdate = { update_id: 4 };
+    expect(resolveMessageThreadId(update)).toBeUndefined();
   });
 });
 

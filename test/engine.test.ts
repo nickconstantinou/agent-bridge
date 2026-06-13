@@ -899,5 +899,37 @@ describe("BridgeEngine", () => {
       expect(db.getSession(topicKey, "claude")).toBe("queued-topic-session");
       expect(db.getSession("100", "claude")).toBeNull();
     });
+
+    it("calls onAfterExecute hook with correct parameters on successful prompt execution", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+      const runCli = vi.fn().mockResolvedValue("CLI execution output");
+      const afterExecute = vi.fn();
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          hooks: {
+            onAfterExecute: afterExecute,
+          },
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("run testing command")]);
+
+      expect(runCli).toHaveBeenCalledOnce();
+      expect(afterExecute).toHaveBeenCalledOnce();
+      expect(afterExecute.mock.calls[0][0]).toBe("run testing command");
+      expect(afterExecute.mock.calls[0][1]).toBe("CLI execution output");
+      expect(afterExecute.mock.calls[0][2]).toEqual({ chatKey: "100" });
+    });
   });
 });

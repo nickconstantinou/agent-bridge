@@ -61,6 +61,8 @@ export interface BridgeEngineHooks {
   onBeforeExecute?: (prompt: string, ctx: HookContext) => Promise<string>;
   /** Called when the CLI throws a capacity/rate-limit error after all model fallbacks are exhausted. */
   onCapacityExhausted?: (chatKey: string) => void | Promise<void>;
+  /** Called after a successful CLI execution. */
+  onAfterExecute?: (prompt: string, resultText: string, ctx: HookContext) => void | Promise<void>;
 }
 
 export interface BridgeEngineOptions {
@@ -87,7 +89,7 @@ export interface ExecFns {
 // ── Internals ────────────────────────────────────────────────────────────────
 
 const MAX_QUEUE_DEPTH = 5;
-const ENGINE_CONTEXT_TURNS = 3;
+const ENGINE_CONTEXT_TURNS = 5;
 const ENGINE_TURN_TEXT_LIMIT = 1_200;
 type QueuedMessage = {
   prompt: string;
@@ -609,6 +611,9 @@ export class BridgeEngine {
       if (isAgentKind(this.kind)) {
         this._rememberTurn(chatKey, prompt, result.text);
       }
+      if (this.hooks.onAfterExecute) {
+        await this.hooks.onAfterExecute(prompt, result.text, { chatKey });
+      }
       await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
         console.error(`[${this.kind}] output file upload failed`, err)
       );
@@ -645,6 +650,9 @@ export class BridgeEngine {
         const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
         const retryResult = await this._runFreshAntigravityRetry(retryPrompt, chatId, chatKey, outDir, onProgress, attachments, "async", eventContext, runId, collect);
         this._rememberTurn(chatKey, prompt, retryResult.text);
+        if (this.hooks.onAfterExecute) {
+          await this.hooks.onAfterExecute(prompt, retryResult.text, { chatKey });
+        }
         return retryResult;
       }
       if (isCapacityExhaustedError(error as Error) && this.opts.botConfig.modelPreference.length > 1) {
@@ -731,6 +739,9 @@ export class BridgeEngine {
       if (isAgentKind(this.kind)) {
         this._rememberTurn(chatKey, prompt, result.text);
       }
+      if (this.hooks.onAfterExecute) {
+        await this.hooks.onAfterExecute(prompt, result.text, { chatKey });
+      }
       await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
         console.error(`[${this.kind}] output file upload failed`, err)
       );
@@ -763,6 +774,9 @@ export class BridgeEngine {
         const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
         const retryResult = await this._runFreshAntigravityRetry(retryPrompt, chatId, chatKey, outDir, () => {}, attachments, "sync", eventContext, runId, collect);
         this._rememberTurn(chatKey, prompt, retryResult.text);
+        if (this.hooks.onAfterExecute) {
+          await this.hooks.onAfterExecute(prompt, retryResult.text, { chatKey });
+        }
         return retryResult;
       }
       if (isCapacityExhaustedError(error as Error) && this.opts.botConfig.modelPreference.length > 1) {
@@ -934,10 +948,17 @@ export class BridgeEngine {
       if (result.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
       if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
       const currentModel = isAgentKind(this.kind) ? (this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null) : null;
-      return {
+      const finalResult = {
         ...result,
         text: `⚠️ Fell back to ${fallbackModel} (${currentModel || "default"} at capacity)\n\n${result.text}`,
       };
+      if (isAgentKind(this.kind)) {
+        this._rememberTurn(chatKey, prompt, finalResult.text);
+      }
+      if (this.hooks.onAfterExecute) {
+        await this.hooks.onAfterExecute(prompt, finalResult.text, { chatKey });
+      }
+      return finalResult;
     } catch (fallbackError) {
       if (fallbackLogFile) { try { rmSync(fallbackLogFile); } catch {} }
       throw fallbackError;

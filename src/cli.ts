@@ -755,10 +755,12 @@ export async function runCli(command: string, args: string[], cwd: string, optio
         doResolve(stdout);
       } else if (signal) {
         if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI killed by signal ${signal}`, category: "cli" }));
-        doReject(new Error(`CLI killed by signal ${signal}: ${stderr || stdout}`));
+        const combined = [stderr.trim(), stdout.trim()].filter(Boolean).join("\n");
+        doReject(new Error(`CLI killed by signal ${signal}: ${combined}`));
       } else if (code !== 0 && code !== null) {
         if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI exited with code ${code}`, category: "cli" }));
-        doReject(new Error(`CLI exited with code ${code}: ${stderr || stdout}`));
+        const combined = [stderr.trim(), stdout.trim()].filter(Boolean).join("\n");
+        doReject(new Error(`CLI exited with code ${code}: ${combined}`));
       } else {
         if (evtCtx) emit(evtType.runCompleted({ ...evtCtx, text: stdout, sessionId: null }));
         doResolve(stdout);
@@ -885,10 +887,12 @@ export async function runCliAsync(
         doResolve({ text: stdout });
       } else if (signal) {
         if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI killed by signal ${signal}`, category: "cli" }));
-        doReject(new Error(`CLI killed by signal ${signal}: ${stderr || stdout.slice(-2000)}`));
+        const combined = [stderr.trim(), stdout.slice(-2000).trim()].filter(Boolean).join("\n");
+        doReject(new Error(`CLI killed by signal ${signal}: ${combined}`));
       } else if (code !== 0 && code !== null) {
         if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI exited with code ${code}`, category: "cli" }));
-        doReject(new Error(`CLI exited with code ${code}: ${stderr || stdout.slice(-2000)}`));
+        const combined = [stderr.trim(), stdout.slice(-2000).trim()].filter(Boolean).join("\n");
+        doReject(new Error(`CLI exited with code ${code}: ${combined}`));
       } else {
         if (evtCtx) emit(evtType.runCompleted({ ...evtCtx, text: stdout, sessionId: null }));
         doResolve({ text: stdout });
@@ -916,9 +920,22 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
 
   // Parse original args to extract prompt, permissions, and output-format
   let prompt = "";
+  let conversationId: string | null = null;
+  let logFile: string | null = null;
+  let printTimeout: string | null = null;
+  let model: string | null = null;
+  let resumeSessionId: string | null = null;
+  const attachments: string[] = [];
+  let hasDoubleDash = false;
+  let hasDashPrompt = false;
+
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg.startsWith("-")) {
+    if (arg === "-") {
+      hasDashPrompt = true;
+    } else if (arg === "--") {
+      hasDoubleDash = true;
+    } else if (arg.startsWith("-")) {
       const hasValue = [
         "--model",
         "--resume",
@@ -928,13 +945,46 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
         "--settings",
         "--log-file",
         "-i",
+        "--conversation",
+        "--print-timeout",
       ].includes(arg);
-      if (hasValue) {
+
+      if (arg === "--conversation") {
+        conversationId = args[i + 1] ?? null;
+        i++;
+      } else if (arg === "--log-file") {
+        logFile = args[i + 1] ?? null;
+        i++;
+      } else if (arg === "--print-timeout") {
+        printTimeout = args[i + 1] ?? null;
+        i++;
+      } else if (arg === "--model") {
+        model = args[i + 1] ?? null;
+        i++;
+      } else if (arg === "--resume") {
+        resumeSessionId = args[i + 1] ?? null;
+        i++;
+      } else if (arg === "-i") {
+        const att = args[i + 1];
+        if (att) attachments.push(att);
+        i++;
+      } else if (hasValue) {
         i++;
       }
     } else {
-      prompt = arg;
+      if (isCodex && arg === "exec") {
+        // skip
+      } else if (isCodex && arg === "resume") {
+        resumeSessionId = args[i + 1] ?? null;
+        i++;
+      } else {
+        prompt = arg;
+      }
     }
+  }
+
+  if (hasDashPrompt && !prompt) {
+    prompt = "-";
   }
 
   let hasPermissionBypass = false;
@@ -962,8 +1012,17 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
 
   if (isAgy) {
     const newArgs: string[] = [];
+    if (conversationId) {
+      newArgs.push("--conversation", conversationId);
+    }
     if (hasPermissionBypass) {
       newArgs.push("--dangerously-skip-permissions");
+    }
+    if (logFile) {
+      newArgs.push("--log-file", logFile);
+    }
+    if (printTimeout) {
+      newArgs.push("--print-timeout", printTimeout);
     }
     newArgs.push("--print", prompt);
     return newArgs;
@@ -971,6 +1030,12 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
 
   if (isCodex) {
     const newArgs: string[] = ["exec"];
+    if (resumeSessionId) {
+      newArgs.push("resume", resumeSessionId);
+    }
+    if (model) {
+      newArgs.push("--model", model);
+    }
     if (hasPermissionBypass) {
       newArgs.push("--dangerously-bypass-approvals-and-sandbox");
     }
@@ -978,7 +1043,14 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
     if (hasJsonOutput) {
       newArgs.push("--json");
     }
-    newArgs.push(prompt);
+    if (attachments.length > 0) {
+      for (const att of attachments) {
+        newArgs.push("-i", att);
+      }
+      newArgs.push("--", "-");
+    } else {
+      newArgs.push(prompt);
+    }
     return newArgs;
   }
 

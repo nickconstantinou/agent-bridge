@@ -6,7 +6,7 @@
  * NEIGHBORS: src/index-worker.ts, src/engine.ts
  */
 
-export const CONTEXT_TURNS = 3;
+export const CONTEXT_TURNS = 5;
 
 export type WorkerTurn = { role: "user" | "assistant"; text: string };
 

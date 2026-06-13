@@ -517,4 +517,47 @@ describe("normalizeCliArgs — CLI argument translator", () => {
     expect(normalizeCliArgs("codex", args2)).toEqual(["exec", "--skip-git-repo-check", "--json", "hello"]);
     expect(normalizeCliArgs("agy", args2)).toEqual(["--print", "hello"]);
   });
+
+  it("preserves conversation, log-file, and print-timeout for Antigravity", async () => {
+    const { normalizeCliArgs } = await import("../src/cli.js");
+    const args = [
+      "--conversation", "abc-123",
+      "--dangerously-skip-permissions",
+      "--log-file", "/tmp/log.txt",
+      "--print-timeout", "60s",
+      "--print", "hello"
+    ];
+    expect(normalizeCliArgs("agy", args)).toEqual([
+      "--conversation", "abc-123",
+      "--dangerously-skip-permissions",
+      "--log-file", "/tmp/log.txt",
+      "--print-timeout", "60s",
+      "--print", "hello"
+    ]);
+  });
+
+  it("preserves resume, model, and attachments for Codex", async () => {
+    const { normalizeCliArgs } = await import("../src/cli.js");
+    const args = [
+      "exec", "resume", "session-xyz",
+      "--model", "gpt-5.5",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--skip-git-repo-check",
+      "--json",
+      "-i", "img1.png",
+      "-i", "img2.jpg",
+      "--", "-"
+    ];
+    expect(normalizeCliArgs("codex", args)).toEqual([
+      "exec", "resume", "session-xyz",
+      "--model", "gpt-5.5",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--skip-git-repo-check",
+      "--json",
+      "-i", "img1.png",
+      "-i", "img2.jpg",
+      "--", "-"
+    ]);
+  });
 });
+

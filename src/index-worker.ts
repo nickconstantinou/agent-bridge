@@ -129,6 +129,9 @@ const engines = Object.fromEntries(
               }
               return prompt;
             },
+            onAfterExecute: async (prompt: string, resultText: string, ctx: { chatKey: string }) => {
+              fallbackChain.addTurn(ctx.chatKey, "assistant", resultText);
+            },
           },
         },
         db,

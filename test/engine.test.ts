@@ -929,7 +929,7 @@ describe("BridgeEngine", () => {
       expect(afterExecute).toHaveBeenCalledOnce();
       expect(afterExecute.mock.calls[0][0]).toBe("run testing command");
       expect(afterExecute.mock.calls[0][1]).toBe("CLI execution output");
-      expect(afterExecute.mock.calls[0][2]).toEqual({ chatId: 100, chatKey: "100" });
+      expect(afterExecute.mock.calls[0][2]).toEqual({ chatId: 100, chatKey: "100", threadId: undefined });
     });
   });
 });

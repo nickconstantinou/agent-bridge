@@ -115,6 +115,15 @@ function topicChatKey(chatId: number, chatType: string, threadId?: number): stri
   return isGroup && threadId != null ? `${chatId}:${threadId}` : String(chatId);
 }
 
+function hookContext(chatId: number, chatKey: string, threadId?: number | string): HookContext {
+  const numericThreadId = typeof threadId === "string" ? Number(threadId) : threadId;
+  return {
+    chatId,
+    chatKey,
+    threadId: Number.isFinite(numericThreadId) ? numericThreadId : undefined,
+  };
+}
+
 function trimTurnText(text: string): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (normalized.length <= ENGINE_TURN_TEXT_LIMIT) return normalized;
@@ -218,14 +227,12 @@ export class BridgeEngine {
         for (const update of (updates.result as any) ?? []) {
           const updateId: number = update.update_id;
           offset = updateId + 1;
-          try {
-            await this.handleUpdate(update);
-          } catch (error) {
-            console.error(`[${this.kind}] update handling failed`, error);
-          }
           if (isAgentKind(this.kind)) {
             this.db.setLastUpdateId(this.kind, updateId);
           }
+          this.handleUpdate(update).catch((error) => {
+            console.error(`[${this.kind}] update handling failed`, error);
+          });
         }
       } catch (error) {
         const plan = planPollError(error, pollErrState, defaultErrorSleepMs);
@@ -612,7 +619,7 @@ export class BridgeEngine {
         this._rememberTurn(chatKey, prompt, result.text);
       }
       if (this.hooks.onAfterExecute) {
-        await this.hooks.onAfterExecute(prompt, result.text, { chatId, chatKey });
+        await this.hooks.onAfterExecute(prompt, result.text, hookContext(chatId, chatKey, body.message_thread_id));
       }
       await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
         console.error(`[${this.kind}] output file upload failed`, err)
@@ -651,7 +658,7 @@ export class BridgeEngine {
         const retryResult = await this._runFreshAntigravityRetry(retryPrompt, chatId, chatKey, outDir, onProgress, attachments, "async", eventContext, runId, collect);
         this._rememberTurn(chatKey, prompt, retryResult.text);
         if (this.hooks.onAfterExecute) {
-          await this.hooks.onAfterExecute(prompt, retryResult.text, { chatId, chatKey });
+          await this.hooks.onAfterExecute(prompt, retryResult.text, hookContext(chatId, chatKey, body.message_thread_id));
         }
         return retryResult;
       }
@@ -740,7 +747,7 @@ export class BridgeEngine {
         this._rememberTurn(chatKey, prompt, result.text);
       }
       if (this.hooks.onAfterExecute) {
-        await this.hooks.onAfterExecute(prompt, result.text, { chatId, chatKey });
+        await this.hooks.onAfterExecute(prompt, result.text, hookContext(chatId, chatKey, body.message_thread_id));
       }
       await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
         console.error(`[${this.kind}] output file upload failed`, err)
@@ -775,7 +782,7 @@ export class BridgeEngine {
         const retryResult = await this._runFreshAntigravityRetry(retryPrompt, chatId, chatKey, outDir, () => {}, attachments, "sync", eventContext, runId, collect);
         this._rememberTurn(chatKey, prompt, retryResult.text);
         if (this.hooks.onAfterExecute) {
-          await this.hooks.onAfterExecute(prompt, retryResult.text, { chatId, chatKey });
+          await this.hooks.onAfterExecute(prompt, retryResult.text, hookContext(chatId, chatKey, body.message_thread_id));
         }
         return retryResult;
       }
@@ -956,7 +963,7 @@ export class BridgeEngine {
         this._rememberTurn(chatKey, prompt, finalResult.text);
       }
       if (this.hooks.onAfterExecute) {
-        await this.hooks.onAfterExecute(prompt, finalResult.text, { chatId, chatKey });
+        await this.hooks.onAfterExecute(prompt, finalResult.text, hookContext(chatId, chatKey, eventContext?.threadId));
       }
       return finalResult;
     } catch (fallbackError) {

@@ -16,6 +16,8 @@ import {
   resolveUpdateChatKey,
   resolveMessageThreadId,
   isAuthorizedInteractiveUpdate,
+  isCliCommandText,
+  describeInteractiveUpdateForLog,
   buildInteractiveCommands,
   dispatchInteractiveWithFallback,
   type CliKind,
@@ -63,6 +65,86 @@ describe("buildCliStatusText", () => {
     for (const cli of VALID_CLI_KINDS) {
       expect(text).toContain(cli);
     }
+  });
+});
+
+describe("isCliCommandText", () => {
+  it("matches bare /cli", () => {
+    expect(isCliCommandText("/cli", "crawlerinteractivebot")).toBe(true);
+  });
+
+  it("matches group command suffix for this bot", () => {
+    expect(isCliCommandText("/cli@crawlerinteractivebot", "crawlerinteractivebot")).toBe(true);
+  });
+
+  it("ignores group command suffix for a different bot", () => {
+    expect(isCliCommandText("/cli@otherbot", "crawlerinteractivebot")).toBe(false);
+  });
+});
+
+describe("describeInteractiveUpdateForLog", () => {
+  it("summarizes group update metadata without message text", () => {
+    const update: TelegramUpdate = {
+      update_id: 10,
+      message: {
+        message_id: 20,
+        chat: { id: -100123, type: "supergroup", title: "Ops" },
+        from: { id: 77, first_name: "A", username: "alice" },
+        text: "secret message body",
+        message_thread_id: 42,
+      },
+    };
+
+    expect(describeInteractiveUpdateForLog(update)).toEqual({
+      updateId: 10,
+      kind: "message",
+      chatId: -100123,
+      chatType: "supergroup",
+      threadId: 42,
+      fromId: 77,
+      senderChatId: null,
+      content: "text",
+      contentDetail: "text",
+    });
+  });
+
+  it("captures anonymous admin sender_chat metadata", () => {
+    const update: TelegramUpdate = {
+      update_id: 11,
+      message: {
+        message_id: 21,
+        chat: { id: -100123, type: "supergroup", title: "Ops" },
+        sender_chat: { id: -100123, type: "supergroup", title: "Ops" },
+        text: "anonymous admin text",
+      },
+    };
+
+    expect(describeInteractiveUpdateForLog(update)).toMatchObject({
+      updateId: 11,
+      chatId: -100123,
+      fromId: null,
+      senderChatId: -100123,
+      content: "text",
+      contentDetail: "text",
+    });
+  });
+
+  it("names the subtype for non-text service messages", () => {
+    const update: TelegramUpdate = {
+      update_id: 12,
+      message: {
+        message_id: 22,
+        chat: { id: -100123, type: "supergroup", title: "Ops" },
+        from: { id: 77, first_name: "A" },
+        new_chat_members: [{ id: 123, first_name: "Bot", is_bot: true }],
+      } as any,
+    };
+
+    expect(describeInteractiveUpdateForLog(update)).toMatchObject({
+      updateId: 12,
+      content: "non_text",
+      contentDetail: "new_chat_members",
+    });
   });
 });
 
@@ -462,4 +544,3 @@ describe("dispatchInteractiveWithFallback", () => {
     expect(contextPreambles.get("chat:1")).toContain("previous question");
   });
 });
-

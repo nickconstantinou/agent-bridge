@@ -78,6 +78,12 @@ export interface TelegramMessage {
     last_name?: string;
     username?: string;
   };
+  sender_chat?: {
+    id: number;
+    type: string;
+    title?: string;
+    username?: string;
+  };
   text?: string;
   caption?: string;
   photo?: TelegramPhotoSize[];
@@ -125,4 +131,3 @@ export interface CliResult {
   text: string;
   sessionId: string | null;
 }
-

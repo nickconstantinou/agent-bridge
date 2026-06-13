@@ -14,6 +14,18 @@ export type CliKind = "codex" | "claude" | "antigravity";
 const VALID_CLI_KINDS: CliKind[] = ["codex", "claude", "antigravity"];
 const DEFAULT_CLI: CliKind = "codex";
 
+export interface InteractiveUpdateLogSummary {
+  updateId: number;
+  kind: "message" | "callback_query" | "other";
+  chatId: number | null;
+  chatType: string | null;
+  threadId: number | null;
+  fromId: number | null;
+  senderChatId: number | null;
+  content: "text" | "caption" | "non_text" | null;
+  contentDetail: string | null;
+}
+
 // ── DB helpers ────────────────────────────────────────────────────────────────
 
 export function getUserCliPreference(db: BridgeDb, chatId: string): CliKind {
@@ -60,6 +72,13 @@ export function buildCliStatusText(activeCli: CliKind): string {
     `Available: ${VALID_CLI_KINDS.join(", ")}`,
     `Switch with: /switch ${others[0]}`,
   ].join("\n");
+}
+
+export function isCliCommandText(rawText: string, botUsername?: string | null): boolean {
+  const command = rawText.trim().split(/\s+/, 1)[0]?.toLowerCase();
+  if (command === "/cli") return true;
+  if (!botUsername || !command?.startsWith("/cli@")) return false;
+  return command.slice("/cli@".length) === botUsername.toLowerCase();
 }
 
 export function buildCliKeyboard(activeCli: CliKind): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
@@ -121,10 +140,68 @@ export function isAuthorizedInteractiveUpdate(
   return allowedUserIds.has(String(userId));
 }
 
+export function describeInteractiveUpdateForLog(update: TelegramUpdate): InteractiveUpdateLogSummary {
+  const message = update.message ?? update.callback_query?.message;
+  const sender = update.message?.from ?? update.callback_query?.from;
+  const contentDetail = describeMessageContentDetail(update.message);
+  return {
+    updateId: update.update_id,
+    kind: update.message ? "message" : update.callback_query ? "callback_query" : "other",
+    chatId: message?.chat?.id ?? null,
+    chatType: message?.chat?.type ?? null,
+    threadId: message?.message_thread_id ?? null,
+    fromId: sender?.id ?? null,
+    senderChatId: update.message?.sender_chat?.id ?? null,
+    content: update.message?.text ? "text" : update.message?.caption ? "caption" : update.message ? "non_text" : null,
+    contentDetail,
+  };
+}
+
+export function isGroupInteractiveUpdate(update: TelegramUpdate): boolean {
+  const chatType = update.message?.chat?.type ?? update.callback_query?.message?.chat?.type;
+  return chatType === "group" || chatType === "supergroup";
+}
+
 // ── Internal ──────────────────────────────────────────────────────────────────
 
 function isValidCliKind(value: unknown): value is CliKind {
   return VALID_CLI_KINDS.includes(value as CliKind);
+}
+
+function describeMessageContentDetail(message: TelegramUpdate["message"]): string | null {
+  if (!message) return null;
+  if (message.text) return "text";
+  if (message.caption) return "caption";
+
+  const subtypeKeys = [
+    "photo",
+    "document",
+    "sticker",
+    "animation",
+    "video",
+    "voice",
+    "audio",
+    "video_note",
+    "contact",
+    "location",
+    "venue",
+    "poll",
+    "dice",
+    "new_chat_members",
+    "left_chat_member",
+    "pinned_message",
+    "forum_topic_created",
+    "forum_topic_closed",
+    "forum_topic_reopened",
+    "general_forum_topic_hidden",
+    "general_forum_topic_unhidden",
+    "migrate_to_chat_id",
+    "migrate_from_chat_id",
+    "successful_payment",
+  ];
+
+  const record = message as unknown as Record<string, unknown>;
+  return subtypeKeys.find((key) => record[key] != null) ?? "unknown_non_text";
 }
 
 // ── Interactive Dispatch with Fallback ────────────────────────────────────────

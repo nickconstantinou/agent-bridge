@@ -28,6 +28,7 @@ import {
   handleCliSwitchCallback,
   buildInteractiveCommands,
   resolveUpdateChatKey,
+  resolveMessageThreadId,
   isAuthorizedInteractiveUpdate,
   dispatchInteractiveWithFallback,
   type CliKind,
@@ -159,13 +160,14 @@ for (;;) {
         if (message) {
           const rawText = (message.text || "").trim();
           const chatId = message.chat.id;
-          const chatKey = String(chatId);
+          const chatKey = resolveUpdateChatKey(update as TelegramUpdate) ?? String(chatId);
 
           if (rawText.toLowerCase() === "/cli") {
             const pref = getUserCliPreference(db, chatKey);
             await sendTelegramMessage({ client, kind: "interactive", chatId, body: {
               text: buildCliStatusText(pref),
               reply_markup: buildCliKeyboard(pref),
+              message_thread_id: message.message_thread_id,
             } });
             continue;
           }
@@ -178,7 +180,7 @@ for (;;) {
           if (newCli !== null) {
             const chatId = cbq.message?.chat?.id;
             const messageId = cbq.message?.message_id;
-            const chatKey = chatId != null ? String(chatId) : null;
+            const chatKey = resolveUpdateChatKey(update as TelegramUpdate);
             if (chatKey) setUserCliPreference(db, chatKey, newCli);
             await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `Switched to ${newCli}` });
             if (chatId && messageId) {
@@ -205,6 +207,7 @@ for (;;) {
             fallbackChain.addTurn(chatKey, "user", messageText);
           }
           const chatId = (update as TelegramUpdate).message?.chat?.id ?? (update as TelegramUpdate).callback_query?.message?.chat?.id;
+          const threadId = resolveMessageThreadId(update as TelegramUpdate);
           if (chatId != null) {
             await dispatchInteractiveWithFallback(update as TelegramUpdate, chatKey, {
               engines,
@@ -213,7 +216,7 @@ for (;;) {
               contextPreambles,
               db,
               notify: async (msg) => {
-                await sendTelegramMessage({ client, kind: "interactive", chatId, body: { text: msg } });
+                await sendTelegramMessage({ client, kind: "interactive", chatId, body: { text: msg, message_thread_id: threadId } });
               },
               onCliSwitched: async (newCli) => {
                 await client.setMyCommands({ commands: buildInteractiveCommands(newCli) })

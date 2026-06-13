@@ -93,10 +93,22 @@ export function buildInteractiveCommands(pref: CliKind): Array<{ command: string
 
 // ── Update routing helpers ────────────────────────────────────────────────────
 
-/** Returns the chat key (string chat_id) from a message or callback_query update, or null. */
+/** Returns the chat key from an update. For group/supergroup messages with a thread, returns "chatId:threadId". */
 export function resolveUpdateChatKey(update: TelegramUpdate): string | null {
-  const chatId = update.message?.chat?.id ?? update.callback_query?.message?.chat?.id;
-  return chatId != null ? String(chatId) : null;
+  const msg = update.message;
+  const cbqMsg = update.callback_query?.message;
+  const chatId = msg?.chat?.id ?? cbqMsg?.chat?.id;
+  if (chatId == null) return null;
+  const source = msg ?? cbqMsg;
+  const isGroup = source?.chat?.type === "group" || source?.chat?.type === "supergroup";
+  const threadId = source?.message_thread_id;
+  if (isGroup && threadId != null) return `${chatId}:${threadId}`;
+  return String(chatId);
+}
+
+/** Returns the message_thread_id from a message or callback_query update, or undefined. */
+export function resolveMessageThreadId(update: TelegramUpdate): number | undefined {
+  return update.message?.message_thread_id ?? update.callback_query?.message?.message_thread_id;
 }
 
 /** Returns true if the update's sender (message.from or callback_query.from) is in the allowed set. */

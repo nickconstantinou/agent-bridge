@@ -108,6 +108,11 @@ function isAntigravityPrintTimeoutError(error: Error): boolean {
   return /agy execution timed out waiting for response|print mode timed out waiting for response/i.test(error.message ?? "");
 }
 
+function topicChatKey(chatId: number, chatType: string, threadId?: number): string {
+  const isGroup = chatType === "group" || chatType === "supergroup";
+  return isGroup && threadId != null ? `${chatId}:${threadId}` : String(chatId);
+}
+
 function trimTurnText(text: string): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (normalized.length <= ENGINE_TURN_TEXT_LIMIT) return normalized;
@@ -245,8 +250,8 @@ export class BridgeEngine {
     const rawText = (message.text || message.caption || "").trim().toLowerCase();
     if (rawText === "/stop" || rawText === "/cancel") {
       const chatId = message.chat.id;
-      const chatKey = String(chatId);
       const threadId = message.message_thread_id;
+      const chatKey = topicChatKey(chatId, message.chat.type, threadId);
       const wasAborted = abortCliProcess(chatKey);
       if (wasAborted) {
         this.db.unlock(chatKey);
@@ -277,11 +282,8 @@ export class BridgeEngine {
     if (!commandText && !prompt) return;
 
     const chatId = primaryMessage.chat.id;
-    const isGroup = primaryMessage.chat.type === "group" || primaryMessage.chat.type === "supergroup";
     const userId = primaryMessage.from?.id;
-    const chatKey = isGroup
-      ? `${chatId}:${threadId ?? ""}:${userId ?? ""}`
-      : String(chatId);
+    const chatKey = topicChatKey(chatId, primaryMessage.chat.type, threadId);
     this.abortedChats.delete(chatKey);
 
     const hookCtx: HookContext = { chatId, chatKey, threadId, userId };
@@ -340,7 +342,7 @@ export class BridgeEngine {
           }
           if (commandResponse.kind === "execute") {
             // Fall through to execution with the overridden prompt
-            return this._executeAndSend(commandResponse.prompt, chatId, chatKey, threadId, userId, hookCtx, []);
+            return this._executeAndSend(commandResponse.prompt, chatId, chatKey, primaryMessage.chat.type, threadId, userId, hookCtx, []);
           }
         }
         return; // Unrecognised command for agent bot — ignore
@@ -363,13 +365,14 @@ export class BridgeEngine {
     }
     const attachments: string[] = attachmentLocalPath ? [attachmentLocalPath] : [];
 
-    return this._executeAndSend(prompt!, chatId, chatKey, threadId, userId, hookCtx, attachments, attachmentLocalPath);
+    return this._executeAndSend(prompt!, chatId, chatKey, primaryMessage.chat.type, threadId, userId, hookCtx, attachments, attachmentLocalPath);
   }
 
   private async _executeAndSend(
     rawPrompt: string,
     chatId: number,
     chatKey: string,
+    chatType: string,
     threadId: number | undefined,
     userId: number | undefined,
     hookCtx: HookContext,
@@ -397,7 +400,7 @@ export class BridgeEngine {
         });
         return;
       }
-      queue.push({ prompt, chatId, threadId, chatKey, chatType: "private", userId });
+      queue.push({ prompt, chatId, threadId, chatKey, chatType, userId });
       this.pendingQueues.set(chatKey, queue);
       if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
       await this.sendText(chatId, {
@@ -419,12 +422,12 @@ export class BridgeEngine {
           runId,
           onEvent: (e) => collect(e),
           execution: (onProgress: (text: string) => void) =>
-            this.executePromptAsync(prompt, sessionId, chatId, { message_thread_id: threadId }, onProgress, attachments, eventContext, runId, collect),
+            this.executePromptAsync(prompt, sessionId, chatId, { message_thread_id: threadId }, onProgress, attachments, eventContext, runId, collect, chatKey),
         });
         finalize();
       } else {
         const { runId, eventContext, collect, finalize } = this._createEventContext(chatId, threadId);
-        const result = await this.executePrompt(prompt, sessionId, chatId, { message_thread_id: threadId }, attachments, eventContext, runId, collect);
+        const result = await this.executePrompt(prompt, sessionId, chatId, { message_thread_id: threadId }, attachments, eventContext, runId, collect, chatKey);
         finalize();
         // For the sync path the final message is sent below; build a view from the
         // collected events so the new event-driven path drives the output text.
@@ -545,8 +548,8 @@ export class BridgeEngine {
     eventContext: CliOptions["eventContext"] = undefined as any,
     runId: string | null = null,
     collect: ((e: BridgeEvent) => void) | null = null,
+    chatKey: string = String(chatId),
   ): Promise<CliResult> {
-    const chatKey = String(chatId);
     const executionKind = this._executionKind();
     const model = isAgentKind(this.kind)
       ? (this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null)
@@ -635,7 +638,7 @@ export class BridgeEngine {
         console.warn(`[${this.kind}] session ID invalid, retrying with fresh session...`);
         if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
         const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
-        return this.executePromptAsync(retryPrompt, null, chatId, body, onProgress, attachments, eventContext, runId, collect);
+        return this.executePromptAsync(retryPrompt, null, chatId, body, onProgress, attachments, eventContext, runId, collect, chatKey);
       }
       if (executionKind === "antigravity" && isAntigravityPrintTimeoutError(error as Error)) {
         if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
@@ -664,9 +667,9 @@ export class BridgeEngine {
     eventContext: CliOptions["eventContext"] = undefined as any,
     runId: string | null = null,
     collect: ((e: BridgeEvent) => void) | null = null,
+    chatKey: string = String(chatId),
   ): Promise<CliResult> {
     const { message_thread_id: threadId } = body;
-    const chatKey = String(chatId);
     const executionKind = this._executionKind();
     const model = isAgentKind(this.kind)
       ? (this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null)
@@ -753,7 +756,7 @@ export class BridgeEngine {
         console.warn(`[${this.kind}] session ID invalid, retrying with fresh session...`);
         if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
         const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
-        return this.executePrompt(retryPrompt, null, chatId, body, attachments, eventContext, runId, collect);
+        return this.executePrompt(retryPrompt, null, chatId, body, attachments, eventContext, runId, collect, chatKey);
       }
       if (executionKind === "antigravity" && isAntigravityPrintTimeoutError(error as Error)) {
         if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);

@@ -1,6 +1,6 @@
 import { mkdir, readdir, unlink, rm } from "node:fs/promises";
 import { join, extname, basename } from "node:path";
-import type { TelegramClient } from "./telegram.js";
+import type { MessagingPlatform } from "./platform.js";
 
 const BRIDGE_OUT_BASE = "/tmp/bridge-out";
 
@@ -30,7 +30,7 @@ const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
 export async function uploadOutputFiles(
   outDir: string,
   chatId: number,
-  client: Pick<TelegramClient, "sendPhoto" | "sendDocument">,
+  client: Pick<MessagingPlatform, "sendPhoto" | "sendDocument">,
 ): Promise<void> {
   const files = await collectOutputFiles(outDir);
   if (files.length > 0) {

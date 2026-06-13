@@ -1,0 +1,18 @@
+[Unit]
+Description=Discord bridge bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=BRIDGE_USER
+EnvironmentFile=-/etc/default/agent-bridge-shared
+EnvironmentFile=/etc/default/agent-bridge-discord
+ExecStart=/usr/bin/env bash -lc 'export PATH="$(dirname "${NODE_BIN:?}"):$PATH"; cd "${BRIDGE_PROJECT_DIR:?}" && exec "${NODE_BIN:?}" ./node_modules/tsx/dist/cli.mjs src/index-discord.ts'
+Restart=always
+RestartSec=5
+KillMode=control-group
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

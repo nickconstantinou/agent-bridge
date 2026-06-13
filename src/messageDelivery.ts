@@ -1,6 +1,6 @@
 import { splitTelegramText, toTelegramEntitiesText } from "./render.js";
 import { toUserMessage, isCapacityExhaustedError } from "./cli.js";
-import type { TelegramClient } from "./telegram.js";
+import type { MessagingPlatform } from "./platform.js";
 import type { CliResult } from "./types.js";
 import { type as eventType } from "./events/types.js";
 import type { BridgeEvent } from "./events/types.js";
@@ -50,7 +50,7 @@ export async function sendTelegramMessage({
   chatId,
   body,
 }: {
-  client: TelegramClient;
+  client: MessagingPlatform;
   kind: string;
   chatId: number;
   body: any;
@@ -154,7 +154,7 @@ export async function sendMessageWithProgress({
   runId,
   onEvent,
 }: {
-  client: TelegramClient;
+  client: MessagingPlatform;
   kind: string;
   chatId: number;
   execution: ((onProgress: (text: string) => void) => Promise<CliResult>) | Promise<CliResult>;

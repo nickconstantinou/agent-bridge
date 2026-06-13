@@ -25,7 +25,8 @@ import {
   setAntigravityModel,
   scrubOutputDir,
 } from "./cli.js";
-import { TelegramClient, MediaGroupBuffer } from "./telegram.js";
+import { MediaGroupBuffer } from "./telegram.js";
+import type { MessagingPlatform } from "./platform.js";
 import { downloadTelegramAttachment } from "./fileDownload.js";
 import { prepareOutputDir, uploadOutputFiles } from "./fileOutput.js";
 import { parseClaudeStreamJsonOutput } from "./claudeStreamJson.js";
@@ -130,7 +131,7 @@ function trimTurnText(text: string): string {
   return `${normalized.slice(0, ENGINE_TURN_TEXT_LIMIT - 15).trimEnd()}... [truncated]`;
 }
 
-function createTypingTracker(client: TelegramClient, chatId: number, kind: string, body: any = {}) {
+function createTypingTracker(client: MessagingPlatform, chatId: number, kind: string, body: any = {}) {
   let timer: NodeJS.Timeout | null = null;
   let active = false;
   const { message_thread_id: threadId } = body;
@@ -163,7 +164,7 @@ function createTypingTracker(client: TelegramClient, chatId: number, kind: strin
 
 export class BridgeEngine {
   readonly kind: string;
-  readonly client: TelegramClient;
+  readonly client: MessagingPlatform;
   readonly mediaBuffer: MediaGroupBuffer;
 
   private readonly opts: BridgeEngineOptions;
@@ -177,7 +178,7 @@ export class BridgeEngine {
   constructor(
     opts: BridgeEngineOptions,
     db: BridgeDb,
-    client: TelegramClient,
+    client: MessagingPlatform,
     exec: Partial<ExecFns> = {},
   ) {
     this.opts = opts;

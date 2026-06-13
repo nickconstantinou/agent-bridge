@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join, extname } from "node:path";
 import type { TelegramMessage } from "./types.js";
-import type { TelegramClient } from "./telegram.js";
+import type { MessagingPlatform } from "./platform.js";
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB — Telegram bot API limit
 
@@ -32,7 +32,7 @@ export interface AttachmentInfo {
 }
 
 export async function downloadTelegramAttachment(
-  client: Pick<TelegramClient, "getFilePath" | "downloadFile">,
+  client: Pick<MessagingPlatform, "getFilePath" | "downloadFile">,
   message: TelegramMessage,
   destDir: string,
 ): Promise<AttachmentInfo | null> {

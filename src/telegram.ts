@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
 import type { TelegramMessage } from "./types.js";
+import type { MessagingPlatform } from "./platform.js";
 
 const TELEGRAM_FILE_BASE_URL = "https://api.telegram.org/file/bot";
 
@@ -30,7 +31,7 @@ export interface TelegramResponse<T> {
   retry_after?: number;
 }
 
-export class TelegramClient {
+export class TelegramClient implements MessagingPlatform {
   private readonly token: string;
   fetch: typeof fetch;
   baseUrl: string;

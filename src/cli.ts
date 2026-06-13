@@ -943,8 +943,14 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
     if (args[i] === "--dangerously-skip-permissions") {
       hasPermissionBypass = true;
     }
+    if (args[i] === "--dangerously-bypass-approvals-and-sandbox") {
+      hasPermissionBypass = true;
+    }
     if (args[i] === "--permission-mode" && args[i + 1] === "acceptEdits") {
       hasPermissionBypass = true;
+    }
+    if (args[i] === "--json") {
+      hasJsonOutput = true;
     }
     if (args[i] === "--output-format" && args[i + 1] === "json") {
       hasJsonOutput = true;
@@ -978,4 +984,3 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
 
   return args;
 }
-

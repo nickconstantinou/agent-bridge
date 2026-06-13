@@ -488,6 +488,18 @@ describe("normalizeCliArgs — CLI argument translator", () => {
     expect(normalizeCliArgs("/opt/codex/bin/codex", args)).toEqual(["exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "hello"]);
   });
 
+  it("preserves Codex trusted bypass when normalizing already-built Codex args", async () => {
+    const { normalizeCliArgs } = await import("../src/cli.js");
+    const args = ["exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "--json", "hello"];
+    expect(normalizeCliArgs("codex", args)).toEqual([
+      "exec",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--skip-git-repo-check",
+      "--json",
+      "hello",
+    ]);
+  });
+
   it("handles basic arguments without permissions", async () => {
     const { normalizeCliArgs } = await import("../src/cli.js");
     const args = ["--print", "--output-format", "text", "hello"];
@@ -506,4 +518,3 @@ describe("normalizeCliArgs — CLI argument translator", () => {
     expect(normalizeCliArgs("agy", args2)).toEqual(["--print", "hello"]);
   });
 });
-

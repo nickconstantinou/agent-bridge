@@ -135,7 +135,7 @@ Use the **Agy (Gemini) CLI** for all image generation — not the raw `gemini` c
 **Invocation pattern:**
 
 ```bash
-GEMINI_CLI_PATH=/home/content-crawler/.nvm/versions/node/v20.20.2/bin/gemini
+GEMINI_CLI_PATH=/home/content-crawler/.nvm/versions/node/v24.15.0/bin/gemini
 
 $GEMINI_CLI_PATH -y -p "Generate a photorealistic image of <description>. Use Imagen to generate directly — do not fetch from the web. Save the result as <output_path>."
 ```

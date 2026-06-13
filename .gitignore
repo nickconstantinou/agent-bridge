@@ -17,9 +17,10 @@ dist/
 
 .env.antigravity
 .data-antigravity/
+.data-interactive/
+.data-worker/
 .env.shared
 .antigravitycli/
 .env.health
 .data-health/
 cache/
-

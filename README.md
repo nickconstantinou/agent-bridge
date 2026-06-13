@@ -33,6 +33,8 @@ Polls a Telegram bot for messages, routes them to the Codex, Antigravity, or Cla
 
 ## Setup
 
+> Maintenance note: the repo-local Claude Code dependency is pinned at `^2.1.177`, and the lockfile carries `esbuild` `0.28.1` to include the June 2026 audit fix.
+
 **Recommended — let the installer generate env files:**
 
 ```bash

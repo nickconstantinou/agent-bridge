@@ -18,7 +18,7 @@
     "scan-token-savings": "tsx scripts/scan-token-savings.ts"
   },
   "dependencies": {
-    "@anthropic-ai/claude-code": "^2.1.175",
+    "@anthropic-ai/claude-code": "^2.1.177",
     "@google/agy-cli": "file:.data/mock-agy-cli",
     "@openai/codex": "^0.139.0",
     "better-sqlite3": "^12.9.0",

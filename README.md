@@ -144,10 +144,19 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 
 ## Group and multi-user usage
 
-The bot works in Telegram groups and supergroups. Two requirements:
+The bot works in Telegram groups and supergroups.
 
-1. **Disable Bot Privacy Mode** via BotFather: `/mybots → [your bot] → Bot Settings → Group Privacy → Turn off`. Without this, Telegram will not deliver non-command messages to the bot.
-2. Commands work with or without the bot username suffix: `/reset` and `/reset@mybotname` are both recognised.
+### Adding a bot to a group — required order
+
+**Do this before adding the bot to any group.** Changing settings after the fact requires removing and re-adding the bot to take effect.
+
+1. **Disable Group Privacy in BotFather first** — `/mybots → [your bot] → Bot Settings → Group Privacy → Turn off`. Without this, Telegram silently drops all non-command, non-mention messages. The setting must be OFF *before* the bot joins the group; toggling it after the bot is already a member does not retroactively fix delivery — you must remove and re-add the bot.
+
+2. **Add the bot to the group.**
+
+3. **Grant admin rights if using forum topics** — In forum-style supergroups (groups with Topics enabled), the bot must be a group admin with at least "Post Messages" permission to reply in topics. Without this, responses fail with `TOPIC_CLOSED`. Standard groups without topics do not require admin rights.
+
+Commands work with or without the bot username suffix: `/reset` and `/reset@mybotname` are both recognised.
 
 **Per-topic sessions:** In forum-style supergroups, each topic gets its own isolated CLI session. Sending in Topic A and Topic B maintains independent conversation threads with the agent.
 

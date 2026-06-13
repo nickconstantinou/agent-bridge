@@ -30,6 +30,9 @@ import {
   resolveUpdateChatKey,
   resolveMessageThreadId,
   isAuthorizedInteractiveUpdate,
+  isCliCommandText,
+  describeInteractiveUpdateForLog,
+  isGroupInteractiveUpdate,
   dispatchInteractiveWithFallback,
   type CliKind,
 } from "./interactiveBot.js";
@@ -88,6 +91,15 @@ if (soulContext) console.log(`[interactive] loaded SOUL.md context (${soulContex
 
 const db = openDb(dbPath);
 const client = new TelegramClient(token, fetch, 45_000);
+let botUsername = process.env.TELEGRAM_BOT_USERNAME || null;
+if (!botUsername) {
+  try {
+    const me = await client.call<{ username?: string }>("getMe");
+    botUsername = me.result.username ?? null;
+  } catch (err) {
+    console.warn("[interactive] getMe failed; group-suffixed /cli commands disabled", err);
+  }
+}
 
 // Fallback chain state
 const cliChain = (process.env.INTERACTIVE_CLI_CHAIN || process.env.WORKER_CLI_CHAIN || "codex,claude,antigravity")
@@ -140,6 +152,8 @@ const engines = Object.fromEntries(
 const defaultPref = getUserCliPreference(db, "default");
 await client.setMyCommands({ commands: buildInteractiveCommands(defaultPref) })
   .catch((err: unknown) => console.warn("[interactive] setMyCommands failed", err));
+await client.setMyCommands({ commands: buildInteractiveCommands(defaultPref), scope: { type: "all_group_chats" } })
+  .catch((err: unknown) => console.warn("[interactive] setMyCommands (groups) failed", err));
 
 console.log("[interactive] starting polling...");
 
@@ -156,16 +170,30 @@ for (;;) {
       db.setLastUpdateId(POLL_KIND, updateId);
 
       try {
-        if (!isAuthorizedInteractiveUpdate(update as TelegramUpdate, allowedUserIds)) continue;
+        const typedUpdate = update as TelegramUpdate;
+        const isGroupUpdate = isGroupInteractiveUpdate(typedUpdate);
+        if (isGroupUpdate) {
+          console.log("[interactive] update.received", JSON.stringify(describeInteractiveUpdateForLog(typedUpdate)));
+        }
+
+        if (!isAuthorizedInteractiveUpdate(typedUpdate, allowedUserIds)) {
+          if (isGroupUpdate) {
+            console.warn("[interactive] update.ignored", JSON.stringify({
+              ...describeInteractiveUpdateForLog(typedUpdate),
+              reason: typedUpdate.message?.sender_chat && !typedUpdate.message?.from ? "anonymous_sender_chat" : "unauthorized_user",
+            }));
+          }
+          continue;
+        }
 
         // Handle /cli before engine dispatch
-        const message = (update as TelegramUpdate).message;
+        const message = typedUpdate.message;
         if (message) {
           const rawText = (message.text || "").trim();
           const chatId = message.chat.id;
-          const chatKey = resolveUpdateChatKey(update as TelegramUpdate) ?? String(chatId);
+          const chatKey = resolveUpdateChatKey(typedUpdate) ?? String(chatId);
 
-          if (rawText.toLowerCase() === "/cli") {
+          if (isCliCommandText(rawText, botUsername)) {
             const pref = getUserCliPreference(db, chatKey);
             await sendTelegramMessage({ client, kind: "interactive", chatId, body: {
               text: buildCliStatusText(pref),
@@ -177,13 +205,13 @@ for (;;) {
         }
 
         // Handle cli:* callback taps (CLI switch from inline keyboard)
-        const cbq = (update as TelegramUpdate).callback_query;
+        const cbq = typedUpdate.callback_query;
         if (cbq?.data) {
           const newCli = handleCliSwitchCallback(cbq.data);
           if (newCli !== null) {
             const chatId = cbq.message?.chat?.id;
             const messageId = cbq.message?.message_id;
-            const chatKey = resolveUpdateChatKey(update as TelegramUpdate);
+            const chatKey = resolveUpdateChatKey(typedUpdate);
             if (chatKey) setUserCliPreference(db, chatKey, newCli);
             await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `Switched to ${newCli}` });
             if (chatId && messageId) {
@@ -197,22 +225,24 @@ for (;;) {
             if (chatKey) {
               await client.setMyCommands({ commands: buildInteractiveCommands(newCli) })
                 .catch((err: unknown) => console.warn("[interactive] setMyCommands failed after cli callback", err));
+              await client.setMyCommands({ commands: buildInteractiveCommands(newCli), scope: { type: "all_group_chats" } })
+                .catch((err: unknown) => console.warn("[interactive] setMyCommands (groups) failed after cli callback", err));
             }
             continue;
           }
         }
 
         // Route to the user's preferred engine with fallback support
-        const chatKey = resolveUpdateChatKey(update as TelegramUpdate);
+        const chatKey = resolveUpdateChatKey(typedUpdate);
         if (chatKey) {
-          const messageText = (update as TelegramUpdate).message?.text?.trim() || "";
+          const messageText = typedUpdate.message?.text?.trim() || "";
           if (messageText) {
             fallbackChain.addTurn(chatKey, "user", messageText);
           }
-          const chatId = (update as TelegramUpdate).message?.chat?.id ?? (update as TelegramUpdate).callback_query?.message?.chat?.id;
-          const threadId = resolveMessageThreadId(update as TelegramUpdate);
+          const chatId = typedUpdate.message?.chat?.id ?? typedUpdate.callback_query?.message?.chat?.id;
+          const threadId = resolveMessageThreadId(typedUpdate);
           if (chatId != null) {
-            await dispatchInteractiveWithFallback(update as TelegramUpdate, chatKey, {
+            dispatchInteractiveWithFallback(typedUpdate, chatKey, {
               engines,
               fallbackChain,
               exhaustedChats,
@@ -224,15 +254,18 @@ for (;;) {
               onCliSwitched: async (newCli) => {
                 await client.setMyCommands({ commands: buildInteractiveCommands(newCli) })
                   .catch((err: unknown) => console.warn("[interactive] setMyCommands failed during fallback", err));
+                await client.setMyCommands({ commands: buildInteractiveCommands(newCli), scope: { type: "all_group_chats" } })
+                  .catch((err: unknown) => console.warn("[interactive] setMyCommands (groups) failed during fallback", err));
               },
-            });
+            }).catch((err: unknown) => console.error("[interactive] dispatch error", err));
           } else {
             const pref = getUserCliPreference(db, chatKey);
-            await engines[pref].handleUpdate(update as TelegramUpdate);
+            engines[pref].handleUpdate(typedUpdate)
+              .catch((err: unknown) => console.error("[interactive] handleUpdate error", err));
           }
         } else {
           const pref = "codex";
-          await engines[pref].handleUpdate(update as TelegramUpdate);
+          await engines[pref].handleUpdate(typedUpdate);
         }
       } catch (err) {
         console.error("[interactive] update handling failed", err);

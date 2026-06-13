@@ -212,7 +212,12 @@ for (;;) {
             const chatId = cbq.message?.chat?.id;
             const messageId = cbq.message?.message_id;
             const chatKey = resolveUpdateChatKey(typedUpdate);
-            if (chatKey) setUserCliPreference(db, chatKey, newCli);
+            if (chatKey) {
+              setUserCliPreference(db, chatKey, newCli);
+              fallbackChain.setActiveCli(chatKey, newCli);
+              const preamble = fallbackChain.buildContextPreamble(chatKey);
+              if (preamble) contextPreambles.set(chatKey, preamble);
+            }
             await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `Switched to ${newCli}` });
             if (chatId && messageId) {
               await client.editMessageText({

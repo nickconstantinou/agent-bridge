@@ -12,6 +12,23 @@ const createMockClient = () => ({
   sendMessageDraft: vi.fn(async () => ({ ok: true })),
 } as any as TelegramClient);
 
+const withEnv = async (env: Record<string, string | undefined>, fn: () => Promise<void>) => {
+  const previous = new Map<string, string | undefined>();
+  for (const key of Object.keys(env)) {
+    previous.set(key, process.env[key]);
+    if (env[key] === undefined) delete process.env[key];
+    else process.env[key] = env[key];
+  }
+  try {
+    await fn();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+};
+
 describe("sendMessageWithProgress", () => {
   it("does not send a thinking placeholder for codex", async () => {
     const client = createMockClient();
@@ -220,6 +237,77 @@ describe("sendTelegramMessage rendering", () => {
     }));
     expect(client.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ parse_mode: "MarkdownV2" }));
   });
+
+  it("uses Bot API 10.1 rich messages for markdown tables when enabled", async () => {
+    await withEnv({ TELEGRAM_RICH_MESSAGES_ENABLED: "true" }, async () => {
+      const client = {
+        ...createMockClient(),
+        sendRichMessage: vi.fn(async (body: any) => ({ ok: true, result: { message_id: 777, ...body } })),
+      } as any as TelegramClient;
+
+      await sendTelegramMessage({
+        client,
+        kind: "codex",
+        chatId: 123,
+        body: { text: "| Service | Status |\n|---|---|\n| web-api | healthy |" },
+      });
+
+      expect(client.sendRichMessage).toHaveBeenCalledWith(expect.objectContaining({
+        chat_id: 123,
+        rich_message: expect.objectContaining({
+          html: expect.stringContaining("<table bordered striped>"),
+        }),
+      }));
+      expect(client.sendMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  it("falls back to flattened Telegram HTML when rich message delivery fails", async () => {
+    await withEnv({ TELEGRAM_RICH_MESSAGES_ENABLED: "true" }, async () => {
+      const client = {
+        ...createMockClient(),
+        sendRichMessage: vi.fn(async () => {
+          throw new Error("Bad Request: rich message rejected");
+        }),
+      } as any as TelegramClient;
+
+      await sendTelegramMessage({
+        client,
+        kind: "codex",
+        chatId: 123,
+        body: { text: "| Service | Status |\n|---|---|\n| web-api | healthy |" },
+      });
+
+      expect(client.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+        chat_id: 123,
+        parse_mode: "HTML",
+        text: expect.stringContaining("<b>Service:</b> web-api"),
+      }));
+    });
+  });
+
+  it("uses in-memory document fallback for oversized Telegram responses", async () => {
+    const client = {
+      ...createMockClient(),
+      sendDocumentBuffer: vi.fn(async () => ({ ok: true, result: { message_id: 778 } })),
+    } as any as TelegramClient;
+
+    await sendTelegramMessage({
+      client,
+      kind: "codex",
+      chatId: 123,
+      body: { text: "x".repeat(3_501), message_thread_id: 99 },
+    });
+
+    expect(client.sendDocumentBuffer).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: 123,
+      message_thread_id: 99,
+      filename: "response.md",
+      mime_type: "text/markdown",
+      caption: expect.stringContaining("Full response attached"),
+    }));
+    expect(client.sendMessage).not.toHaveBeenCalled();
+  });
 });
 
 describe("dead code removed from messageDelivery.ts", () => {
@@ -281,4 +369,3 @@ describe("sendMessageWithProgress Option 1 validation", () => {
     warnSpy.mockRestore();
   });
 });
-

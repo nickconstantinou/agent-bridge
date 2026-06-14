@@ -6,6 +6,12 @@ import { type as eventType } from "./events/types.js";
 import type { BridgeEvent } from "./events/types.js";
 import { reduce as reduceEvents } from "./events/reducer.js";
 import { runViewToTelegramText } from "./events/telegramAdapter.js";
+import {
+  flattenMarkdownTablesToCards,
+  markdownTableToRichHtml,
+  richMessagesEnabled,
+  routeNativeLayout,
+} from "./nativeLayout.js";
 
 const MAX_TELEGRAM_TEXT = 4096;
 
@@ -52,6 +58,66 @@ export async function sendTelegramMessage({
 }: {
   client: MessagingPlatform;
   kind: string;
+  chatId: number;
+  body: any;
+}): Promise<void> {
+  const text = String(body.text || "");
+  const { text: _ignored, ...rest } = body;
+  const route = routeNativeLayout(text, {
+    richEnabled: richMessagesEnabled() && typeof client.sendRichMessage === "function",
+  });
+
+  if (route.kind === "document" && typeof client.sendDocumentBuffer === "function") {
+    await client.sendDocumentBuffer({
+      chat_id: chatId,
+      ...rest,
+      bytes: Buffer.from(text, "utf8"),
+      filename: "response.md",
+      mime_type: "text/markdown",
+      caption: `Full response attached as response.md (${route.reason})`,
+    });
+    return;
+  }
+
+  if (route.kind === "rich" && typeof client.sendRichMessage === "function") {
+    try {
+      await client.sendRichMessage({
+        chat_id: chatId,
+        ...rest,
+        rich_message: {
+          html: markdownTableToRichHtml(text),
+        },
+      });
+      return;
+    } catch (err) {
+      console.warn(`[${kind}] rich message failed; falling back to native HTML`, err);
+    }
+  }
+
+  if (route.kind === "html" || route.kind === "rich") {
+    try {
+      await client.sendMessage({
+        chat_id: chatId,
+        ...rest,
+        text: flattenMarkdownTablesToCards(text),
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+      });
+      return;
+    } catch (err) {
+      console.warn(`[${kind}] native HTML message failed; falling back to plain text`, err);
+    }
+  }
+
+  await sendEntityMessages({ client, chatId, body: { ...rest, text } });
+}
+
+async function sendEntityMessages({
+  client,
+  chatId,
+  body,
+}: {
+  client: MessagingPlatform;
   chatId: number;
   body: any;
 }): Promise<void> {

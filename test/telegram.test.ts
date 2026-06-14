@@ -92,6 +92,58 @@ describe("TelegramClient", () => {
     expect(calls[0].options).toEqual({ chat_id: 1, action: "typing" });
   });
 
+  it("sendRichMessage posts Bot API 10.1 rich message JSON", async () => {
+    const calls: any[] = [];
+    const fakeFetch = (async (url: string, options: any) => {
+      calls.push({ url, options: JSON.parse(options.body) });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, result: { message_id: 321 } }),
+      };
+    }) as any;
+
+    const client = new TelegramClient("token", fakeFetch);
+    await client.sendRichMessage({
+      chat_id: 1,
+      rich_message: { html: "<table bordered><tr><td>ok</td></tr></table>" },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toContain("/sendRichMessage");
+    expect(calls[0].options).toEqual({
+      chat_id: 1,
+      rich_message: { html: "<table bordered><tr><td>ok</td></tr></table>" },
+    });
+  });
+
+  it("sendRichMessageDraft posts Bot API 10.1 draft JSON", async () => {
+    const calls: any[] = [];
+    const fakeFetch = (async (url: string, options: any) => {
+      calls.push({ url, options: JSON.parse(options.body) });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, result: true }),
+      };
+    }) as any;
+
+    const client = new TelegramClient("token", fakeFetch);
+    await client.sendRichMessageDraft({
+      chat_id: 1,
+      draft_id: 42,
+      rich_message: { html: "<tg-thinking>Running</tg-thinking>" },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toContain("/sendRichMessageDraft");
+    expect(calls[0].options).toEqual({
+      chat_id: 1,
+      draft_id: 42,
+      rich_message: { html: "<tg-thinking>Running</tg-thinking>" },
+    });
+  });
+
   // Step 1: download methods
 
   it("getFilePath calls GET /getFile?file_id and returns file_path", async () => {
@@ -208,6 +260,39 @@ describe("TelegramClient", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it("sendDocumentBuffer makes an in-memory multipart POST to /sendDocument", async () => {
+    const calls: { url: string; body: FormData }[] = [];
+    const fakeFetch = (async (url: string, opts: any) => {
+      calls.push({ url, body: opts.body });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, result: { message_id: 101 } }),
+      };
+    }) as any;
+
+    const client = new TelegramClient("mytoken", fakeFetch);
+    await client.sendDocumentBuffer({
+      chat_id: 42,
+      message_thread_id: 99,
+      bytes: Buffer.from("hello"),
+      filename: "response.md",
+      mime_type: "text/markdown",
+      caption: "Full response attached",
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toContain("/sendDocument");
+    const fd = calls[0].body;
+    expect(fd.get("chat_id")).toBe("42");
+    expect(fd.get("message_thread_id")).toBe("99");
+    expect(fd.get("caption")).toBe("Full response attached");
+    const file = fd.get("document") as File;
+    expect(file.name).toBe("response.md");
+    expect(file.type).toBe("text/markdown");
+    expect(await file.text()).toBe("hello");
   });
 
   it("sendPhoto makes a multipart POST to /sendPhoto", async () => {

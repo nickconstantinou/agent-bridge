@@ -531,6 +531,9 @@ agent-bridge/
 | `BRIDGE_PROJECT_DIR` | All | Repo path (used for default `DB_PATH`) |
 | `AGENT_BRIDGE_SOUL_PATH` | All | Optional persona contract path (default: `<project-dir>/SOUL.md`) |
 | `AGENT_BRIDGE_SOUL_MODE` | All | `summary`, `full`, or `off` (default: `summary`) |
+| `TELEGRAM_RICH_MESSAGES_ENABLED` | Telegram bots | `true` enables Bot API 10.1 rich final-message rendering for tables and diagnostic blocks |
+| `TELEGRAM_LAYOUT_DOCUMENT_THRESHOLD` | Telegram bots | Character threshold before final responses become in-memory `response.md` attachments (default: 3500) |
+| `TELEGRAM_LAYOUT_CODE_BLOCK_THRESHOLD` | Telegram bots | Fenced-code-block threshold before final responses become in-memory `response.md` attachments (default: 3) |
 | `HEALTH_MONITOR_ENABLED` | All | `false` to disable health monitoring. **Currently disabled by default in `.env.shared`** — see `docs/health-monitor-rectification.md` before re-enabling. |
 | `HEALTH_MONITOR_CADENCE_SECONDS` | All | Seconds between health check runs (default: `3600`) |
 | `HEALTH_MONITOR_AUTONOMY` | All | `report` — report only; `suggest` — also spawns a CLI for diagnosis (default: `report`) |

@@ -101,6 +101,14 @@ export class TelegramClient implements MessagingPlatform {
     return this.call("sendMessage", body);
   }
 
+  async sendRichMessage(body: any): Promise<TelegramResponse<TelegramMessage>> {
+    return this.call("sendRichMessage", body);
+  }
+
+  async sendRichMessageDraft(body: any): Promise<TelegramResponse<boolean>> {
+    return this.call("sendRichMessageDraft", body);
+  }
+
   async answerCallbackQuery(body: any): Promise<TelegramResponse<boolean>> {
     return this.call("answerCallbackQuery", body);
   }
@@ -184,6 +192,41 @@ export class TelegramClient implements MessagingPlatform {
 
   async sendDocument(chatId: number, filePath: string, caption?: string): Promise<void> {
     return this.sendFile("sendDocument", "document", chatId, filePath, caption);
+  }
+
+  async sendDocumentBuffer(body: {
+    chat_id: number | string;
+    bytes: Buffer;
+    filename: string;
+    mime_type?: string;
+    caption?: string;
+    [key: string]: any;
+  }): Promise<TelegramResponse<TelegramMessage>> {
+    const { bytes, filename, mime_type: mimeType = "application/octet-stream", ...fields } = body;
+    const fd = new FormData();
+    for (const [key, value] of Object.entries(fields)) {
+      if (value === undefined || value === null) continue;
+      fd.set(key, typeof value === "object" ? JSON.stringify(value) : String(value));
+    }
+    const fileBytes = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
+    fd.set("document", new File([fileBytes], filename, { type: mimeType }));
+
+    const url = `${this.baseUrl}/sendDocument`;
+    const ac = new AbortController();
+    const fetchTimer = setTimeout(() => ac.abort(), this.fetchTimeoutMs);
+    let response: Response;
+    try {
+      response = await this.fetch(url, { method: "POST", body: fd, signal: ac.signal } as any);
+    } finally {
+      clearTimeout(fetchTimer);
+    }
+
+    const data = await response.json().catch(() => null) as any;
+    if (!response.ok || data?.ok === false) {
+      const detail = data?.description ? `: ${data.description}` : "";
+      throw new Error(`Telegram sendDocument HTTP ${response.status}${detail}`);
+    }
+    return data;
   }
 
   async sendPhoto(chatId: number, filePath: string, caption?: string): Promise<void> {

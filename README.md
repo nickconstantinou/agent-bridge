@@ -1,10 +1,31 @@
 # agent-bridge
 
-Telegram bridge for Codex CLI, Antigravity CLI, and Claude Code CLI. TypeScript, streaming-first.
+Operations bridge for CLI coding agents across Telegram and Discord. It connects chat messages, slash commands, approval buttons, and background worker jobs to Codex, Antigravity, and Claude Code while keeping state in SQLite and process lifecycle under systemd.
 
 ## What it does
 
-Polls a Telegram bot for messages, routes them to the Codex, Antigravity, or Claude Code CLI, and streams responses back by editing a placeholder message in real time. Each bot runs as an independent systemd service from the same codebase.
+Runs one or more chat-facing services from the same TypeScript codebase:
+
+- dedicated Telegram bots for a single CLI backend
+- one unified Telegram bot with `/cli` switching and automatic CLI fallback
+- a Telegram worker bot for queued engineering jobs, GitHub issues, PRs, stale PR handling, and merge approvals
+- optional Discord single-CLI and interactive bots through the Discord Gateway
+- optional health bot that reports host, bridge, and external-system checks
+
+Interactive requests stream responses back to the chat. Background worker jobs run through a durable SQLite queue and report only at useful boundaries.
+
+## Service matrix
+
+| Service | Entry point | Surface | Purpose |
+|---|---|---|---|
+| `agent-bridge-codex.service` | `src/index.ts` | Telegram | Dedicated Codex bot |
+| `agent-bridge-antigravity.service` | `src/index.ts` | Telegram | Dedicated Antigravity bot |
+| `agent-bridge-claude.service` | `src/index.ts` | Telegram | Dedicated Claude Code bot |
+| `agent-bridge-interactive.service` | `src/index-interactive.ts` | Telegram | One bot with `/cli`, per-chat CLI preference, and CLI-to-CLI fallback |
+| `agent-bridge-worker-bot.service` | `src/index-worker.ts` | Telegram | Autonomous worker queue, GitHub issue/PR lifecycle, merge gate |
+| `agent-bridge-health.service` | `src/index-health.ts` | Telegram | Scheduled health reports and optional CLI suggestions |
+| `agent-bridge-discord.service` | `src/index-discord.ts` | Discord | Dedicated Discord CLI bridge |
+| `agent-bridge-discord-interactive.service` | `src/index-discord-interactive.ts` | Discord | Discord bot with switchable CLI routing |
 
 ## Features
 
@@ -22,14 +43,18 @@ Polls a Telegram bot for messages, routes them to the Codex, Antigravity, or Cla
 - **Shared skills installer** — optional SDLC skills can be installed across Codex, Antigravity, and Claude Code
 - **SOUL.md design** — proposed bridge-level persona contract for consistent voice, values, boundaries, and workflow across agents
 - **Rate limit handling** — automatic retry on Telegram 429 responses
-- **Health monitoring** — plugin-based scheduler that runs health checks at a configurable interval and sends formatted reports to a Telegram chat; extensible to any external system via a one-file JSON script
+- **Discord support** — Gateway transport, slash commands, message chunking, and an interactive Discord entry point
+- **Autonomous worker lane** — durable job queue for reviews, feature plans, TDD implementation, draft PRs, stale PR digests, and merge approvals
+- **Health monitoring** — dedicated scheduler service that runs health checks at a configurable interval and sends formatted reports to a Telegram chat; extensible to any external system via a one-file JSON script
 
 ## Requirements
 
 - Node 24+
 - One or more of `codex`, `agy`, `claude` CLI on `$PATH`
 - `npm` on `$PATH`
-- One Telegram bot per CLI backend, created via [@BotFather](https://t.me/BotFather)
+- Telegram bot tokens from BotFather for the services you run
+- Optional: a Discord application/bot token with Message Content intent enabled
+- Optional worker lane: GitHub CLI access through `GITHUB_TOKEN_FILE`
 
 ## Setup
 
@@ -42,7 +67,9 @@ npm run setup:shared-memory
 sudo bash scripts/install.sh
 ```
 
-The installer prompts for bot tokens, user IDs, and paths, then writes `.env.codex`, `.env.antigravity`, and `.env.claude` from the example templates and installs the systemd services. If you also provide `TELEGRAM_BOT_TOKEN_HEALTH`, it writes `/etc/default/agent-bridge-health` and installs `agent-bridge-health.service` too.
+The installer prompts for bot tokens, user IDs, Discord credentials, and paths, then writes local env files from the example templates and installs the standard systemd services. Codex and Antigravity are the primary dedicated services; Claude, health, Discord, and Discord interactive are installed when their tokens/default files are present.
+
+The unified Telegram interactive bot and worker bot have service templates and env examples, but are intentionally operator-enabled: create `/etc/default/agent-bridge-interactive` or `/etc/default/agent-bridge-worker-bot` from the matching `.env.*.example`, then install/enable those units once their tokens and flags are correct.
 
 The installer records the absolute Node binary path as `NODE_BIN` in each systemd defaults file and the service templates run `tsx` through that binary. This avoids systemd falling back to an older ambient `node` on the login shell path.
 
@@ -53,16 +80,24 @@ npm install
 cp .env.codex.example .env.codex
 cp .env.antigravity.example .env.antigravity
 cp .env.claude.example .env.claude
+cp .env.interactive.example .env.interactive
+cp .env.worker.example .env.worker
+cp .env.discord.example .env.discord
+cp .env.discord-interactive.example .env.discord-interactive
 npm run setup:shared-memory
 ```
 
 Then fill in the relevant token(s) and paths in each file:
 - `TELEGRAM_BOT_TOKEN_*` — bot token from @BotFather
+- `TELEGRAM_BOT_TOKEN_INTERACTIVE` — unified Telegram bot token
+- `TELEGRAM_BOT_TOKEN_WORKER` — worker bot token
 - `TELEGRAM_BOT_TOKEN_HEALTH` — optional separate token for the health bot service
 - `TELEGRAM_ALLOWED_USER_IDS` — your Telegram numeric user ID
+- `DISCORD_BOT_TOKEN`, `DISCORD_APPLICATION_ID`, `DISCORD_ALLOWED_USER_IDS` — optional Discord bridge credentials
 - `BRIDGE_ROOT_DIR` / `BRIDGE_PROJECT_DIR` — deployment paths supplied by environment or installer
 - `*_COMMAND` — absolute path to each CLI binary (use `which codex`, `which agy`, `which claude`)
 - `*_PROJECT_DIR` — working directory passed to the CLI (optional; defaults to `BRIDGE_PROJECT_DIR`)
+- `INTERACTIVE_CLI_CHAIN` / `WORKER_CLI_CHAIN` — CLI fallback order for unified and worker services
 - Shared memory instructions are written to `~/AGENTS.md`, `~/ANTIGRAVITY.md`, and `~/CLAUDE.md`
 - `agent-memory` is installed as a shell wrapper in `~/.local/bin/agent-memory`
 
@@ -71,6 +106,10 @@ Run a single bot for development:
 ```bash
 BRIDGE_ENV_FILE=.env.antigravity ./node_modules/.bin/tsx src/index.ts
 BRIDGE_ENV_FILE=.env.claude ./node_modules/.bin/tsx src/index.ts
+BRIDGE_ENV_FILE=.env.interactive ./node_modules/.bin/tsx src/index-interactive.ts
+BRIDGE_ENV_FILE=.env.worker ./node_modules/.bin/tsx src/index-worker.ts
+BRIDGE_ENV_FILE=.env.discord ./node_modules/.bin/tsx src/index-discord.ts
+BRIDGE_ENV_FILE=.env.discord-interactive ./node_modules/.bin/tsx src/index-discord-interactive.ts
 ```
 
 Important:
@@ -83,15 +122,16 @@ Important:
 ## Commands
 
 | Command | Action |
-|---------|--------|
+|---|---|
 | `/reset` | Clear the current CLI session (start fresh) |
 | `/models` | Show and change the active model |
+| `/cli` | Interactive bot only: show/change active CLI |
 | `/skills` | List bundled shared skills and install/repair commands |
 | `/memory` | Run a shared-memory CLI smoke test through the live CLI path |
 | `/stop` | Abort the currently running CLI process |
 | `/cancel` | Same as `/stop` |
 
-All other text is forwarded to the CLI as a prompt.
+All other text is forwarded to the active CLI as a prompt. Discord uses slash-command registration for the same command set where supported.
 
 ## Autonomous worker loop
 
@@ -104,10 +144,11 @@ live checkouts, and merges are blocked unless the PR head SHA still matches
 the approval and CI checks are green.
 
 Worker commands: `/review`, `/feature`, `/issues`, `/issue`, `/jobs`, `/job`,
-`/approvals`, `/models`.
+`/approvals`, `/models`. The worker also schedules `pr_watch` jobs to react to
+CI status, stale PRs, and held/refresh/close decisions.
 
 Full guide: `docs/WORKER-GUIDE.md`. Architecture: `agents.md` → "Autonomous
-Worker Lane". Design history and Phase 9 plan:
+Worker Lane". Design history and Phase 9 implementation record:
 `docs/autonomous-agent-bridge-research.md`.
 
 ## Configuration
@@ -119,6 +160,11 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `TELEGRAM_BOT_TOKEN_CODEX` | Codex | — | Bot token from @BotFather |
 | `TELEGRAM_BOT_TOKEN_CLAUDE` | Claude | — | Bot token from @BotFather |
 | `TELEGRAM_BOT_TOKEN_ANTIGRAVITY` | Antigravity | — | Bot token from @BotFather |
+| `TELEGRAM_BOT_TOKEN_INTERACTIVE` | Interactive | — | Unified Telegram bot token |
+| `TELEGRAM_BOT_TOKEN_WORKER` | Worker | — | Worker bot token |
+| `DISCORD_BOT_TOKEN` | Discord | — | Discord bot token |
+| `DISCORD_APPLICATION_ID` | Discord | — | Discord application ID for slash commands |
+| `DISCORD_ALLOWED_USER_IDS` | Discord | — | Comma-separated Discord user snowflake IDs |
 | `TELEGRAM_ALLOWED_USER_IDS` | All | — | Comma-separated Telegram user IDs. Also accepts legacy `TELEGRAM_ALLOWED_USER_ID`. |
 | `CODEX_COMMAND` | Codex | `codex` | CLI binary path |
 | `ANTIGRAVITY_COMMAND` | Antigravity | `agy` | CLI binary path |
@@ -137,6 +183,10 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `AGENT_MEMORY_DB_PATH` | All | `~/.agent-bridge/shared-memory/agent-memory.sqlite` | Path to shared agent memory database |
 | `AGENT_BRIDGE_SOUL_PATH` | All | `$BRIDGE_PROJECT_DIR/SOUL.md` | Optional SOUL.md persona contract injected into each CLI prompt |
 | `AGENT_BRIDGE_SOUL_MODE` | All | `summary` | `summary`, `full`, or `off` persona injection mode |
+| `INTERACTIVE_DEFAULT_CLI` | Interactive | `codex` | Default CLI for new interactive chats |
+| `INTERACTIVE_CLI_CHAIN` | Interactive | `codex,claude,antigravity` | CLI fallback order after model fallbacks are exhausted |
+| `WORKER_ENABLED` | Worker | `false` | Master switch for autonomous job commands |
+| `WORKER_CLI_CHAIN` | Worker | `codex,claude,antigravity` | CLI fallback order for worker jobs |
 | `BRIDGE_ASYNC_ENABLED` | All | `true` | Enable streaming (disable for sync/plain mode) |
 | `BRIDGE_EXECUTION_MODE` | All | `safe` | `safe` or `trusted` (bypasses CLI approval prompts) |
 | `BRIDGE_PROJECT_DIR` | All | current working directory | Repo path (used as default CLI working dir and DB location) |
@@ -158,6 +208,14 @@ The bot works in Telegram groups and supergroups.
 
 Commands work with or without the bot username suffix: `/reset` and `/reset@mybotname` are both recognised.
 
+Interactive bot command diagnostics are logged with sanitized group metadata:
+`[interactive] update.received` for processable group updates and
+`[interactive] update.ignored` with a `contentDetail` such as `new_chat_members`,
+`photo`, `document`, or `command_for_other_bot` when an update is intentionally
+skipped. If a dedicated bot responds in the group but the interactive bot does
+not, compare BotFather privacy, remove/re-add the interactive bot after changing
+privacy, and check these log lines before changing code.
+
 **Per-topic sessions:** In forum-style supergroups, each topic gets its own isolated CLI session. Sending in Topic A and Topic B maintains independent conversation threads with the agent.
 
 **Multiple users:** Set `TELEGRAM_ALLOWED_USER_IDS` to a comma-separated list of Telegram user IDs. Each user in a private chat has their own isolated session. In groups with multiple allowed users, sessions are isolated per-user per-topic.
@@ -165,6 +223,29 @@ Commands work with or without the bot username suffix: `/reset` and `/reset@mybo
 ```
 TELEGRAM_ALLOWED_USER_IDS=111111111,222222222
 ```
+
+## Discord channel and thread usage
+
+Discord bots use channel snowflakes as the conversation boundary. A normal
+server channel, a DM channel, and every Discord thread each have a distinct
+`channel_id`, so each gets its own CLI lock, queue, model/session state, and
+fallback-chain context.
+
+The Discord interactive entry point adapts those snowflakes into deterministic
+numeric aliases for the shared Telegram-shaped engine, then maps outbound sends
+back to the original Discord channel snowflake. This preserves session isolation
+while keeping the shared engine reusable.
+
+Operational diagnostics are sanitized:
+
+- `[discord-interactive] update.received` means an allowed user sent processable text
+- `[discord-interactive] update.ignored` reports `unauthorized_author`, `bot_author`, or `empty_content`
+
+Discord requirements:
+
+- `DISCORD_ALLOWED_USER_IDS` must contain Discord user snowflake IDs, not usernames
+- Message Content intent must be enabled in the Discord Developer Portal for plain-message routing
+- Slash commands may be guild-scoped with `DISCORD_GUILD_ID` for immediate propagation
 
 ## Shared memory
 
@@ -253,7 +334,7 @@ npm run skills -- verify --fix
 
 ## Health monitoring
 
-The bridge runs a built-in `HealthScheduler` that polls plugins at a configurable cadence and sends formatted status reports to a Telegram chat.
+The dedicated health service runs a `HealthScheduler` that polls plugins at a configurable cadence and sends formatted status reports to a Telegram chat.
 
 ### Built-in plugins
 
@@ -269,7 +350,7 @@ The bridge runs a built-in `HealthScheduler` that polls plugins at a configurabl
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HEALTH_MONITOR_ENABLED` | `true` | Set to `false` to disable all health checks |
+| `HEALTH_MONITOR_ENABLED` | `false` | Set to `true` in the health service defaults to enable scheduled checks |
 | `HEALTH_MONITOR_CADENCE_SECONDS` | `3600` | How often to run each plugin (seconds) |
 | `HEALTH_MONITOR_AUTONOMY` | `report` | `report` — formatted report only; `suggest` — also spawns a CLI to diagnose and propose fixes |
 | `HEALTH_MONITOR_CHAT_ID` | — | Telegram chat ID to receive reports; if unset, reports are logged to stdout only |
@@ -438,12 +519,15 @@ sudo bash scripts/install.sh
 Or copy manually (include only the services you want):
 
 ```bash
-sudo cp systemd/agent-bridge-antigravity.service /etc/systemd/system/
-sudo cp systemd/agent-bridge-codex.service /etc/systemd/system/
-sudo cp systemd/agent-bridge-claude.service /etc/systemd/system/
+sudo cp systemd/agent-bridge-{antigravity,codex,claude,interactive,worker-bot,health}.service /etc/systemd/system/
+sudo cp systemd/agent-bridge-discord.service /etc/systemd/system/
+sudo cp systemd/agent-bridge-discord-interactive.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now agent-bridge-antigravity agent-bridge-codex agent-bridge-claude
+sudo systemctl enable --now agent-bridge-antigravity agent-bridge-codex
 ```
+
+Only enable optional services after their `/etc/default/agent-bridge-*` file
+exists and contains a real token.
 
 Follow logs:
 
@@ -451,6 +535,9 @@ Follow logs:
 journalctl -u agent-bridge-antigravity -f
 journalctl -u agent-bridge-codex -f
 journalctl -u agent-bridge-claude -f
+journalctl -u agent-bridge-interactive -f
+journalctl -u agent-bridge-worker-bot -f
+journalctl -u agent-bridge-discord-interactive -f
 ```
 
 To update an existing deployment (updates npm packages, Claude Code CLI, and restarts services):
@@ -476,40 +563,33 @@ npm test -- test/cli.test.ts  # single file
 ## Architecture
 
 ```
-Telegram Poll
+Telegram / Discord update
     │
-    ▼
-handleUpdate()
-    ├── /stop, /cancel → abortCliProcess() + db.unlock()
-    ├── callback_query → model selector (inline keyboard)
-    └── message → MediaGroupBuffer (1500ms flush)
-                      │
-                      ▼
-               handleMessages()
-                      ├── handleCommand() → /reset, /models
-                      ├── db.tryLock()   → busy guard (rejects if already running)
-                      └── sendMessageWithProgress()
-                                │
-                                ▼
-                         executePromptAsync()
-                                ├── runCliAsync() → streams onProgress chunks
-                                │       └── StreamingUpdater.push()
-                                │               ├── DM: debounced editMessageText (1500ms)
-                                │               └── Group: sendMessageDraft (immediate)
-                                └── StreamingUpdater.flush() → final editMessageText
+    ├── dedicated bot        → BridgeEngine → active CLI → streamed response
+    ├── interactive bot      → /cli preference → BridgeEngine → fallback chain
+    ├── worker bot command   → SQLite work_jobs → handler → Telegram report
+    └── health service timer → HealthScheduler → Telegram report
 ```
 
 ## State
 
-All state lives in a single SQLite database (`bridge_state` table, WAL mode):
+Each service has its own SQLite database by default (`DB_PATH`, WAL mode). The
+main bridge database stores chat sessions and polling state; the worker database
+also stores `work_items`, `work_jobs`, `approvals`, and `github_links`.
 
 | Row key | Value | Purpose |
 |---------|-------|---------|
 | `<chatId>` | — | Per-chat row; holds session IDs and execution lock |
 | `$polling:codex` / `:antigravity` / `:claude` | last update_id | Telegram polling offset per bot |
 | `codex` / `antigravity` / `claude` (in `settings`) | model name | Per-bot model override (set via `/models`) |
+| `interactive_cli_preference` | CLI kind | Per-chat active CLI for the unified interactive bot |
 
 Session IDs are stored as columns (`codex_session_id`, `antigravity_session_id`, legacy `gemini_session_id`, `claude_session_id`) on the chat row. The migration adds `antigravity_session_id` and backfills it from legacy `gemini_session_id` automatically on first run.
+
+Discord interactive rows use deterministic numeric aliases of Discord channel
+snowflakes. These aliases are stable across restarts; runtime delivery maps the
+alias back to the original channel snowflake before calling the Discord REST
+API.
 
 Antigravity session capture follows the same durable pattern as Codex, but Agy exposes the ID differently:
 

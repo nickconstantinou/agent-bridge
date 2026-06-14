@@ -22,5 +22,7 @@ dist/
 .env.shared
 .antigravitycli/
 .env.health
+.env.discord
+.env.discord-interactive
 .data-health/
 cache/

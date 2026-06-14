@@ -2,7 +2,11 @@
 
 ## Status
 
-**All phases complete.** The full autonomous loop is live: `/review` → defect scan → proposed work items → human approval → TDD implementation branch → draft PR → human merge gate. 686 tests passing, TypeScript clean.
+**Core loop and Phase 9 PR lifecycle controls are implemented.** The autonomous
+loop is live: `/review` → defect scan → proposed work items → human approval →
+TDD implementation branch → draft PR → PR watch/refresh/stale handling → human
+merge gate. Run the current Vitest suite and typecheck for the live verification
+count.
 
 | Phase | Status |
 |---|---|
@@ -15,7 +19,8 @@
 | Phase 6 — GitHub issue creation | ✅ Complete |
 | Phase 7 — TDD implementation job | ✅ Complete |
 | Phase 8 — PR lifecycle + merge gate | ✅ Complete |
-| Phase 9 — PR lifecycle completion (caps, CI reaction, stale digest) | 📝 Planned — see "Phase 9" section |
+| Phase 9 — PR lifecycle completion (caps, CI reaction, stale digest) | ✅ Complete |
+| Phase 9.5 — maintainer queue triage | 📝 Planned |
 
 This note reviews the proposed Agent Bridge evolution from a Telegram-driven CLI wrapper into an asynchronous, policy-gated engineering agent. It is intentionally specific enough for a later implementation agent to use, but it should be treated as a design document until each phase is converted into red-green-refactor work.
 
@@ -2461,14 +2466,15 @@ npm test
 npm run typecheck
 ```
 
-## Phase 9 — PR Lifecycle Completion (Planned)
+## Phase 9 — PR Lifecycle Completion (Implemented)
 
 Phase 8 shipped one slice of the designed lifecycle: push → draft PR → merge
-approval. This phase completes the loop described in "PR Lifecycle Management":
-caps, update-over-create, CI reaction, stale handling, and held state. Each
-slice follows the global TDD rules (separate test and implementation commits).
+approval. Phase 9 completes the loop described in "PR Lifecycle Management":
+caps, update-over-create, CI reaction, stale handling, held state, refresh
+execution, owner decision briefs, and proof comments. The section below remains
+as the implementation record and regression checklist.
 
-Current gaps this phase closes:
+Historical gaps this phase closed:
 
 - retrying `pr_lifecycle` calls `gh pr create` again and fails instead of
   reusing the existing PR

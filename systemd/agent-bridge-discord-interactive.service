@@ -9,7 +9,7 @@ User=BRIDGE_USER
 EnvironmentFile=-/etc/default/agent-bridge-shared
 EnvironmentFile=/etc/default/agent-bridge-discord-interactive
 ExecStart=/usr/bin/env bash -lc 'export PATH="$(dirname "${NODE_BIN:?}"):$PATH"; cd "${BRIDGE_PROJECT_DIR:?}" && exec "${NODE_BIN:?}" ./node_modules/tsx/dist/cli.mjs src/index-discord-interactive.ts'
-Restart=always
+Restart=on-failure
 RestartSec=5
 KillMode=control-group
 Environment=NODE_ENV=production

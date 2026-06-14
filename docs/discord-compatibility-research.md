@@ -2,13 +2,30 @@
 
 ## Status
 
-**Planned.** No implementation started. This document covers the API delta, proposed architecture, and a phased build sequence.
+**Implemented baseline.** Discord now has Gateway-based single-CLI and
+interactive entry points:
+
+- `src/discord-gateway.ts`
+- `src/discord.ts`
+- `src/index-discord.ts`
+- `src/index-discord-interactive.ts`
+- `.env.discord.example`
+- `.env.discord-interactive.example`
+- `systemd/agent-bridge-discord.service`
+- `systemd/agent-bridge-discord-interactive.service`
+
+This document is retained as the compatibility map, implementation record, and
+follow-up checklist.
 
 ## Executive Summary
 
-The bridge is today Telegram-native: polling, message editing, session keys, and typing indicators all couple tightly to Telegram's HTTP API. Adding Discord is achievable without rewriting the core, but it requires a platform abstraction layer in front of `BridgeEngine` and a WebSocket-based transport to replace `TelegramClient`.
+The bridge now supports Discord without replacing the Telegram path. Discord is
+implemented as separate entry points and a Gateway/REST client that converts
+Discord events into the bridge's existing engine shape where practical.
 
-The lowest-risk path is a thin **adapter interface** that both `TelegramClient` and a new `DiscordClient` satisfy, with a separate Discord entry point (`src/index-discord.ts`) that wires the adapter into the existing engine. The engine itself (`engine.ts`) would be updated to call the adapter rather than a Telegram-specific client.
+The main remaining work is operational hardening: live rate-limit telemetry,
+clear startup failures for missing privileged intents, and broader end-to-end
+smoke coverage against a real guild.
 
 ---
 
@@ -72,66 +89,60 @@ This maps to the existing "send placeholder, edit with result" pattern.
 
 ### 5. Session Keys
 
-Current session keys are `chatId` or `chatId:threadId`. Discord equivalent:
+Current Telegram session keys are `chatId` or `chatId:threadId`. Discord
+equivalent:
+
 - DM: `channelId` (each DM is a dedicated channel)
 - Server channel: `channelId`
-- Thread: `threadId` (thread channels have their own ID)
+- Thread: `thread channelId` (Discord threads are channels with their own ID)
 
-The key format can stay as a string — Discord channel IDs are snowflakes (numeric strings) which do not collide with Telegram's integer chat IDs as long as databases are kept separate.
+The implemented interactive Discord path keeps the Discord channel snowflake as
+the top-level conversation key for preferences and fallback context. When it
+passes a message into the shared Telegram-shaped `BridgeEngine`, it converts the
+channel and author snowflakes into deterministic numeric aliases, stores CLI
+session state under those aliases, and maps outbound sends back to the original
+Discord channel snowflake before calling the Discord REST API. This keeps
+general channels, DMs, and thread channels isolated without forking the engine.
 
 ---
 
-## Proposed Architecture
+## Implemented Architecture
 
-### Adapter Interface
+### Adapter Shape
 
-```ts
-// src/platform.ts
-export interface MessagingPlatform {
-  sendMessage(channelId: string, body: SendMessageBody): Promise<{ messageId: string }>;
-  editMessage(channelId: string, messageId: string, text: string): Promise<void>;
-  sendTyping(channelId: string): Promise<void>;
-  deleteMessage(channelId: string, messageId: string): Promise<void>;
-  uploadFile(channelId: string, filename: string, data: Buffer): Promise<void>;
-  setCommands(commands: BotCommand[], scope?: CommandScope): Promise<void>;
-}
-```
+`DiscordClient` exposes the message, edit, typing, file, and command
+registration operations needed by the Discord entry points. The dedicated
+Discord bot maps gateway updates into Telegram-like bridge updates before
+calling `BridgeEngine`; the interactive Discord bot mirrors the Telegram
+interactive router with Discord interactions and buttons, plus a snowflake alias
+adapter for channel/thread isolation.
 
-`TelegramClient` implements this interface. `DiscordClient` (new) also implements it. `BridgeEngine` accepts a `MessagingPlatform` instead of hard-coding `TelegramClient`.
-
-### New Files
+### Implemented Files
 
 | File | Purpose |
 |---|---|
-| `src/platform.ts` | `MessagingPlatform` interface + shared types |
 | `src/discord.ts` | `DiscordClient` — WebSocket gateway + REST API wrapper |
 | `src/discord-gateway.ts` | Raw WebSocket heartbeat/reconnect/resume logic |
 | `src/index-discord.ts` | Discord entry point (mirrors `index.ts`) |
+| `src/index-discord-interactive.ts` | Interactive Discord entry point with CLI switching |
 | `.env.discord.example` | Example env for Discord bot |
+| `.env.discord-interactive.example` | Example env for interactive Discord bot |
 | `systemd/agent-bridge-discord.service` | Service unit |
-
-### Modified Files
-
-| File | Change |
-|---|---|
-| `src/telegram.ts` | Implement `MessagingPlatform` |
-| `src/engine.ts` | Accept `MessagingPlatform` instead of `TelegramClient` |
-| `src/messageDelivery.ts` | Chunk at 1990 chars when platform is Discord |
-| `src/types.ts` | Add `platform: "telegram" \| "discord"` to engine options |
+| `systemd/agent-bridge-discord-interactive.service` | Interactive service unit |
 
 ---
 
 ## Implementation Phases
 
-### Phase 1 — Platform abstraction (no new features, tests must stay green)
+### Phase 1 — Platform abstraction
 
-1. Define `MessagingPlatform` interface in `src/platform.ts`.
-2. Add `implements MessagingPlatform` to `TelegramClient`. Fix any mismatches.
-3. Update `BridgeEngine` constructor to accept `MessagingPlatform`.
-4. Update `messageDelivery.ts` to call interface methods.
-5. All 857 existing tests must pass unchanged.
+Status: superseded by a lighter adapter path. Telegram remains unchanged;
+Discord entry points adapt incoming events and outgoing delivery around the
+existing engine contracts.
 
 ### Phase 2 — Discord Gateway client
+
+Status: implemented.
 
 1. Implement `DiscordGateway` in `src/discord-gateway.ts`:
    - Connect, identify, heartbeat loop, reconnect on disconnect, resume on resume codes.
@@ -144,6 +155,8 @@ export interface MessagingPlatform {
 
 ### Phase 3 — Discord entry point
 
+Status: implemented.
+
 1. `src/index-discord.ts`: mirrors `index.ts`, loads `.env.discord`, creates `DiscordClient`, wires into `BridgeEngine`.
 2. `systemd/agent-bridge-discord.service` unit file.
 3. `.env.discord.example` with: `DISCORD_BOT_TOKEN`, `DISCORD_APPLICATION_ID`, `DISCORD_GUILD_ID` (optional, for instant command registration), `TELEGRAM_ALLOWED_USER_IDS` → `DISCORD_ALLOWED_USER_IDS`.
@@ -152,14 +165,17 @@ export interface MessagingPlatform {
 
 ### Phase 4 — Interactions (slash command flow)
 
+Status: implemented for command ACK and follow-up flow used by the Discord
+entry points.
+
 1. Handle `INTERACTION_CREATE` in `DiscordClient` event loop.
 2. ACK within 3 seconds with deferred response.
 3. Follow up with CLI result via `PATCH /webhooks/…/@original`.
 4. Wire `/reset`, `/models`, `/stop`, `/cancel` as slash commands.
 
-### Phase 5 — Interactive Discord bot (optional)
+### Phase 5 — Interactive Discord bot
 
-Mirror the `index-interactive.ts` multi-CLI routing for Discord: a single Discord bot that routes to codex/claude/antigravity based on per-channel preference, stored in a separate SQLite database.
+Status: implemented in `src/index-discord-interactive.ts`.
 
 ---
 
@@ -184,13 +200,14 @@ DB_PATH=.data-discord/bridge.sqlite
 | `MESSAGE_CONTENT` privileged intent must be enabled manually in Discord Developer Portal | Document in README; fail fast with a clear error at startup if not granted |
 | 3-second interaction ACK window | Always ACK immediately with deferred response; never await CLI before ACKing |
 | Discord rate limits (50 req/s global, 5 req/s per channel) | Add per-channel rate limit tracking in `DiscordClient`; queue edits |
-| Reconnect storms on gateway disconnect | Exponential backoff + jitter; honour Discord's `RECONNECT` and `INVALID_SESSION` opcodes |
+| Reconnect storms on gateway disconnect | Terminal close codes stop reconnecting; pre-READY closes are capped; normal reconnects still use exponential backoff + jitter |
 | 2000-char message limit | Enforce in `messageDelivery.ts` at the platform level; caller should not need to know |
 
 ---
 
-## Implementation Order Recommendation
+## Remaining Work
 
-Start with Phase 1 (abstraction). It has zero user-visible impact and makes all subsequent phases straightforward. The riskiest part is the gateway WebSocket lifecycle (Phase 2); isolate it in `discord-gateway.ts` so it can be unit-tested independently of the REST API.
-
-Total estimated scope: ~600–800 lines of new code across 4–5 files, plus ~100 lines of modification to existing files.
+- Fail fast when Discord Message Content intent is missing.
+- Add rate-limit counters and log summaries for REST send/edit routes.
+- Add an operator smoke-test checklist for guild-scoped command registration,
+  DM delivery, channel delivery, thread delivery, and interactive buttons.

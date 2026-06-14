@@ -45,12 +45,18 @@ function makeGateway(onEvent = vi.fn(), onReady = vi.fn()) {
 describe("DiscordGateway", () => {
   let origWebSocket: typeof WebSocket;
   let fakeWs: FakeWebSocket;
+  let wsInstances: FakeWebSocket[];
 
   beforeEach(() => {
     fakeWs = new FakeWebSocket();
+    wsInstances = [];
     origWebSocket = (globalThis as any).WebSocket;
     // Must be a regular function (not arrow) to be `new`-able
-    (globalThis as any).WebSocket = function FakeWsConstructor() { return fakeWs; };
+    (globalThis as any).WebSocket = function FakeWsConstructor() {
+      const ws = wsInstances.length === 0 ? fakeWs : new FakeWebSocket();
+      wsInstances.push(ws);
+      return ws;
+    };
     (globalThis as any).WebSocket.OPEN = FakeWebSocket.OPEN;
   });
 
@@ -160,6 +166,52 @@ describe("DiscordGateway", () => {
     const heartbeats = fakeWs.sent.filter((p) => p.op === 1);
     const last = heartbeats.at(-1);
     expect(last?.d).toBe(7);
+
+    gateway.destroy();
+  });
+
+  it("does not reconnect on terminal authentication close codes", () => {
+    vi.useFakeTimers();
+    const onError = vi.fn();
+    const gateway = new DiscordGateway({
+      token: "bad-token",
+      intents: 33_281,
+      onEvent: vi.fn(),
+      onError,
+    });
+    gateway.connect();
+
+    fakeWs.emit("close", { code: 4004, reason: "Authentication failed." });
+    vi.advanceTimersByTime(60_000);
+
+    expect(wsInstances).toHaveLength(1);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("Authentication failed") }),
+    );
+
+    gateway.destroy();
+  });
+
+  it("stops reconnecting after repeated pre-ready close failures", () => {
+    vi.useFakeTimers();
+    const onError = vi.fn();
+    const gateway = new DiscordGateway({
+      token: "test-token",
+      intents: 33_281,
+      onEvent: vi.fn(),
+      onError,
+    });
+    gateway.connect();
+
+    for (let i = 0; i < 5; i++) {
+      wsInstances.at(-1)?.emit("close", { code: 1006, reason: "" });
+      vi.advanceTimersByTime(60_000);
+    }
+
+    expect(wsInstances).toHaveLength(5);
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("before READY") }),
+    );
 
     gateway.destroy();
   });

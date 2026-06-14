@@ -15,6 +15,15 @@
 
 const GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json";
 const MAX_RECONNECT_DELAY_MS = 60_000;
+const MAX_PRE_READY_CLOSES = 5;
+const TERMINAL_CLOSE_CODES = new Set([
+  4004, // Authentication failed
+  4005, // Already authenticated
+  4010, // Invalid shard
+  4011, // Sharding required
+  4013, // Invalid intents
+  4014, // Disallowed intents
+]);
 
 export type GatewayPayload = {
   t: string | null;
@@ -43,6 +52,7 @@ export class DiscordGateway {
   private sessionId: string | null = null;
   private resumeGatewayUrl: string | null = null;
   private reconnectDelay = 1_000;
+  private preReadyCloseCount = 0;
   private destroyed = false;
 
   constructor(opts: DiscordGatewayOptions) {
@@ -68,6 +78,19 @@ export class DiscordGateway {
     ws.addEventListener("close", ({ code, reason }) => {
       this._stopHeartbeat();
       if (this.destroyed) return;
+      if (TERMINAL_CLOSE_CODES.has(code)) {
+        this.destroyed = true;
+        this.opts.onError?.(new Error(`Discord Gateway terminal close code=${code} reason=${reason ?? ""}`));
+        return;
+      }
+      if (!this.sessionId) {
+        this.preReadyCloseCount += 1;
+        if (this.preReadyCloseCount >= MAX_PRE_READY_CLOSES) {
+          this.destroyed = true;
+          this.opts.onError?.(new Error(`Discord Gateway closed ${this.preReadyCloseCount} times before READY; stopping reconnects`));
+          return;
+        }
+      }
       console.warn(`[discord-gateway] ws closed code=${code} reason=${reason ?? ""}, reconnecting in ${this.reconnectDelay}ms`);
       this._scheduleReconnect();
     });
@@ -129,6 +152,7 @@ export class DiscordGateway {
           this.sessionId = payload.d.session_id as string;
           this.resumeGatewayUrl = payload.d.resume_gateway_url as string;
           this.reconnectDelay = 1_000;
+          this.preReadyCloseCount = 0;
           this.opts.onReady?.();
         }
         this.opts.onEvent(payload);

@@ -1,39 +1,65 @@
 # Agent Bridge — Architecture
 
-The **Agent Bridge** connects Telegram directly to AI CLI backends (Codex, Antigravity, Claude Code) using long-polling, structured JSON parsing, and per-chat execution locking.
+The **Agent Bridge** connects Telegram and Discord directly to AI CLI backends (Codex, Antigravity, Claude Code) using chat transports, structured JSON parsing, per-chat execution locking, and a durable worker queue for background engineering jobs.
 
 ---
 
 ## System Overview
 
 ```
-Telegram Bot Long-Polling
+Telegram long-poll / Discord Gateway / worker timer
          │
          ▼
-┌─────────────────────────────────────────────────────┐
-│                 BridgeBot.run()                     │
-│  • Telegram long-polling (getUpdates, 30s timeout) │
-│  • Per-chat locking (db.tryLock)                   │
-│  • Async streaming execution path                  │
-│  • CLI invocation → JSON → Telegram response        │
-└──────────────────┬──────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│                 Agent Bridge services                │
+│  • Dedicated Telegram CLI bots                       │
+│  • Unified interactive Telegram bot (`/cli`)         │
+│  • Telegram worker bot + durable SQLite job queue    │
+│  • Discord single-CLI and interactive bots           │
+│  • Health scheduler and report bot                   │
+└──────────────────┬───────────────────────────────────┘
                    │
       ┌────────────┼────────────┐
       │            │            │
- Antigravity Bot   Codex Bot   Claude Bot
- (agy CLI)         (codex CLI) (claude CLI)
- (systemd)         (systemd)   (systemd)
+ Antigravity       Codex        Claude Code
+ (agy CLI)         (codex CLI)  (claude CLI)
 ```
 
-Each bot is an **independent systemd service** sharing the same TypeScript source. All services load a shared env file first, then the bot-specific file:
+Each runtime surface is an **independent systemd service** sharing the same TypeScript source. Services load shared defaults where configured, then their service-specific environment:
 
 | Service | Shared env | Bot-specific env | Data Dir |
 |---------|-----------|-----------------|----------|
 | `agent-bridge-antigravity.service` | `.env.shared` | `/etc/default/agent-bridge-antigravity` | `.data-antigravity/` |
 | `agent-bridge-codex.service` | `.env.shared` | `/etc/default/agent-bridge-codex` | `.data-codex/` |
-| `agent-bridge-claude.service` | `.env.shared` | `.env.claude` | `.data-claude/` |
+| `agent-bridge-claude.service` | `.env.shared` | `/etc/default/agent-bridge-claude` | `.data-claude/` |
+| `agent-bridge-interactive.service` | `.env.shared` | `/etc/default/agent-bridge-interactive` | `.data/interactive.sqlite` |
+| `agent-bridge-worker-bot.service` | `.env.shared` | `/etc/default/agent-bridge-worker-bot` | `.data/worker.sqlite` |
+| `agent-bridge-health.service` | `.env.shared` | `/etc/default/agent-bridge-health` | service DB / monitored DBs |
+| `agent-bridge-discord.service` | `.env.shared` | `/etc/default/agent-bridge-discord` | `.data/discord.sqlite` |
+| `agent-bridge-discord-interactive.service` | `.env.shared` | `/etc/default/agent-bridge-discord-interactive` | `.data/discord-interactive.sqlite` |
 
-`.env.shared` holds settings that apply to all bots: allowed user IDs, execution mode, bridge paths, health monitoring config. Bot-specific files hold only the token, CLI command, model preference, and DB path. See `.env.shared.example` for the full reference.
+Shared env holds settings that apply to all services: allowed user IDs, execution mode, bridge paths, health monitoring config, and shared memory paths. Service-specific files hold tokens, CLI command/model preferences, platform credentials, DB path, and worker feature flags. See `.env.shared.example` and `.env.*.example` for the full reference.
+
+### Discord Session Mapping
+
+Discord channel snowflakes are the isolation boundary. Server channels, DM
+channels, and thread channels each carry their own `channel_id`; the interactive
+Discord service treats that ID as the user-facing conversation key.
+
+The shared `BridgeEngine` still expects Telegram-shaped numeric IDs. The
+Discord interactive adapter therefore:
+
+- converts Discord channel and author snowflakes into deterministic numeric
+  aliases before calling the engine
+- stores CLI sessions under those stable aliases in the Discord service DB
+- keeps CLI preference and fallback context keyed by the original channel
+  snowflake
+- maps outbound engine sends back to the original Discord channel snowflake
+  before calling Discord REST
+
+Do not bypass this adapter or pass lossy `Number(snowflake)` values directly
+into the engine. That breaks authorization, session isolation, and reply
+routing for large Discord IDs.
 
 ## Path Portability Rule
 
@@ -401,7 +427,7 @@ over a durable SQLite queue (`work_items`, `work_jobs`, `approvals`,
 ```text
 Telegram command → work item / job row → executor loop (10s poll)
    → handler (defect_scan | feature_plan | tdd_implementation |
-              open_github_issue | pr_lifecycle)
+              open_github_issue | pr_lifecycle | pr_watch | pr_refresh)
    → Telegram notification (+ merge keyboard when a PR opens)
 ```
 

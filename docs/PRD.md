@@ -1,12 +1,12 @@
-# Agent-Bridge PRD: Telegram CLI Bridge
+# Agent-Bridge PRD: CLI Bridge Control Plane
 
 ## 1. Concept & Vision
 
-**What it does:** Bridges Telegram messages to CLI-based AI coding agents (Codex, Antigravity/Gemini CLI, Claude Code), enabling real-time conversational coding through a Telegram bot.
+**What it does:** Bridges Telegram and Discord messages to CLI-based AI coding agents (Codex, Antigravity/Gemini CLI, Claude Code), enabling real-time conversational coding, switchable interactive routing, health reporting, and policy-gated background engineering jobs.
 
-**Core experience:** A user sends a prompt via Telegram → the bridge spawns a CLI agent → responses stream back via real-time Telegram message editing.
+**Core experience:** A user sends a prompt via Telegram or Discord → the bridge spawns the selected CLI agent → responses stream back through the same chat surface. Long-running worker jobs use Telegram commands and inline approvals to scan, plan, implement, open PRs, watch CI, and ask for merge decisions.
 
-**What makes it different:** It's a thin, reliable bridge — not an agent itself. It handles Telegram polling, rate limiting, message batching, session management, and process lifecycle so the CLI agent can focus on being smart.
+**What makes it different:** It's a thin, reliable bridge — not an agent itself. It handles chat transport, rate limiting, message batching, session management, process lifecycle, queue leases, and approval gates so the CLI agent can focus on reasoning and implementation.
 
 ---
 
@@ -265,9 +265,24 @@ docs/
 
 ### Systemd
 
-Three service files in `systemd/` (codex, antigravity, claude). Each loads its own env file via `BRIDGE_ENV_FILE`. All share the same `tsx src/index.ts` entrypoint through the `NODE_BIN` configured in the systemd defaults file — bot selection is determined by which token is present in the env file. `NODE_BIN` must point at Node 24+.
+Systemd units live in `systemd/`. Dedicated Telegram CLI bots share
+`tsx src/index.ts`; the unified interactive bot uses `src/index-interactive.ts`;
+the worker bot uses `src/index-worker.ts`; health uses `src/index-health.ts`;
+Discord uses `src/index-discord.ts` and `src/index-discord-interactive.ts`.
+Each service loads its own `/etc/default/agent-bridge-*` file and `NODE_BIN`
+must point at Node 24+.
 
-The installer (`scripts/install.sh`) requires Node 24+, generates `.env.codex`, `.env.antigravity`, and `.env.claude` from the `.env.*.example` templates, and writes machine-specific values (home dir, Node binary path, CLI binary paths, tokens) to the service defaults. Existing deployments can be refreshed with `scripts/install-deployment.sh`, which also requires Node 24+ and updates `NODE_BIN` in `/etc/default/agent-bridge-*`.
+The installer (`scripts/install.sh`) requires Node 24+, generates local env
+files from the `.env.*.example` templates, writes machine-specific values
+(home dir, Node binary path, CLI binary paths, tokens) to service defaults, and
+installs the standard services whose tokens/default files are present. Existing
+deployments can be refreshed with `scripts/install-deployment.sh`, which also
+requires Node 24+ and updates `NODE_BIN` in `/etc/default/agent-bridge-*`.
+
+The interactive Telegram bot and worker bot are operator-enabled services:
+create `/etc/default/agent-bridge-interactive` or
+`/etc/default/agent-bridge-worker-bot` from their examples before enabling
+those units.
 
 ### Database
 
@@ -277,9 +292,19 @@ Each service instance has its own `DB_PATH` to avoid SQLite lock contention.
 .data-codex/bridge.sqlite
 .data-antigravity/bridge.sqlite
 .data-claude/bridge.sqlite
+.data/interactive.sqlite
+.data/worker.sqlite
+.data/discord.sqlite
+.data/discord-interactive.sqlite
 ```
 
 WAL mode is enabled on open for concurrent read access.
+
+Discord interactive sessions use one row per Discord channel/thread alias. The
+runtime receives real Discord channel snowflakes, creates deterministic numeric
+aliases for the shared engine, and rewrites outbound sends back to the original
+snowflake. General channels, DMs, and Discord thread channels therefore remain
+isolated from each other while sharing the same CLI backend code.
 
 ---
 
@@ -304,3 +329,7 @@ WAL mode is enabled on open for concurrent read access.
 - Sync path (`BRIDGE_ASYNC_ENABLED=false`) available but not the default
 - `abortCliProcess` SIGKILLs the top-level process only (not the full process group)
 - Antigravity model switching is applied by mutating `~/.gemini/antigravity-cli/settings.json`; concurrent interactive Agy sessions (if any) would see the same setting
+- Discord requires Message Content intent in the Developer Portal for plain-message routing
+- Worker jobs depend on local git checkouts and GitHub token access; missing repos fail loudly instead of scanning or modifying the wrong path
+- Discord snowflakes must go through the interactive adapter's alias mapping;
+  direct `Number(snowflake)` conversion is unsafe for authorization and routing

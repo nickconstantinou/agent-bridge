@@ -129,10 +129,24 @@ from it and repoint `origin` at its real remote so pushes reach GitHub.
 - Treat its own defect reports as confirmed bugs: findings are proposals
   until you approve them.
 
-## What's Next (Phase 9 — planned)
+## PR Lifecycle Controls
 
-Caps on open/daily agent PRs, reuse of existing PRs on retry, CI-failure
-auto-fix jobs, a stale-PR digest with hold/refresh/close decisions, and a
-non-destructive refresh executor. Plan:
-`docs/autonomous-agent-bridge-research.md` → "Phase 9 — PR Lifecycle
-Completion".
+The Phase 9 PR lifecycle controls are implemented in the worker lane:
+
+- `pr_lifecycle` reuses an existing agent PR for the same branch instead of
+  creating duplicates on retry.
+- `WORKER_MAX_OPEN_PRS` and `WORKER_MAX_DAILY_PRS` cap new agent PR creation
+  while still allowing existing PRs to be refreshed.
+- `pr_watch` runs on the configured interval, checks CI and merge readiness,
+  marks stale PRs, and refreshes merge approvals with the current head SHA.
+- stale PRs are batched into a digest with hold, refresh, close, and release
+  decisions.
+- `pr_refresh` merges the base branch into the PR branch in a disposable
+  workspace, runs verification, and pushes only on success.
+- merge approval messages include an owner decision brief and proof comment
+  data so the user is not asked to approve from a bare URL.
+
+The remaining roadmap is maintainer queue triage: turning external issue/PR
+queues into the same policy-gated worker flow. Plan:
+`docs/autonomous-agent-bridge-research.md` → "Phase 9.5 — Maintainer Queue
+Triage".

@@ -79,14 +79,28 @@ export function recallMemories(input: { query: string; scope?: MemoryScope; limi
   const db = openDb();
   const limit = Math.max(1, Math.min(input.limit ?? 10, 100));
   const query = input.query.trim();
-  const rows = db.prepare(`
-    SELECT id, type, scope, text, created_at, source
-    FROM memories
-    WHERE text LIKE ? ${input.scope ? "AND scope = ?" : ""}
-    ORDER BY created_at DESC
-    LIMIT ?
-  `).all(input.scope ? [`%${query}%`, input.scope, limit] : [`%${query}%`, limit]);
-  return rows as MemoryRecord[];
+  try {
+    const rows = db.prepare(`
+      SELECT m.id, m.type, m.scope, m.text, m.created_at, m.source,
+             -bm25(memories_fts) AS score
+      FROM memories_fts
+      JOIN memories m ON m.rowid = memories_fts.rowid
+      WHERE memories_fts MATCH ?
+        ${input.scope ? "AND m.scope = ?" : ""}
+      ORDER BY score DESC
+      LIMIT ?
+    `).all(input.scope ? [query, input.scope, limit] : [query, limit]);
+    return rows as MemoryRecord[];
+  } catch {
+    const rows = db.prepare(`
+      SELECT id, type, scope, text, created_at, source
+      FROM memories
+      WHERE text LIKE ? ${input.scope ? "AND scope = ?" : ""}
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(input.scope ? [`%${query}%`, input.scope, limit] : [`%${query}%`, limit]);
+    return rows as MemoryRecord[];
+  }
 }
 
 export const searchMemories = recallMemories;

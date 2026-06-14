@@ -373,6 +373,21 @@ describe("buildCliInvocation — attachment injection", () => {
       expect(prompt).toMatch(/omit.*file path|file path.*omit/i);
     }
   });
+
+  it("wraps prompts with optimized Telegram response style constraints", () => {
+    const { args } = buildCliInvocation({
+      ...base,
+      bot: "codex",
+      command: "codex",
+    });
+    const prompt = args[args.length - 1];
+    expect(prompt).toContain("Preserve the facts the user needs to act");
+    expect(prompt).toContain("Preserve causal direction exactly");
+    expect(prompt).toContain("Do not replace a known implementation direction with a vague abstraction");
+    expect(prompt).toContain("For CI or gate failures");
+    expect(prompt).toContain("For generated file output");
+    expect(prompt).toContain("Skip throat-clearing");
+  });
 });
 
 describe("buildSafeChildEnv", () => {
@@ -560,4 +575,3 @@ describe("normalizeCliArgs — CLI argument translator", () => {
     ]);
   });
 });
-

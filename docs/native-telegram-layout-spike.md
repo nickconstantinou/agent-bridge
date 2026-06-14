@@ -6,9 +6,8 @@ The safe path is a hybrid native pipeline:
 
 1. `sendMessage` with `parse_mode="HTML"` for normal responses and flattened
    tables.
-2. `sendDocument` with an in-memory `response.md` for oversized logs,
-   code-block-heavy answers, or anything that is better preserved as raw
-   Markdown.
+2. `sendDocument` with an in-memory `response.md` is an opt-in exceptional
+   fallback for outputs that are explicitly better preserved as raw Markdown.
 3. `sendDocument` with an in-memory `response.html` is useful as a visual
    experiment, but should not be assumed to render inline in Telegram clients.
 4. Bot API 10.1 `sendRichMessage` is the first true native table path. It
@@ -190,7 +189,8 @@ const DOCUMENT_LENGTH_THRESHOLD = 3500;
 const DOCUMENT_CODE_BLOCK_THRESHOLD = 3;
 ```
 
-Route to `sendDocument` when:
+Route to `sendDocument` only when `TELEGRAM_DOCUMENT_FALLBACK_ENABLED=true`
+and one of these thresholds is crossed:
 
 - raw Markdown length is greater than 3500 characters
 - more than 3 fenced code blocks are present
@@ -319,7 +319,7 @@ if (responseHasTable) {
   return sendMessage(flattenMarkdownTablesToCards(response), { parse_mode: "HTML" });
 }
 
-if (response.length > 3500 || codeBlockCount > 3) {
+if (documentFallbackEnabled && (response.length > 3500 || codeBlockCount > 3)) {
   return sendDocument(Buffer.from(response), "response.md");
 }
 
@@ -382,7 +382,7 @@ The script includes three deterministic test inputs:
 
 | Input | Purpose | Expected route |
 |---|---|---|
-| `logDump` | 5000-ish character operational log | `sendDocument` |
+| `logDump` | 5000-ish character operational log | `sendDocument` in the spike harness; production uses files only when explicitly enabled |
 | `table4Col` | 4-column Markdown table | `sendMessage` HTML after table flattening |
 | `nestedList` | deeply nested list with unsafe HTML characters | `sendMessage` HTML with escaping |
 
@@ -402,7 +402,7 @@ inside the normal Telegram client boundary, not inside the spike script.
 function routeAgentResponse(markdown: string) {
   const codeBlocks = countCodeBlocks(markdown);
 
-  if (markdown.length > 3500 || codeBlocks > 3) {
+  if (documentFallbackEnabled && (markdown.length > 3500 || codeBlocks > 3)) {
     return sendDocument(Buffer.from(markdown, "utf8"), "response.md");
   }
 
@@ -479,8 +479,9 @@ Response classifier
 |---|---|---|
 | `TELEGRAM_RICH_MESSAGES_ENABLED` | `false` | Enables `sendRichMessage` final delivery |
 | `TELEGRAM_RICH_DRAFTS_ENABLED` | `false` | Enables `sendRichMessageDraft` progress previews |
-| `TELEGRAM_LAYOUT_DOCUMENT_THRESHOLD` | `3500` | Overrides document fallback length |
-| `TELEGRAM_LAYOUT_CODE_BLOCK_THRESHOLD` | `3` | Overrides document fallback code-block count |
+| `TELEGRAM_DOCUMENT_FALLBACK_ENABLED` | `false` | Enables in-memory `response.md` attachments for exceptional oversized/code-heavy responses |
+| `TELEGRAM_LAYOUT_DOCUMENT_THRESHOLD` | `3500` | Document fallback length threshold used only when attachments are enabled |
+| `TELEGRAM_LAYOUT_CODE_BLOCK_THRESHOLD` | `3` | Document fallback code-block threshold used only when attachments are enabled |
 
 Start with both rich flags disabled. Current soak target is the unified
 interactive bot because it exercises the switchable CLI path without changing
@@ -491,8 +492,8 @@ bots only after observing real interactive responses.
 
 Recommended route order:
 
-1. **Hard document fallback**: raw response is too large, too code-heavy, or
-   explicitly marked as an artifact.
+1. **Opt-in document fallback**: raw response is explicitly better preserved as
+   an attachment and `TELEGRAM_DOCUMENT_FALLBACK_ENABLED=true`.
 2. **Rich message**: response contains tables, diagnostics, status matrices,
    sections, or collapsible content and `TELEGRAM_RICH_MESSAGES_ENABLED=true`.
 3. **Flattened HTML**: response contains tables but rich messages are disabled
@@ -500,8 +501,8 @@ Recommended route order:
 4. **Plain Telegram HTML**: normal short text.
 5. **Last-resort plain text**: Telegram entity parsing fails after escaping.
 
-Do not let rich-message support remove the document fallback. Large logs are
-still better as files because they preserve copy/search and avoid chat spam.
+Do not make document fallback normal chat behavior. Large logs may be better as
+files, but only when the operator explicitly enables that route for the bot.
 
 ### Rich Layout Compiler
 
@@ -570,7 +571,7 @@ Expanded draft payload after command execution:
 | Test class | Coverage |
 |---|---|
 | unit | table detection, rich compiler output, escaping, route decisions |
-| integration with mocked Telegram | `sendRichMessage` success, 400 fallback, document fallback |
+| integration with mocked Telegram | `sendRichMessage` success, 400 fallback, opt-in document fallback |
 | live operator probe | private-chat visual rendering on mobile and desktop |
 | regression | unsupported rich tag falls back without losing response |
 
@@ -579,7 +580,7 @@ Expanded draft payload after command execution:
 - Bot API 10.1 rich route is behind a feature flag.
 - A table-heavy response renders as a rich native table when enabled.
 - The same response falls back to flattened cards when rich delivery fails.
-- Oversized logs still route to `sendDocument`.
+- Oversized logs route to `sendDocument` only when document fallback is explicitly enabled.
 - No external renderer, Telegraph page, or temp file is introduced.
 - Logs record route metadata only, not response body content.
 
@@ -595,7 +596,7 @@ Scope:
 - add route metadata: `rich|html|document|plain`, reason, length, table count,
   code-block count
 - add `sendDocument` in-memory `response.md` fallback to the production
-  delivery path, still behind a feature flag
+  delivery path, disabled unless `TELEGRAM_DOCUMENT_FALLBACK_ENABLED=true`
 
 Acceptance:
 
@@ -655,7 +656,8 @@ Acceptance:
 
 Implement rich messages as an opportunistic delivery route, not as the only
 route. The new API is good enough to justify production work, but the bridge
-still needs boring fallbacks: `response.md` for large logs, flattened cards for
-classic Telegram HTML, and plain text as the final escape hatch. `sendPhoto`
+still needs boring fallbacks: flattened cards for classic Telegram HTML, plain
+text as the final escape hatch, and opt-in `response.md` only for exceptional
+large logs. `sendPhoto`
 should remain a narrow path for locally rendered visual reports, not the default
 table or log transport.

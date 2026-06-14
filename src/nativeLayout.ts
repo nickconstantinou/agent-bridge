@@ -21,6 +21,10 @@ export function richMessagesEnabled(): boolean {
   return process.env.TELEGRAM_RICH_MESSAGES_ENABLED === "true";
 }
 
+export function documentFallbackEnabled(): boolean {
+  return process.env.TELEGRAM_DOCUMENT_FALLBACK_ENABLED === "true";
+}
+
 export function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -43,15 +47,17 @@ export function hasMarkdownTable(markdown: string): boolean {
 
 export function routeNativeLayout(
   markdown: string,
-  options: { richEnabled?: boolean; documentLength?: number; documentCodeBlocks?: number } = {},
+  options: { richEnabled?: boolean; documentEnabled?: boolean; documentLength?: number; documentCodeBlocks?: number } = {},
 ): NativeLayoutRoute {
   const codeBlocks = countCodeBlocks(markdown);
   const length = markdown.length;
   const documentLength = options.documentLength ?? documentLengthThreshold();
   const documentCodeBlocks = options.documentCodeBlocks ?? documentCodeBlockThreshold();
 
-  if (length > documentLength) return { kind: "document", reason: "length", codeBlocks, length };
-  if (codeBlocks > documentCodeBlocks) return { kind: "document", reason: "code_blocks", codeBlocks, length };
+  if (options.documentEnabled) {
+    if (length > documentLength) return { kind: "document", reason: "length", codeBlocks, length };
+    if (codeBlocks > documentCodeBlocks) return { kind: "document", reason: "code_blocks", codeBlocks, length };
+  }
   if (hasMarkdownTable(markdown)) {
     return {
       kind: options.richEnabled ? "rich" : "html",

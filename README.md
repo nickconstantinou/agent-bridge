@@ -184,8 +184,9 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `AGENT_BRIDGE_SOUL_PATH` | All | `$BRIDGE_PROJECT_DIR/SOUL.md` | Optional SOUL.md persona contract injected into each CLI prompt |
 | `AGENT_BRIDGE_SOUL_MODE` | All | `summary` | `summary`, `full`, or `off` persona injection mode |
 | `TELEGRAM_RICH_MESSAGES_ENABLED` | Telegram bots | `false` | Enable Bot API 10.1 rich final-message rendering for tables and diagnostic blocks |
-| `TELEGRAM_LAYOUT_DOCUMENT_THRESHOLD` | Telegram bots | `3500` | Route oversized final responses to in-memory `response.md` attachment |
-| `TELEGRAM_LAYOUT_CODE_BLOCK_THRESHOLD` | Telegram bots | `3` | Route code-block-heavy final responses to in-memory `response.md` attachment |
+| `TELEGRAM_DOCUMENT_FALLBACK_ENABLED` | Telegram bots | `false` | Opt in to in-memory `response.md` attachments for exceptional oversized/code-heavy final responses |
+| `TELEGRAM_LAYOUT_DOCUMENT_THRESHOLD` | Telegram bots | `3500` | Attachment threshold used only when `TELEGRAM_DOCUMENT_FALLBACK_ENABLED=true` |
+| `TELEGRAM_LAYOUT_CODE_BLOCK_THRESHOLD` | Telegram bots | `3` | Code-block attachment threshold used only when `TELEGRAM_DOCUMENT_FALLBACK_ENABLED=true` |
 | `INTERACTIVE_DEFAULT_CLI` | Interactive | `codex` | Default CLI for new interactive chats |
 | `INTERACTIVE_CLI_CHAIN` | Interactive | `codex,claude,antigravity` | CLI fallback order after model fallbacks are exhausted |
 | `WORKER_ENABLED` | Worker | `false` | Master switch for autonomous job commands |

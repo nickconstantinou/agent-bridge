@@ -286,27 +286,54 @@ describe("sendTelegramMessage rendering", () => {
     });
   });
 
-  it("uses in-memory document fallback for oversized Telegram responses", async () => {
-    const client = {
-      ...createMockClient(),
-      sendDocumentBuffer: vi.fn(async () => ({ ok: true, result: { message_id: 778 } })),
-    } as any as TelegramClient;
+  it("keeps oversized Telegram responses as chat messages by default", async () => {
+    await withEnv({
+      TELEGRAM_DOCUMENT_FALLBACK_ENABLED: undefined,
+      TELEGRAM_LAYOUT_DOCUMENT_THRESHOLD: "3500",
+    }, async () => {
+      const client = {
+        ...createMockClient(),
+        sendDocumentBuffer: vi.fn(async () => ({ ok: true, result: { message_id: 778 } })),
+      } as any as TelegramClient;
 
-    await sendTelegramMessage({
-      client,
-      kind: "codex",
-      chatId: 123,
-      body: { text: "x".repeat(3_501), message_thread_id: 99 },
+      await sendTelegramMessage({
+        client,
+        kind: "codex",
+        chatId: 123,
+        body: { text: "x".repeat(3_501), message_thread_id: 99 },
+      });
+
+      expect(client.sendDocumentBuffer).not.toHaveBeenCalled();
+      expect(client.sendMessage).toHaveBeenCalled();
     });
+  });
 
-    expect(client.sendDocumentBuffer).toHaveBeenCalledWith(expect.objectContaining({
-      chat_id: 123,
-      message_thread_id: 99,
-      filename: "response.md",
-      mime_type: "text/markdown",
-      caption: expect.stringContaining("Full response attached"),
-    }));
-    expect(client.sendMessage).not.toHaveBeenCalled();
+  it("uses in-memory document fallback only when explicitly enabled", async () => {
+    await withEnv({
+      TELEGRAM_DOCUMENT_FALLBACK_ENABLED: "true",
+      TELEGRAM_LAYOUT_DOCUMENT_THRESHOLD: "3500",
+    }, async () => {
+      const client = {
+        ...createMockClient(),
+        sendDocumentBuffer: vi.fn(async () => ({ ok: true, result: { message_id: 778 } })),
+      } as any as TelegramClient;
+
+      await sendTelegramMessage({
+        client,
+        kind: "codex",
+        chatId: 123,
+        body: { text: "x".repeat(3_501), message_thread_id: 99 },
+      });
+
+      expect(client.sendDocumentBuffer).toHaveBeenCalledWith(expect.objectContaining({
+        chat_id: 123,
+        message_thread_id: 99,
+        filename: "response.md",
+        mime_type: "text/markdown",
+        caption: expect.stringContaining("Full response attached"),
+      }));
+      expect(client.sendMessage).not.toHaveBeenCalled();
+    });
   });
 });
 

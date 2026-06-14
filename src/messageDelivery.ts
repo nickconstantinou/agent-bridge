@@ -7,6 +7,7 @@ import type { BridgeEvent } from "./events/types.js";
 import { reduce as reduceEvents } from "./events/reducer.js";
 import { runViewToTelegramText } from "./events/telegramAdapter.js";
 import {
+  documentFallbackEnabled,
   flattenMarkdownTablesToCards,
   markdownTableToRichHtml,
   richMessagesEnabled,
@@ -64,6 +65,7 @@ export async function sendTelegramMessage({
   const text = String(body.text || "");
   const { text: _ignored, ...rest } = body;
   const route = routeNativeLayout(text, {
+    documentEnabled: documentFallbackEnabled(),
     richEnabled: richMessagesEnabled() && typeof client.sendRichMessage === "function",
   });
 

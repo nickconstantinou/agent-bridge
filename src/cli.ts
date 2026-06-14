@@ -38,6 +38,7 @@ export function scrubOutputDir(text: string, outDir: string | null | undefined):
 
 const KILL_GRACE_MS = 5_000;
 const ANTIGRAVITY_FINAL_RESPONSE_DELIMITER = "***";
+const ANTIGRAVITY_STALLED_PLANNER_MARKER = "PlannerResponse without ModifiedResponse encountered";
 
 function wrapPromptContext(prompt: string, soulContext: string | null = null): string {
   const soulContract = renderSoulContract(soulContext);
@@ -93,6 +94,42 @@ function killProcessTree(child: ChildProcess, pid: number, graceMs: number = KIL
   try { process.kill(-pid, "SIGTERM"); } catch { /* ignore — process may have already exited */ }
   const t = setTimeout(() => { try { process.kill(-pid, "SIGKILL"); } catch { /* ignore */ } }, graceMs);
   child.once("close", () => clearTimeout(t));
+}
+
+function getAntigravityStalledPlannerTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS || 300_000);
+  return Number.isFinite(raw) && raw > 0 ? raw : 300_000;
+}
+
+function extractLogFileArg(args: string[]): string | null {
+  for (let i = 0; i < args.length - 1; i += 1) {
+    if (args[i] === "--log-file") return args[i + 1] || null;
+  }
+  return null;
+}
+
+function createAntigravityPlannerStallWatch(args: string[], stdoutRef: () => string, onStall: () => void): NodeJS.Timeout | null {
+  const logFile = extractLogFileArg(args);
+  if (!logFile) return null;
+  const stallTimeoutMs = getAntigravityStalledPlannerTimeoutMs();
+  const startedAt = Date.now();
+  const intervalMs = Math.max(250, Math.min(stallTimeoutMs, 1_000));
+
+  return setInterval(() => {
+    if (stdoutRef().trim()) return;
+    if (Date.now() - startedAt < stallTimeoutMs) return;
+
+    let logContent = "";
+    try {
+      logContent = readFileSync(logFile, "utf8");
+    } catch {
+      return;
+    }
+
+    if (logContent.includes(ANTIGRAVITY_STALLED_PLANNER_MARKER)) {
+      onStall();
+    }
+  }, intervalMs);
 }
 
 export function abortCliProcess(chatId: number | string): boolean {
@@ -718,6 +755,18 @@ export async function runCli(command: string, args: string[], cwd: string, optio
       killWithGrace(child, killGraceMs);
     }, timeoutMs);
 
+    let plannerStallTriggered = false;
+    const plannerStallTimer = command.includes("agy") || command.includes("antigravity")
+      ? createAntigravityPlannerStallWatch(normalizedArgs, () => stdout, () => {
+          if (plannerStallTriggered || settled) return;
+          plannerStallTriggered = true;
+          console.error(`[AGY STALL] Planner churn detected without usable output${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""}`);
+          if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: "Agy stalled in planner loop without usable output", category: "timeout" }));
+          doReject(new Error("Agy stalled in planner loop without usable output"));
+          killWithGrace(child, killGraceMs);
+        })
+      : null;
+
     let idleTimer: NodeJS.Timeout | null = null;
     const resetIdleTimer = () => {
       if (idleTimeoutMs === null) return;
@@ -748,6 +797,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
 
     child.on("close", (code, signal) => {
       clearTimeout(timer);
+      if (plannerStallTimer) clearInterval(plannerStallTimer);
       if (idleTimer) clearTimeout(idleTimer);
       if (options.chatId != null) activeProcesses.delete(options.chatId);
       console.log(`[close]${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"} code=${code} signal=${signal ?? "none"}`);
@@ -773,6 +823,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
 
     child.on("error", (err) => {
       clearTimeout(timer);
+      if (plannerStallTimer) clearInterval(plannerStallTimer);
       if (idleTimer) clearTimeout(idleTimer);
       if (options.chatId != null) activeProcesses.delete(options.chatId);
       if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: err.message, category: "cli" }));
@@ -851,6 +902,18 @@ export async function runCliAsync(
       doReject(new Error(`CLI hard timeout after ${timeoutMs}ms`));
     }, timeoutMs);
 
+    let plannerStallTriggered = false;
+    const plannerStallTimer = command.includes("agy") || command.includes("antigravity")
+      ? createAntigravityPlannerStallWatch(normalizedArgs, () => stdout, () => {
+          if (plannerStallTriggered || settled) return;
+          plannerStallTriggered = true;
+          console.error(`[AGY STALL] Planner churn detected without usable output${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"}`);
+          if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: "Agy stalled in planner loop without usable output", category: "timeout" }));
+          if (pid) killProcessTree(child, pid, killGraceMs);
+          doReject(new Error("Agy stalled in planner loop without usable output"));
+        })
+      : null;
+
     let idleTimer: NodeJS.Timeout | null = null;
     const resetIdleTimer = () => {
       if (idleTimeoutMs === null) return;
@@ -881,6 +944,7 @@ export async function runCliAsync(
 
     child.on("close", (code, signal) => {
       clearTimeout(timer);
+      if (plannerStallTimer) clearInterval(plannerStallTimer);
       if (idleTimer) clearTimeout(idleTimer);
       if (options.chatId != null) activeProcesses.delete(options.chatId);
       console.log(`[close]${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"} code=${code} signal=${signal ?? "none"}`);
@@ -905,6 +969,7 @@ export async function runCliAsync(
 
     child.on("error", (err) => {
       clearTimeout(timer);
+      if (plannerStallTimer) clearInterval(plannerStallTimer);
       if (idleTimer) clearTimeout(idleTimer);
       if (options.chatId != null) activeProcesses.delete(options.chatId);
       if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: err.message, category: "cli" }));

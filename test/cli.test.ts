@@ -15,6 +15,33 @@ describe("runCliAsync idle timeout", () => {
       }),
     ).rejects.toThrow(/idle timeout/i);
   }, 2000);
+
+  it("aborts agy when planner churn persists without usable output", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "agy-stall-"));
+    const scriptPath = join(tempDir, "agy");
+    const logPath = join(tempDir, "agy.log");
+    writeFileSync(
+      scriptPath,
+      `#!/usr/bin/env bash\necho 'PlannerResponse without ModifiedResponse encountered' > "$2"\nsleep 5\n`,
+      { mode: 0o755 },
+    );
+
+    const previous = process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS;
+    process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS = "200";
+    try {
+      await expect(
+        runCliAsync(scriptPath, ["--log-file", logPath, "--print", "hello"], process.cwd(), {
+          timeoutMs: 5_000,
+          idleTimeoutMs: 5_000,
+          killGraceMs: 25,
+        }),
+      ).rejects.toThrow(/stalled in planner loop/i);
+    } finally {
+      if (previous === undefined) delete process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS;
+      else process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS = previous;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  }, 4000);
 });
 
 describe("CLI Runner", () => {
@@ -158,6 +185,41 @@ describe("model fallback", () => {
     expect(getNextFallbackModel("b", prefs)).toBe("c");
     expect(getNextFallbackModel("c", prefs)).toBeNull();
   });
+
+  it("aborts agy when planner churn persists without usable output", async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "agy-stall-cli-"));
+    const fakeAgy = join(tempDir, "agy");
+    const tmpLog = join(tempDir, "agy.log");
+    writeFileSync(
+      fakeAgy,
+      `#!/usr/bin/env bash
+printf 'PlannerResponse without ModifiedResponse encountered\\n' >> "$2"
+sleep 5
+`,
+      { mode: 0o755 },
+    );
+
+    const previous = process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS;
+    process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS = "200";
+    try {
+      await expect(
+        runCliAsync(
+          fakeAgy,
+          ["--log-file", tmpLog, "--print", "hello"],
+          process.cwd(),
+          {
+            timeoutMs: 5_000,
+            idleTimeoutMs: 5_000,
+            killGraceMs: 25,
+          },
+        ),
+      ).rejects.toThrow(/stalled in planner loop/i);
+    } finally {
+      if (previous === undefined) delete process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS;
+      else process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS = previous;
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  }, 4000);
 });
 
 describe("cli.ts signal handler hygiene", () => {

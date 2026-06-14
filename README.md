@@ -519,12 +519,20 @@ sudo bash scripts/install.sh
 Or copy manually (include only the services you want):
 
 ```bash
-sudo cp systemd/agent-bridge-{antigravity,codex,claude,interactive,worker-bot,health}.service /etc/systemd/system/
-sudo cp systemd/agent-bridge-discord.service /etc/systemd/system/
-sudo cp systemd/agent-bridge-discord-interactive.service /etc/systemd/system/
+sudo install -D -m 0644 systemd/agent-bridge-antigravity.service /etc/systemd/system/agent-bridge-antigravity.service
+sudo install -D -m 0644 systemd/agent-bridge-codex.service /etc/systemd/system/agent-bridge-codex.service
+sudo install -D -m 0644 systemd/agent-bridge-claude.service /etc/systemd/system/agent-bridge-claude.service
+sudo install -D -m 0644 systemd/agent-bridge-interactive.service /etc/systemd/system/agent-bridge-interactive.service
+sudo install -D -m 0644 systemd/agent-bridge-worker-bot.service /etc/systemd/system/agent-bridge-worker-bot.service
+sudo install -D -m 0644 systemd/agent-bridge-health.service /etc/systemd/system/agent-bridge-health.service
+sudo install -D -m 0644 systemd/agent-bridge-discord.service /etc/systemd/system/agent-bridge-discord.service
+sudo install -D -m 0644 systemd/agent-bridge-discord-interactive.service /etc/systemd/system/agent-bridge-discord-interactive.service
+sudo sed -i 's/User=BRIDGE_USER/User='"$USER"'/g' /etc/systemd/system/agent-bridge-*.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now agent-bridge-antigravity agent-bridge-codex
 ```
+
+The repo service templates intentionally use `User=BRIDGE_USER` as an install-time placeholder. If you copy units manually, replace that placeholder with the real runtime account before starting the service; otherwise systemd fails with `status=217/USER`.
 
 Only enable optional services after their `/etc/default/agent-bridge-*` file
 exists and contains a real token.

@@ -381,12 +381,11 @@ describe("buildCliInvocation — attachment injection", () => {
       command: "codex",
     });
     const prompt = args[args.length - 1];
-    expect(prompt).toContain("Preserve the facts the user needs to act");
-    expect(prompt).toContain("Preserve causal direction exactly");
-    expect(prompt).toContain("Do not replace a known implementation direction with a vague abstraction");
-    expect(prompt).toContain("For CI or gate failures");
-    expect(prompt).toContain("For generated file output");
-    expect(prompt).toContain("Skip throat-clearing");
+    expect(prompt).toContain("Telegram response style:");
+    expect(prompt).toContain("Never drop critical facts");
+    expect(prompt).toContain("Retain all specific commands, signals, file paths, error codes");
+    expect(prompt).toContain("Skip all throat-clearing");
+    expect(prompt).toContain("Avoid Markdown links and em dashes");
   });
 });
 

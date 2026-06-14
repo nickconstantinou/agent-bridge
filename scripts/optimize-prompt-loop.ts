@@ -61,6 +61,7 @@ export interface LlmClient {
 }
 
 export type CodexRunner = (command: string, args: string[], stdin: string, timeoutMs: number) => Promise<string>;
+export type AgyRunner = (command: string, args: string[], timeoutMs: number) => Promise<string>;
 
 interface CaseRun {
   caseId: string;
@@ -428,6 +429,97 @@ export async function runOptimizationLoop(input: {
   return { best, history };
 }
 
+export function extractAgyResponse(stdout: string): string {
+  const lines = stdout.split(/\r?\n/);
+  let lastSepIdx = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (lines[i].trim() === "***") {
+      lastSepIdx = i;
+      break;
+    }
+  }
+  if (lastSepIdx !== -1) {
+    return lines.slice(lastSepIdx + 1).join("\n").trim();
+  }
+  return stdout.trim();
+}
+
+export function formatAgyPrompt(messages: ModelMessage[], jsonMode: boolean): string {
+  const parts: string[] = [
+    "You are being called by an automated prompt-optimization experiment.",
+    "Respond to the final user task only.",
+    "Do not run shell commands or edit files.",
+  ];
+  if (jsonMode) {
+    parts.push("Return only strict JSON.");
+  }
+  parts.push("");
+  for (const message of messages) {
+    parts.push(`${message.role.toUpperCase()}:`);
+    parts.push(message.content);
+    parts.push("");
+  }
+  return parts.join("\n").trim() + "\n";
+}
+
+export class AgyPipeClient implements LlmClient {
+  private command: string;
+  private runner: AgyRunner;
+  private timeoutMs: number;
+
+  constructor(input: { command?: string; runner?: AgyRunner; timeoutMs?: number } = {}) {
+    this.command = input.command || process.env.OPTIMIZER_AGY_COMMAND || "agy";
+    this.runner = input.runner || runAgyProcess;
+    this.timeoutMs = input.timeoutMs ?? Number(process.env.OPTIMIZER_AGY_TIMEOUT_MS || 600_000);
+  }
+
+  async complete(messages: ModelMessage[], options: { model: string; temperature?: number; jsonMode?: boolean }): Promise<string> {
+    const prompt = formatAgyPrompt(messages, options.jsonMode === true);
+    const timeoutSeconds = Math.ceil(this.timeoutMs / 1000);
+    const args = ["--print-timeout", `${timeoutSeconds}s`, "--print", prompt];
+    return this.runner(this.command, args, this.timeoutMs);
+  }
+}
+
+function runAgyProcess(command: string, args: string[], timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: process.cwd(),
+      shell: false,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { child.kill("SIGTERM"); } catch {}
+      reject(new Error(`agy optimizer call timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (code === 0) {
+        resolve(extractAgyResponse(stdout));
+        return;
+      }
+      reject(new Error(`agy optimizer call failed code=${code ?? "null"} signal=${signal ?? "none"}: ${(stderr || stdout).trim()}`));
+    });
+  });
+}
+
 export class CodexPipeClient implements LlmClient {
   private command: string;
   private runner: CodexRunner;
@@ -537,7 +629,7 @@ async function main(): Promise<void> {
   const optimizerModel = process.env.OPTIMIZER_MODEL || generatorModel;
   const passes = Number(argValue("--passes") || process.env.OPTIMIZER_PASSES || 4);
   const dataset = loadDataset(argValue("--dataset"));
-  const client = new CodexPipeClient();
+  const client = new AgyPipeClient();
 
   await runOptimizationLoop({
     dataset,

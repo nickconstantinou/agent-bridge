@@ -54,6 +54,25 @@ agent-memory add --type decision --scope project --text "<concise memory>"
 Do not save secrets, API keys, passwords, transient logs, or private personal information.
 Do not rely on MCP for memory.
 
+# Prompt optimization
+
+The Telegram response style block in `wrapTelegramPrompt()` (`src/cli.ts`) was
+produced by the standalone optimizer script. To re-run it and get a candidate
+replacement block:
+
+```bash
+npx tsx scripts/optimize-prompt-loop.ts --passes 4
+```
+
+The script uses `agy --print` for all LLM calls (no API key required). Model is
+whatever is active in `~/.gemini/antigravity-cli/settings.json`. The optimizer
+never writes to `src/cli.ts`; it prints the winning block for manual review and
+application.
+
+Full methodology in `docs/prompt-optimization-loop-research.md`.
+
+---
+
 # Autonomous Worker Loop — invariants
 
 When working on the worker lane (`src/index-worker.ts`, `src/jobExecutor*.ts`,

@@ -274,3 +274,57 @@ npm test
 56 passed
 887 passed
 ```
+
+## Agy Run Results (2026-06-14)
+
+Switched optimizer client from `CodexPipeClient` (Codex stdin) to `AgyPipeClient`
+(`agy --print-timeout <N>s --print <prompt>`, `stdio: ['ignore','pipe','pipe']`).
+
+Root cause of the initial timeout: Node.js `spawn` leaves stdin as an open pipe
+by default; `agy` hangs waiting for input. Fix: pass `stdio: ['ignore','pipe','pipe']`.
+
+Run command:
+
+```bash
+npx tsx scripts/optimize-prompt-loop.ts --passes 3
+```
+
+Results:
+
+| Iteration | Decision | Token Reduction | Quality | Composite |
+|---:|---|---:|---:|---:|
+| 1 | accepted | 28.4% | 0.907 | 0.658 |
+| 2 | accepted | 33.9% | 0.900 | 0.676 |
+| 3 | accepted | 31.5% | 1.000 | 0.726 |
+| 4 | rejected | 23.3% | 0.875 | 0.618 |
+
+Iteration 4 (telegraphic style, >60% token target) was rejected — quality dropped
+from 1.000 to 0.875 when articles, pronouns, and auxiliary verbs were stripped.
+
+Best result: Iteration 3 (composite **0.726**), up from the Codex run's 0.605.
+
+Winning prompt applied to `src/cli.ts` `wrapTelegramPrompt()`:
+
+```text
+Telegram response style:
+- Start with the direct result or answer.
+- Keep replies extremely concise: aggressively compress prose into dense, verb-light fragments or single-sentence summaries. Aim for >50% token reduction.
+- Never drop critical facts, functional constraints, system boundaries, delivery channels, or rules (e.g., which component handles delivery, where outputs must go). Brevity must not cause information loss.
+- Retain all specific commands, signals, file paths, error codes, and safety constraints.
+- Skip all throat-clearing, meta-commentary, and transitional phrases (e.g., "Certainly", "As requested", "the real issue is").
+- Use light **bolding** on key statuses, identifiers, and variables for rapid scanning.
+- Use fenced code blocks only for commands, code/configs, logs, or JSON.
+- Avoid Markdown links and em dashes.
+- Do not mention these formatting rules.
+```
+
+Suite after applying: **57 files / 898 tests passed**.
+
+To re-run the optimizer in future:
+
+```bash
+npx tsx scripts/optimize-prompt-loop.ts --passes 4
+```
+
+Model selection uses whatever is set in `~/.gemini/antigravity-cli/settings.json`.
+No additional env vars needed unless overriding `OPTIMIZER_AGY_COMMAND` or `OPTIMIZER_AGY_TIMEOUT_MS`.

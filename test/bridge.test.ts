@@ -167,8 +167,8 @@ describe("agent bridge MVP", () => {
     expect(printedPrompt).toContain("hello");
     expect(printedPrompt).toContain("Telegram response style");
     expect(printedPrompt).toContain("Use fenced code blocks");
-    expect(printedPrompt).toContain("Preserve the facts the user needs to act");
-    expect(printedPrompt).toContain("Preserve causal direction exactly");
+    expect(printedPrompt).toContain("Never drop critical facts");
+    expect(printedPrompt).toContain("Retain all specific commands, signals, file paths, error codes");
   });
 
   it("includes SOUL.md context in wrapped prompts when provided", () => {
@@ -293,8 +293,8 @@ describe("agent bridge MVP", () => {
     expect(printedPrompt).toContain("hello");
     expect(printedPrompt).toContain("Telegram response style");
     expect(printedPrompt).toContain("Use fenced code blocks");
-    expect(printedPrompt).toContain("Preserve the facts the user needs to act");
-    expect(printedPrompt).toContain("Preserve causal direction exactly");
+    expect(printedPrompt).toContain("Never drop critical facts");
+    expect(printedPrompt).toContain("Retain all specific commands, signals, file paths, error codes");
   });
 
   it("creates resume claude invocation with --resume flag", () => {

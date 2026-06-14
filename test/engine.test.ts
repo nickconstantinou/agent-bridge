@@ -274,6 +274,49 @@ describe("BridgeEngine", () => {
       expect(capturedPrompts[2]).toContain("second question");
       expect(client.sendMessage.mock.calls.at(-1)?.[0].text).toBe("Recovered answer");
     });
+
+    it("retries recoverable Agy cascade errors once with a fresh conversation and recent context", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+
+      const capturedPrompts: string[] = [];
+      const capturedArgs: string[][] = [];
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedArgs.push(args);
+        capturedPrompts.push(args[args.length - 1]);
+        if (runCli.mock.calls.length === 1) return "***\nPrior answer from Agy";
+        if (runCli.mock.calls.length === 2) {
+          throw new Error('{"type":"error","message":"error executing cascade step: CORTEX_STEP_TYPE_GREP_SEARCH: grep: -r: No such file or directory: exit status 2"}');
+        }
+        return "***\nRecovered after reset";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        {
+          kind: "antigravity",
+          botConfig: { command: "agy", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      db.setSession("100", "antigravity", "stale-conversation");
+
+      await engine.handleMessages([makeMessage("first question")]);
+      await engine.handleMessages([makeMessage("second question")]);
+
+      expect(runCli).toHaveBeenCalledTimes(3);
+      expect(capturedArgs[2]).not.toContain("--conversation");
+      expect(capturedPrompts[2]).toContain("[Context from previous conversation]");
+      expect(capturedPrompts[2]).toContain("User: first question");
+      expect(capturedPrompts[2]).toContain("Assistant: Prior answer from Agy");
+      expect(capturedPrompts[2]).toContain("second question");
+      expect(client.sendMessage.mock.calls.at(-1)?.[0].text).toBe("Recovered after reset");
+    });
   });
 
   describe("authorization", () => {

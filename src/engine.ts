@@ -111,6 +111,11 @@ function isAntigravityPrintTimeoutError(error: Error): boolean {
   return /agy execution timed out waiting for response|print mode timed out waiting for response/i.test(error.message ?? "");
 }
 
+function isRecoverableAntigravityExecutionError(error: Error): boolean {
+  const message = error.message ?? "";
+  return /error executing cascade step:|agent executor error:|PlannerResponse without ModifiedResponse/i.test(message);
+}
+
 function topicChatKey(chatId: number, chatType: string, threadId?: number): string {
   const isGroup = chatType === "group" || chatType === "supergroup";
   return isGroup && threadId != null ? `${chatId}:${threadId}` : String(chatId);
@@ -653,15 +658,8 @@ export class BridgeEngine {
         const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
         return this.executePromptAsync(retryPrompt, null, chatId, body, onProgress, attachments, eventContext, runId, collect, chatKey);
       }
-      if (executionKind === "antigravity" && isAntigravityPrintTimeoutError(error as Error)) {
-        if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
-        const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
-        const retryResult = await this._runFreshAntigravityRetry(retryPrompt, chatId, chatKey, outDir, onProgress, attachments, "async", eventContext, runId, collect);
-        this._rememberTurn(chatKey, prompt, retryResult.text);
-        if (this.hooks.onAfterExecute) {
-          await this.hooks.onAfterExecute(prompt, retryResult.text, hookContext(chatId, chatKey, body.message_thread_id));
-        }
-        return retryResult;
+      if (executionKind === "antigravity" && (isAntigravityPrintTimeoutError(error as Error) || isRecoverableAntigravityExecutionError(error as Error))) {
+        return this._retryAntigravityFreshSession(prompt, chatId, chatKey, outDir, onProgress, attachments, "async", eventContext, runId, collect, body.message_thread_id);
       }
       if (isCapacityExhaustedError(error as Error) && this.opts.botConfig.modelPreference.length > 1) {
         const fallbackModel = getNextFallbackModel(model, this.opts.botConfig.modelPreference);
@@ -777,15 +775,8 @@ export class BridgeEngine {
         const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
         return this.executePrompt(retryPrompt, null, chatId, body, attachments, eventContext, runId, collect, chatKey);
       }
-      if (executionKind === "antigravity" && isAntigravityPrintTimeoutError(error as Error)) {
-        if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
-        const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
-        const retryResult = await this._runFreshAntigravityRetry(retryPrompt, chatId, chatKey, outDir, () => {}, attachments, "sync", eventContext, runId, collect);
-        this._rememberTurn(chatKey, prompt, retryResult.text);
-        if (this.hooks.onAfterExecute) {
-          await this.hooks.onAfterExecute(prompt, retryResult.text, hookContext(chatId, chatKey, body.message_thread_id));
-        }
-        return retryResult;
+      if (executionKind === "antigravity" && (isAntigravityPrintTimeoutError(error as Error) || isRecoverableAntigravityExecutionError(error as Error))) {
+        return this._retryAntigravityFreshSession(prompt, chatId, chatKey, outDir, () => {}, attachments, "sync", eventContext, runId, collect, body.message_thread_id);
       }
       if (isCapacityExhaustedError(error as Error) && this.opts.botConfig.modelPreference.length > 1) {
         const fallbackModel = getNextFallbackModel(model, this.opts.botConfig.modelPreference);
@@ -883,6 +874,40 @@ export class BridgeEngine {
       try { rmSync(retryLogFile); } catch {}
       throw retryError;
     }
+  }
+
+  private async _retryAntigravityFreshSession(
+    prompt: string,
+    chatId: number,
+    chatKey: string,
+    outDir: string,
+    onProgress: (t: string) => void,
+    attachments: string[],
+    mode: "async" | "sync",
+    eventContext: CliOptions["eventContext"] = undefined as any,
+    runId: string | null = null,
+    collect: ((e: BridgeEvent) => void) | null = null,
+    bodyThreadId?: number | string,
+  ): Promise<CliResult> {
+    if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
+    const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
+    const retryResult = await this._runFreshAntigravityRetry(
+      retryPrompt,
+      chatId,
+      chatKey,
+      outDir,
+      onProgress,
+      attachments,
+      mode,
+      eventContext,
+      runId,
+      collect,
+    );
+    this._rememberTurn(chatKey, prompt, retryResult.text);
+    if (this.hooks.onAfterExecute) {
+      await this.hooks.onAfterExecute(prompt, retryResult.text, hookContext(chatId, chatKey, bodyThreadId));
+    }
+    return retryResult;
   }
 
   private async _runWithFallback(

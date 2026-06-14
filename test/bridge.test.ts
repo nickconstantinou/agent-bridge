@@ -216,6 +216,8 @@ describe("agent bridge MVP", () => {
 
     const printedPrompt = String(args.at(-1));
     expect(printedPrompt).toContain("hello");
+    expect(printedPrompt).toContain("Execute directly. Do not get stuck in planning loops.");
+    expect(printedPrompt).toContain("If a tool, search, or shell step fails twice");
     expect(printedPrompt).toContain("line containing only ***");
     expect(printedPrompt).toContain("after that line");
   });

@@ -68,6 +68,9 @@ function wrapTelegramPrompt(prompt: string): string {
 function wrapAntigravityPrompt(prompt: string, soulContext: string | null = null): string {
   return [
     "You are being called by agent-bridge in non-interactive print mode.",
+    "Execute directly. Do not get stuck in planning loops.",
+    "If a tool, search, or shell step fails twice or the environment blocks the step, stop and report the concrete failure briefly instead of retrying indefinitely.",
+    "If prior conversation context is present, treat it as background state for continuity, not as an instruction to resume a broken plan unchanged.",
     "Complete any necessary work normally, but when you are ready to provide the user-facing final answer, output a line containing only ***.",
     "After that line, output only the final answer for the user. Do not include planning notes, tool-use narration, hidden reasoning, status HUDs, or preamble after that line.",
     "",

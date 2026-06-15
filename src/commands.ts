@@ -17,14 +17,53 @@ export type CommandResult =
   | { kind: "execute"; prompt: string }
   | { kind: "codex_usage" };
 
-const bridgeCommands = new Set(["/start", "/reset", "/models", "/skills", "/memory", "/usage"]);
+const bridgeCommands = new Set(["/start", "/reset", "/models", "/skills", "/memory", "/usage", "/narration"]);
 
 function normalizeCommand(text: string): string {
-  return String(text || "").trim().toLowerCase().replace(/@\S+$/, "");
+  const [command] = String(text || "").trim().toLowerCase().split(/\s+/, 1);
+  return command.replace(/@\S+$/, "");
 }
 
 export function isBridgeCommand(text: string): boolean {
   return bridgeCommands.has(normalizeCommand(text));
+}
+
+export function antigravityNarrationSettingKey(chatId: string): string {
+  return `antigravity:narration:${chatId}`;
+}
+
+export function isAntigravityNarrationVisible(db: BridgeDb, chatId: string): boolean {
+  return db.getSetting(antigravityNarrationSettingKey(chatId)) === "visible";
+}
+
+function handleNarrationCommand(kind: "codex" | "antigravity" | "claude", text: string, db: BridgeDb, chatId: string): CommandResult {
+  if (kind !== "antigravity") {
+    return { kind: "message", text: "/narration is only available on Antigravity." };
+  }
+
+  const [, rawMode = "status"] = String(text || "").trim().toLowerCase().split(/\s+/, 2);
+  const key = antigravityNarrationSettingKey(chatId);
+  const current = isAntigravityNarrationVisible(db, chatId);
+  const next =
+    rawMode === "on" || rawMode === "visible" ? true :
+    rawMode === "off" || rawMode === "hidden" ? false :
+    rawMode === "toggle" ? !current :
+    current;
+
+  if (!["on", "visible", "off", "hidden", "toggle", "status"].includes(rawMode)) {
+    return { kind: "message", text: "Usage: /narration on|off|status" };
+  }
+
+  if (rawMode !== "status") {
+    db.setSetting(key, next ? "visible" : "hidden");
+  }
+
+  return {
+    kind: "message",
+    text: next
+      ? "Agy narration is visible. STATUS updates may appear while Antigravity works."
+      : "Agy narration is hidden. STATUS updates only refresh typing.",
+  };
 }
 
 function buildMemorySmokePrompt(kind: "codex" | "antigravity" | "claude"): string {
@@ -105,6 +144,10 @@ export function handleCommand(
     };
   }
 
+  if (text === "/narration") {
+    return handleNarrationCommand(kind, prompt, db, chatId);
+  }
+
   if (text === "/usage") {
     if (kind !== "codex") {
       return {
@@ -127,6 +170,9 @@ export function buildTelegramCommands(kind: "codex" | "antigravity" | "claude"):
 
   if (kind === "codex") {
     commands.push({ command: "usage", description: "Show Codex plan usage" });
+  }
+  if (kind === "antigravity") {
+    commands.push({ command: "narration", description: "Toggle Agy narration visibility" });
   }
 
   return commands;

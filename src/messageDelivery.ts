@@ -20,6 +20,16 @@ function truncate(text: string): string {
   return text.length > MAX_TELEGRAM_TEXT ? text.slice(-MAX_TELEGRAM_TEXT) : text;
 }
 
+function extractStatusProgress(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^STATUS:\s+\S/i.test(line))
+    .map((line) => line.replace(/^STATUS:\s*/i, ""))
+    .join("\n")
+    .trim();
+}
+
 function extractCodexProgressText(chunk: string): string {
   const lines = chunk.split("\n").map((line) => line.trim()).filter(Boolean);
   const parts: string[] = [];
@@ -218,6 +228,7 @@ export async function sendMessageWithProgress({
   execution,
   onProgress = () => {},
   body = {},
+  showProgressNarration = false,
   isAborted,
   runId,
   onEvent,
@@ -228,6 +239,7 @@ export async function sendMessageWithProgress({
   execution: ((onProgress: (text: string) => void) => Promise<CliResult>) | Promise<CliResult>;
   onProgress?: (text: string) => void;
   body?: any;
+  showProgressNarration?: boolean;
   isAborted?: () => boolean;
   runId?: string;
   onEvent?: (event: BridgeEvent) => void;
@@ -268,10 +280,13 @@ export async function sendMessageWithProgress({
     originalOnProgress?.(chunk);
 
     if (streamingEnabled && placeholderMsgId != null) {
+      sendTyping();
+      if (!showProgressNarration) return;
       const now = Date.now();
       if (now - lastProgressEditMs >= PROGRESS_EDIT_INTERVAL_MS) {
         lastProgressEditMs = now;
-        const previewText = truncate(currentText);
+        const previewText = truncate(extractStatusProgress(currentText));
+        if (!previewText) return;
         client.editMessageText({
           chat_id: chatId,
           message_id: placeholderMsgId,

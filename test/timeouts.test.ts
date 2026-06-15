@@ -23,14 +23,14 @@ describe("resolveTimeoutsForKind — built-in defaults", () => {
   it("all kinds get 1200s idle timeout by default", () => {
     setEnv({ CODEX_CLI_IDLE_TIMEOUT_MS: undefined, ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: undefined, CLAUDE_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
     expect(resolveTimeoutsForKind("codex").cliIdleTimeoutMs).toBe(1_200_000);
-    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(1_200_000);
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(3_600_000);
     expect(resolveTimeoutsForKind("claude").cliIdleTimeoutMs).toBe(1_200_000);
   });
 
   it("all kinds get 1800s hard timeout by default", () => {
     setEnv({ CODEX_CLI_TIMEOUT_MS: undefined, ANTIGRAVITY_CLI_TIMEOUT_MS: undefined, CLAUDE_CLI_TIMEOUT_MS: undefined, CLI_TIMEOUT_MS: undefined });
     expect(resolveTimeoutsForKind("codex").cliTimeoutMs).toBe(1_800_000);
-    expect(resolveTimeoutsForKind("antigravity").cliTimeoutMs).toBe(1_800_000);
+    expect(resolveTimeoutsForKind("antigravity").cliTimeoutMs).toBe(3_600_000);
     expect(resolveTimeoutsForKind("claude").cliTimeoutMs).toBe(1_800_000);
   });
 
@@ -81,9 +81,9 @@ describe("resolveTimeoutsForKind — env precedence", () => {
 
   it("ignores zero or non-numeric values and falls back", () => {
     setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: "0", CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(1_200_000);
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(3_600_000);
     setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: "not-a-number", CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(1_200_000);
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(3_600_000);
   });
 });
 
@@ -96,8 +96,8 @@ describe("buildExecutionOptions", () => {
       CLI_TIMEOUT_MS: undefined,
     });
     const opts = buildExecutionOptions("antigravity");
-    expect(opts.idleTimeoutMs).toBe(1_200_000);
-    expect(opts.timeoutMs).toBe(1_800_000);
+    expect(opts.idleTimeoutMs).toBe(3_600_000);
+    expect(opts.timeoutMs).toBe(3_600_000);
   });
 
   it("reflects env overrides at call time", () => {

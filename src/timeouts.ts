@@ -11,7 +11,7 @@ interface PerKindDefaults {
 // (gpt-5.5, agy) while still recovering from genuine stalls within a reasonable window.
 const DEFAULTS: Record<BotKind, PerKindDefaults> = {
   codex:       { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 1_200_000 },
-  antigravity: { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 1_200_000 },
+  antigravity: { cliTimeoutMs: 3_600_000, cliIdleTimeoutMs: 3_600_000 },
   claude:      { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 1_200_000 },
 };
 

@@ -19,6 +19,10 @@ export class WorkerFallbackChain {
     this.chain = chain;
   }
 
+  getChain(): string[] {
+    return [...this.chain];
+  }
+
   getActiveCli(chatKey: string): string {
     const idx = this.chatActiveIdx.get(chatKey) ?? 0;
     return this.chain[Math.min(idx, this.chain.length - 1)];

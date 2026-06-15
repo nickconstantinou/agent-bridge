@@ -46,6 +46,15 @@ describe("WorkerFallbackChain", () => {
     });
   });
 
+  describe("getChain", () => {
+    it("returns a copy of the fallback chain array", () => {
+      const chainList = ["codex", "claude", "antigravity"];
+      const chain = new WorkerFallbackChain(chainList);
+      expect(chain.getChain()).toEqual(chainList);
+      expect(chain.getChain()).not.toBe(chainList);
+    });
+  });
+
   describe("isChainExhausted", () => {
     it("returns false when not at the last CLI", () => {
       const chain = new WorkerFallbackChain(["codex", "claude"]);

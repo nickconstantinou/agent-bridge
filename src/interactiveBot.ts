@@ -224,30 +224,44 @@ export async function dispatchInteractiveWithFallback(
   update: TelegramUpdate,
   chatKey: string,
   deps: InteractiveDispatchDeps,
+  tried = new Set<string>(),
 ): Promise<void> {
   const { engines, fallbackChain, exhaustedChats, contextPreambles, db, notify, onCliSwitched } = deps;
 
   exhaustedChats.delete(chatKey);
 
-  const pref = getUserCliPreference(db, chatKey);
-  fallbackChain.setActiveCli(chatKey, pref);
+  if (tried.size === 0) {
+    const pref = getUserCliPreference(db, chatKey);
+    fallbackChain.setActiveCli(chatKey, pref);
+  }
 
   const activeCli = fallbackChain.getActiveCli(chatKey) as CliKind;
+  tried.add(activeCli);
   await engines[activeCli].handleUpdate(update);
 
   if (exhaustedChats.has(chatKey)) {
     exhaustedChats.delete(chatKey);
-    const next = fallbackChain.advance(chatKey) as CliKind | null;
+    let next: CliKind | null = null;
+    const chain = fallbackChain.getChain();
+    for (const cli of chain) {
+      if (!tried.has(cli)) {
+        next = cli as CliKind;
+        break;
+      }
+    }
     if (next) {
+      fallbackChain.setActiveCli(chatKey, next);
       contextPreambles.set(chatKey, fallbackChain.buildContextPreamble(chatKey));
-      setUserCliPreference(db, chatKey, next);
+      // Do NOT write setUserCliPreference here — auto-fallback is temporary and must
+      // not overwrite the user's explicit preference. Each new message resets to the
+      // stored preference, allowing the 1st choice to be retried on recovery.
 
       await notify(`Switching to ${next} (${activeCli} at capacity)`);
       if (onCliSwitched) {
         await onCliSwitched(next);
       }
 
-      await dispatchInteractiveWithFallback(update, chatKey, deps);
+      await dispatchInteractiveWithFallback(update, chatKey, deps, tried);
     } else {
       await notify("All CLIs are currently unavailable. Please try again later.");
     }

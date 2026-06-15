@@ -154,6 +154,13 @@ await client.setMyCommands({ commands: buildInteractiveCommands(defaultPref) })
   .catch((err: unknown) => console.warn("[interactive] setMyCommands failed", err));
 await client.setMyCommands({ commands: buildInteractiveCommands(defaultPref), scope: { type: "all_group_chats" } })
   .catch((err: unknown) => console.warn("[interactive] setMyCommands (groups) failed", err));
+await client.setMyCommands({ commands: buildInteractiveCommands(defaultPref), scope: { type: "all_supergroups" } })
+  .catch((err: unknown) => console.warn("[interactive] setMyCommands (supergroups) failed", err));
+
+// Tracks which group chat IDs have had per-chat commands registered this session.
+// Telegram requires a chat-specific scope registration for commands to appear reliably
+// in individual groups, even when all_group_chats / all_supergroups scopes are set.
+const registeredGroupChats = new Set<number>();
 
 console.log("[interactive] starting polling...");
 
@@ -174,6 +181,22 @@ for (;;) {
         const isGroupUpdate = isGroupInteractiveUpdate(typedUpdate);
         if (isGroupUpdate) {
           console.log("[interactive] update.received", JSON.stringify(describeInteractiveUpdateForLog(typedUpdate)));
+        }
+
+        // Register per-chat commands the first time a group/supergroup is seen so that
+        // the command menu appears reliably in that specific chat (global scope alone is
+        // not always picked up by Telegram clients for existing groups).
+        const groupChatId = isGroupUpdate
+          ? (typedUpdate.message?.chat?.id ?? typedUpdate.callback_query?.message?.chat?.id ?? null)
+          : null;
+        if (groupChatId != null && !registeredGroupChats.has(groupChatId)) {
+          registeredGroupChats.add(groupChatId);
+          const groupChatKey = String(groupChatId);
+          const groupPref = getUserCliPreference(db, groupChatKey);
+          client.setMyCommands({
+            commands: buildInteractiveCommands(groupPref),
+            scope: { type: "chat", chat_id: groupChatId },
+          }).catch((err: unknown) => console.warn(`[interactive] setMyCommands (chat ${groupChatId}) failed`, err));
         }
 
         if (!isAuthorizedInteractiveUpdate(typedUpdate, allowedUserIds)) {
@@ -232,6 +255,8 @@ for (;;) {
                 .catch((err: unknown) => console.warn("[interactive] setMyCommands failed after cli callback", err));
               await client.setMyCommands({ commands: buildInteractiveCommands(newCli), scope: { type: "all_group_chats" } })
                 .catch((err: unknown) => console.warn("[interactive] setMyCommands (groups) failed after cli callback", err));
+              await client.setMyCommands({ commands: buildInteractiveCommands(newCli), scope: { type: "all_supergroups" } })
+                .catch((err: unknown) => console.warn("[interactive] setMyCommands (supergroups) failed after cli callback", err));
             }
             continue;
           }
@@ -261,6 +286,8 @@ for (;;) {
                   .catch((err: unknown) => console.warn("[interactive] setMyCommands failed during fallback", err));
                 await client.setMyCommands({ commands: buildInteractiveCommands(newCli), scope: { type: "all_group_chats" } })
                   .catch((err: unknown) => console.warn("[interactive] setMyCommands (groups) failed during fallback", err));
+                await client.setMyCommands({ commands: buildInteractiveCommands(newCli), scope: { type: "all_supergroups" } })
+                  .catch((err: unknown) => console.warn("[interactive] setMyCommands (supergroups) failed during fallback", err));
               },
             }).catch((err: unknown) => console.error("[interactive] dispatch error", err));
           } else {

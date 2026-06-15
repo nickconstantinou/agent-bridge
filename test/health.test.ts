@@ -716,6 +716,20 @@ describe("buildSuggestionPrompt", () => {
     expect(prompt).toMatch(/order|priorit|likelihood/i);
   });
 
+  it("asks for a recommended option with rationale", async () => {
+    const { buildSuggestionPrompt } = await import("../src/health/suggest.js");
+    const report = {
+      pluginName: "test",
+      status: "red" as const,
+      checks: [{ name: "stale-workers", status: "red" as const, message: "no activity for 2h" }],
+      summary: "Critical: stale-workers",
+      timestamp: new Date().toISOString(),
+    };
+    const prompt = buildSuggestionPrompt(report);
+    expect(prompt).toMatch(/recommend/i);
+    expect(prompt).toMatch(/rationale|why/i);
+  });
+
   it("excludes green checks", async () => {
     const { buildSuggestionPrompt } = await import("../src/health/suggest.js");
     const report = {

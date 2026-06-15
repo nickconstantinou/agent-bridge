@@ -54,7 +54,7 @@ describe("sendMessageWithProgress", () => {
     );
   });
 
-  it("edits the antigravity placeholder with accumulated chunks when progress arrives", async () => {
+  it("edits the antigravity placeholder with STATUS progress when narration visibility is enabled", async () => {
     const edits: string[] = [];
     const client = {
       sendMessage: vi.fn(async (body: any) => ({ ok: true, result: { message_id: 99, ...body } })),
@@ -67,15 +67,56 @@ describe("sendMessageWithProgress", () => {
       client,
       kind: "antigravity",
       chatId: 123,
+      showProgressNarration: true,
       execution: (onProgress: (chunk: string) => void) => {
-        onProgress("chunk1");
-        onProgress("chunk2");
+        onProgress("STATUS: chunk1\n");
+        onProgress("STATUS: chunk2\n");
         return Promise.resolve({ text: "Final answer", sessionId: "s1" } as CliResult);
       },
     });
 
     // At least one edit should have occurred with accumulated progress text
     expect(edits.some((t) => t.includes("chunk1"))).toBe(true);
+  });
+
+  it("hides antigravity progress narration when narration visibility is disabled", async () => {
+    const client = createMockClient();
+
+    await sendMessageWithProgress({
+      client,
+      kind: "antigravity",
+      chatId: 123,
+      showProgressNarration: false,
+      execution: (onProgress: (chunk: string) => void) => {
+        onProgress("I will inspect files.\nSTATUS: reading files\n");
+        return Promise.resolve({ text: "Final answer", sessionId: "s1" } as CliResult);
+      },
+    });
+
+    const editTexts = (client.editMessageText as any).mock.calls.map((call: any[]) => call[0]?.text ?? "");
+    expect(editTexts.some((text: string) => text.includes("reading files"))).toBe(false);
+    expect(editTexts.some((text: string) => text.includes("I will inspect files"))).toBe(false);
+    expect(client.sendChatAction).toHaveBeenCalledWith(expect.objectContaining({ chat_id: 123, action: "typing" }));
+  });
+
+  it("shows only sanitized STATUS lines when antigravity narration visibility is enabled", async () => {
+    const client = createMockClient();
+
+    await sendMessageWithProgress({
+      client,
+      kind: "antigravity",
+      chatId: 123,
+      showProgressNarration: true,
+      execution: (onProgress: (chunk: string) => void) => {
+        onProgress("I will inspect files.\nSTATUS: reading files\nSTATUS: running tests\n");
+        return Promise.resolve({ text: "Final answer", sessionId: "s1" } as CliResult);
+      },
+    });
+
+    const editTexts = (client.editMessageText as any).mock.calls.map((call: any[]) => call[0]?.text ?? "");
+    expect(editTexts.some((text: string) => text.includes("reading files"))).toBe(true);
+    expect(editTexts.some((text: string) => text.includes("running tests"))).toBe(true);
+    expect(editTexts.some((text: string) => text.includes("I will inspect files"))).toBe(false);
   });
 
   it("delivers final text to Telegram for a resolved-promise execution", async () => {

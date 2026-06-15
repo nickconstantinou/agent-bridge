@@ -33,7 +33,7 @@ import { parseClaudeStreamJsonOutput } from "./claudeStreamJson.js";
 import { createPollErrorState, planPollError, notePollSuccess } from "./polling.js";
 import { sendTelegramMessage, sendMessageWithProgress } from "./messageDelivery.js";
 import { buildModelKeyboard, buildModelsText, getCliWorkingDir, extractPromptText, extractThreadId, isAuthorizedMessage } from "./bridge.js";
-import { handleCommand, isBridgeCommand, buildTelegramCommands } from "./commands.js";
+import { handleCommand, isBridgeCommand, buildTelegramCommands, isAntigravityNarrationVisible } from "./commands.js";
 import { getCodexUsageText } from "./codexUsage.js";
 import type { BridgeEvent } from "./events/types.js";
 import { EventStore } from "./events/store.js";
@@ -433,6 +433,7 @@ export class BridgeEngine {
           kind: this._deliveryKind(),
           chatId,
           body: { message_thread_id: threadId },
+          showProgressNarration: this.kind === "antigravity" && isAntigravityNarrationVisible(this.db, chatKey),
           isAborted: () => this.abortedChats.has(chatKey),
           runId,
           onEvent: (e) => collect(e),

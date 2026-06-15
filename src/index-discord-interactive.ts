@@ -167,6 +167,12 @@ const client = new DiscordClient({
     registerCommands().catch((err) =>
       console.warn("[discord-interactive] command registration failed", err),
     );
+    db.cleanupOrphanedRuns(async (run) => {
+      await client.sendMessage({
+        chat_id: run.chat_id,
+        text: "⚠️ **Agent bridge restarted.** The active task was interrupted. You can reply with `provide update` or `continue` to resume.",
+      }).catch((err) => console.error(`Failed to send restart notification to Discord channel ${run.chat_id}`, err));
+    });
   },
   onError: (err) => console.error("[discord-interactive] gateway error", err),
 });

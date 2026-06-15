@@ -268,6 +268,33 @@ describe("BridgeDb runs and events persistence", () => {
       db.insertEvent("missing-run", 1, "run.started", new Date().toISOString(), { command: "codex" })
     ).toThrow();
   });
+
+  describe("cleanupOrphanedRuns", () => {
+    it("marks running runs as failed and invokes callback", () => {
+      db.insertRun("run-orphan-1", "chat-123", "codex");
+      db.insertRun("run-done-1", "chat-123", "codex");
+      db.updateRunCompleted("run-done-1", "done", null);
+
+      const orphanedRuns: any[] = [];
+      db.cleanupOrphanedRuns((run) => {
+        orphanedRuns.push(run);
+      });
+
+      expect(orphanedRuns.length).toBe(1);
+      expect(orphanedRuns[0].run_id).toBe("run-orphan-1");
+      expect(orphanedRuns[0].chat_id).toBe("chat-123");
+      expect(orphanedRuns[0].bot).toBe("codex");
+
+      const orphanStatus = db.getRun("run-orphan-1");
+      expect(orphanStatus.status).toBe("failed");
+      expect(orphanStatus.error).toBe("Process interrupted by bridge restart");
+      expect(orphanStatus.ended_at).toBeDefined();
+
+      const doneStatus = db.getRun("run-done-1");
+      expect(doneStatus.status).toBe("done");
+      expect(doneStatus.error).toBeNull();
+    });
+  });
 });
 
 describe("insertRun — simplified signature", () => {

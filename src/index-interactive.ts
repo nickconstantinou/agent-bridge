@@ -91,6 +91,23 @@ if (soulContext) console.log(`[interactive] loaded SOUL.md context (${soulContex
 
 const db = openDb(dbPath);
 const client = new TelegramClient(token, fetch, 45_000);
+
+db.cleanupOrphanedRuns(async (run) => {
+  const parts = run.chat_id.split(":");
+  const chatId = Number(parts[0]);
+  const threadId = parts.length > 1 ? Number(parts[1]) : undefined;
+  if (!Number.isNaN(chatId)) {
+    await sendTelegramMessage({
+      client,
+      kind: "interactive",
+      chatId,
+      body: {
+        text: "⚠️ **Agent bridge restarted.** The active task was interrupted. You can reply with `provide update` or `continue` to resume.",
+        message_thread_id: threadId,
+      },
+    }).catch((err) => console.error(`Failed to send restart notification to ${run.chat_id}`, err));
+  }
+});
 let botUsername = process.env.TELEGRAM_BOT_USERNAME || null;
 if (!botUsername) {
   try {

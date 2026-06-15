@@ -727,6 +727,29 @@ export class BridgeDb {
     ).run(JSON.stringify(scope), id);
   }
 
+  cleanupOrphanedRuns(onOrphan: (run: { run_id: string; chat_id: string; bot: string }) => void | Promise<void>): void {
+    const endedAt = new Date().toISOString();
+    const orphans = this.raw
+      .prepare(`SELECT run_id, chat_id, bot FROM bridge_runs WHERE status = 'running'`)
+      .all() as Array<{ run_id: string; chat_id: string; bot: string }>;
+
+    for (const run of orphans) {
+      this.raw
+        .prepare(
+          `UPDATE bridge_runs
+           SET status = 'failed', ended_at = ?, error = 'Process interrupted by bridge restart'
+           WHERE run_id = ?`
+        )
+        .run(endedAt, run.run_id);
+      
+      try {
+        onOrphan(run);
+      } catch (err) {
+        console.error(`Failed to handle orphaned run ${run.run_id}`, err);
+      }
+    }
+  }
+
   close(): void {
     this.raw.close();
   }

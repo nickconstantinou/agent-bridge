@@ -669,7 +669,9 @@ Checks it performs:
 
 ### Restart Process
 
-No lock files to clear. Just restart the service:
+No lock files to clear. The SQLite polling offset persists across restarts — no re-processing of old updates.
+
+#### From an external terminal
 
 ```bash
 sudo systemctl restart agent-bridge-antigravity
@@ -677,9 +679,20 @@ sudo systemctl restart agent-bridge-codex
 sudo systemctl restart agent-bridge-claude
 ```
 
-The SQLite polling offset persists across restarts — no re-processing of old updates.
+#### From within an active bot session (safe restart)
 
-> **⚠️ Do not trigger restarts from within an active bot session.** Systemd uses `KillMode=control-group`, so the restart SIGTERM kills the entire cgroup including the currently-running CLI child process. This leaves the bot appearing unresponsive until the session times out. Always restart from an external terminal or Claude Code desktop interface. If the bot does get stuck, send `/reset` to clear the stale execution lock.
+Restarts from within a session are permitted using a grace-period pattern. Systemd uses `KillMode=control-group`, so a direct `systemctl restart` would kill the bridge process before it can deliver its final Telegram message to the user. The safe pattern avoids this:
+
+1. **Notify the user first** — include the restart warning in your response text (e.g. *"Restarting bridge in 5 seconds — reconnect to continue."*).
+2. **Schedule the restart in the background** so the current request can complete and the message can be delivered:
+
+```bash
+(sleep 5 && sudo systemctl restart agent-bridge-claude) &
+```
+
+Replace `agent-bridge-claude` with the appropriate service name. The 5-second sleep lets the bridge finish its current HTTP response cycle and deliver the Telegram notification. `sudo systemctl restart` works by sending a D-Bus signal to systemd and then exiting — systemd handles the actual cgroup teardown and new-instance start asynchronously, so it does not matter that the background process is killed shortly after the signal is dispatched.
+
+**Do not `await` or block on this command** — run it as a fire-and-forget background job from within the agent's tool execution, then end your response normally.
 
 ### Monitoring
 

@@ -245,12 +245,61 @@ export async function sendMessageWithProgress({
   await sendTyping();
   const typingInterval = setInterval(sendTyping, 4500);
 
+  // For antigravity: send a placeholder message upfront so the user sees activity,
+  // then edit it with accumulated STATUS/progress output as the CLI runs.
+  const streamingEnabled = kind === "antigravity";
+  let placeholderMsgId: number | null = null;
+  if (streamingEnabled) {
+    try {
+      const sent = await client.sendMessage({ chat_id: chatId, ...body, text: "🤔 Thinking..." });
+      placeholderMsgId = (sent as any)?.result?.message_id ?? null;
+    } catch {
+      /* non-fatal — fall back to final-only delivery */
+    }
+  }
+
   let currentText = "";
+  let lastProgressEditMs = 0;
+  const PROGRESS_EDIT_INTERVAL_MS = 5_000;
   const originalOnProgress = onProgress;
+
   const wrappedOnProgress = (chunk: string) => {
     currentText += chunk;
     originalOnProgress?.(chunk);
+
+    if (streamingEnabled && placeholderMsgId != null) {
+      const now = Date.now();
+      if (now - lastProgressEditMs >= PROGRESS_EDIT_INTERVAL_MS) {
+        lastProgressEditMs = now;
+        const previewText = truncate(currentText);
+        client.editMessageText({
+          chat_id: chatId,
+          message_id: placeholderMsgId,
+          ...body,
+          text: previewText,
+        }).catch(() => { /* ignore edit failures during streaming */ });
+      }
+    }
   };
+
+  async function deliverFinal(text: string): Promise<void> {
+    if (streamingEnabled && placeholderMsgId != null) {
+      try {
+        await client.editMessageText({
+          chat_id: chatId,
+          message_id: placeholderMsgId,
+          ...body,
+          text: truncate(text),
+        });
+        return;
+      } catch (editErr: any) {
+        const msg = String(editErr?.message ?? editErr);
+        if (msg.includes("message is not modified")) return;
+        /* fall through to sendTelegramMessage if edit fails */
+      }
+    }
+    await sendTelegramMessage({ client, kind, chatId, body: { ...body, text } });
+  }
 
   try {
     let result: any;
@@ -272,7 +321,7 @@ export async function sendMessageWithProgress({
       sessionId: result?.sessionId,
     });
 
-    await sendTelegramMessage({ client, kind, chatId, body: { ...body, text: finalText } });
+    await deliverFinal(finalText);
 
     clearInterval(typingInterval);
     return { ...result, onProgress: wrappedOnProgress };
@@ -288,7 +337,7 @@ export async function sendMessageWithProgress({
       runId,
       errorText,
     });
-    await sendTelegramMessage({ client, kind, chatId, body: { ...body, text: errorText } });
+    await deliverFinal(errorText);
     console.error(`[${kind}] execution error`, err);
     return null;
   }

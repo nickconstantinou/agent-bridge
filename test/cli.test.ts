@@ -636,3 +636,28 @@ describe("normalizeCliArgs — CLI argument translator", () => {
     ]);
   });
 });
+
+describe("wrapAntigravityPrompt — liveness and narration", () => {
+  const base = { prompt: "do something long", sessionId: null, command: "agy", model: null };
+
+  function getAgyPrompt(): string {
+    const { args } = buildCliInvocation({ ...base, bot: "antigravity" });
+    return args[args.length - 1];
+  }
+
+  it("does not contain the old LIVENESS RULE idle-timeout coupling", () => {
+    const prompt = getAgyPrompt();
+    expect(prompt).not.toContain("LIVENESS RULE");
+    expect(prompt).not.toContain("idle timeout termination");
+  });
+
+  it("does not instruct bare PING output", () => {
+    const prompt = getAgyPrompt();
+    expect(prompt).not.toMatch(/'PING'/);
+  });
+
+  it("contains a STATUS narration instruction for user visibility", () => {
+    const prompt = getAgyPrompt();
+    expect(prompt).toContain("STATUS:");
+  });
+});

@@ -42,16 +42,40 @@ describe("sendMessageWithProgress", () => {
     );
   });
 
-  it("does not send a thinking placeholder for antigravity", async () => {
+  it("sends a thinking placeholder for antigravity", async () => {
     const client = createMockClient();
     const chatId = 123;
     const execution = Promise.resolve({ text: "Final answer", sessionId: "s1" } as CliResult);
 
     await sendMessageWithProgress({ client, kind: "antigravity", chatId, execution });
 
-    expect(client.sendMessage).not.toHaveBeenCalledWith(
+    expect(client.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ chat_id: chatId, text: "🤔 Thinking..." })
     );
+  });
+
+  it("edits the antigravity placeholder with accumulated chunks when progress arrives", async () => {
+    const edits: string[] = [];
+    const client = {
+      sendMessage: vi.fn(async (body: any) => ({ ok: true, result: { message_id: 99, ...body } })),
+      sendChatAction: vi.fn(async () => ({ ok: true })),
+      editMessageText: vi.fn(async (body: any) => { edits.push(body.text); return { ok: true }; }),
+      sendMessageDraft: vi.fn(async () => ({ ok: true })),
+    } as any as TelegramClient;
+
+    await sendMessageWithProgress({
+      client,
+      kind: "antigravity",
+      chatId: 123,
+      execution: (onProgress: (chunk: string) => void) => {
+        onProgress("chunk1");
+        onProgress("chunk2");
+        return Promise.resolve({ text: "Final answer", sessionId: "s1" } as CliResult);
+      },
+    });
+
+    // At least one edit should have occurred with accumulated progress text
+    expect(edits.some((t) => t.includes("chunk1"))).toBe(true);
   });
 
   it("delivers final text to Telegram for a resolved-promise execution", async () => {
@@ -124,17 +148,22 @@ describe("sendMessageWithProgress", () => {
     }
   });
 
-  it("sends final error without a thinking placeholder for antigravity", async () => {
+  it("edits antigravity thinking placeholder with error text on failure", async () => {
     const client = createMockClient();
     const chatId = 123;
     const execution = Promise.reject(new Error("CLI failed"));
 
     await expect(sendMessageWithProgress({ client, kind: "antigravity", chatId, execution })).resolves.toBeNull();
 
+    // Placeholder sent first, then error sent (either via edit or new message)
     expect(client.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("❌ CLI failed") })
+      expect.objectContaining({ chat_id: chatId, text: "🤔 Thinking..." })
     );
-    expect(client.editMessageText).not.toHaveBeenCalled();
+    const allTexts = [
+      ...(client.sendMessage as any).mock.calls.map((c: any[]) => c[0]?.text ?? ""),
+      ...(client.editMessageText as any).mock.calls.map((c: any[]) => c[0]?.text ?? ""),
+    ];
+    expect(allTexts.some((t: string) => t.includes("❌") && t.includes("CLI failed"))).toBe(true);
   });
 
   it("does not send duplicate message when final edit returns 'message is not modified'", async () => {

@@ -1,0 +1,6 @@
+{
+  "name": "@google/agy-cli",
+  "version": "1.0.6",
+  "description": "Mock package for agy-cli to allow local npm install",
+  "main": "index.js"
+}

@@ -19,7 +19,7 @@
   },
   "dependencies": {
     "@anthropic-ai/claude-code": "^2.1.177",
-    "@google/agy-cli": "file:.data/mock-agy-cli",
+    "@google/agy-cli": "file:test/mocks/mock-agy-cli",
     "@openai/codex": "^0.139.0",
     "better-sqlite3": "^12.9.0",
     "dotenv": "^17.2.3",

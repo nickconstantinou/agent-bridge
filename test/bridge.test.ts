@@ -615,6 +615,32 @@ describe("agent bridge MVP", () => {
       expect(result?.kind).toBe("message");
       expect(result && "text" in result ? result.text : "").toContain("only available on the Codex bridge");
     });
+
+    it("enables and disables Antigravity narration visibility per chat", () => {
+      const on = handleCommand("antigravity", "/narration on", { db, chatId: "123", config });
+      expect(on?.kind).toBe("message");
+      expect(on && "text" in on ? on.text : "").toContain("visible");
+      expect(db.getSetting("antigravity:narration:123")).toBe("visible");
+
+      const off = handleCommand("antigravity", "/narration off", { db, chatId: "123", config });
+      expect(off?.kind).toBe("message");
+      expect(off && "text" in off ? off.text : "").toContain("hidden");
+      expect(db.getSetting("antigravity:narration:123")).toBe("hidden");
+    });
+
+    it("reports Antigravity narration status", () => {
+      db.setSetting("antigravity:narration:123", "visible");
+      const result = handleCommand("antigravity", "/narration status", { db, chatId: "123", config });
+      expect(result?.kind).toBe("message");
+      expect(result && "text" in result ? result.text : "").toContain("visible");
+    });
+
+    it("keeps /narration Antigravity-only", () => {
+      const result = handleCommand("codex", "/narration on", { db, chatId: "123", config });
+      expect(result?.kind).toBe("message");
+      expect(result && "text" in result ? result.text : "").toContain("only available on Antigravity");
+      expect(db.getSetting("antigravity:narration:123")).toBeNull();
+    });
   });
 });
 
@@ -717,6 +743,15 @@ describe("Telegram command menu", () => {
     });
     expect(buildTelegramCommands("antigravity").some((command: any) => command.command === "usage")).toBe(false);
     expect(buildTelegramCommands("claude").some((command: any) => command.command === "usage")).toBe(false);
+  });
+
+  it("adds /narration to the Antigravity menu only", () => {
+    expect(buildTelegramCommands("antigravity")).toContainEqual({
+      command: "narration",
+      description: "Toggle Agy narration visibility",
+    });
+    expect(buildTelegramCommands("codex").some((command: any) => command.command === "narration")).toBe(false);
+    expect(buildTelegramCommands("claude").some((command: any) => command.command === "narration")).toBe(false);
   });
 
   it("does not include /skills in the command palette", () => {

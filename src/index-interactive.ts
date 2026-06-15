@@ -26,7 +26,8 @@ import {
   buildCliStatusText,
   buildCliKeyboard,
   handleCliSwitchCallback,
-  buildInteractiveCommands,
+  buildGlobalInteractiveCommandRegistrations,
+  buildChatInteractiveCommandRegistrations,
   resolveUpdateChatKey,
   resolveMessageThreadId,
   isAuthorizedInteractiveUpdate,
@@ -167,16 +168,26 @@ const engines = Object.fromEntries(
 ) as Record<CliKind, BridgeEngine>;
 
 const defaultPref = getUserCliPreference(db, "default");
-await client.setMyCommands({ commands: buildInteractiveCommands(defaultPref) })
-  .catch((err: unknown) => console.warn("[interactive] setMyCommands failed", err));
-await client.setMyCommands({ commands: buildInteractiveCommands(defaultPref), scope: { type: "all_group_chats" } })
-  .catch((err: unknown) => console.warn("[interactive] setMyCommands (groups) failed", err));
-await client.setMyCommands({ commands: buildInteractiveCommands(defaultPref), scope: { type: "all_supergroups" } })
-  .catch((err: unknown) => console.warn("[interactive] setMyCommands (supergroups) failed", err));
+async function registerGlobalCommands(pref: CliKind, label: string): Promise<void> {
+  for (const body of buildGlobalInteractiveCommandRegistrations(pref)) {
+    const scopeName = body.scope?.type ?? "default";
+    await client.setMyCommands(body)
+      .catch((err: unknown) => console.warn(`[interactive] setMyCommands (${scopeName}) failed${label}`, err));
+  }
+}
 
+async function registerGroupChatCommands(pref: CliKind, chatId: number): Promise<void> {
+  for (const body of buildChatInteractiveCommandRegistrations(pref, chatId)) {
+    const scopeName = body.scope?.type ?? "chat";
+    await client.setMyCommands(body)
+      .catch((err: unknown) => console.warn(`[interactive] setMyCommands (${scopeName} ${chatId}) failed`, err));
+  }
+}
+
+await registerGlobalCommands(defaultPref, "");
 // Tracks which group chat IDs have had per-chat commands registered this session.
 // Telegram requires a chat-specific scope registration for commands to appear reliably
-// in individual groups, even when all_group_chats / all_supergroups scopes are set.
+// in individual groups, even when global group scopes are set.
 const registeredGroupChats = new Set<number>();
 
 console.log("[interactive] starting polling...");
@@ -210,10 +221,7 @@ for (;;) {
           registeredGroupChats.add(groupChatId);
           const groupChatKey = String(groupChatId);
           const groupPref = getUserCliPreference(db, groupChatKey);
-          client.setMyCommands({
-            commands: buildInteractiveCommands(groupPref),
-            scope: { type: "chat", chat_id: groupChatId },
-          }).catch((err: unknown) => console.warn(`[interactive] setMyCommands (chat ${groupChatId}) failed`, err));
+          registerGroupChatCommands(groupPref, groupChatId);
         }
 
         if (!isAuthorizedInteractiveUpdate(typedUpdate, allowedUserIds)) {
@@ -268,12 +276,10 @@ for (;;) {
               });
             }
             if (chatKey) {
-              await client.setMyCommands({ commands: buildInteractiveCommands(newCli) })
-                .catch((err: unknown) => console.warn("[interactive] setMyCommands failed after cli callback", err));
-              await client.setMyCommands({ commands: buildInteractiveCommands(newCli), scope: { type: "all_group_chats" } })
-                .catch((err: unknown) => console.warn("[interactive] setMyCommands (groups) failed after cli callback", err));
-              await client.setMyCommands({ commands: buildInteractiveCommands(newCli), scope: { type: "all_supergroups" } })
-                .catch((err: unknown) => console.warn("[interactive] setMyCommands (supergroups) failed after cli callback", err));
+              await registerGlobalCommands(newCli, " after cli callback");
+              if (chatId != null && isGroupInteractiveUpdate(typedUpdate)) {
+                await registerGroupChatCommands(newCli, chatId);
+              }
             }
             continue;
           }
@@ -299,12 +305,10 @@ for (;;) {
                 await sendTelegramMessage({ client, kind: "interactive", chatId, body: { text: msg, message_thread_id: threadId } });
               },
               onCliSwitched: async (newCli) => {
-                await client.setMyCommands({ commands: buildInteractiveCommands(newCli) })
-                  .catch((err: unknown) => console.warn("[interactive] setMyCommands failed during fallback", err));
-                await client.setMyCommands({ commands: buildInteractiveCommands(newCli), scope: { type: "all_group_chats" } })
-                  .catch((err: unknown) => console.warn("[interactive] setMyCommands (groups) failed during fallback", err));
-                await client.setMyCommands({ commands: buildInteractiveCommands(newCli), scope: { type: "all_supergroups" } })
-                  .catch((err: unknown) => console.warn("[interactive] setMyCommands (supergroups) failed during fallback", err));
+                await registerGlobalCommands(newCli, " during fallback");
+                if (isGroupInteractiveUpdate(typedUpdate)) {
+                  await registerGroupChatCommands(newCli, chatId);
+                }
               },
             }).catch((err: unknown) => console.error("[interactive] dispatch error", err));
           } else {

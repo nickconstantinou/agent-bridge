@@ -19,6 +19,8 @@ import {
   isCliCommandText,
   describeInteractiveUpdateForLog,
   buildInteractiveCommands,
+  buildGlobalInteractiveCommandRegistrations,
+  buildChatInteractiveCommandRegistrations,
   dispatchInteractiveWithFallback,
   type CliKind,
 } from "../src/interactiveBot.js";
@@ -396,6 +398,27 @@ describe("buildInteractiveCommands", () => {
       const names = buildInteractiveCommands(pref).map(c => c.command);
       expect(new Set(names).size).toBe(names.length);
     }
+  });
+});
+
+// ── command registration scopes ───────────────────────────────────────────────
+
+describe("interactive command registration scopes", () => {
+  it("registers global private, group, and group-admin command scopes", () => {
+    const registrations = buildGlobalInteractiveCommandRegistrations("codex");
+    expect(registrations.map((r) => r.scope?.type ?? "default")).toEqual([
+      "default",
+      "all_group_chats",
+      "all_chat_administrators",
+    ]);
+  });
+
+  it("registers chat and chat-admin command scopes for a specific group", () => {
+    const registrations = buildChatInteractiveCommandRegistrations("claude", -100123);
+    expect(registrations.map((r) => r.scope)).toEqual([
+      { type: "chat", chat_id: -100123 },
+      { type: "chat_administrators", chat_id: -100123 },
+    ]);
   });
 });
 

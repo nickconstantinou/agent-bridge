@@ -10,6 +10,10 @@ import { buildTelegramCommands } from "./commands.js";
 import { WorkerFallbackChain } from "./workerFallback.js";
 
 export type CliKind = "codex" | "claude" | "antigravity";
+export type InteractiveCommandRegistration = {
+  commands: Array<{ command: string; description: string }>;
+  scope?: { type: "all_group_chats" | "all_chat_administrators" } | { type: "chat" | "chat_administrators"; chat_id: number };
+};
 
 const VALID_CLI_KINDS: CliKind[] = ["codex", "claude", "antigravity"];
 const DEFAULT_CLI: CliKind = "codex";
@@ -108,6 +112,23 @@ export function buildInteractiveCommands(pref: CliKind): Array<{ command: string
     }
   }
   return merged;
+}
+
+export function buildGlobalInteractiveCommandRegistrations(pref: CliKind): InteractiveCommandRegistration[] {
+  const commands = buildInteractiveCommands(pref);
+  return [
+    { commands },
+    { commands, scope: { type: "all_group_chats" } },
+    { commands, scope: { type: "all_chat_administrators" } },
+  ];
+}
+
+export function buildChatInteractiveCommandRegistrations(pref: CliKind, chatId: number): InteractiveCommandRegistration[] {
+  const commands = buildInteractiveCommands(pref);
+  return [
+    { commands, scope: { type: "chat", chat_id: chatId } },
+    { commands, scope: { type: "chat_administrators", chat_id: chatId } },
+  ];
 }
 
 // ── Update routing helpers ────────────────────────────────────────────────────

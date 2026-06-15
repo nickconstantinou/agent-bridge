@@ -17,6 +17,7 @@ export function buildSuggestionPrompt(report: HealthReport): string {
     "List 2–4 numbered remediation options, ordered by likelihood. For each:",
     "1. One-line description of what it fixes",
     "2. Exact shell command or steps to apply it",
+    "3. Mark one option as Recommended and include one concise rationale explaining why",
     "Keep each option brief. No preamble.",
   ].join("\n");
 }

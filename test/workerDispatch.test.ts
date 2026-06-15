@@ -146,7 +146,7 @@ describe("runCliWithFallback", () => {
     const result = await runCliWithFallback("claude", ["args"], "cwd", ["codex", "claude", "antigravity"]);
     expect(result).toBe("successful scan output");
     expect(runCli).toHaveBeenCalledOnce();
-    expect(runCli).toHaveBeenCalledWith("claude", ["args"], "cwd", undefined);
+    expect(runCli).toHaveBeenCalledWith(getCliCommandForKind("claude"), ["args"], "cwd", undefined);
   });
 
   it("retries with the next CLI in the chain when encountering capacity exhaustion", async () => {
@@ -157,7 +157,7 @@ describe("runCliWithFallback", () => {
     const result = await runCliWithFallback("claude", ["args"], "cwd", ["codex", "claude", "antigravity"]);
     expect(result).toBe("fallback successful output");
     expect(runCli).toHaveBeenCalledTimes(2);
-    expect(runCli).toHaveBeenNthCalledWith(1, "claude", ["args"], "cwd", undefined);
+    expect(runCli).toHaveBeenNthCalledWith(1, getCliCommandForKind("claude"), ["args"], "cwd", undefined);
     expect(runCli).toHaveBeenNthCalledWith(2, getCliCommandForKind("antigravity"), ["args"], "cwd", undefined);
   });
 
@@ -183,4 +183,3 @@ describe("runCliWithFallback", () => {
     expect(runCli).toHaveBeenCalledOnce();
   });
 });
-

@@ -37,8 +37,9 @@ Interactive requests stream responses back to the chat. Background worker jobs r
 - **Model fallback** — automatically retries with a smaller model on capacity exhaustion (all bots)
 - **Concurrency lock** — one execution per chat at a time (SQLite atomic lock, no race conditions)
 - **Circuit breaker** — auto-clears a corrupt or stale session after 2 consecutive timeout/signal failures
+- **Agy stall detection** — monitors Antigravity log files for planner loops (`PlannerResponse without ModifiedResponse encountered`) and aborts execution early to prevent infinite churn
 - **Session TTL** — sessions older than 7 days are automatically cleared on startup to prevent stale resume loops
-- **Orphan cleanup** — kills any leftover CLI processes from a previous bridge instance before starting
+- **Orphan and restart recovery** — kills leftover CLI subprocesses from previous runs on boot, transitions interrupted SQLite runs to `failed`, and notifies active Telegram/Discord chats to resume using `provide update` or `continue`
 - **Shared memory CLI** — local `agent-memory` commands store and recall durable project facts in SQLite
 - **Shared skills installer** — optional SDLC skills can be installed across Codex, Antigravity, and Claude Code
 - **SOUL.md design** — proposed bridge-level persona contract for consistent voice, values, boundaries, and workflow across agents
@@ -58,7 +59,7 @@ Interactive requests stream responses back to the chat. Background worker jobs r
 
 ## Setup
 
-> Maintenance note: the repo-local Claude Code dependency is pinned at `^2.1.177`, and the lockfile carries `esbuild` `0.28.1` to include the June 2026 audit fix.
+> Maintenance note: the repo-local Claude Code dependency is pinned at `^2.1.177`, and the lockfile carries `esbuild` `0.28.1` to include the June 2026 audit fix. The `@google/agy-cli` dependency is resolved locally from a committed mock package at `test/mocks/mock-agy-cli` to enable clean offline installation.
 
 **Recommended — let the installer generate env files:**
 
@@ -176,8 +177,8 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `ANTIGRAVITY_PROJECT_DIR` | Antigravity | — | Working dir for CLI execution (overrides `BRIDGE_PROJECT_DIR`) |
 | `CLAUDE_PROJECT_DIR` | Claude | — | Working dir for CLI execution (overrides `BRIDGE_PROJECT_DIR`) |
 | `DB_PATH` | All | `.data-<bot>/bridge.sqlite` | SQLite database path |
-| `CLI_TIMEOUT_MS` | All | `1800000` (30m) | Hard execution timeout (ms) |
-| `CLI_IDLE_TIMEOUT_MS` | All | `1200000` (20m) | Kill CLI after this many ms with no output |
+| `CLI_TIMEOUT_MS` | All | `1800000` (30m) | Hard execution timeout (ms). Antigravity defaults to `3600000` (60m) |
+| `CLI_IDLE_TIMEOUT_MS` | All | `1200000` (20m) | Kill CLI after this many ms with no output. Antigravity defaults to `3600000` (60m) |
 | `FETCH_TIMEOUT_MS` | All | `45000` | Telegram API fetch timeout (ms) |
 | `POLL_INTERVAL_MS` | All | `1000` | Telegram long-poll interval (ms) |
 | `AGENT_MEMORY_DB_PATH` | All | `~/.agent-bridge/shared-memory/agent-memory.sqlite` | Path to shared agent memory database |

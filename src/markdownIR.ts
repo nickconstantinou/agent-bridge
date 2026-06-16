@@ -21,6 +21,22 @@ export function parseMarkdownToIR(markdown: string): IRNode[] {
 
   while (i < lines.length) {
     const line = lines[i];
+
+    if (line.trim().startsWith("```")) {
+      flushParagraph();
+      const languageMatch = line.trim().match(/^```([A-Za-z0-9_+.-]*)\s*$/);
+      const language = languageMatch && languageMatch[1] ? languageMatch[1] : undefined;
+      const contentLines: string[] = [];
+      i += 1;
+      while (i < lines.length && !lines[i].trim().startsWith("```")) {
+        contentLines.push(lines[i]);
+        i += 1;
+      }
+      i += 1; // skip closing fence
+      nodes.push({ type: "code_block", value: contentLines.join("\n"), language });
+      continue;
+    }
+
     paragraph.push(line);
     i += 1;
   }

@@ -45,4 +45,30 @@ describe("parseMarkdownToIR", () => {
   it("returns an empty array for empty input", () => {
     expect(parseMarkdownToIR("")).toEqual([]);
   });
+
+  it("parses a code block with a language tag", () => {
+    expect(parseMarkdownToIR("```js\nconsole.log(1);\n```")).toEqual([
+      { type: "code_block", value: "console.log(1);", language: "js" },
+    ]);
+  });
+
+  it("parses a code block with no language tag", () => {
+    expect(parseMarkdownToIR("```\nplain content\n```")).toEqual([
+      { type: "code_block", value: "plain content", language: undefined },
+    ]);
+  });
+
+  it("preserves angle brackets and ampersands inside a code block untouched", () => {
+    expect(parseMarkdownToIR('```js\nif (x < 1 && y > 2) { log("<b>hi</b>"); }\n```')).toEqual([
+      { type: "code_block", value: 'if (x < 1 && y > 2) { log("<b>hi</b>"); }', language: "js" },
+    ]);
+  });
+
+  it("treats text before and after a code block as separate paragraphs", () => {
+    expect(parseMarkdownToIR("before\n```\ncode\n```\nafter")).toEqual([
+      { type: "text", value: "before" },
+      { type: "code_block", value: "code", language: undefined },
+      { type: "text", value: "after" },
+    ]);
+  });
 });

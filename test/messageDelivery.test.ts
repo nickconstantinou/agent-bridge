@@ -123,6 +123,37 @@ describe("sendMessageWithProgress", () => {
     expect(allTexts.some((text: string) => text.includes("I will inspect files"))).toBe(false);
   });
 
+  it("does not re-send an unchanged STATUS preview on a later tick (dedup)", async () => {
+    const dateSpy = vi.spyOn(Date, "now");
+    let now = 1_000_000;
+    dateSpy.mockImplementation(() => now);
+
+    const client = createMockClient();
+
+    await sendMessageWithProgress({
+      client,
+      kind: "antigravity",
+      chatId: 123,
+      showProgressNarration: true,
+      execution: async (onProgress: (chunk: string) => void) => {
+        onProgress("STATUS: running tests\n");
+        await new Promise((r) => setTimeout(r, 0));
+        now += 6000;
+        // No new STATUS line — extracted preview text is identical to the last tick.
+        onProgress("more reasoning, no new STATUS line\n");
+        await new Promise((r) => setTimeout(r, 0));
+        return { text: "Final answer", sessionId: "s1" } as CliResult;
+      },
+    });
+
+    dateSpy.mockRestore();
+
+    const previewEdits = (client.editMessageText as any).mock.calls.filter(
+      (call: any[]) => call[0]?.text === "running tests"
+    );
+    expect(previewEdits.length).toBe(0);
+  });
+
   it("delivers final text to Telegram for a resolved-promise execution", async () => {
     const client = createMockClient();
     const chatId = 123;

@@ -267,6 +267,7 @@ export async function sendMessageWithProgress({
 
   let currentText = "";
   let lastProgressEditMs = 0;
+  let lastSentPreviewText = "";
   const PROGRESS_EDIT_INTERVAL_MS = 5_000;
   const originalOnProgress = onProgress;
 
@@ -282,6 +283,8 @@ export async function sendMessageWithProgress({
         lastProgressEditMs = now;
         const previewText = truncate(extractStatusProgress(currentText));
         if (!previewText) return;
+        if (previewText === lastSentPreviewText) return;
+        lastSentPreviewText = previewText;
         if (progressMsgId == null) {
           if (progressMsgPending) return;
           progressMsgPending = true;

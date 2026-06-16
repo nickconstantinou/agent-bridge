@@ -37,6 +37,14 @@ export function parseMarkdownToIR(markdown: string): IRNode[] {
       continue;
     }
 
+    const headingMatch = line.match(/^(#{1,3})\s+(.+)$/);
+    if (headingMatch) {
+      flushParagraph();
+      nodes.push({ type: "heading", level: headingMatch[1].length, value: headingMatch[2].trim() });
+      i += 1;
+      continue;
+    }
+
     paragraph.push(line);
     i += 1;
   }

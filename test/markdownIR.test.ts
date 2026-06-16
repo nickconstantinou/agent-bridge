@@ -71,4 +71,23 @@ describe("parseMarkdownToIR", () => {
       { type: "text", value: "after" },
     ]);
   });
+
+  it("parses a level-1 heading", () => {
+    expect(parseMarkdownToIR("# Title")).toEqual([
+      { type: "heading", level: 1, value: "Title" },
+    ]);
+  });
+
+  it("parses a level-3 heading", () => {
+    expect(parseMarkdownToIR("### Sub Title")).toEqual([
+      { type: "heading", level: 3, value: "Sub Title" },
+    ]);
+  });
+
+  it("treats a heading and following paragraph as separate nodes", () => {
+    expect(parseMarkdownToIR("## Section\nbody text")).toEqual([
+      { type: "heading", level: 2, value: "Section" },
+      { type: "text", value: "body text" },
+    ]);
+  });
 });

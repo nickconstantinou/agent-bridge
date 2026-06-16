@@ -116,4 +116,24 @@ describe("parseMarkdownToIR", () => {
       { type: "text", value: "end." },
     ]);
   });
+
+  it("parses a bullet list using -", () => {
+    expect(parseMarkdownToIR("- first\n- second")).toEqual([
+      { type: "list", items: ["first", "second"] },
+    ]);
+  });
+
+  it("parses a bullet list using *", () => {
+    expect(parseMarkdownToIR("* first\n* second")).toEqual([
+      { type: "list", items: ["first", "second"] },
+    ]);
+  });
+
+  it("treats text before and after a list as separate paragraphs", () => {
+    expect(parseMarkdownToIR("intro\n- one\n- two\noutro")).toEqual([
+      { type: "text", value: "intro" },
+      { type: "list", items: ["one", "two"] },
+      { type: "text", value: "outro" },
+    ]);
+  });
 });

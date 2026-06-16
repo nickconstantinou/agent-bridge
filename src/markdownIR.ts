@@ -74,6 +74,17 @@ export function parseMarkdownToIR(markdown: string): IRNode[] {
       continue;
     }
 
+    if (/^[-*]\s+\S/.test(line)) {
+      flushParagraph();
+      const items: string[] = [];
+      while (i < lines.length && /^[-*]\s+\S/.test(lines[i])) {
+        items.push(lines[i].replace(/^[-*]\s+/, "").trim());
+        i += 1;
+      }
+      nodes.push({ type: "list", items });
+      continue;
+    }
+
     paragraph.push(line);
     i += 1;
   }

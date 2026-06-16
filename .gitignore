@@ -26,3 +26,4 @@ dist/
 .env.discord-interactive
 .data-health/
 cache/
+.worktrees/

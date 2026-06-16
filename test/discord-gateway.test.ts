@@ -215,4 +215,45 @@ describe("DiscordGateway", () => {
 
     gateway.destroy();
   });
+
+  it("schedules a reconnect synchronously on opcode 7 RECONNECT even if the close event never fires", () => {
+    vi.useFakeTimers();
+    const gateway = makeGateway();
+    gateway.connect();
+    // Simulate the real-world async gap: close() is called but the "close"
+    // event never arrives before the process would otherwise consider the
+    // event loop empty.
+    fakeWs.close = () => {};
+
+    fakeWs.emitMessage({ op: 7, d: null, t: null, s: null });
+    vi.advanceTimersByTime(1_001);
+
+    expect(wsInstances).toHaveLength(2);
+
+    gateway.destroy();
+  });
+
+  it("ignores dispatches from a superseded (stale) socket", () => {
+    vi.useFakeTimers();
+    const onReady = vi.fn();
+    const gateway = makeGateway(vi.fn(), onReady);
+    gateway.connect();
+    const staleWs = wsInstances[0];
+
+    // Simulate an overlapping reconnect superseding the first socket while
+    // it is still open.
+    gateway.connect();
+    expect(wsInstances).toHaveLength(2);
+
+    staleWs.emitMessage({
+      op: 0,
+      t: "READY",
+      s: 1,
+      d: { session_id: "stale-session", resume_gateway_url: "wss://stale" },
+    });
+
+    expect(onReady).not.toHaveBeenCalled();
+
+    gateway.destroy();
+  });
 });

@@ -54,6 +54,8 @@ export class DiscordGateway {
   private reconnectDelay = 1_000;
   private preReadyCloseCount = 0;
   private destroyed = false;
+  private generation = 0;
+  private closeHandled = false;
 
   constructor(opts: DiscordGatewayOptions) {
     this.opts = opts;
@@ -61,11 +63,14 @@ export class DiscordGateway {
 
   connect(): void {
     if (this.destroyed) return;
+    const myGeneration = ++this.generation;
+    this.closeHandled = false;
     const url = this.resumeGatewayUrl ?? GATEWAY_URL;
     const ws = new WebSocket(url);
     this.ws = ws;
 
     ws.addEventListener("message", ({ data }) => {
+      if (myGeneration !== this.generation) return;
       let payload: GatewayPayload;
       try {
         payload = JSON.parse(typeof data === "string" ? data : String(data));
@@ -76,28 +81,36 @@ export class DiscordGateway {
     });
 
     ws.addEventListener("close", ({ code, reason }) => {
-      this._stopHeartbeat();
-      if (this.destroyed) return;
-      if (TERMINAL_CLOSE_CODES.has(code)) {
-        this.destroyed = true;
-        this.opts.onError?.(new Error(`Discord Gateway terminal close code=${code} reason=${reason ?? ""}`));
-        return;
-      }
-      if (!this.sessionId) {
-        this.preReadyCloseCount += 1;
-        if (this.preReadyCloseCount >= MAX_PRE_READY_CLOSES) {
-          this.destroyed = true;
-          this.opts.onError?.(new Error(`Discord Gateway closed ${this.preReadyCloseCount} times before READY; stopping reconnects`));
-          return;
-        }
-      }
-      console.warn(`[discord-gateway] ws closed code=${code} reason=${reason ?? ""}, reconnecting in ${this.reconnectDelay}ms`);
-      this._scheduleReconnect();
+      if (myGeneration !== this.generation) return;
+      this._handleClose(code, reason ?? "");
     });
 
     ws.addEventListener("error", (event) => {
+      if (myGeneration !== this.generation) return;
       this.opts.onError?.(new Error(`WebSocket error: ${(event as any).message ?? "unknown"}`));
     });
+  }
+
+  private _handleClose(code: number, reason: string): void {
+    if (this.closeHandled) return;
+    this.closeHandled = true;
+    this._stopHeartbeat();
+    if (this.destroyed) return;
+    if (TERMINAL_CLOSE_CODES.has(code)) {
+      this.destroyed = true;
+      this.opts.onError?.(new Error(`Discord Gateway terminal close code=${code} reason=${reason}`));
+      return;
+    }
+    if (!this.sessionId) {
+      this.preReadyCloseCount += 1;
+      if (this.preReadyCloseCount >= MAX_PRE_READY_CLOSES) {
+        this.destroyed = true;
+        this.opts.onError?.(new Error(`Discord Gateway closed ${this.preReadyCloseCount} times before READY; stopping reconnects`));
+        return;
+      }
+    }
+    console.warn(`[discord-gateway] ws closed code=${code} reason=${reason}, reconnecting in ${this.reconnectDelay}ms`);
+    this._scheduleReconnect();
   }
 
   destroy(): void {
@@ -134,6 +147,7 @@ export class DiscordGateway {
       case 7: // RECONNECT
         console.log("[discord-gateway] server requested reconnect");
         this.ws?.close();
+        this._handleClose(1000, "server requested reconnect");
         break;
 
       case 9: // INVALID_SESSION

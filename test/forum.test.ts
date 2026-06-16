@@ -75,20 +75,13 @@ describe("Forum Topic Routing", () => {
       body: { message_thread_id: threadId }
     });
 
-    // Placeholder is sent first via sendMessage
     expect(client.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         chat_id: chatId,
         message_thread_id: threadId,
-      })
-    );
-
-    // Final text is delivered by editing the placeholder (antigravity streaming path)
-    expect(client.editMessageText).toHaveBeenCalledWith(
-      expect.objectContaining({
-        chat_id: chatId,
         text: "Final forum response",
       })
     );
+    expect(client.editMessageText).not.toHaveBeenCalled();
   });
 });

@@ -42,22 +42,23 @@ describe("sendMessageWithProgress", () => {
     );
   });
 
-  it("sends a thinking placeholder for antigravity", async () => {
+  it("does not send a thinking placeholder for antigravity", async () => {
     const client = createMockClient();
     const chatId = 123;
     const execution = Promise.resolve({ text: "Final answer", sessionId: "s1" } as CliResult);
 
     await sendMessageWithProgress({ client, kind: "antigravity", chatId, execution });
 
-    expect(client.sendMessage).toHaveBeenCalledWith(
+    expect(client.sendMessage).not.toHaveBeenCalledWith(
       expect.objectContaining({ chat_id: chatId, text: "🤔 Thinking..." })
     );
   });
 
-  it("edits the antigravity placeholder with STATUS progress when narration visibility is enabled", async () => {
+  it("sends sanitized STATUS progress when antigravity narration visibility is enabled", async () => {
+    const sent: string[] = [];
     const edits: string[] = [];
     const client = {
-      sendMessage: vi.fn(async (body: any) => ({ ok: true, result: { message_id: 99, ...body } })),
+      sendMessage: vi.fn(async (body: any) => { sent.push(body.text); return { ok: true, result: { message_id: 99, ...body } }; }),
       sendChatAction: vi.fn(async () => ({ ok: true })),
       editMessageText: vi.fn(async (body: any) => { edits.push(body.text); return { ok: true }; }),
       sendMessageDraft: vi.fn(async () => ({ ok: true })),
@@ -75,8 +76,8 @@ describe("sendMessageWithProgress", () => {
       },
     });
 
-    // At least one edit should have occurred with accumulated progress text
-    expect(edits.some((t) => t.includes("chunk1"))).toBe(true);
+    expect(sent.some((t) => t.includes("chunk1"))).toBe(true);
+    expect(sent.some((t) => t.includes("🤔 Thinking"))).toBe(false);
   });
 
   it("hides antigravity progress narration when narration visibility is disabled", async () => {
@@ -113,10 +114,13 @@ describe("sendMessageWithProgress", () => {
       },
     });
 
-    const editTexts = (client.editMessageText as any).mock.calls.map((call: any[]) => call[0]?.text ?? "");
-    expect(editTexts.some((text: string) => text.includes("reading files"))).toBe(true);
-    expect(editTexts.some((text: string) => text.includes("running tests"))).toBe(true);
-    expect(editTexts.some((text: string) => text.includes("I will inspect files"))).toBe(false);
+    const allTexts = [
+      ...(client.sendMessage as any).mock.calls.map((call: any[]) => call[0]?.text ?? ""),
+      ...(client.editMessageText as any).mock.calls.map((call: any[]) => call[0]?.text ?? ""),
+    ];
+    expect(allTexts.some((text: string) => text.includes("reading files"))).toBe(true);
+    expect(allTexts.some((text: string) => text.includes("running tests"))).toBe(true);
+    expect(allTexts.some((text: string) => text.includes("I will inspect files"))).toBe(false);
   });
 
   it("delivers final text to Telegram for a resolved-promise execution", async () => {
@@ -189,15 +193,14 @@ describe("sendMessageWithProgress", () => {
     }
   });
 
-  it("edits antigravity thinking placeholder with error text on failure", async () => {
+  it("sends antigravity error text without a thinking placeholder on failure", async () => {
     const client = createMockClient();
     const chatId = 123;
     const execution = Promise.reject(new Error("CLI failed"));
 
     await expect(sendMessageWithProgress({ client, kind: "antigravity", chatId, execution })).resolves.toBeNull();
 
-    // Placeholder sent first, then error sent (either via edit or new message)
-    expect(client.sendMessage).toHaveBeenCalledWith(
+    expect(client.sendMessage).not.toHaveBeenCalledWith(
       expect.objectContaining({ chat_id: chatId, text: "🤔 Thinking..." })
     );
     const allTexts = [

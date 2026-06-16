@@ -257,18 +257,13 @@ export async function sendMessageWithProgress({
   await sendTyping();
   const typingInterval = setInterval(sendTyping, 4500);
 
-  // For antigravity: send a placeholder message upfront so the user sees activity,
-  // then edit it with accumulated STATUS/progress output as the CLI runs.
+  // For antigravity: raw reasoning/progress should keep Telegram's typing
+  // indicator alive. Visible narration is opt-in and only shows sanitized
+  // STATUS lines, never generic thinking notes or raw pre-final narration.
   const streamingEnabled = kind === "antigravity";
-  let placeholderMsgId: number | null = null;
-  if (streamingEnabled) {
-    try {
-      const sent = await client.sendMessage({ chat_id: chatId, ...body, text: "🤔 Thinking..." });
-      placeholderMsgId = (sent as any)?.result?.message_id ?? null;
-    } catch {
-      /* non-fatal — fall back to final-only delivery */
-    }
-  }
+  let progressMsgId: number | null = null;
+  let progressMsgPending = false;
+  const progressUpdates: Promise<unknown>[] = [];
 
   let currentText = "";
   let lastProgressEditMs = 0;
@@ -279,7 +274,7 @@ export async function sendMessageWithProgress({
     currentText += chunk;
     originalOnProgress?.(chunk);
 
-    if (streamingEnabled && placeholderMsgId != null) {
+    if (streamingEnabled) {
       sendTyping();
       if (!showProgressNarration) return;
       const now = Date.now();
@@ -287,22 +282,34 @@ export async function sendMessageWithProgress({
         lastProgressEditMs = now;
         const previewText = truncate(extractStatusProgress(currentText));
         if (!previewText) return;
-        client.editMessageText({
+        if (progressMsgId == null) {
+          if (progressMsgPending) return;
+          progressMsgPending = true;
+          const update = client.sendMessage({ chat_id: chatId, ...body, text: previewText })
+            .then((sent: any) => { progressMsgId = sent?.result?.message_id ?? null; })
+            .catch(() => { /* ignore send failures during streaming */ })
+            .finally(() => { progressMsgPending = false; });
+          progressUpdates.push(update);
+          return;
+        }
+        const update = client.editMessageText({
           chat_id: chatId,
-          message_id: placeholderMsgId,
+          message_id: progressMsgId,
           ...body,
           text: previewText,
         }).catch(() => { /* ignore edit failures during streaming */ });
+        progressUpdates.push(update);
       }
     }
   };
 
   async function deliverFinal(text: string): Promise<void> {
-    if (streamingEnabled && placeholderMsgId != null) {
+    await Promise.allSettled(progressUpdates);
+    if (streamingEnabled && progressMsgId != null) {
       try {
         await client.editMessageText({
           chat_id: chatId,
-          message_id: placeholderMsgId,
+          message_id: progressMsgId,
           ...body,
           text: truncate(text),
         });

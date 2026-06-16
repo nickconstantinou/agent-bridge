@@ -7,6 +7,22 @@ export type IRNode =
   | { type: "table"; headers: string[]; rows: string[][] }
   | { type: "list"; items: string[] };
 
+const TABLE_SEPARATOR_RE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/;
+
+function isTableRow(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.includes("|") && splitTableRow(trimmed).length >= 2;
+}
+
+function splitTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((cell) => cell.trim());
+}
+
 export function parseMarkdownToIR(markdown: string): IRNode[] {
   const lines = markdown.split(/\r?\n/);
   const nodes: IRNode[] = [];
@@ -42,6 +58,19 @@ export function parseMarkdownToIR(markdown: string): IRNode[] {
       flushParagraph();
       nodes.push({ type: "heading", level: headingMatch[1].length, value: headingMatch[2].trim() });
       i += 1;
+      continue;
+    }
+
+    if (isTableRow(line) && i + 1 < lines.length && TABLE_SEPARATOR_RE.test(lines[i + 1])) {
+      flushParagraph();
+      const headers = splitTableRow(line);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && isTableRow(lines[i])) {
+        rows.push(splitTableRow(lines[i]));
+        i += 1;
+      }
+      nodes.push({ type: "table", headers, rows });
       continue;
     }
 

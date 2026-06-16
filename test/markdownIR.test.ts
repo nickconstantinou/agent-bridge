@@ -90,4 +90,30 @@ describe("parseMarkdownToIR", () => {
       { type: "text", value: "body text" },
     ]);
   });
+
+  it("parses a markdown table", () => {
+    const markdown = "| Name | Age |\n| --- | --- |\n| Alice | 30 |\n| Bob | 25 |";
+    expect(parseMarkdownToIR(markdown)).toEqual([
+      {
+        type: "table",
+        headers: ["Name", "Age"],
+        rows: [["Alice", "30"], ["Bob", "25"]],
+      },
+    ]);
+  });
+
+  it("does not treat a lone pipe-containing line without a separator as a table", () => {
+    expect(parseMarkdownToIR("a | b")).toEqual([
+      { type: "text", value: "a | b" },
+    ]);
+  });
+
+  it("treats text before and after a table as separate paragraphs", () => {
+    const markdown = "summary:\n| A | B |\n| --- | --- |\n| 1 | 2 |\nend.";
+    expect(parseMarkdownToIR(markdown)).toEqual([
+      { type: "text", value: "summary:" },
+      { type: "table", headers: ["A", "B"], rows: [["1", "2"]] },
+      { type: "text", value: "end." },
+    ]);
+  });
 });

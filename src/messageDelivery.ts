@@ -1,4 +1,4 @@
-import { splitTelegramText, toTelegramEntitiesText } from "./render.js";
+import { splitTelegramText, toTelegramEntitiesText, renderTelegramEntitiesFromIR } from "./render.js";
 import { toUserMessage, isCapacityExhaustedError } from "./cli.js";
 import type { MessagingPlatform } from "./platform.js";
 import type { CliResult } from "./types.js";
@@ -13,6 +13,7 @@ import {
   richMessagesEnabled,
   routeNativeLayout,
 } from "./nativeLayout.js";
+import { telegramMarkdownIrEnabled, parseMarkdownToIR, renderMarkerString, TELEGRAM_HTML_MARKERS } from "./markdownIR.js";
 
 const MAX_TELEGRAM_TEXT = 4096;
 
@@ -97,7 +98,9 @@ export async function sendTelegramMessage({
         chat_id: chatId,
         ...rest,
         rich_message: {
-          html: markdownTableToRichHtml(text),
+          html: telegramMarkdownIrEnabled()
+            ? renderMarkerString(parseMarkdownToIR(text), TELEGRAM_HTML_MARKERS)
+            : markdownTableToRichHtml(text),
         },
       });
       return;
@@ -111,7 +114,9 @@ export async function sendTelegramMessage({
       await client.sendMessage({
         chat_id: chatId,
         ...rest,
-        text: flattenMarkdownTablesToCards(text),
+        text: telegramMarkdownIrEnabled()
+          ? renderMarkerString(parseMarkdownToIR(text), TELEGRAM_HTML_MARKERS)
+          : flattenMarkdownTablesToCards(text),
         parse_mode: "HTML",
         disable_web_page_preview: true,
       });
@@ -145,7 +150,9 @@ async function sendEntityMessages({
     };
 
     if (i > 0) delete chunkBody.reply_markup;
-    const ep = toTelegramEntitiesText(chunkText);
+    const ep = telegramMarkdownIrEnabled()
+      ? renderTelegramEntitiesFromIR(parseMarkdownToIR(chunkText))
+      : toTelegramEntitiesText(chunkText);
     chunkBody.text = ep.text;
     if (ep.entities.length > 0) chunkBody.entities = ep.entities;
     await client.sendMessage(chunkBody);

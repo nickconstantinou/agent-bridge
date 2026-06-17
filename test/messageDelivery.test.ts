@@ -464,6 +464,41 @@ describe("isAborted suppression", () => {
   });
 });
 
+describe("sendTelegramMessage table rendering flag", () => {
+  const tableMarkdown = "| Name | Age |\n| --- | --- |\n| Alice | 30 |";
+
+  it("uses the IR renderer for the html route when TELEGRAM_MARKDOWN_IR_ENABLED is true", async () => {
+    await withEnv({ TELEGRAM_MARKDOWN_IR_ENABLED: "true", TELEGRAM_RICH_MESSAGES_ENABLED: undefined }, async () => {
+      const client = createMockClient();
+      await sendTelegramMessage({ client, kind: "claude", chatId: 1, body: { text: tableMarkdown } });
+      expect(client.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "<b>Name:</b> Alice\n• <b>Age:</b> 30", parse_mode: "HTML" }),
+      );
+    });
+  });
+
+  it("uses the legacy renderer for the html route when TELEGRAM_MARKDOWN_IR_ENABLED is false", async () => {
+    await withEnv({ TELEGRAM_MARKDOWN_IR_ENABLED: undefined, TELEGRAM_RICH_MESSAGES_ENABLED: undefined }, async () => {
+      const client = createMockClient();
+      await sendTelegramMessage({ client, kind: "claude", chatId: 1, body: { text: tableMarkdown } });
+      expect(client.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ text: "<b>Name:</b> Alice\n• <b>Age:</b> 30", parse_mode: "HTML" }),
+      );
+    });
+  });
+
+  it("calls renderMarkerString-based rendering, not flattenMarkdownTablesToCards, when the flag is true", async () => {
+    const nativeLayout = await import("../src/nativeLayout.js");
+    const spy = vi.spyOn(nativeLayout, "flattenMarkdownTablesToCards");
+    await withEnv({ TELEGRAM_MARKDOWN_IR_ENABLED: "true" }, async () => {
+      const client = createMockClient();
+      await sendTelegramMessage({ client, kind: "claude", chatId: 1, body: { text: tableMarkdown } });
+      expect(spy).not.toHaveBeenCalled();
+    });
+    spy.mockRestore();
+  });
+});
+
 describe("sendMessageWithProgress Option 1 validation", () => {
   it("logs a warning when the legacy output and the event adapter output do not match", async () => {
     const client = createMockClient();

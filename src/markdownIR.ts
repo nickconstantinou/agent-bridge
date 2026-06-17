@@ -1,3 +1,5 @@
+import { escapeHtml } from "./nativeLayout.js";
+
 export type IRNode =
   | { type: "text"; value: string }
   | { type: "bold"; value: string }
@@ -130,4 +132,93 @@ function parseInlineSpans(text: string, nodes: IRNode[]): void {
   }
 
   flushBuffer();
+}
+
+export type MarkerTable = {
+  text: (text: string) => string;
+  bold: (text: string) => string;
+  code_inline: (text: string) => string;
+  code_block: (text: string, language?: string) => string;
+  heading: (text: string, level: number) => string;
+  table: (headers: string[], rows: string[][]) => string;
+  list: (items: string[]) => string;
+};
+
+export function renderMarkerString(ir: IRNode[], markers: MarkerTable): string {
+  const parts: string[] = [];
+  for (const node of ir) {
+    switch (node.type) {
+      case "text":
+        parts.push(markers.text(node.value));
+        break;
+      case "bold":
+        parts.push(markers.bold(node.value));
+        break;
+      case "code_inline":
+        parts.push(markers.code_inline(node.value));
+        break;
+      case "code_block":
+        parts.push(markers.code_block(node.value, node.language));
+        break;
+      case "heading":
+        parts.push(markers.heading(node.value, node.level));
+        break;
+      case "table":
+        parts.push(markers.table(node.headers, node.rows));
+        break;
+      case "list":
+        parts.push(markers.list(node.items));
+        break;
+    }
+  }
+  return parts.join("");
+}
+
+function renderTableAsCards(
+  headers: string[],
+  rows: string[][],
+  formatLabel: (label: string) => string,
+  bulletPrefix: string,
+  escape: (text: string) => string,
+): string {
+  const lines: string[] = [];
+  for (const row of rows) {
+    const [firstHeader, ...restHeaders] = headers;
+    const [firstCell, ...restCells] = row;
+    lines.push(`${formatLabel(escape(firstHeader ?? "Item"))} ${escape(firstCell ?? "")}`);
+    for (let c = 0; c < restHeaders.length; c += 1) {
+      lines.push(`${bulletPrefix}${formatLabel(escape(restHeaders[c] ?? `Field ${c + 2}`))} ${escape(restCells[c] ?? "")}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+export const DISCORD_MARKERS: MarkerTable = {
+  text: (text) => text,
+  bold: (text) => `**${text}**`,
+  code_inline: (text) => `\`${text}\``,
+  code_block: (text, language) => "```" + (language ?? "") + "\n" + text + "\n```",
+  heading: (text, level) => `${"#".repeat(level)} ${text}`,
+  list: (items) => items.map((item) => `- ${item}`).join("\n"),
+  table: (headers, rows) =>
+    renderTableAsCards(headers, rows, (label) => `**${label}:**`, "- ", (text) => text),
+};
+
+export const TELEGRAM_HTML_MARKERS: MarkerTable = {
+  text: (text) => escapeHtml(text),
+  bold: (text) => `<b>${escapeHtml(text)}</b>`,
+  code_inline: (text) => `<code>${escapeHtml(text)}</code>`,
+  code_block: (text) => `<pre>${escapeHtml(text)}</pre>`,
+  heading: (text) => `<b>${escapeHtml(text)}</b>`,
+  list: (items) => items.map((item) => `• ${escapeHtml(item)}`).join("\n"),
+  table: (headers, rows) =>
+    renderTableAsCards(headers, rows, (label) => `<b>${label}:</b>`, "• ", (text) => text),
+};
+
+export function discordMarkdownIrEnabled(): boolean {
+  return process.env.DISCORD_MARKDOWN_IR_ENABLED === "true";
+}
+
+export function telegramMarkdownIrEnabled(): boolean {
+  return process.env.TELEGRAM_MARKDOWN_IR_ENABLED === "true";
 }

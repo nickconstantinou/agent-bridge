@@ -20,13 +20,14 @@ import { formatReport } from "./health/reporter.js";
 import { openDb } from "./db.js";
 import { BridgeEngine } from "./engine.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
+import { shutdownCliProcesses } from "./bridge.js";
+import { resolveTimeoutsForKind } from "./timeouts.js";
+import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
 import type { BotKind } from "./types.js";
 import type { HealthPlugin } from "./health/types.js";
 
 // ── Config ──────────────────────────────────────────────────────────────────
-if (process.env.BRIDGE_ENV_FILE) {
-  dotenv.config({ path: process.env.BRIDGE_ENV_FILE, override: false });
-}
+dotenv.config({ path: process.env.BRIDGE_ENV_FILE || ".env", override: false });
 
 const token = process.env.TELEGRAM_BOT_TOKEN_HEALTH;
 if (!token) {
@@ -75,7 +76,13 @@ const dbPath = process.env.HEALTH_DB_PATH || ".data-health/health.sqlite";
 // ── Infrastructure ───────────────────────────────────────────────────────────
 const bridgeDb = openDb(dbPath);
 const rawDb = bridgeDb.raw;
-const client = new TelegramClient(token, fetch);
+const client = new TelegramClient(token, fetch, resolveTimeoutsForKind(cliBot).fetchTimeoutMs);
+
+const soulContext = loadSoulContext({
+  mode: normalizeSoulMode(process.env.AGENT_BRIDGE_SOUL_MODE),
+  path: process.env.AGENT_BRIDGE_SOUL_PATH || defaultSoulPath(process.env.BRIDGE_PROJECT_DIR || process.cwd()),
+});
+if (soulContext) console.log(`[health-bot] loaded SOUL.md context (${soulContext.length} chars)`);
 
 const sendText = async (text: string): Promise<void> => {
   if (!chatId) {
@@ -140,6 +147,7 @@ const engine = new BridgeEngine(
     executionMode: "safe",
     asyncEnabled: false,
     pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 1000),
+    soulContext,
     hooks: {
       onCommand: async (cmd, ctx) => {
         if (cmd === "/health") {
@@ -184,6 +192,8 @@ await client.setMyCommands({
   commands: [
     { command: "health", description: "Run health checks immediately" },
     { command: "status", description: "Show last health report and suggestions" },
+    { command: "models", description: "Switch model for CLI suggestions" },
+    { command: "reset", description: "Clear current session" },
     { command: "stop", description: "Abort running execution" },
   ],
 }).catch((err) => console.warn(`[health-bot] setMyCommands failed`, err));
@@ -201,6 +211,7 @@ if (healthEnabled) {
 const shutdown = (signal: string) => {
   console.log(`[health-bot] ${signal} received, shutting down...`);
   scheduler.stop();
+  shutdownCliProcesses();
   rawDb.close();
   process.exit(0);
 };

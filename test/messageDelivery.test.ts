@@ -325,6 +325,7 @@ describe("sendMessageWithProgress", () => {
 
 describe("sendTelegramMessage rendering", () => {
   it("renders Codex fenced code blocks with Telegram pre entities instead of visible backticks", async () => {
+    await withEnv({ TELEGRAM_MARKDOWN_IR_ENABLED: undefined }, async () => {
     const client = createMockClient();
 
     await sendTelegramMessage({
@@ -340,10 +341,11 @@ describe("sendTelegramMessage rendering", () => {
       entities: [{ type: "pre", offset: 0, length: 6, language: "text" }],
     }));
     expect(client.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ parse_mode: "MarkdownV2" }));
+    });
   });
 
   it("uses Bot API 10.1 rich messages for markdown tables when enabled", async () => {
-    await withEnv({ TELEGRAM_RICH_MESSAGES_ENABLED: "true" }, async () => {
+    await withEnv({ TELEGRAM_RICH_MESSAGES_ENABLED: "true", TELEGRAM_MARKDOWN_IR_ENABLED: undefined }, async () => {
       const client = {
         ...createMockClient(),
         sendRichMessage: vi.fn(async (body: any) => ({ ok: true, result: { message_id: 777, ...body } })),

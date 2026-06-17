@@ -71,8 +71,8 @@ describe("renderTelegramEntitiesFromIR", () => {
   it("renders a code block as a pre entity with language", () => {
     const ir = parseMarkdownToIR("```js\nconsole.log(1);\n```");
     expect(renderTelegramEntitiesFromIR(ir)).toEqual({
-      text: "console.log(1);",
-      entities: [{ type: "pre", offset: 0, length: 15, language: "js" }],
+      text: "console.log(1);\n",
+      entities: [{ type: "pre", offset: 0, length: 16, language: "js" }],
     });
   });
 

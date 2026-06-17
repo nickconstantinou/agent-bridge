@@ -198,13 +198,13 @@ export function renderTelegramEntitiesFromIR(ir: IRNode[]): { text: string; enti
       entities.push({ type: "code", offset: start, length: node.value.length });
     } else if (node.type === "code_block") {
       const start = length;
-      push(node.value);
+      const blockValue = node.value + "\n";
+      push(blockValue);
       entities.push(
         node.language
-          ? { type: "pre", offset: start, length: node.value.length, language: node.language }
-          : { type: "pre", offset: start, length: node.value.length },
+          ? { type: "pre", offset: start, length: blockValue.length, language: node.language }
+          : { type: "pre", offset: start, length: blockValue.length },
       );
-      if (!isLast) push("\n");
     } else if (node.type === "table") {
       const headerLine = node.headers.join(" | ");
       const rowLines = node.rows.map((row) => row.join(" | "));

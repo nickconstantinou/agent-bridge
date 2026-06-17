@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import type { MessagingPlatform } from "./platform.js";
 import { DiscordGateway, type GatewayPayload } from "./discord-gateway.js";
+import { discordMarkdownIrEnabled, parseMarkdownToIR, renderMarkerString, DISCORD_MARKERS } from "./markdownIR.js";
 
 const DISCORD_API = "https://discord.com/api/v10";
 export const MAX_DISCORD_MESSAGE_LENGTH = 1990;
@@ -79,7 +80,10 @@ export class DiscordClient implements MessagingPlatform {
     [key: string]: any;
   }): Promise<any> {
     const channelId = String(body.channel_id ?? body.chat_id ?? "");
-    const text = String(body.text ?? body.content ?? "");
+    const rawText = String(body.text ?? body.content ?? "");
+    const text = discordMarkdownIrEnabled()
+      ? renderMarkerString(parseMarkdownToIR(rawText), DISCORD_MARKERS)
+      : rawText;
     const chunks = chunkText(text);
     let last: any = null;
     for (const chunk of chunks) {

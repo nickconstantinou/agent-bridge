@@ -64,6 +64,42 @@ describe("DiscordClient", () => {
       await client.sendMessage({ chat_id: "999", text: longText });
       expect(fetchMock).toHaveBeenCalledTimes(3);
     });
+
+    it("renders markdown tables when DISCORD_MARKDOWN_IR_ENABLED is true", async () => {
+      const previous = process.env.DISCORD_MARKDOWN_IR_ENABLED;
+      process.env.DISCORD_MARKDOWN_IR_ENABLED = "true";
+      try {
+        const fetchMock = vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          json: async () => ({ id: "msg-1" }),
+        });
+        const client = new DiscordClient(baseOpts, fetchMock);
+        await client.sendMessage({
+          chat_id: "999",
+          text: "| Name | Age |\n| --- | --- |\n| Alice | 30 |",
+        });
+        const [, init] = fetchMock.mock.calls[0];
+        expect(JSON.parse(init.body).content).toBe("**Name:** Alice\n- **Age:** 30");
+      } finally {
+        if (previous === undefined) delete process.env.DISCORD_MARKDOWN_IR_ENABLED;
+        else process.env.DISCORD_MARKDOWN_IR_ENABLED = previous;
+      }
+    });
+
+    it("sends raw markdown unchanged when DISCORD_MARKDOWN_IR_ENABLED is false", async () => {
+      delete process.env.DISCORD_MARKDOWN_IR_ENABLED;
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ id: "msg-1" }),
+      });
+      const client = new DiscordClient(baseOpts, fetchMock);
+      const rawTable = "| Name | Age |\n| --- | --- |\n| Alice | 30 |";
+      await client.sendMessage({ chat_id: "999", text: rawTable });
+      const [, init] = fetchMock.mock.calls[0];
+      expect(JSON.parse(init.body).content).toBe(rawTable);
+    });
   });
 
   describe("sendChatAction (typing indicator)", () => {

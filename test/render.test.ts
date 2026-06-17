@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { escapeTelegramMarkdownV2, toTelegramEntitiesText } from "../src/render.js";
+import { escapeTelegramMarkdownV2, toTelegramEntitiesText, renderTelegramEntitiesFromIR } from "../src/render.js";
+import { parseMarkdownToIR } from "../src/markdownIR.js";
 
 describe("escapeTelegramMarkdownV2", () => {
   it("escapes reserved characters in plain text", () => {
@@ -46,5 +47,36 @@ describe("toTelegramEntitiesText", () => {
     const result = toTelegramEntitiesText("```\nconst x = 1;\n```");
     expect(result.text).toBe("const x = 1;\n");
     expect(result.entities).toEqual([{ type: "pre", offset: 0, length: 13 }]);
+  });
+});
+
+describe("renderTelegramEntitiesFromIR", () => {
+  const cases = [
+    "Use a List<String> type here, not <Object>.",
+    "Fetch & retry on 5xx, **respect** Retry-After.",
+    "**a < b && c > d**",
+    "✅ **Done** — 🚀 shipped to prod 🎉",
+    "run `npm test` now",
+    "### Section\nbody text",
+    "plain text with no markup at all",
+  ];
+
+  it.each(cases)("matches toTelegramEntitiesText output for: %s", (input) => {
+    const legacy = toTelegramEntitiesText(input);
+    const ir = parseMarkdownToIR(input.replace(/^(#{1,3})\s+(.+)$/m, "$1 $2"));
+    const next = renderTelegramEntitiesFromIR(ir);
+    expect(next).toEqual(legacy);
+  });
+
+  it("renders a code block as a pre entity with language", () => {
+    const ir = parseMarkdownToIR("```js\nconsole.log(1);\n```");
+    expect(renderTelegramEntitiesFromIR(ir)).toEqual({
+      text: "console.log(1);",
+      entities: [{ type: "pre", offset: 0, length: 15, language: "js" }],
+    });
+  });
+
+  it("returns empty text and entities for empty input", () => {
+    expect(renderTelegramEntitiesFromIR([])).toEqual({ text: "", entities: [] });
   });
 });

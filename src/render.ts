@@ -1,3 +1,5 @@
+import type { IRNode } from "./markdownIR.js";
+
 export function splitTelegramText(text: string, limit = 3500): string[] {
   const value = String(text || "");
   if (value.length <= limit) return [value];
@@ -163,4 +165,56 @@ export function toTelegramEntitiesText(text: string): { text: string; entities: 
   }
 
   return { text: output.join(""), entities };
+}
+
+export function renderTelegramEntitiesFromIR(ir: IRNode[]): { text: string; entities: any[] } {
+  const entities: any[] = [];
+  const outputParts: string[] = [];
+  let length = 0;
+
+  const push = (value: string) => {
+    outputParts.push(value);
+    length += value.length;
+  };
+
+  for (let idx = 0; idx < ir.length; idx++) {
+    const node = ir[idx];
+    const isLast = idx === ir.length - 1;
+
+    if (node.type === "text") {
+      push(node.value);
+    } else if (node.type === "bold") {
+      const start = length;
+      push(node.value);
+      entities.push({ type: "bold", offset: start, length: node.value.length });
+    } else if (node.type === "heading") {
+      const start = length;
+      push(node.value);
+      entities.push({ type: "bold", offset: start, length: node.value.length });
+      if (!isLast) push("\n");
+    } else if (node.type === "code_inline") {
+      const start = length;
+      push(node.value);
+      entities.push({ type: "code", offset: start, length: node.value.length });
+    } else if (node.type === "code_block") {
+      const start = length;
+      push(node.value);
+      entities.push(
+        node.language
+          ? { type: "pre", offset: start, length: node.value.length, language: node.language }
+          : { type: "pre", offset: start, length: node.value.length },
+      );
+      if (!isLast) push("\n");
+    } else if (node.type === "table") {
+      const headerLine = node.headers.join(" | ");
+      const rowLines = node.rows.map((row) => row.join(" | "));
+      push([headerLine, ...rowLines].join("\n"));
+      if (!isLast) push("\n");
+    } else if (node.type === "list") {
+      push(node.items.map((item) => `- ${item}`).join("\n"));
+      if (!isLast) push("\n");
+    }
+  }
+
+  return { text: outputParts.join(""), entities };
 }

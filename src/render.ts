@@ -211,7 +211,10 @@ export function renderTelegramEntitiesFromIR(ir: IRNode[]): { text: string; enti
       push([headerLine, ...rowLines].join("\n"));
       if (!isLast) push("\n");
     } else if (node.type === "list") {
-      push(node.items.map((item) => `- ${item}`).join("\n"));
+      const listText = node.ordered
+        ? node.items.map((item, idx) => `${idx + 1}. ${item}`).join("\n")
+        : node.items.map((item) => `- ${item}`).join("\n");
+      push(listText);
       if (!isLast) push("\n");
     }
   }

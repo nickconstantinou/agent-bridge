@@ -143,6 +143,33 @@ describe("parseMarkdownToIR", () => {
       { type: "text", value: "outro" },
     ]);
   });
+
+  it("preserves a blank line between text and a following block as paragraph separation", () => {
+    expect(parseMarkdownToIR("intro\n\n- one\n- two")).toEqual([
+      { type: "text", value: "intro\n\n" },
+      { type: "list", items: ["one", "two"] },
+    ]);
+  });
+
+  it("parses a numbered (ordered) list", () => {
+    expect(parseMarkdownToIR("1. first\n2. second\n3. third")).toEqual([
+      { type: "list", ordered: true, items: ["first", "second", "third"] },
+    ]);
+  });
+
+  it("parses a numbered list with non-1 starting number", () => {
+    expect(parseMarkdownToIR("3. alpha\n4. beta")).toEqual([
+      { type: "list", ordered: true, items: ["alpha", "beta"] },
+    ]);
+  });
+
+  it("treats text before and after an ordered list as separate paragraphs", () => {
+    expect(parseMarkdownToIR("intro\n1. one\n2. two\noutro")).toEqual([
+      { type: "text", value: "intro" },
+      { type: "list", ordered: true, items: ["one", "two"] },
+      { type: "text", value: "outro" },
+    ]);
+  });
 });
 
 describe("renderMarkerString with DISCORD_MARKERS", () => {
@@ -166,6 +193,11 @@ describe("renderMarkerString with DISCORD_MARKERS", () => {
     expect(renderMarkerString(ir, DISCORD_MARKERS)).toBe("- one\n- two");
   });
 
+  it("renders an ordered list using numbered format", () => {
+    const ir = parseMarkdownToIR("1. first\n2. second");
+    expect(renderMarkerString(ir, DISCORD_MARKERS)).toBe("1. first\n2. second");
+  });
+
   it("renders a table as a bold-label card list", () => {
     const ir = parseMarkdownToIR("| Name | Age |\n| --- | --- |\n| Alice | 30 |");
     expect(renderMarkerString(ir, DISCORD_MARKERS)).toBe("**Name:** Alice\n- **Age:** 30");
@@ -186,6 +218,11 @@ describe("renderMarkerString with TELEGRAM_HTML_MARKERS", () => {
   it("renders a table as escaped bold-label cards", () => {
     const ir = parseMarkdownToIR("| Name | Age |\n| --- | --- |\n| Alice | 30 |");
     expect(renderMarkerString(ir, TELEGRAM_HTML_MARKERS)).toBe("<b>Name:</b> Alice\n• <b>Age:</b> 30");
+  });
+
+  it("renders an ordered list with numbered prefix", () => {
+    const ir = parseMarkdownToIR("1. first\n2. second");
+    expect(renderMarkerString(ir, TELEGRAM_HTML_MARKERS)).toBe("1. first\n2. second");
   });
 });
 

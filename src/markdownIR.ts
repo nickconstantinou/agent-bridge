@@ -7,7 +7,7 @@ export type IRNode =
   | { type: "code_block"; value: string; language?: string }
   | { type: "heading"; level: number; value: string }
   | { type: "table"; headers: string[]; rows: string[][] }
-  | { type: "list"; items: string[] };
+  | { type: "list"; items: string[]; ordered?: boolean };
 
 const TABLE_SEPARATOR_RE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/;
 
@@ -33,7 +33,11 @@ export function parseMarkdownToIR(markdown: string): IRNode[] {
 
   const flushParagraph = () => {
     if (paragraph.length === 0) return;
-    parseInlineSpans(paragraph.join("\n"), nodes);
+    const hasTrailingBlank = paragraph[paragraph.length - 1] === "";
+    while (paragraph.length > 0 && paragraph[paragraph.length - 1] === "") paragraph.pop();
+    if (paragraph.length > 0) {
+      parseInlineSpans(paragraph.join("\n") + (hasTrailingBlank ? "\n\n" : ""), nodes);
+    }
     paragraph = [];
   };
 
@@ -84,6 +88,17 @@ export function parseMarkdownToIR(markdown: string): IRNode[] {
         i += 1;
       }
       nodes.push({ type: "list", items });
+      continue;
+    }
+
+    if (/^\d+\.\s+\S/.test(line)) {
+      flushParagraph();
+      const items: string[] = [];
+      while (i < lines.length && /^\d+\.\s+\S/.test(lines[i])) {
+        items.push(lines[i].replace(/^\d+\.\s+/, "").trim());
+        i += 1;
+      }
+      nodes.push({ type: "list", ordered: true, items });
       continue;
     }
 
@@ -141,7 +156,7 @@ export type MarkerTable = {
   code_block: (text: string, language?: string) => string;
   heading: (text: string, level: number) => string;
   table: (headers: string[], rows: string[][]) => string;
-  list: (items: string[]) => string;
+  list: (items: string[], ordered?: boolean) => string;
 };
 
 export function renderMarkerString(ir: IRNode[], markers: MarkerTable): string {
@@ -167,7 +182,7 @@ export function renderMarkerString(ir: IRNode[], markers: MarkerTable): string {
         parts.push(markers.table(node.headers, node.rows));
         break;
       case "list":
-        parts.push(markers.list(node.items));
+        parts.push(markers.list(node.items, node.ordered));
         break;
     }
   }
@@ -199,7 +214,10 @@ export const DISCORD_MARKERS: MarkerTable = {
   code_inline: (text) => `\`${text}\``,
   code_block: (text, language) => "```" + (language ?? "") + "\n" + text + "\n```",
   heading: (text, level) => `${"#".repeat(level)} ${text}`,
-  list: (items) => items.map((item) => `- ${item}`).join("\n"),
+  list: (items, ordered) =>
+    ordered
+      ? items.map((item, i) => `${i + 1}. ${item}`).join("\n")
+      : items.map((item) => `- ${item}`).join("\n"),
   table: (headers, rows) =>
     renderTableAsCards(headers, rows, (label) => `**${label}:**`, "- ", (text) => text),
 };
@@ -210,7 +228,10 @@ export const TELEGRAM_HTML_MARKERS: MarkerTable = {
   code_inline: (text) => `<code>${escapeHtml(text)}</code>`,
   code_block: (text) => `<pre>${escapeHtml(text)}</pre>`,
   heading: (text) => `<b>${escapeHtml(text)}</b>`,
-  list: (items) => items.map((item) => `• ${escapeHtml(item)}`).join("\n"),
+  list: (items, ordered) =>
+    ordered
+      ? items.map((item, i) => `${i + 1}. ${escapeHtml(item)}`).join("\n")
+      : items.map((item) => `• ${escapeHtml(item)}`).join("\n"),
   table: (headers, rows) =>
     renderTableAsCards(headers, rows, (label) => `<b>${label}:</b>`, "• ", (text) => text),
 };

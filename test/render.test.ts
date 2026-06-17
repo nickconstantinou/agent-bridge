@@ -79,4 +79,12 @@ describe("renderTelegramEntitiesFromIR", () => {
   it("returns empty text and entities for empty input", () => {
     expect(renderTelegramEntitiesFromIR([])).toEqual({ text: "", entities: [] });
   });
+
+  it("renders an ordered list as numbered plain text", () => {
+    const ir = parseMarkdownToIR("1. first\n2. second");
+    expect(renderTelegramEntitiesFromIR(ir)).toEqual({
+      text: "1. first\n2. second",
+      entities: [],
+    });
+  });
 });

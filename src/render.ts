@@ -206,9 +206,22 @@ export function renderTelegramEntitiesFromIR(ir: IRNode[]): { text: string; enti
           : { type: "pre", offset: start, length: blockValue.length },
       );
     } else if (node.type === "table") {
-      const headerLine = node.headers.join(" | ");
-      const rowLines = node.rows.map((row) => row.join(" | "));
-      push([headerLine, ...rowLines].join("\n"));
+      const lastRowIdx = node.rows.length - 1;
+      const lastColIdx = node.headers.length - 1;
+      for (let rowIdx = 0; rowIdx <= lastRowIdx; rowIdx++) {
+        const row = node.rows[rowIdx]!;
+        for (let colIdx = 0; colIdx <= lastColIdx; colIdx++) {
+          const header = node.headers[colIdx] ?? `Field ${colIdx + 1}`;
+          const cell = row[colIdx] ?? "";
+          const isVeryLast = rowIdx === lastRowIdx && colIdx === lastColIdx;
+          const headerStart = length;
+          push(header);
+          entities.push({ type: "bold", offset: headerStart, length: header.length });
+          push(`: ${cell}`);
+          if (!isVeryLast) push("\n");
+        }
+        if (rowIdx < lastRowIdx) push("---\n");
+      }
       if (!isLast) push("\n");
     } else if (node.type === "list") {
       const listText = node.ordered

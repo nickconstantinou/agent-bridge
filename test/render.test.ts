@@ -103,4 +103,16 @@ describe("renderTelegramEntitiesFromIR", () => {
       entities: [],
     });
   });
+
+  it("renders a table as a card list with bold header entities", () => {
+    const ir = parseMarkdownToIR("| Name | Age |\n| --- | --- |\n| Alice | 30 |\n| Bob | 25 |");
+    const result = renderTelegramEntitiesFromIR(ir);
+    expect(result.text).toBe("Name: Alice\nAge: 30\n---\nName: Bob\nAge: 25");
+    expect(result.entities).toEqual([
+      { type: "bold", offset: 0, length: 4 },
+      { type: "bold", offset: 12, length: 3 },
+      { type: "bold", offset: 24, length: 4 },
+      { type: "bold", offset: 34, length: 3 },
+    ]);
+  });
 });

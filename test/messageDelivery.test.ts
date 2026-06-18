@@ -369,7 +369,7 @@ describe("sendTelegramMessage rendering", () => {
   });
 
   it("falls back to flattened Telegram HTML when rich message delivery fails", async () => {
-    await withEnv({ TELEGRAM_RICH_MESSAGES_ENABLED: "true" }, async () => {
+    await withEnv({ TELEGRAM_RICH_MESSAGES_ENABLED: "true", TELEGRAM_MARKDOWN_IR_ENABLED: undefined }, async () => {
       const client = {
         ...createMockClient(),
         sendRichMessage: vi.fn(async () => {
@@ -469,12 +469,21 @@ describe("isAborted suppression", () => {
 describe("sendTelegramMessage table rendering flag", () => {
   const tableMarkdown = "| Name | Age |\n| --- | --- |\n| Alice | 30 |";
 
-  it("uses the IR renderer for the html route when TELEGRAM_MARKDOWN_IR_ENABLED is true", async () => {
+  it("uses the entities path (no parse_mode HTML) when TELEGRAM_MARKDOWN_IR_ENABLED is true", async () => {
     await withEnv({ TELEGRAM_MARKDOWN_IR_ENABLED: "true", TELEGRAM_RICH_MESSAGES_ENABLED: undefined }, async () => {
       const client = createMockClient();
       await sendTelegramMessage({ client, kind: "claude", chatId: 1, body: { text: tableMarkdown } });
       expect(client.sendMessage).toHaveBeenCalledWith(
-        expect.objectContaining({ text: "<b>Name:</b> Alice\n• <b>Age:</b> 30", parse_mode: "HTML" }),
+        expect.objectContaining({
+          text: "Name: Alice\nAge: 30",
+          entities: [
+            { type: "bold", offset: 0, length: 4 },
+            { type: "bold", offset: 12, length: 3 },
+          ],
+        }),
+      );
+      expect(client.sendMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ parse_mode: "HTML" }),
       );
     });
   });

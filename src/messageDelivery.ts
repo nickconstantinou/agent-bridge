@@ -109,14 +109,12 @@ export async function sendTelegramMessage({
     }
   }
 
-  if (route.kind === "html" || route.kind === "rich") {
+  if ((route.kind === "html" || route.kind === "rich") && !telegramMarkdownIrEnabled()) {
     try {
       await client.sendMessage({
         chat_id: chatId,
         ...rest,
-        text: telegramMarkdownIrEnabled()
-          ? renderMarkerString(parseMarkdownToIR(text), TELEGRAM_HTML_MARKERS)
-          : flattenMarkdownTablesToCards(text),
+        text: flattenMarkdownTablesToCards(text),
         parse_mode: "HTML",
         disable_web_page_preview: true,
       });

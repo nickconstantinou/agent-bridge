@@ -87,4 +87,20 @@ describe("renderTelegramEntitiesFromIR", () => {
       entities: [],
     });
   });
+
+  it("renders text immediately before a list with a separating newline", () => {
+    const ir = parseMarkdownToIR("Options:\n1. A\n2. B");
+    expect(renderTelegramEntitiesFromIR(ir)).toEqual({
+      text: "Options:\n1. A\n2. B",
+      entities: [],
+    });
+  });
+
+  it("renders text before and after a list with newline separators", () => {
+    const ir = parseMarkdownToIR("intro:\n- one\n- two\noutro");
+    expect(renderTelegramEntitiesFromIR(ir)).toEqual({
+      text: "intro:\n- one\n- two\noutro",
+      entities: [],
+    });
+  });
 });

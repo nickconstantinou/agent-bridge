@@ -31,12 +31,13 @@ export function parseMarkdownToIR(markdown: string): IRNode[] {
   let paragraph: string[] = [];
   let i = 0;
 
-  const flushParagraph = () => {
+  const flushParagraph = (beforeBlock?: boolean) => {
     if (paragraph.length === 0) return;
     const hasTrailingBlank = paragraph[paragraph.length - 1] === "";
     while (paragraph.length > 0 && paragraph[paragraph.length - 1] === "") paragraph.pop();
     if (paragraph.length > 0) {
-      parseInlineSpans(paragraph.join("\n") + (hasTrailingBlank ? "\n\n" : ""), nodes);
+      const suffix = hasTrailingBlank ? "\n\n" : beforeBlock ? "\n" : "";
+      parseInlineSpans(paragraph.join("\n") + suffix, nodes);
     }
     paragraph = [];
   };
@@ -45,7 +46,7 @@ export function parseMarkdownToIR(markdown: string): IRNode[] {
     const line = lines[i];
 
     if (line.trim().startsWith("```")) {
-      flushParagraph();
+      flushParagraph(true);
       const languageMatch = line.trim().match(/^```([A-Za-z0-9_+.-]*)\s*$/);
       const language = languageMatch && languageMatch[1] ? languageMatch[1] : undefined;
       const contentLines: string[] = [];
@@ -61,14 +62,14 @@ export function parseMarkdownToIR(markdown: string): IRNode[] {
 
     const headingMatch = line.match(/^(#{1,3})\s+(.+)$/);
     if (headingMatch) {
-      flushParagraph();
+      flushParagraph(true);
       nodes.push({ type: "heading", level: headingMatch[1].length, value: headingMatch[2].trim() });
       i += 1;
       continue;
     }
 
     if (isTableRow(line) && i + 1 < lines.length && TABLE_SEPARATOR_RE.test(lines[i + 1])) {
-      flushParagraph();
+      flushParagraph(true);
       const headers = splitTableRow(line);
       i += 2;
       const rows: string[][] = [];
@@ -81,7 +82,7 @@ export function parseMarkdownToIR(markdown: string): IRNode[] {
     }
 
     if (/^[-*]\s+\S/.test(line)) {
-      flushParagraph();
+      flushParagraph(true);
       const items: string[] = [];
       while (i < lines.length && /^[-*]\s+\S/.test(lines[i])) {
         items.push(lines[i].replace(/^[-*]\s+/, "").trim());
@@ -92,7 +93,7 @@ export function parseMarkdownToIR(markdown: string): IRNode[] {
     }
 
     if (/^\d+\.\s+\S/.test(line)) {
-      flushParagraph();
+      flushParagraph(true);
       const items: string[] = [];
       while (i < lines.length && /^\d+\.\s+\S/.test(lines[i])) {
         items.push(lines[i].replace(/^\d+\.\s+/, "").trim());
@@ -161,7 +162,9 @@ export type MarkerTable = {
 
 export function renderMarkerString(ir: IRNode[], markers: MarkerTable): string {
   const parts: string[] = [];
-  for (const node of ir) {
+  for (let idx = 0; idx < ir.length; idx++) {
+    const node = ir[idx];
+    const isLast = idx === ir.length - 1;
     switch (node.type) {
       case "text":
         parts.push(markers.text(node.value));
@@ -174,15 +177,19 @@ export function renderMarkerString(ir: IRNode[], markers: MarkerTable): string {
         break;
       case "code_block":
         parts.push(markers.code_block(node.value, node.language));
+        if (!isLast) parts.push("\n");
         break;
       case "heading":
         parts.push(markers.heading(node.value, node.level));
+        if (!isLast) parts.push("\n");
         break;
       case "table":
         parts.push(markers.table(node.headers, node.rows));
+        if (!isLast) parts.push("\n");
         break;
       case "list":
         parts.push(markers.list(node.items, node.ordered));
+        if (!isLast) parts.push("\n");
         break;
     }
   }

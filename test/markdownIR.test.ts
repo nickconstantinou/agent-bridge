@@ -73,7 +73,7 @@ describe("parseMarkdownToIR", () => {
 
   it("treats text before and after a code block as separate paragraphs", () => {
     expect(parseMarkdownToIR("before\n```\ncode\n```\nafter")).toEqual([
-      { type: "text", value: "before" },
+      { type: "text", value: "before\n" },
       { type: "code_block", value: "code", language: undefined },
       { type: "text", value: "after" },
     ]);
@@ -118,7 +118,7 @@ describe("parseMarkdownToIR", () => {
   it("treats text before and after a table as separate paragraphs", () => {
     const markdown = "summary:\n| A | B |\n| --- | --- |\n| 1 | 2 |\nend.";
     expect(parseMarkdownToIR(markdown)).toEqual([
-      { type: "text", value: "summary:" },
+      { type: "text", value: "summary:\n" },
       { type: "table", headers: ["A", "B"], rows: [["1", "2"]] },
       { type: "text", value: "end." },
     ]);
@@ -138,7 +138,7 @@ describe("parseMarkdownToIR", () => {
 
   it("treats text before and after a list as separate paragraphs", () => {
     expect(parseMarkdownToIR("intro\n- one\n- two\noutro")).toEqual([
-      { type: "text", value: "intro" },
+      { type: "text", value: "intro\n" },
       { type: "list", items: ["one", "two"] },
       { type: "text", value: "outro" },
     ]);
@@ -165,7 +165,7 @@ describe("parseMarkdownToIR", () => {
 
   it("treats text before and after an ordered list as separate paragraphs", () => {
     expect(parseMarkdownToIR("intro\n1. one\n2. two\noutro")).toEqual([
-      { type: "text", value: "intro" },
+      { type: "text", value: "intro\n" },
       { type: "list", ordered: true, items: ["one", "two"] },
       { type: "text", value: "outro" },
     ]);
@@ -196,6 +196,16 @@ describe("renderMarkerString with DISCORD_MARKERS", () => {
   it("renders an ordered list using numbered format", () => {
     const ir = parseMarkdownToIR("1. first\n2. second");
     expect(renderMarkerString(ir, DISCORD_MARKERS)).toBe("1. first\n2. second");
+  });
+
+  it("renders text immediately before a list with a line break", () => {
+    const ir = parseMarkdownToIR("Here are the options:\n- one\n- two");
+    expect(renderMarkerString(ir, DISCORD_MARKERS)).toBe("Here are the options:\n- one\n- two");
+  });
+
+  it("renders text immediately before a list with text following", () => {
+    const ir = parseMarkdownToIR("intro:\n- one\n- two\noutro");
+    expect(renderMarkerString(ir, DISCORD_MARKERS)).toBe("intro:\n- one\n- two\noutro");
   });
 
   it("renders a table as a bold-label card list", () => {

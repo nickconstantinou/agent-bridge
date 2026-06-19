@@ -405,10 +405,10 @@ export class BridgeDb {
     this.raw
       .prepare(
         `UPDATE bridge_runs
-         SET status = 'cancelled', ended_at = ?
+         SET status = 'cancelled', ended_at = ?, error = ?
          WHERE run_id = ?`
       )
-      .run(endedAt, runId);
+      .run(endedAt, reason, runId);
   }
 
   insertEvent(runId: string, seq: number, type: string, timestamp: string, payload: any): void {
@@ -588,7 +588,9 @@ export class BridgeDb {
 
   cancelWorkJob(jobId: number, _reason: string): void {
     this.raw.prepare(
-      `UPDATE work_jobs SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+      `UPDATE work_jobs
+       SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status NOT IN ('completed','failed','cancelled')`
     ).run(jobId);
   }
 

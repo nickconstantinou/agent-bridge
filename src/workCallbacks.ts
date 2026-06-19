@@ -82,6 +82,9 @@ export function buildWorkCallback(action: WorkCallbackAction): string {
   } else if (action.type.startsWith("ap_")) {
     prefix = "ap";
     actionStr = action.type.slice(3);
+  } else if (action.type.startsWith("pr_")) {
+    prefix = "pr";
+    actionStr = action.type.slice(3);
   }
   const payload = `${prefix}:${action.id}:${actionStr}`;
   if (payload.length > 64) {
@@ -323,7 +326,7 @@ export async function handleWorkerCallback(
     db.updateWorkItemStatus(item.id, "closed");
     for (const j of db
       .listWorkJobs()
-      .filter((j: WorkJob) => j.work_item_id === item.id && (j.status === "pending" || j.status === "leased"))) {
+      .filter((j: WorkJob) => j.work_item_id === item.id && (j.status === "pending" || j.status === "leased" || j.status === "running"))) {
       db.cancelWorkJob(j.id, "work item closed");
     }
     await client.answerCallbackQuery({ callback_query_id: cbq.id });

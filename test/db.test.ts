@@ -248,6 +248,7 @@ describe("BridgeDb runs and events persistence", () => {
     db.updateRunCancelled("run-1", "user");
     const run = db.getRun("run-1");
     expect(run.status).toBe("cancelled");
+    expect(run.error).toBe("user");
     expect(run.ended_at).toBeDefined();
   });
 
@@ -687,6 +688,28 @@ describe("cancelWorkJob", () => {
     const job = db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:cancel" });
     db.cancelWorkJob(job.id, "user request");
     expect(db.getWorkJob(job.id)!.status).toBe("cancelled");
+  });
+
+  it("does not overwrite a completed job", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:cancel-completed" });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
+    db.markWorkJobRunning(job.id, "worker-1");
+    db.completeWorkJob(job.id, { summary: "done" }, "worker-1");
+
+    db.cancelWorkJob(job.id, "late cancel");
+
+    expect(db.getWorkJob(job.id)!.status).toBe("completed");
+  });
+
+  it("does not overwrite a failed job", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:cancel-failed", max_attempts: 1 });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
+    db.markWorkJobRunning(job.id, "worker-1");
+    db.failWorkJob(job.id, "fatal", "worker-1");
+
+    db.cancelWorkJob(job.id, "late cancel");
+
+    expect(db.getWorkJob(job.id)!.status).toBe("failed");
   });
 });
 

@@ -42,6 +42,10 @@ describe("work callback builder", () => {
     expect(buildWorkCallback({ type: "job_cncl", id: 12 })).toBe("job:12:cncl");
     expect(buildWorkCallback({ type: "ap_yes", id: 34 })).toBe("ap:34:yes");
     expect(buildWorkCallback({ type: "ap_no", id: 56 })).toBe("ap:56:no");
+    expect(buildWorkCallback({ type: "pr_hold", id: 78 })).toBe("pr:78:hold");
+    expect(buildWorkCallback({ type: "pr_rels", id: 79 })).toBe("pr:79:rels");
+    expect(buildWorkCallback({ type: "pr_rfsh", id: 80 })).toBe("pr:80:rfsh");
+    expect(buildWorkCallback({ type: "pr_clse", id: 81 })).toBe("pr:81:clse");
   });
 
   it("throws or returns under 64 bytes", () => {
@@ -320,8 +324,8 @@ describe("handleWorkerCallback (Slice 5)", () => {
     expect(db.getWorkJob(job.id)!.status).toBe("cancelled");
   });
 
-  it("does not cancel running jobs linked to the work item on wi:id:clse", async () => {
-    const item = db.createWorkItem({ kind: "defect", source: "defect_scan", title: "Running Skip", created_by: "worker" });
+  it("cancels running jobs linked to the work item on wi:id:clse", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "defect_scan", title: "Running Cancel", created_by: "worker" });
     const job = db.createWorkJob({ task_type: "tdd_implementation", idempotency_key: "tdd:cancel-running", work_item_id: item.id });
     db.raw.prepare(`UPDATE work_jobs SET status = 'running' WHERE id = ?`).run(job.id);
     const cbq = {
@@ -332,7 +336,7 @@ describe("handleWorkerCallback (Slice 5)", () => {
     };
     await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
     expect(db.getWorkItem(item.id)!.status).toBe("closed");
-    expect(db.getWorkJob(job.id)!.status).toBe("running");
+    expect(db.getWorkJob(job.id)!.status).toBe("cancelled");
   });
 });
 

@@ -305,6 +305,21 @@ describe("handleWorkerCallback (Slice 5)", () => {
     expect(db.getWorkJob(job.id)!.status).toBe("cancelled");
   });
 
+  it("cancels leased jobs linked to the work item on wi:id:clse", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "defect_scan", title: "Leased Cancel", created_by: "worker" });
+    const job = db.createWorkJob({ task_type: "tdd_implementation", idempotency_key: "tdd:cancel-leased", work_item_id: item.id });
+    db.claimNextWorkJob("worker-1", new Date().toISOString(), 60, job.id);
+    const cbq = {
+      id: "cb-clse-leased",
+      data: `wi:${item.id}:clse`,
+      from: { id: 42 },
+      message: { message_id: 100, chat: { id: 10 } },
+    };
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+    expect(db.getWorkItem(item.id)!.status).toBe("closed");
+    expect(db.getWorkJob(job.id)!.status).toBe("cancelled");
+  });
+
   it("does not cancel running jobs linked to the work item on wi:id:clse", async () => {
     const item = db.createWorkItem({ kind: "defect", source: "defect_scan", title: "Running Skip", created_by: "worker" });
     const job = db.createWorkJob({ task_type: "tdd_implementation", idempotency_key: "tdd:cancel-running", work_item_id: item.id });

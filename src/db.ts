@@ -529,7 +529,7 @@ export class BridgeDb {
   markWorkJobRunning(jobId: number, workerId: string): void {
     this.raw.prepare(
       `UPDATE work_jobs SET status = 'running', updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND lease_owner = ?`
+       WHERE id = ? AND lease_owner = ? AND status = 'leased'`
     ).run(jobId, workerId);
   }
 

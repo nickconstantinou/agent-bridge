@@ -558,6 +558,16 @@ describe("markWorkJobRunning / heartbeatWorkJob", () => {
     expect(db.getWorkJob(job.id)!.status).toBe("running");
   });
 
+  it("does not transition a cancelled leased job to running", () => {
+    db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:cancel-leased-running" });
+    const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;
+
+    db.cancelWorkJob(job.id, "work item closed");
+    db.markWorkJobRunning(job.id, "worker-1");
+
+    expect(db.getWorkJob(job.id)!.status).toBe("cancelled");
+  });
+
   it("heartbeat updates heartbeat_at", () => {
     db.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:hb" });
     const job = db.claimNextWorkJob("worker-1", new Date().toISOString(), 60)!;

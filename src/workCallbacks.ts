@@ -14,6 +14,7 @@
 import { parsePrMergeCallback, handlePrMergeCallback } from "./prMergeGate.js";
 import { createRunCommand } from "./runCommandAsync.js";
 import { toTelegramEntitiesText } from "./render.js";
+import type { WorkJob } from "./db.js";
 
 /** Edit a message converting bold/code markdown markers to native Telegram entities. */
 function editWithEntities(
@@ -320,7 +321,9 @@ export async function handleWorkerCallback(
       return;
     }
     db.updateWorkItemStatus(item.id, "closed");
-    for (const j of db.listWorkJobs().filter(j => j.work_item_id === item.id && (j.status === "pending" || j.status === "leased"))) {
+    for (const j of db
+      .listWorkJobs()
+      .filter((j: WorkJob) => j.work_item_id === item.id && (j.status === "pending" || j.status === "leased"))) {
       db.cancelWorkJob(j.id, "work item closed");
     }
     await client.answerCallbackQuery({ callback_query_id: cbq.id });

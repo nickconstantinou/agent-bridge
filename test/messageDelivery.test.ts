@@ -469,6 +469,22 @@ describe("isAborted suppression", () => {
 describe("sendTelegramMessage table rendering flag", () => {
   const tableMarkdown = "| Name | Age |\n| --- | --- |\n| Alice | 30 |";
 
+  it("uses markdownTableToRichHtml (real HTML table) for rich path even when IR is enabled", async () => {
+    await withEnv({ TELEGRAM_MARKDOWN_IR_ENABLED: "true", TELEGRAM_RICH_MESSAGES_ENABLED: "true" }, async () => {
+      const client = {
+        ...createMockClient(),
+        sendRichMessage: vi.fn(async (body: any) => ({ ok: true, result: { message_id: 999, ...body } })),
+      } as any as TelegramClient;
+      await sendTelegramMessage({ client, kind: "claude", chatId: 1, body: { text: tableMarkdown } });
+      expect(client.sendRichMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rich_message: expect.objectContaining({ html: expect.stringContaining("<table bordered striped>") }),
+        }),
+      );
+      expect(client.sendMessage).not.toHaveBeenCalled();
+    });
+  });
+
   it("uses the entities path (no parse_mode HTML) when TELEGRAM_MARKDOWN_IR_ENABLED is true", async () => {
     await withEnv({ TELEGRAM_MARKDOWN_IR_ENABLED: "true", TELEGRAM_RICH_MESSAGES_ENABLED: undefined }, async () => {
       const client = createMockClient();

@@ -98,9 +98,7 @@ export async function sendTelegramMessage({
         chat_id: chatId,
         ...rest,
         rich_message: {
-          html: telegramMarkdownIrEnabled()
-            ? renderMarkerString(parseMarkdownToIR(text), TELEGRAM_HTML_MARKERS)
-            : markdownTableToRichHtml(text),
+          html: markdownTableToRichHtml(text),
         },
       });
       return;

@@ -13,7 +13,7 @@ import {
   richMessagesEnabled,
   routeNativeLayout,
 } from "./nativeLayout.js";
-import { telegramMarkdownIrEnabled, parseMarkdownToIR, renderMarkerString, TELEGRAM_HTML_MARKERS } from "./markdownIR.js";
+import { telegramMarkdownIrEnabled, parseMarkdownToIR, renderMarkerString, TELEGRAM_HTML_MARKERS, TELEGRAM_RICH_HTML_MARKERS } from "./markdownIR.js";
 
 const MAX_TELEGRAM_TEXT = 4096;
 
@@ -98,7 +98,9 @@ export async function sendTelegramMessage({
         chat_id: chatId,
         ...rest,
         rich_message: {
-          html: markdownTableToRichHtml(text),
+          html: telegramMarkdownIrEnabled()
+            ? renderMarkerString(parseMarkdownToIR(text), TELEGRAM_RICH_HTML_MARKERS)
+            : markdownTableToRichHtml(text),
         },
       });
       return;

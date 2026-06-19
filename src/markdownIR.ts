@@ -243,6 +243,20 @@ export const TELEGRAM_HTML_MARKERS: MarkerTable = {
     renderTableAsCards(headers, rows, (label) => `<b>${label}:</b>`, "• ", (text) => text),
 };
 
+export const TELEGRAM_RICH_HTML_MARKERS: MarkerTable = {
+  text: (text) => escapeHtml(text),
+  bold: (text) => `<b>${escapeHtml(text)}</b>`,
+  code_inline: (text) => `<code>${escapeHtml(text)}</code>`,
+  code_block: (text) => `<pre>${escapeHtml(text)}</pre>`,
+  heading: (text, level) => `<h${level}>${escapeHtml(text)}</h${level}>`,
+  list: (items, ordered) =>
+    ordered
+      ? `<ol>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol>`
+      : `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`,
+  table: (headers, rows) =>
+    `<table bordered striped><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${headers.map((_, i) => `<td>${escapeHtml(row[i] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`,
+};
+
 export function discordMarkdownIrEnabled(): boolean {
   return process.env.DISCORD_MARKDOWN_IR_ENABLED === "true";
 }

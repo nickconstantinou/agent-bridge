@@ -58,13 +58,11 @@ export function routeNativeLayout(
     if (length > documentLength) return { kind: "document", reason: "length", codeBlocks, length };
     if (codeBlocks > documentCodeBlocks) return { kind: "document", reason: "code_blocks", codeBlocks, length };
   }
+  if (options.richEnabled) {
+    return { kind: "rich", reason: "table", codeBlocks, length };
+  }
   if (hasMarkdownTable(markdown)) {
-    return {
-      kind: options.richEnabled ? "rich" : "html",
-      reason: "table",
-      codeBlocks,
-      length,
-    };
+    return { kind: "html", reason: "table", codeBlocks, length };
   }
   return { kind: "plain", reason: "default", codeBlocks, length };
 }

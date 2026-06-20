@@ -578,6 +578,39 @@ export class BridgeEngine {
     return ctx ? `${ctx}${prompt}` : prompt;
   }
 
+  private _buildContextAccess(chatKey: string): { prompt: string; env: Record<string, string> } | null {
+    const dbPath = this.opts.fullConfig?.dbPath;
+    if (!dbPath) return null;
+    const status = this.db.getConvStatus(chatKey);
+    if (status.turnCount === 0 && !status.latestSummaryAt) return null;
+    const commandPath = join(process.cwd(), "bin", "agent-bridge-context");
+    return {
+      prompt: [
+        "[Agent Bridge context]",
+        "More conversation history is available if needed:",
+        '"$AGENT_BRIDGE_CONTEXT_COMMAND" --summary',
+        '"$AGENT_BRIDGE_CONTEXT_COMMAND" --recent 20',
+        "",
+      ].join("\n"),
+      env: {
+        AGENT_BRIDGE_CONTEXT_AVAILABLE: "1",
+        AGENT_BRIDGE_CONTEXT_COMMAND: commandPath,
+        AGENT_BRIDGE_CONTEXT_DB: dbPath,
+        AGENT_BRIDGE_CHAT_KEY: chatKey,
+      },
+    };
+  }
+
+  private _buildPromptForCli(chatKey: string, prompt: string): { prompt: string; contextEnv?: Record<string, string> } {
+    const contextPrompt = this._buildRecentContextPrompt(chatKey, prompt);
+    const access = this._buildContextAccess(chatKey);
+    if (!access) return { prompt: contextPrompt };
+    return {
+      prompt: `${access.prompt}${contextPrompt}`,
+      contextEnv: access.env,
+    };
+  }
+
   async executePromptAsync(
     prompt: string,
     sessionId: string | null,
@@ -604,11 +637,12 @@ export class BridgeEngine {
     const cwd = getCliWorkingDir(executionKind);
     const startedAtMs = Date.now();
     if (executionKind === "antigravity") setAntigravityModel(model);
+    const promptForCli = this._buildPromptForCli(chatKey, prompt);
     const invocation = buildCliInvocation({
       bot: executionKind,
       command: this.opts.botConfig.command,
       model,
-      prompt,
+      prompt: promptForCli.prompt,
       sessionId,
       executionMode: this.opts.executionMode,
       outputFormat: executionKind === "antigravity" ? undefined : "json",
@@ -624,6 +658,7 @@ export class BridgeEngine {
         onProgress,
         chatId: chatKey,
         stdin: invocation.stdin,
+        contextEnv: promptForCli.contextEnv,
         eventContext,
         onEvent: collect ?? undefined,
       });
@@ -723,11 +758,12 @@ export class BridgeEngine {
     const cwd = getCliWorkingDir(executionKind);
     const startedAtMs = Date.now();
     if (executionKind === "antigravity") setAntigravityModel(model);
+    const promptForCli = this._buildPromptForCli(chatKey, prompt);
     const invocation = buildCliInvocation({
       bot: executionKind,
       command: this.opts.botConfig.command,
       model,
-      prompt,
+      prompt: promptForCli.prompt,
       sessionId,
       sessionMode: "resume",
       executionMode: this.opts.executionMode,
@@ -745,6 +781,7 @@ export class BridgeEngine {
         ...buildExecutionOptions(executionKind),
         chatId: chatKey,
         stdin: invocation.stdin,
+        contextEnv: promptForCli.contextEnv,
         eventContext,
         onEvent: collect ?? undefined,
       });

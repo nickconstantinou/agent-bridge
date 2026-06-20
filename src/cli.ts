@@ -28,6 +28,13 @@ export function buildSafeChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.
   );
 }
 
+function buildChildEnv(extraEnv?: Record<string, string>): NodeJS.ProcessEnv {
+  return {
+    ...buildSafeChildEnv(),
+    ...(extraEnv ?? {}),
+  };
+}
+
 export function scrubOutputDir(text: string, outDir: string | null | undefined): string {
   if (!outDir) return text;
   const lines = text.split("\n");
@@ -724,7 +731,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
   return new Promise((resolve, reject) => {
     const normalizedArgs = normalizeCliArgs(command, args);
     console.log(formatSpawnLog(command, normalizedArgs, cwd, options.chatId, options.stdin));
-    const child = spawn(command, normalizedArgs, { cwd, shell: false, env: buildSafeChildEnv() });
+    const child = spawn(command, normalizedArgs, { cwd, shell: false, env: buildChildEnv(options.contextEnv) });
     if (options.stdin) {
       child.stdin?.write(options.stdin);
     }
@@ -870,7 +877,7 @@ export async function runCliAsync(
   const normalizedArgs = normalizeCliArgs(command, args);
   return new Promise((resolve, reject) => {
     console.log(formatSpawnLog(command, normalizedArgs, cwd, options.chatId, options.stdin));
-    const child = spawn(command, normalizedArgs, { cwd, shell: false, detached: true, env: buildSafeChildEnv() });
+    const child = spawn(command, normalizedArgs, { cwd, shell: false, detached: true, env: buildChildEnv(options.contextEnv) });
     if (options.stdin) {
       child.stdin?.write(options.stdin);
     }

@@ -341,7 +341,10 @@ export async function sendMessageWithProgress({
 
     const finalText = result?.text || currentText || "";
 
-    if (isAborted?.()) return result;
+    if (isAborted?.()) {
+      clearInterval(typingInterval);
+      return result;
+    }
 
     validateParity({
       kind,

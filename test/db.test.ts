@@ -1,5 +1,9 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { openDb, BridgeDb } from "../src/db.js";
+import Database from "better-sqlite3";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 let db: BridgeDb;
 
@@ -209,6 +213,84 @@ describe("Per-topic session isolation", () => {
     db.setSession("-1001:10:222", "codex", "s-user-222");
     expect(db.getSession("-1001:10:111", "codex")).toBe("s-user-111");
     expect(db.getSession("-1001:10:222", "codex")).toBe("s-user-222");
+  });
+});
+
+describe("BridgeDb schema migrations", () => {
+  it("repairs approvals.job_id foreign keys that point at work_jobs_old", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agent-bridge-db-"));
+    const dbPath = join(dir, "bridge.sqlite");
+    try {
+      const legacy = new Database(dbPath);
+      legacy.exec(`
+        CREATE TABLE work_items (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          kind TEXT NOT NULL,
+          source TEXT NOT NULL,
+          repository TEXT,
+          title TEXT NOT NULL,
+          body TEXT,
+          status TEXT NOT NULL DEFAULT 'proposed',
+          priority TEXT NOT NULL DEFAULT 'normal',
+          created_by TEXT NOT NULL,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE work_jobs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          work_item_id INTEGER,
+          task_type TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          bot TEXT,
+          lease_owner TEXT,
+          lease_expires_at TEXT,
+          heartbeat_at TEXT,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          max_attempts INTEGER NOT NULL DEFAULT 2,
+          idempotency_key TEXT NOT NULL UNIQUE,
+          input_json TEXT NOT NULL DEFAULT '{}',
+          result_json TEXT,
+          error TEXT,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY(work_item_id) REFERENCES work_items(id)
+        );
+        CREATE TABLE approvals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          work_item_id INTEGER,
+          job_id INTEGER,
+          approval_type TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          requested_by TEXT NOT NULL,
+          requested_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          decided_by TEXT,
+          decided_at TEXT,
+          expires_at TEXT,
+          payload_json TEXT NOT NULL DEFAULT '{}',
+          FOREIGN KEY(work_item_id) REFERENCES work_items(id),
+          FOREIGN KEY(job_id) REFERENCES "work_jobs_old"(id)
+        );
+      `);
+      legacy.close();
+
+      const repaired = openDb(dbPath);
+      const item = repaired.createWorkItem({ kind: "defect", source: "defect_scan", title: "T", created_by: "worker" });
+      const job = repaired.createWorkJob({ task_type: "ops_check", idempotency_key: "ops:approval-fk", work_item_id: item.id });
+
+      expect(() => repaired.createApproval({
+        approval_type: "merge_pr",
+        requested_by: "agent",
+        work_item_id: item.id,
+        job_id: job.id,
+      })).not.toThrow();
+
+      const fks = repaired.raw.prepare(`PRAGMA foreign_key_list(approvals)`).all() as Array<{ table: string }>;
+      expect(fks.some(fk => fk.table === "work_jobs")).toBe(true);
+      expect(fks.some(fk => fk.table === "work_jobs_old")).toBe(false);
+      repaired.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

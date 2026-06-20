@@ -454,7 +454,8 @@ describe("createPrLifecycleHandler — decision brief", () => {
     const stubs = makeStubs();
     stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
       if (args[0] === "rev-parse") return "abc123\n";
-      if (args[0] === "log") return "fix: green impl\ntest: red test\n";
+      if (args[0] === "log" && args[2] === "origin/main..HEAD") return "fix: green impl\ntest: red test\n";
+      if (args[0] === "log") return "feat: unrelated base commit\nfix: green impl\ntest: red test\n";
       return "";
     });
     stubs.runCommand.mockResolvedValue("https://github.com/owner/repo/pull/50");
@@ -470,13 +471,14 @@ describe("createPrLifecycleHandler — decision brief", () => {
     ).get(item.id) as any;
     const payload = JSON.parse(appr.payload_json);
     expect(payload.commit_subjects).toEqual(["fix: green impl", "test: red test"]);
+    expect(stubs.runGit).toHaveBeenCalledWith(["log", "--format=%s", "origin/main..HEAD"], undefined);
   });
 
-  it("stores files_summary from git diff --stat in the approval payload", async () => {
+  it("stores files_summary from the branch diff in the approval payload", async () => {
     const stubs = makeStubs();
     stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
       if (args[0] === "rev-parse") return "abc123\n";
-      if (args[0] === "diff") return " src/foo.ts | 10 ++++\n 1 file changed, 10 insertions(+)\n";
+      if (args[0] === "diff" && args[2] === "origin/main..HEAD") return " src/foo.ts | 10 ++++\n 1 file changed, 10 insertions(+)\n";
       return "";
     });
     stubs.runCommand.mockResolvedValue("https://github.com/owner/repo/pull/51");
@@ -492,6 +494,7 @@ describe("createPrLifecycleHandler — decision brief", () => {
     ).get(item.id) as any;
     const payload = JSON.parse(appr.payload_json);
     expect(payload.files_summary).toContain("src/foo.ts");
+    expect(stubs.runGit).toHaveBeenCalledWith(["diff", "--stat", "origin/main..HEAD"], undefined);
   });
 
   it("stores verify_tail from input in the approval payload", async () => {
@@ -661,4 +664,3 @@ describe("createPrLifecycleHandler — proof comment", () => {
     expect(finalApprovals[0].status).toBe("pending");
   });
 });
-

@@ -207,6 +207,50 @@ export function openDb(dbPath: string): BridgeDb {
     }
   } catch (err) { console.warn('[db] work_jobs pr_watch migration failed:', err); }
 
+  // Repair legacy DBs where an earlier work_jobs rename left approvals.job_id
+  // pointing at a dropped migration table. That blocks merge approval creation.
+  try {
+    const approvalsSql = (raw.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='approvals'`
+    ).get() as { sql: string } | undefined)?.sql ?? "";
+    if (approvalsSql.includes("work_jobs_old") || approvalsSql.includes("work_jobs_migrate_tmp")) {
+      raw.pragma("foreign_keys = OFF");
+      raw.pragma("legacy_alter_table = ON");
+      try {
+        raw.exec(`
+          ALTER TABLE approvals RENAME TO approvals_migrate_tmp;
+          CREATE TABLE approvals (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            work_item_id  INTEGER,
+            job_id        INTEGER,
+            approval_type TEXT NOT NULL CHECK (approval_type IN ('create_issue','start_implementation','push_branch','open_pr','merge_pr','restart_service','cancel_job')),
+            status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','expired')),
+            requested_by  TEXT NOT NULL,
+            requested_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            decided_by    TEXT,
+            decided_at    TEXT,
+            expires_at    TEXT,
+            payload_json  TEXT NOT NULL DEFAULT '{}',
+            FOREIGN KEY(work_item_id) REFERENCES work_items(id),
+            FOREIGN KEY(job_id) REFERENCES work_jobs(id)
+          );
+          INSERT INTO approvals (
+            id, work_item_id, job_id, approval_type, status, requested_by,
+            requested_at, decided_by, decided_at, expires_at, payload_json
+          )
+          SELECT
+            id, work_item_id, job_id, approval_type, status, requested_by,
+            requested_at, decided_by, decided_at, expires_at, payload_json
+          FROM approvals_migrate_tmp;
+          DROP TABLE approvals_migrate_tmp;
+        `);
+      } finally {
+        raw.pragma("legacy_alter_table = OFF");
+        raw.pragma("foreign_keys = ON");
+      }
+    }
+  } catch (err) { console.warn('[db] approvals FK migration failed:', err); }
+
   // Clear any locks left held from a previous process that was killed mid-execution
   raw.exec(`UPDATE bridge_state SET active_execution_lock = 0 WHERE active_execution_lock = 1`);
   // Expire sessions older than 7 days — prevents a stale/corrupt session from

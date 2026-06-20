@@ -201,7 +201,15 @@ export async function handlePrMergeCallback(
       closeArgs.push(payload.pr_url);
     }
 
-    await runCommand("gh", closeArgs);
+    try {
+      await runCommand("gh", closeArgs);
+    } catch (err) {
+      await answerCbq();
+      await editMessage(
+        `PR close failed: ${err instanceof Error ? err.message : String(err)}. Approval kept pending.`,
+      );
+      return;
+    }
 
     db.resolveApproval(approval.id, "rejected", ctx.userId ?? "user");
     db.updateWorkItemStatus(action.id, "closed");

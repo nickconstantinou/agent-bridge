@@ -16,8 +16,7 @@ export type CommandResult =
   | { kind: "keyboard_message"; text: string; reply_markup: any }
   | { kind: "execute"; prompt: string }
   | { kind: "codex_usage" }
-  | { kind: "compact"; chatKey: string }
-  | { kind: "context_status"; chatKey: string };
+  | { kind: "compact"; chatKey: string };
 
 const bridgeCommands = new Set(["/start", "/reset", "/models", "/skills", "/memory", "/usage", "/narration", "/compact", "/context"]);
 

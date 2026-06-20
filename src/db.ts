@@ -252,6 +252,7 @@ export function openDb(dbPath: string): BridgeDb {
   } catch (err) { console.warn('[db] approvals FK migration failed:', err); }
 
   // ── Conversation persistence (2026-06-20) ────────────────────────────────
+  // TODO: add TTL/pruning for conversation_turns and conversation_summaries — currently grow unboundedly
   try {
     raw.exec(`
       CREATE TABLE IF NOT EXISTS conversation_turns (
@@ -932,6 +933,11 @@ export class BridgeDb {
          FROM conversation_summaries WHERE chat_key = ? ORDER BY id DESC LIMIT 1`
       )
       .get(chatKey) as any) ?? null;
+  }
+
+  clearConvHistory(chatKey: string): void {
+    this.raw.prepare(`DELETE FROM conversation_turns WHERE chat_key = ?`).run(chatKey);
+    this.raw.prepare(`DELETE FROM conversation_summaries WHERE chat_key = ?`).run(chatKey);
   }
 
   getConvStatus(chatKey: string): {

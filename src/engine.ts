@@ -322,6 +322,7 @@ export class BridgeEngine {
             if (commandText === "/reset") {
               const pending = this.db.dequeueMsgs(chatKey);
               for (const m of pending) this.db.deletePendingMsg(m.id);
+              this.db.clearConvHistory(chatKey);
               abortCliProcess(chatKey);
               this.db.unlock(chatKey);
             }
@@ -367,14 +368,9 @@ export class BridgeEngine {
             ].join("\n");
             this.db.addConvSummary(ck, startId, endId, summaryMd);
             await this.sendText(chatId, {
-              text: `Context compacted. ${turns.length} turns summarised. Future prompts will receive the summary + new turns only.`,
+              text: `Context compacted. ${turns.length} turn${turns.length === 1 ? "" : "s"} checkpointed (turn count, CLI, last message). Future prompts receive this header + your most recent turns.`,
               message_thread_id: threadId,
             });
-            return;
-          }
-          if (commandResponse.kind === "context_status") {
-            // context_status is handled fully in commands.ts and returned as kind: "message"
-            // This branch is kept for type completeness but should not be reached.
             return;
           }
         }

@@ -35,6 +35,7 @@ import { sendTelegramMessage, sendMessageWithProgress } from "./messageDelivery.
 import { buildModelKeyboard, buildModelsText, getCliWorkingDir, extractPromptText, extractThreadId, isAuthorizedMessage } from "./bridge.js";
 import { handleCommand, isBridgeCommand, buildTelegramCommands, isAntigravityNarrationVisible } from "./commands.js";
 import { getCodexUsageText } from "./codexUsage.js";
+import { buildCompactSummaryPrompt, buildTombstone, COMPACT_TIMEOUT_MS } from "./compactSummary.js";
 import type { BridgeEvent } from "./events/types.js";
 import { EventStore } from "./events/store.js";
 import type { BridgeConfig, BotKind, BotConfig, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult, CliOptions } from "./types.js";
@@ -360,12 +361,32 @@ export class BridgeEngine {
             }
             const startId = turns[0].id;
             const endId = turns[turns.length - 1].id;
-            const summaryMd = [
-              `[Compacted at ${new Date().toISOString()}]`,
-              `${turns.length} turns captured (${turns.filter(t => t.role === "user").length} user, ${turns.filter(t => t.role === "assistant").length} assistant).`,
-              `CLI at compact time: ${this.kind}.`,
-              `Last user message: ${turns.filter(t => t.role === "user").pop()?.text ?? "none"}`,
-            ].join("\n");
+
+            let summaryMd: string;
+            try {
+              const summaryPrompt = buildCompactSummaryPrompt(turns);
+              const model = this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null;
+              const invocation = buildCliInvocation({
+                bot: this.kind,
+                prompt: summaryPrompt,
+                sessionId: null,
+                command: this.opts.botConfig.command,
+                model,
+                executionMode: "safe",
+              });
+              const raw = await Promise.race([
+                this.exec.runCli(invocation.command, invocation.args, process.cwd(), {}),
+                new Promise<never>((_, reject) =>
+                  setTimeout(() => reject(new Error("compact timeout")), COMPACT_TIMEOUT_MS)
+                ),
+              ]);
+              summaryMd = typeof raw === "string" && raw.trim().length > 0
+                ? raw.trim()
+                : buildTombstone(turns, this.kind);
+            } catch {
+              summaryMd = buildTombstone(turns, this.kind);
+            }
+
             this.db.addConvSummary(ck, startId, endId, summaryMd);
             await this.sendText(chatId, {
               text: `Context compacted. ${turns.length} turn${turns.length === 1 ? "" : "s"} checkpointed (turn count, CLI, last message). Future prompts receive this header + your most recent turns.`,

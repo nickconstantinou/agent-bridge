@@ -1030,4 +1030,72 @@ describe("BridgeEngine", () => {
       expect(afterExecute.mock.calls[0][2]).toEqual({ chatId: 100, chatKey: "100", threadId: undefined });
     });
   });
+
+  describe("/compact command", () => {
+    it("compact handler calls runCli for LLM summary and stores result", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      db.addConvTurn("100", "user", "fix the auth bug");
+      db.addConvTurn("100", "assistant", "on it");
+
+      let capturedPrompt: string | undefined;
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        // For claude bot, the prompt is the last argument
+        capturedPrompt = args[args.length - 1];
+        return "Current objective:\n- fix auth bug\n\nDurable facts:\n- none\n\nOpen state:\n- none";
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("/compact")]);
+
+      const summary = db.getLatestConvSummary("100");
+      expect(summary).not.toBeNull();
+      expect(summary!.summary_md).toContain("fix auth bug");
+      expect(capturedPrompt).toContain("Current objective:");
+    });
+
+    it("compact handler falls back to tombstone when runCli fails", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      db.addConvTurn("100", "user", "hello");
+      db.addConvTurn("100", "assistant", "hi there");
+
+      const runCli = vi.fn().mockRejectedValue(new Error("CLI timeout"));
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("/compact")]);
+
+      const summary = db.getLatestConvSummary("100");
+      expect(summary).not.toBeNull();
+      expect(summary!.summary_md).toContain("turns captured");
+    });
+  });
 });

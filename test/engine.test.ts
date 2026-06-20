@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { rmSync } from "node:fs";
 import Database from "better-sqlite3";
 import { openDb } from "../src/db.js";
-import type { TelegramMessage } from "../src/types.js";
+import type { BridgeConfig, TelegramMessage } from "../src/types.js";
 import { type as eventType } from "../src/events/types.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -29,6 +29,23 @@ function makeMockClient() {
     sendPhoto: vi.fn().mockResolvedValue({ ok: true }),
     sendDocument: vi.fn().mockResolvedValue({ ok: true }),
   } as any;
+}
+
+function makeFullConfig(dbPath: string): BridgeConfig {
+  return {
+    allowedUserIds: new Set(["42"]),
+    serviceEnvFile: null,
+    serviceKind: null,
+    pollIntervalMs: 1000,
+    executionMode: "safe",
+    asyncEnabled: false,
+    dbPath,
+    bots: {
+      codex: { token: undefined, command: "codex", modelPreference: [] },
+      claude: { token: undefined, command: "claude", modelPreference: [] },
+      antigravity: { token: undefined, command: "agy", modelPreference: [] },
+    },
+  };
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -1099,6 +1116,83 @@ describe("BridgeEngine", () => {
       const summary = db.getLatestConvSummary("100");
       expect(summary).not.toBeNull();
       expect(summary!.summary_md).toContain("turns captured");
+    });
+  });
+
+  describe("Agent Bridge context helper affordance", () => {
+    it("injects helper env and prompt affordance when stored context exists", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+      db.addConvTurn("100", "user", "remember work item #16", "claude");
+      db.addConvSummary("100", 1, 1, "Current objective:\n- Keep context available.");
+
+      let capturedPrompt = "";
+      let capturedContextEnv: Record<string, string> | undefined;
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[], _cwd: string, options: any) => {
+        capturedPrompt = args[args.length - 1];
+        capturedContextEnv = options.contextEnv;
+        return "done";
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          fullConfig: makeFullConfig(dbPath),
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("what was the work item?")]);
+
+      expect(capturedContextEnv).toMatchObject({
+        AGENT_BRIDGE_CONTEXT_AVAILABLE: "1",
+        AGENT_BRIDGE_CHAT_KEY: "100",
+      });
+      expect(capturedContextEnv?.AGENT_BRIDGE_CONTEXT_COMMAND).toContain("agent-bridge-context");
+      expect(capturedPrompt).toContain("[Agent Bridge context]");
+      expect(capturedPrompt).toContain("$AGENT_BRIDGE_CONTEXT_COMMAND");
+      expect(capturedPrompt).toContain("--recent 20");
+      expect(capturedPrompt).toContain("Current objective:");
+    });
+
+    it("does not inject helper env or affordance when no stored context exists", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      let capturedPrompt = "";
+      let capturedContextEnv: Record<string, string> | undefined;
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[], _cwd: string, options: any) => {
+        capturedPrompt = args[args.length - 1];
+        capturedContextEnv = options.contextEnv;
+        return "done";
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          fullConfig: makeFullConfig(dbPath),
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(capturedContextEnv).toBeUndefined();
+      expect(capturedPrompt).not.toContain("[Agent Bridge context]");
     });
   });
 });

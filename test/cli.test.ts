@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
-import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage, buildCliInvocation } from "../src/cli.js";
+import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage, buildCliInvocation, buildSafeChildEnv } from "../src/cli.js";
 import { isBridgeCommand, handleCommand } from "../src/commands.js";
 import { openDb } from "../src/db.js";
 import type { BridgeConfig } from "../src/types.js";
@@ -48,6 +48,31 @@ describe("runCliAsync idle timeout", () => {
 });
 
 describe("CLI Runner", () => {
+  it("buildSafeChildEnv keeps context helper env while stripping Telegram secrets", () => {
+    const env = buildSafeChildEnv({
+      TELEGRAM_BOT_TOKEN: "secret",
+      AGENT_BRIDGE_CONTEXT_AVAILABLE: "1",
+      AGENT_BRIDGE_CONTEXT_COMMAND: "agent-bridge-context",
+      AGENT_BRIDGE_CHAT_KEY: "chat:1",
+    });
+
+    expect(env.TELEGRAM_BOT_TOKEN).toBeUndefined();
+    expect(env.AGENT_BRIDGE_CONTEXT_AVAILABLE).toBe("1");
+    expect(env.AGENT_BRIDGE_CONTEXT_COMMAND).toBe("agent-bridge-context");
+    expect(env.AGENT_BRIDGE_CHAT_KEY).toBe("chat:1");
+  });
+
+  it("passes contextEnv into child processes", async () => {
+    const output = await runCli(
+      process.execPath,
+      ["-e", "console.log(process.env.AGENT_BRIDGE_CONTEXT_AVAILABLE + ':' + process.env.AGENT_BRIDGE_CHAT_KEY)"],
+      process.cwd(),
+      { contextEnv: { AGENT_BRIDGE_CONTEXT_AVAILABLE: "1", AGENT_BRIDGE_CHAT_KEY: "chat:1" } } as any,
+    );
+
+    expect(output.trim()).toBe("1:chat:1");
+  });
+
   it("runs a simple command and returns stdout", async () => {
     const output = await runCli("echo", ["hello"], process.cwd());
     expect(output.trim()).toBe("hello");

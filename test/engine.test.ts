@@ -1066,6 +1066,9 @@ describe("BridgeEngine", () => {
       expect(summary).not.toBeNull();
       expect(summary!.summary_md).toContain("fix auth bug");
       expect(capturedPrompt).toContain("Current objective:");
+      const sentBody = client.sendMessage.mock.calls.at(-1)?.[0];
+      expect(sentBody.text).toContain("semantic summary");
+      expect(sentBody.text).not.toContain("turn count, CLI, last message");
     });
 
     it("compact handler falls back to tombstone when runCli fails", async () => {

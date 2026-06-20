@@ -389,7 +389,7 @@ export class BridgeEngine {
 
             this.db.addConvSummary(ck, startId, endId, summaryMd);
             await this.sendText(chatId, {
-              text: `Context compacted. ${turns.length} turn${turns.length === 1 ? "" : "s"} checkpointed (turn count, CLI, last message). Future prompts receive this header + your most recent turns.`,
+              text: `Context compacted. ${turns.length} turn${turns.length === 1 ? "" : "s"} summarised. Future prompts receive this semantic summary + new turns.`,
               message_thread_id: threadId,
             });
             return;

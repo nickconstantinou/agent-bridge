@@ -466,6 +466,34 @@ describe("isAborted suppression", () => {
   });
 });
 
+describe("typingInterval cleanup on isAborted early return", () => {
+  it("clears typingInterval when isAborted() returns true, preventing further sendChatAction calls", async () => {
+    vi.useFakeTimers();
+    try {
+      const client = createMockClient();
+
+      await sendMessageWithProgress({
+        client,
+        kind: "codex",
+        chatId: 123,
+        execution: Promise.resolve({ text: "partial", sessionId: null }),
+        isAborted: () => true,
+      });
+
+      // Capture the call count right after abort — only the initial sendTyping() fires
+      const callsAfterAbort = (client.sendChatAction as any).mock.calls.length;
+
+      // Advance past the 4500ms typing interval — a leaked interval would fire here
+      await vi.advanceTimersByTimeAsync(5000);
+
+      // If the interval was cleared, no new sendChatAction calls should appear
+      expect((client.sendChatAction as any).mock.calls.length).toBe(callsAfterAbort);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("sendTelegramMessage table rendering flag", () => {
   const tableMarkdown = "| Name | Age |\n| --- | --- |\n| Alice | 30 |";
 

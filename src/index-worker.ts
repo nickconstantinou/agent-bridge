@@ -66,7 +66,7 @@ const client = new TelegramClient(token, fetch, 45_000);
 
 // ── Fallback chain state (shared across all dispatches) ───────────────────────
 
-const fallbackChain = new WorkerFallbackChain(cliChain);
+const fallbackChain = new WorkerFallbackChain(cliChain, db);
 const exhaustedChats = new Set<string>();
 // contextPreambles: set by dispatchWithFallback before retry; consumed + deleted by onBeforeExecute
 const contextPreambles = new Map<string, string>();

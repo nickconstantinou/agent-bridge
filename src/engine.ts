@@ -92,7 +92,6 @@ export interface ExecFns {
 const MAX_QUEUE_DEPTH = 5;
 const ENGINE_CONTEXT_TURNS = 5;
 const ENGINE_TURN_TEXT_LIMIT = 1_200;
-type RecentTurn = { role: "user" | "assistant"; text: string };
 
 const AGENT_KINDS = new Set<string>(["codex", "antigravity", "claude"]);
 function isAgentKind(kind: string): kind is BotKind {
@@ -169,7 +168,6 @@ export class BridgeEngine {
   private readonly hooks: BridgeEngineHooks;
   private readonly exec: ExecFns;
   private readonly abortedChats = new Set<string>();
-  private readonly recentTurns = new Map<string, RecentTurn[]>();
 
   constructor(
     opts: BridgeEngineOptions,
@@ -528,22 +526,13 @@ export class BridgeEngine {
   }
 
   private _rememberTurn(chatKey: string, userPrompt: string, assistantText: string): void {
-    const turns = this.recentTurns.get(chatKey) ?? [];
-    turns.push({ role: "user", text: trimTurnText(userPrompt) });
-    turns.push({ role: "assistant", text: trimTurnText(assistantText) });
-    while (turns.length > ENGINE_CONTEXT_TURNS * 2) turns.shift();
-    this.recentTurns.set(chatKey, turns);
+    this.db.addConvTurn(chatKey, "user", trimTurnText(userPrompt), this.kind);
+    this.db.addConvTurn(chatKey, "assistant", trimTurnText(assistantText), this.kind);
   }
 
   private _buildRecentContextPrompt(chatKey: string, prompt: string): string {
-    const turns = this.recentTurns.get(chatKey) ?? [];
-    if (!turns.length) return prompt;
-    const lines = ["[Context from previous conversation]"];
-    for (const turn of turns.slice(-ENGINE_CONTEXT_TURNS * 2)) {
-      lines.push(`${turn.role === "user" ? "User" : "Assistant"}: ${turn.text}`);
-    }
-    lines.push("[End context — continue naturally]");
-    return `${lines.join("\n")}\n\n${prompt}`;
+    const ctx = this.db.buildConvContext(chatKey, ENGINE_CONTEXT_TURNS * 2);
+    return ctx ? `${ctx}${prompt}` : prompt;
   }
 
   async executePromptAsync(

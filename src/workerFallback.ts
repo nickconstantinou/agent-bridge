@@ -6,17 +6,18 @@
  * NEIGHBORS: src/index-worker.ts, src/engine.ts
  */
 
-export const CONTEXT_TURNS = 5;
+import type { BridgeDb } from "./db.js";
 
-export type WorkerTurn = { role: "user" | "assistant"; text: string };
+export const CONTEXT_TURNS = 5;
 
 export class WorkerFallbackChain {
   private readonly chain: string[];
   private readonly chatActiveIdx = new Map<string, number>();
-  private readonly chatTurns = new Map<string, WorkerTurn[]>();
+  private readonly db: BridgeDb;
 
-  constructor(chain: string[]) {
+  constructor(chain: string[], db: BridgeDb) {
     this.chain = chain;
+    this.db = db;
   }
 
   getChain(): string[] {
@@ -53,21 +54,10 @@ export class WorkerFallbackChain {
   }
 
   addTurn(chatKey: string, role: "user" | "assistant", text: string): void {
-    const turns = this.chatTurns.get(chatKey) ?? [];
-    turns.push({ role, text });
-    while (turns.length > CONTEXT_TURNS * 2) turns.shift();
-    this.chatTurns.set(chatKey, turns);
+    this.db.addConvTurn(chatKey, role, text);
   }
 
   buildContextPreamble(chatKey: string): string {
-    const turns = this.chatTurns.get(chatKey) ?? [];
-    if (turns.length === 0) return "";
-    const recent = turns.slice(-CONTEXT_TURNS * 2);
-    const lines = ["[Context from previous conversation]"];
-    for (const t of recent) {
-      lines.push(`${t.role === "user" ? "User" : "Assistant"}: ${t.text}`);
-    }
-    lines.push("[End context — continue naturally]");
-    return lines.join("\n") + "\n\n";
+    return this.db.buildConvContext(chatKey, CONTEXT_TURNS * 2);
   }
 }

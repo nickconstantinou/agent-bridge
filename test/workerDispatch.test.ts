@@ -8,6 +8,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { WorkerFallbackChain } from "../src/workerFallback.js";
 import { dispatchWithFallback, runCliWithFallback, getCliCommandForKind } from "../src/workerDispatch.js";
 import { runCli } from "../src/cli.js";
+import { openDb, type BridgeDb } from "../src/db.js";
 
 vi.mock("../src/cli.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/cli.js")>();
@@ -36,6 +37,7 @@ function makeMockEngine(kind: string): MockEngine {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe("dispatchWithFallback", () => {
+  let db: BridgeDb;
   let codex: MockEngine;
   let claude: MockEngine;
   let antigravity: MockEngine;
@@ -45,10 +47,11 @@ describe("dispatchWithFallback", () => {
   let sentMessages: string[];
 
   beforeEach(() => {
+    db = openDb(":memory:");
     codex = makeMockEngine("codex");
     claude = makeMockEngine("claude");
     antigravity = makeMockEngine("antigravity");
-    fallbackChain = new WorkerFallbackChain(["codex", "claude", "antigravity"]);
+    fallbackChain = new WorkerFallbackChain(["codex", "claude", "antigravity"], db);
     exhaustedChats = new Set();
     contextPreambles = new Map();
     sentMessages = [];

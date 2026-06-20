@@ -122,7 +122,7 @@ if (!botUsername) {
 // Fallback chain state
 const cliChain = (process.env.INTERACTIVE_CLI_CHAIN || process.env.WORKER_CLI_CHAIN || "codex,claude,antigravity")
   .split(",").map(s => s.trim()).filter(Boolean);
-const fallbackChain = new WorkerFallbackChain(cliChain);
+const fallbackChain = new WorkerFallbackChain(cliChain, db);
 const exhaustedChats = new Set<string>();
 const contextPreambles = new Map<string, string>();
 

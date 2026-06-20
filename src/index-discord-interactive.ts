@@ -88,7 +88,7 @@ const db = openDb(dbPath);
 
 const cliChain = (process.env.INTERACTIVE_CLI_CHAIN || "codex,claude,antigravity")
   .split(",").map((s) => s.trim()).filter(Boolean);
-const fallbackChain = new WorkerFallbackChain(cliChain);
+const fallbackChain = new WorkerFallbackChain(cliChain, db);
 const exhaustedChats = new Set<string>();
 const contextPreambles = new Map<string, string>();
 const snowflakeAliases = new Map<string, string>();

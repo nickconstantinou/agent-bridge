@@ -513,7 +513,7 @@ describe("dispatchInteractiveWithFallback", () => {
     codex = { handleCount: 0, handleUpdate: async () => { codex.handleCount++; } };
     claude = { handleCount: 0, handleUpdate: async () => { claude.handleCount++; } };
     antigravity = { handleCount: 0, handleUpdate: async () => { antigravity.handleCount++; } };
-    fallbackChain = new WorkerFallbackChain(["codex", "claude", "antigravity"]);
+    fallbackChain = new WorkerFallbackChain(["codex", "claude", "antigravity"], db);
     exhaustedChats = new Set();
     contextPreambles = new Map();
     sentMessages = [];

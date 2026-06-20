@@ -77,14 +77,16 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
       ? input.verify_output.slice(-500)
       : undefined;
 
+    const branchRange = "origin/main..HEAD";
+
     try {
-      const logOut = String(await runGit(["log", "--format=%s", "-10", "HEAD"], repoPath));
+      const logOut = String(await runGit(["log", "--format=%s", branchRange], repoPath));
       const subjects = logOut.split("\n").map(s => s.trim()).filter(Boolean);
       if (subjects.length) commit_subjects = subjects;
     } catch {}
 
     try {
-      const diffOut = String(await runGit(["diff", "--stat"], repoPath));
+      const diffOut = String(await runGit(["diff", "--stat", branchRange], repoPath));
       if (diffOut.trim()) files_summary = diffOut;
     } catch {}
 

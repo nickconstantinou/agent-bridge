@@ -15,9 +15,11 @@ export type CommandResult =
   | { kind: "message"; text: string }
   | { kind: "keyboard_message"; text: string; reply_markup: any }
   | { kind: "execute"; prompt: string }
-  | { kind: "codex_usage" };
+  | { kind: "codex_usage" }
+  | { kind: "compact"; chatKey: string }
+  | { kind: "context_status"; chatKey: string };
 
-const bridgeCommands = new Set(["/start", "/reset", "/models", "/skills", "/memory", "/usage", "/narration"]);
+const bridgeCommands = new Set(["/start", "/reset", "/models", "/skills", "/memory", "/usage", "/narration", "/compact", "/context"]);
 
 function normalizeCommand(text: string): string {
   const [command] = String(text || "").trim().toLowerCase().split(/\s+/, 1);
@@ -158,14 +160,38 @@ export function handleCommand(
     return { kind: "codex_usage" };
   }
 
+  if (text === "/compact") {
+    return { kind: "compact", chatKey: chatId };
+  }
+
+  if (text === "/context") {
+    const status = db.getConvStatus(chatId);
+    const summary = db.getLatestConvSummary(chatId);
+    const turnWord = status.turnCount === 1 ? "1 turn" : `${status.turnCount} turns`;
+    const lines = [
+      `**Context status** for \`${chatId}\``,
+      `Stored: ${turnWord}`,
+      `Pending queue: ${status.pendingCount}`,
+      `Latest turn: ${status.latestTurnAt ?? "none"}`,
+      `Latest compact: ${status.latestSummaryAt ?? "never"}`,
+    ];
+    if (summary) {
+      const turnsSince = db.getRecentConvTurns(chatId, 1000, summary.range_end_turn_id).length;
+      lines.push(`Turns since last compact: ${turnsSince}`);
+    }
+    return { kind: "message", text: lines.join("\n") };
+  }
+
   return null;
 }
 
 export function buildTelegramCommands(kind: "codex" | "antigravity" | "claude"): Array<{ command: string; description: string }> {
   const commands = [
-    { command: "models", description: "Switch model" },
-    { command: "reset",  description: "Clear current session" },
-    { command: "stop",   description: "Abort running execution" },
+    { command: "models",   description: "Switch model" },
+    { command: "reset",    description: "Clear current session" },
+    { command: "stop",     description: "Abort running execution" },
+    { command: "compact",  description: "Compact conversation context" },
+    { command: "context",  description: "Show context status" },
   ];
 
   if (kind === "codex") {

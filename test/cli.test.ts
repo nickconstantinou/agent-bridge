@@ -1,6 +1,9 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
 import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage, buildCliInvocation } from "../src/cli.js";
+import { isBridgeCommand, handleCommand } from "../src/commands.js";
+import { openDb } from "../src/db.js";
+import type { BridgeConfig } from "../src/types.js";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -659,5 +662,47 @@ describe("wrapAntigravityPrompt — liveness and narration", () => {
   it("contains a STATUS narration instruction for user visibility", () => {
     const prompt = getAgyPrompt();
     expect(prompt).toContain("STATUS:");
+  });
+});
+
+// Minimal config stub for command handler tests
+const stubConfig: BridgeConfig = {
+  allowedUserIds: new Set(),
+  serviceEnvFile: null,
+  serviceKind: null,
+  pollIntervalMs: 1000,
+  executionMode: "safe",
+  asyncEnabled: false,
+  dbPath: ":memory:",
+  bots: {
+    codex: { token: undefined, command: "codex", modelPreference: [] },
+    antigravity: { token: undefined, command: "agy", modelPreference: [] },
+    claude: { token: undefined, command: "claude", modelPreference: [] },
+  },
+};
+
+describe("/compact command", () => {
+  it("is recognised as a bridge command", () => {
+    expect(isBridgeCommand("/compact")).toBe(true);
+  });
+
+  it("returns compact result kind", () => {
+    const db = openDb(":memory:");
+    const result = handleCommand("claude", "/compact", { db, chatId: "chat:1", config: stubConfig });
+    expect(result?.kind).toBe("compact");
+  });
+});
+
+describe("/context command", () => {
+  it("is recognised as a bridge command", () => {
+    expect(isBridgeCommand("/context")).toBe(true);
+  });
+
+  it("returns context_status result with turn count", () => {
+    const db = openDb(":memory:");
+    db.addConvTurn("chat:1", "user", "hello");
+    const result = handleCommand("claude", "/context", { db, chatId: "chat:1", config: stubConfig });
+    expect(result?.kind).toBe("message");
+    expect(result?.text).toContain("1 turn");
   });
 });

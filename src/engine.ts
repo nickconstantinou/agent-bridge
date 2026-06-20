@@ -350,6 +350,33 @@ export class BridgeEngine {
             // Fall through to execution with the overridden prompt
             return this._executeAndSend(commandResponse.prompt, chatId, chatKey, primaryMessage.chat.type, threadId, userId, hookCtx, []);
           }
+          if (commandResponse.kind === "compact") {
+            const ck = commandResponse.chatKey;
+            const turns = this.db.getRecentConvTurns(ck, 1000);
+            if (turns.length === 0) {
+              await this.sendText(chatId, { text: "Nothing to compact — no conversation turns yet.", message_thread_id: threadId });
+              return;
+            }
+            const startId = turns[0].id;
+            const endId = turns[turns.length - 1].id;
+            const summaryMd = [
+              `[Compacted at ${new Date().toISOString()}]`,
+              `${turns.length} turns captured (${turns.filter(t => t.role === "user").length} user, ${turns.filter(t => t.role === "assistant").length} assistant).`,
+              `CLI at compact time: ${this.kind}.`,
+              `Last user message: ${turns.filter(t => t.role === "user").pop()?.text ?? "none"}`,
+            ].join("\n");
+            this.db.addConvSummary(ck, startId, endId, summaryMd);
+            await this.sendText(chatId, {
+              text: `Context compacted. ${turns.length} turns summarised. Future prompts will receive the summary + new turns only.`,
+              message_thread_id: threadId,
+            });
+            return;
+          }
+          if (commandResponse.kind === "context_status") {
+            // context_status is handled fully in commands.ts and returned as kind: "message"
+            // This branch is kept for type completeness but should not be reached.
+            return;
+          }
         }
         return; // Unrecognised command for agent bot — ignore
       }

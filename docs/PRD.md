@@ -92,7 +92,7 @@ handleUpdate()
 | Antigravity | `--resume <sessionId>` |
 | Claude | `--resume <sessionId>` |
 
-Sessions are stored per chat in SQLite and restored across service restarts. `/reset` clears the session.
+Sessions are stored per chat in SQLite and restored across service restarts. Every user and assistant turn is also persisted to `conversation_turns`, surviving restarts and CLI switches. `/reset` clears the CLI session **and** all conversation turns + summaries for the chat.
 
 ### 4.3 Process Registry & Kill Switch
 
@@ -100,7 +100,24 @@ Sessions are stored per chat in SQLite and restored across service restarts. `/r
 
 `/stop` and `/cancel` are intercepted in `handleUpdate` before `db.tryLock()`, so they work even when a lock is held.
 
-### 4.4 Model Fallback
+### 4.4 Conversation Persistence & Compaction
+
+Every user message and assistant response is persisted to SQLite in `conversation_turns`. The table survives service restarts and CLI switches — replacing the previous in-memory `recentTurns` / `chatTurns` Maps.
+
+`buildConvContext(chatKey, maxTurns)` composes the latest compact summary (if any) plus the most recent raw turns into a context preamble prepended to CLI prompts on fallback and context requests.
+
+**`/compact`** — Creates a semantic checkpoint. The engine:
+1. Loads all turns for the chat key via `getRecentConvTurns`.
+2. Builds a summarization prompt via `buildCompactSummaryPrompt` (≤ 7,500 chars, trimmed to fit).
+3. Calls the active CLI in single-shot print mode (`sessionId: null`) with a 60s `Promise.race` timeout.
+4. Stores LLM output as `summary_md` via `addConvSummary`. Falls back to a tombstone on any failure.
+5. Future `buildConvContext` calls return the richer summary automatically.
+
+**`/context`** — Reports current conversation state: turn count, pending queue depth, last turn timestamp, and last compact time. Reads from `getConvStatus` and `getLatestConvSummary`.
+
+**`/reset`** — Now performs a true clean break: clears the CLI session (`db.setSession`) **and** deletes all `conversation_turns` + `conversation_summaries` for the chat key via `clearConvHistory`.
+
+### 4.4a Model Fallback
 
 On `MODEL_CAPACITY_EXHAUSTED` / `No capacity available` / `rateLimitExceeded`, the bridge retries with the next model in the preference chain. Configured via `CODEX_MODEL_PREFERENCE` / `ANTIGRAVITY_MODEL_PREFERENCE` / `CLAUDE_MODEL_PREFERENCE` (comma-separated, priority order):
 
@@ -123,19 +140,36 @@ The response is prepended with a warning notice when a fallback is used.
 
 > **Antigravity note**: Agy does not accept a `--model` CLI flag. Model selection (including fallback) is applied by mapping the chosen model ID (e.g. `gemini-3.5-flash-high`) to its display label (e.g. `Gemini 3.5 Flash (High)`) and writing that value into `~/.gemini/antigravity-cli/settings.json` before the process is spawned. Resetting to default removes the `model` key so Agy falls back to its own default.
 
+### 4.4b Agent Context Helper
+
+CLI agents spawned by the bridge receive three environment variables injected by `buildCliInvocation`:
+
+| Variable | Value |
+|---|---|
+| `AGENT_BRIDGE_CONTEXT_AVAILABLE` | `"1"` — signals helper is present |
+| `AGENT_BRIDGE_CONTEXT_COMMAND` | Absolute path to `bin/agent-bridge-context` |
+| `AGENT_BRIDGE_CONTEXT_DB` | DB path for the current bot instance |
+| `AGENT_BRIDGE_CHAT_KEY` | Current chat key (`chatId:threadId`) |
+
+The `agent-bridge-context` binary (in `bin/`) opens the DB **read-only** and outputs:
+- `agent-bridge-context` (no args) — latest compact summary
+- `agent-bridge-context --recent [N]` — N most recent turns (default 20, max 100)
+
+This gives CLI agents queryable access to bridge conversation history without any MCP server. The bridge prompt preamble tells agents when `AGENT_BRIDGE_CONTEXT_AVAILABLE=1` and how to invoke it.
+
 ### 4.5 Interactive Bot CLI-to-CLI Fallback
 
 In the unified interactive bot (switchable CLI), if all model fallbacks of the user's preferred CLI are exhausted and the bot encounters a capacity/rate-limit error (e.g. `session limit` or `resets`), it automatically:
 1. Advances to the next CLI in the preference chain (default order: `codex` → `claude` → `antigravity`, configurable via `INTERACTIVE_CLI_CHAIN` in environment variables).
 2. Updates the user's CLI preference in SQLite (`interactive_cli_preference` column in `bridge_state` table).
 3. Notifies the user of the switch and updates the Telegram commands menu to match the active CLI.
-4. Prepends a context preamble (containing the last 3 message turns) to the prompt and retries the execution on the fallback CLI engine.
+4. Prepends a context preamble (latest compact summary + recent turns from SQLite) to the prompt and retries the execution on the fallback CLI engine.
 
 ### 4.6 Concurrency Lock & Message Queue
 
 `db.tryLock(chatId)` is an atomic SQLite `UPDATE … WHERE active_execution_lock = 0` — only one execution per chat at a time. Lock is released in a `finally` block which also calls `drainQueue(chatKey)`.
 
-If a chat is busy, the incoming message is queued (max `MAX_QUEUE_DEPTH = 5`). The user receives a position notice. When execution finishes, `drainQueue` pops the next item via `setImmediate` and calls `handleMessages` with a synthetic message. If the queue is full, the user receives "⏳ Queue is full."
+If a chat is busy, the incoming message is queued to `pending_messages` in SQLite (max `MAX_QUEUE_DEPTH = 5`), surviving restarts. The user receives a position notice. When execution finishes, `drainQueue` pops the next item via `setImmediate` and calls `handleMessages` with a synthetic message. If the queue is full, the user receives "⏳ Queue is full."
 
 ### 4.7 Rate Limit Handling
 
@@ -188,7 +222,9 @@ interface BridgeConfig {
 }
 ```
 
-### SQLite Schema (`bridge_state`)
+### SQLite Schema
+
+**`bridge_state`** — settings, sessions, locks:
 
 ```sql
 CREATE TABLE bridge_state (
@@ -205,23 +241,71 @@ CREATE TABLE bridge_state (
 | `$polling:<bot>` | last update_id | Telegram polling offset |
 | `<bot>` | model name | Per-bot model override |
 
+**`conversation_turns`** — persistent per-chat message history:
+
+```sql
+CREATE TABLE conversation_turns (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_key TEXT NOT NULL,
+  role    TEXT NOT NULL CHECK (role IN ('user','assistant')),
+  text    TEXT NOT NULL,
+  cli     TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+**`pending_messages`** — durable queue for messages that arrive while a lock is held:
+
+```sql
+CREATE TABLE pending_messages (
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_key TEXT NOT NULL,
+  prompt   TEXT NOT NULL,
+  chat_id  INTEGER NOT NULL,
+  thread_id INTEGER,
+  chat_type TEXT,
+  user_id  INTEGER,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+**`conversation_summaries`** — LLM-generated compact checkpoints written by `/compact`:
+
+```sql
+CREATE TABLE conversation_summaries (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  chat_key         TEXT NOT NULL,
+  range_start_turn_id INTEGER NOT NULL,
+  range_end_turn_id   INTEGER NOT NULL,
+  summary_md       TEXT NOT NULL,
+  created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+> Note: `conversation_turns` and `conversation_summaries` currently grow unboundedly — TTL/pruning is a future TODO.
+
 ---
 
 ## 7. File Structure
 
 ```
 src/
-├── index.ts          — Main entry, BridgeBot class, polling loop
-├── cli.ts            — Process spawn, runCli/runCliAsync, abortCliProcess
-├── telegram.ts       — TelegramClient (HTTP), MediaGroupBuffer
-├── messageDelivery.ts — sendTelegramMessage, sendMessageWithProgress, StreamingUpdater
-├── render.ts         — Text splitting, MarkdownV2, Telegram entities
-├── bridge.ts         — Auth, session helpers, working dir resolution
-├── db.ts             — BridgeDb (SQLite via better-sqlite3)
-├── types.ts          — TypeScript interfaces
-├── commands.ts       — /reset, /models (synchronous, returns string | null)
-├── timeouts.ts       — Timeout resolution (per-bot prefix → global → default)
-└── agentMemory.ts    — agent-memory DB path resolution
+├── index.ts            — Main entry, BridgeBot class, polling loop
+├── cli.ts              — Process spawn, runCli/runCliAsync, abortCliProcess; injects AGENT_BRIDGE_* env
+├── telegram.ts         — TelegramClient (HTTP), MediaGroupBuffer
+├── messageDelivery.ts  — sendTelegramMessage, sendMessageWithProgress, StreamingUpdater
+├── render.ts           — Text splitting, MarkdownV2, Telegram entities
+├── bridge.ts           — Auth, session helpers, working dir resolution
+├── db.ts               — BridgeDb (SQLite via better-sqlite3); conversation_turns/summaries/pending
+├── types.ts            — TypeScript interfaces
+├── commands.ts         — /reset, /models, /compact, /context (synchronous, returns string | null)
+├── compactSummary.ts   — buildCompactSummaryPrompt, buildTombstone, COMPACT_PROMPT_MAX_CHARS, COMPACT_TIMEOUT_MS
+├── contextCommand.ts   — renderAgentBridgeContext: read-only DB helper for agent CLI access
+├── timeouts.ts         — Timeout resolution (per-bot prefix → global → default)
+└── agentMemory.ts      — agent-memory DB path resolution
+
+bin/
+└── agent-bridge-context  — Shell wrapper: invokes contextCommand.ts via tsx (read-only agent helper)
 
 test/
 ├── cli.test.ts         — Process lifecycle, abort, fallback, timeouts
@@ -325,7 +409,8 @@ isolated from each other while sharing the same CLI backend code.
 
 ## 11. Known Limitations
 
-- Sessions are CLI thread IDs, not full conversation history
+- CLI sessions are provider thread IDs — bridge conversation history (turns/summaries) is separate and bridge-owned
+- `conversation_turns` and `conversation_summaries` grow unboundedly; no TTL or pruning yet
 - Sync path (`BRIDGE_ASYNC_ENABLED=false`) available but not the default
 - `abortCliProcess` SIGKILLs the top-level process only (not the full process group)
 - Antigravity model switching is applied by mutating `~/.gemini/antigravity-cli/settings.json`; concurrent interactive Agy sessions (if any) would see the same setting

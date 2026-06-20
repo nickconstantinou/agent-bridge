@@ -334,4 +334,67 @@ describe("handlePrMergeCallback — wi_clspr", () => {
     expect(args).toContain("close");
     expect(db.getWorkItem(item.id)!.status).toBe("closed");
   });
+
+  it("answers the callback with an error message when gh pr close fails — does not throw", async () => {
+    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram", title: "Bug", created_by: "worker",
+      repository: "owner/repo",
+    });
+    const approval = db.createApproval({
+      approval_type: "merge_pr",
+      requested_by: "agent",
+      work_item_id: item.id,
+      payload: { pr_url: "https://github.com/owner/repo/pull/5", pr_number: 5, branch_name: "agent/work-1", repository: "owner/repo" },
+    });
+
+    const runCommand = vi.fn().mockRejectedValue(new Error("PR already closed"));
+    const answerCbq = vi.fn().mockResolvedValue(undefined);
+    const editMessage = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      handlePrMergeCallback(
+        { type: "wi_clspr", id: item.id },
+        { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
+      )
+    ).resolves.toBeUndefined();
+
+    expect(answerCbq).toHaveBeenCalled();
+    expect(editMessage).toHaveBeenCalledWith(expect.stringMatching(/failed|close|PR already closed/i));
+    // Approval must remain pending — close did not succeed
+    const row = db.raw.prepare("SELECT * FROM approvals WHERE id = ?").get(approval.id) as any;
+    expect(row.status).toBe("pending");
+    expect(db.getWorkItem(item.id)!.status).not.toBe("closed");
+  });
+
+  it("answers the callback when gh pr close fails with an auth error — does not throw", async () => {
+    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram", title: "Bug", created_by: "worker",
+      repository: "owner/repo",
+    });
+    db.createApproval({
+      approval_type: "merge_pr",
+      requested_by: "agent",
+      work_item_id: item.id,
+      payload: { pr_url: "https://github.com/owner/repo/pull/9", pr_number: 9, branch_name: "agent/work-2", repository: "owner/repo" },
+    });
+
+    const runCommand = vi.fn().mockRejectedValue(new Error("HTTP 401: Bad credentials"));
+    const answerCbq = vi.fn().mockResolvedValue(undefined);
+    const editMessage = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      handlePrMergeCallback(
+        { type: "wi_clspr", id: item.id },
+        { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
+      )
+    ).resolves.toBeUndefined();
+
+    // Telegram callback query must be answered regardless of outcome
+    expect(answerCbq).toHaveBeenCalled();
+    expect(editMessage).toHaveBeenCalledWith(expect.stringMatching(/failed|close|401|credentials/i));
+  });
 });

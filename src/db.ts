@@ -251,6 +251,43 @@ export function openDb(dbPath: string): BridgeDb {
     }
   } catch (err) { console.warn('[db] approvals FK migration failed:', err); }
 
+  // ── Conversation persistence (2026-06-20) ────────────────────────────────
+  try {
+    raw.exec(`
+      CREATE TABLE IF NOT EXISTS conversation_turns (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_key   TEXT    NOT NULL,
+        role       TEXT    NOT NULL CHECK (role IN ('user', 'assistant')),
+        text       TEXT    NOT NULL,
+        cli        TEXT,
+        created_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_conv_turns_chat_key ON conversation_turns(chat_key, id);
+
+      CREATE TABLE IF NOT EXISTS pending_messages (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_key    TEXT    NOT NULL,
+        prompt      TEXT    NOT NULL,
+        chat_id     INTEGER NOT NULL,
+        thread_id   INTEGER,
+        chat_type   TEXT    NOT NULL DEFAULT 'private',
+        user_id     INTEGER,
+        created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_pending_msgs_chat_key ON pending_messages(chat_key, id);
+
+      CREATE TABLE IF NOT EXISTS conversation_summaries (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_key            TEXT    NOT NULL,
+        range_start_turn_id INTEGER NOT NULL,
+        range_end_turn_id   INTEGER NOT NULL,
+        summary_md          TEXT    NOT NULL,
+        created_at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_conv_summaries_chat_key ON conversation_summaries(chat_key, id);
+    `);
+  } catch { /* tables already exist on upgraded DBs */ }
+
   // Clear any locks left held from a previous process that was killed mid-execution
   raw.exec(`UPDATE bridge_state SET active_execution_lock = 0 WHERE active_execution_lock = 1`);
   // Expire sessions older than 7 days — prevents a stale/corrupt session from
@@ -792,6 +829,132 @@ export class BridgeDb {
         console.error(`Failed to handle orphaned run ${run.run_id}`, err);
       }
     }
+  }
+
+  // ── Conversation turns ──────────────────────────────────────────────────
+  addConvTurn(chatKey: string, role: "user" | "assistant", text: string, cli?: string): void {
+    this.raw
+      .prepare(`INSERT INTO conversation_turns (chat_key, role, text, cli) VALUES (?, ?, ?, ?)`)
+      .run(chatKey, role, text, cli ?? null);
+  }
+
+  getRecentConvTurns(
+    chatKey: string,
+    limit: number,
+    sinceId?: number,
+  ): Array<{ id: number; role: string; text: string; cli: string | null; created_at: string }> {
+    if (sinceId != null) {
+      return this.raw
+        .prepare(
+          `SELECT id, role, text, cli, created_at FROM conversation_turns
+           WHERE chat_key = ? AND id > ?
+           ORDER BY id ASC LIMIT ?`
+        )
+        .all(chatKey, sinceId, limit) as any;
+    }
+    return this.raw
+      .prepare(
+        `SELECT id, role, text, cli, created_at FROM (
+           SELECT id, role, text, cli, created_at FROM conversation_turns
+           WHERE chat_key = ?
+           ORDER BY id DESC LIMIT ?
+         ) ORDER BY id ASC`
+      )
+      .all(chatKey, limit) as any;
+  }
+
+  buildConvContext(chatKey: string, maxTurns = 10): string {
+    const summary = this.getLatestConvSummary(chatKey);
+    const sinceId = summary?.range_end_turn_id;
+    const turns = this.getRecentConvTurns(chatKey, maxTurns, sinceId);
+    if (!summary && turns.length === 0) return "";
+    const lines = ["[Context from previous conversation]"];
+    if (summary) {
+      lines.push(summary.summary_md);
+      lines.push("");
+    }
+    for (const t of turns) {
+      lines.push(`${t.role === "user" ? "User" : "Assistant"}: ${t.text}`);
+    }
+    lines.push("[End context — continue naturally]");
+    return lines.join("\n") + "\n\n";
+  }
+
+  // ── Pending messages ────────────────────────────────────────────────────
+  pendingMsgCount(chatKey: string): number {
+    const row = this.raw
+      .prepare(`SELECT COUNT(*) AS n FROM pending_messages WHERE chat_key = ?`)
+      .get(chatKey) as { n: number };
+    return row.n;
+  }
+
+  enqueueMsg(
+    chatKey: string,
+    msg: { prompt: string; chatId: number; threadId?: number; chatType: string; userId?: number },
+  ): void {
+    this.raw
+      .prepare(
+        `INSERT INTO pending_messages (chat_key, prompt, chat_id, thread_id, chat_type, user_id)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(chatKey, msg.prompt, msg.chatId, msg.threadId ?? null, msg.chatType, msg.userId ?? null);
+  }
+
+  dequeueMsgs(chatKey: string): Array<{
+    id: number; prompt: string; chatId: number; threadId: number | null; chatType: string; userId: number | null;
+  }> {
+    return (this.raw
+      .prepare(`SELECT id, prompt, chat_id AS chatId, thread_id AS threadId, chat_type AS chatType, user_id AS userId
+                FROM pending_messages WHERE chat_key = ? ORDER BY id ASC`)
+      .all(chatKey) as any);
+  }
+
+  deletePendingMsg(id: number): void {
+    this.raw.prepare(`DELETE FROM pending_messages WHERE id = ?`).run(id);
+  }
+
+  // ── Conversation summaries ──────────────────────────────────────────────
+  addConvSummary(chatKey: string, startTurnId: number, endTurnId: number, summaryMd: string): void {
+    this.raw
+      .prepare(
+        `INSERT INTO conversation_summaries (chat_key, range_start_turn_id, range_end_turn_id, summary_md)
+         VALUES (?, ?, ?, ?)`
+      )
+      .run(chatKey, startTurnId, endTurnId, summaryMd);
+  }
+
+  getLatestConvSummary(chatKey: string): {
+    id: number; range_start_turn_id: number; range_end_turn_id: number; summary_md: string; created_at: string;
+  } | null {
+    return (this.raw
+      .prepare(
+        `SELECT id, range_start_turn_id, range_end_turn_id, summary_md, created_at
+         FROM conversation_summaries WHERE chat_key = ? ORDER BY id DESC LIMIT 1`
+      )
+      .get(chatKey) as any) ?? null;
+  }
+
+  getConvStatus(chatKey: string): {
+    turnCount: number; pendingCount: number; latestSummaryAt: string | null; latestTurnAt: string | null;
+  } {
+    const tc = this.raw
+      .prepare(`SELECT COUNT(*) AS n FROM conversation_turns WHERE chat_key = ?`)
+      .get(chatKey) as { n: number };
+    const pc = this.raw
+      .prepare(`SELECT COUNT(*) AS n FROM pending_messages WHERE chat_key = ?`)
+      .get(chatKey) as { n: number };
+    const lt = this.raw
+      .prepare(`SELECT created_at FROM conversation_turns WHERE chat_key = ? ORDER BY id DESC LIMIT 1`)
+      .get(chatKey) as { created_at: string } | undefined;
+    const ls = this.raw
+      .prepare(`SELECT created_at FROM conversation_summaries WHERE chat_key = ? ORDER BY id DESC LIMIT 1`)
+      .get(chatKey) as { created_at: string } | undefined;
+    return {
+      turnCount: tc.n,
+      pendingCount: pc.n,
+      latestSummaryAt: ls?.created_at ?? null,
+      latestTurnAt: lt?.created_at ?? null,
+    };
   }
 
   close(): void {

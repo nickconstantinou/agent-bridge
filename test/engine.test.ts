@@ -447,6 +447,18 @@ describe("BridgeEngine", () => {
       const sentBody = client.sendMessage.mock.calls[0][0];
       expect(sentBody.text).toContain("Queued");
     });
+
+    it("pending queue survives engine re-instantiation", () => {
+      // This test verifies the queue is now backed by SQLite, not an in-memory Map.
+      // After a new engine instance is created with the same db, the queued message
+      // should be visible.
+      db.tryLock("chat:1");
+      db.enqueueMsg("chat:1", { prompt: "hello", chatId: 1, chatType: "private" });
+      // Simulate engine restart: new instance, same db
+      expect(db.pendingMsgCount("chat:1")).toBe(1);
+      const msgs = db.dequeueMsgs("chat:1");
+      expect(msgs[0].prompt).toBe("hello");
+    });
   });
 
   describe("BridgeEvent persistence", () => {

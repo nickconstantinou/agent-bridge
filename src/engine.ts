@@ -92,14 +92,6 @@ export interface ExecFns {
 const MAX_QUEUE_DEPTH = 5;
 const ENGINE_CONTEXT_TURNS = 5;
 const ENGINE_TURN_TEXT_LIMIT = 1_200;
-type QueuedMessage = {
-  prompt: string;
-  chatId: number;
-  threadId?: number;
-  chatKey: string;
-  chatType: string;
-  userId?: number;
-};
 type RecentTurn = { role: "user" | "assistant"; text: string };
 
 const AGENT_KINDS = new Set<string>(["codex", "antigravity", "claude"]);
@@ -177,7 +169,6 @@ export class BridgeEngine {
   private readonly hooks: BridgeEngineHooks;
   private readonly exec: ExecFns;
   private readonly abortedChats = new Set<string>();
-  private readonly pendingQueues = new Map<string, QueuedMessage[]>();
   private readonly recentTurns = new Map<string, RecentTurn[]>();
 
   constructor(
@@ -272,7 +263,8 @@ export class BridgeEngine {
         this.db.unlock(chatKey);
         this.abortedChats.add(chatKey);
       }
-      this.pendingQueues.delete(chatKey);
+      const pendingStop = this.db.dequeueMsgs(chatKey);
+      for (const m of pendingStop) this.db.deletePendingMsg(m.id);
       await this.sendText(chatId, { text: "🛑 Execution aborted by user.", message_thread_id: threadId });
       return;
     }
@@ -330,7 +322,8 @@ export class BridgeEngine {
         if (commandResponse) {
           if (commandResponse.kind === "message") {
             if (commandText === "/reset") {
-              this.pendingQueues.delete(chatKey);
+              const pending = this.db.dequeueMsgs(chatKey);
+              for (const m of pending) this.db.deletePendingMsg(m.id);
               abortCliProcess(chatKey);
               this.db.unlock(chatKey);
             }
@@ -406,8 +399,7 @@ export class BridgeEngine {
     const useAsync = this.opts.asyncEnabled === true;
 
     if (!this.db.tryLock(chatKey)) {
-      const queue = this.pendingQueues.get(chatKey) ?? [];
-      if (queue.length >= MAX_QUEUE_DEPTH) {
+      if (this.db.pendingMsgCount(chatKey) >= MAX_QUEUE_DEPTH) {
         if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
         await this.sendText(chatId, {
           text: `⏳ Queue is full (max ${MAX_QUEUE_DEPTH}). Please wait.`,
@@ -415,11 +407,11 @@ export class BridgeEngine {
         });
         return;
       }
-      queue.push({ prompt, chatId, threadId, chatKey, chatType, userId });
-      this.pendingQueues.set(chatKey, queue);
+      this.db.enqueueMsg(chatKey, { prompt, chatId, threadId, chatType, userId });
+      const queuePos = this.db.pendingMsgCount(chatKey);
       if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
       await this.sendText(chatId, {
-        text: `⏳ Queued (position ${queue.length} of ${MAX_QUEUE_DEPTH}). Will process shortly.`,
+        text: `⏳ Queued (position ${queuePos} of ${MAX_QUEUE_DEPTH}). Will process shortly.`,
         message_thread_id: threadId,
       });
       return;
@@ -512,21 +504,22 @@ export class BridgeEngine {
   }
 
   private _drainQueue(chatKey: string): void {
-    const queue = this.pendingQueues.get(chatKey);
-    if (!queue?.length) return;
-    const next = queue.shift()!;
-    if (!queue.length) this.pendingQueues.delete(chatKey);
+    const msgs = this.db.dequeueMsgs(chatKey);
+    if (!msgs.length) return;
+    const next = msgs[0];
+    this.db.deletePendingMsg(next.id);
     setImmediate(() => {
       this.sendText(next.chatId, {
         text: "▶️ Processing your queued message...",
-        message_thread_id: next.threadId,
+        message_thread_id: next.threadId ?? undefined,
       }).catch(() => {});
       const syntheticMessage: TelegramMessage = {
         message_id: 0,
         chat: { id: next.chatId, type: next.chatType },
         from: { id: next.userId ?? Number([...this.opts.allowedUserIds][0] ?? 0), first_name: "queue" },
-        message_thread_id: next.threadId,
+        message_thread_id: next.threadId ?? undefined,
         text: next.prompt,
+        date: Math.floor(Date.now() / 1000),
       };
       this.handleMessages([syntheticMessage]).catch((err) =>
         console.error(`[${this.kind}] drainQueue error`, err)

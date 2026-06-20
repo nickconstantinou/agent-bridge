@@ -561,7 +561,6 @@ export class BridgeEngine {
         from: { id: next.userId ?? Number([...this.opts.allowedUserIds][0] ?? 0), first_name: "queue" },
         message_thread_id: next.threadId ?? undefined,
         text: next.prompt,
-        date: Math.floor(Date.now() / 1000),
       };
       this.handleMessages([syntheticMessage]).catch((err) =>
         console.error(`[${this.kind}] drainQueue error`, err)

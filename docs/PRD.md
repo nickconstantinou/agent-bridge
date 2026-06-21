@@ -104,18 +104,19 @@ Sessions are stored per chat in SQLite and restored across service restarts. Eve
 
 Every user message and assistant response is persisted to SQLite in `conversation_turns`. The table survives service restarts and CLI switches — replacing the previous in-memory `recentTurns` / `chatTurns` Maps.
 
-`buildConvContext(chatKey, maxTurns)` composes the latest compact summary (if any) plus the most recent raw turns into a context preamble prepended to CLI prompts on fallback and context requests.
+`buildConvContext(chatKey, maxChars)` composes the latest compact summary (if any) plus recent raw turns into a context preamble prepended to CLI prompts. It walks turns newest-first, accumulating character count, and stops when the char budget is exhausted. The summary always takes priority and is included even if it alone exceeds the budget. Default budget: `BRIDGE_CONTEXT_MAX_CHARS = 8_000` (~2K tokens); override via env var.
 
-**`/compact`** — Creates a semantic checkpoint. The engine:
+**`/compact`** — Creates a semantic checkpoint and starts a fresh CLI session. The engine:
 1. Loads all turns for the chat key via `getRecentConvTurns`.
 2. Builds a summarization prompt via `buildCompactSummaryPrompt` (≤ 7,500 chars, trimmed to fit).
 3. Calls the active CLI in single-shot print mode (`sessionId: null`) with a 60s `Promise.race` timeout.
 4. Stores LLM output as `summary_md` via `addConvSummary`. Falls back to a tombstone on any failure.
-5. Future `buildConvContext` calls return the richer summary automatically.
+5. Prunes raw turns up to `endId` via `pruneConvTurns` — keeps storage bounded.
+6. Clears the `ctx_suppress` flag and the CLI session — next prompt starts a fresh CLI seeded with the new summary.
 
 **`/context`** — Reports current conversation state: turn count, pending queue depth, last turn timestamp, and last compact time. Reads from `getConvStatus` and `getLatestConvSummary`.
 
-**`/reset`** — Now performs a true clean break: clears the CLI session (`db.setSession`) **and** deletes all `conversation_turns` + `conversation_summaries` for the chat key via `clearConvHistory`.
+**`/reset`** — Preserves conversation data but suppresses context injection. Sets a `ctx_suppress:<chatKey>` flag in the `settings` table and clears the CLI session. The next prompt starts a fresh CLI with no history preamble. The `ctx_suppress` flag is automatically cleared when `/compact` runs.
 
 ### 4.4a Model Fallback
 
@@ -282,7 +283,7 @@ CREATE TABLE conversation_summaries (
 );
 ```
 
-> Note: `conversation_turns` and `conversation_summaries` currently grow unboundedly — TTL/pruning is a future TODO.
+> Note: `conversation_turns` are pruned after each successful `/compact` (rows up to `range_end_turn_id` deleted). `conversation_summaries` are small (< 1 KB each) and kept indefinitely.
 
 ---
 
@@ -410,7 +411,7 @@ isolated from each other while sharing the same CLI backend code.
 ## 11. Known Limitations
 
 - CLI sessions are provider thread IDs — bridge conversation history (turns/summaries) is separate and bridge-owned
-- `conversation_turns` and `conversation_summaries` grow unboundedly; no TTL or pruning yet
+- `conversation_turns` are pruned post-compact; `conversation_summaries` are retained indefinitely (small footprint)
 - Sync path (`BRIDGE_ASYNC_ENABLED=false`) available but not the default
 - `abortCliProcess` SIGKILLs the top-level process only (not the full process group)
 - Antigravity model switching is applied by mutating `~/.gemini/antigravity-cli/settings.json`; concurrent interactive Agy sessions (if any) would see the same setting

@@ -1084,7 +1084,7 @@ describe("BridgeEngine", () => {
       expect(summary!.summary_md).toContain("fix auth bug");
       expect(capturedPrompt).toContain("Current objective:");
       const sentBody = client.sendMessage.mock.calls.at(-1)?.[0];
-      expect(sentBody.text).toContain("semantic summary");
+      expect(sentBody.text).toContain("Session reset");
       expect(sentBody.text).not.toContain("turn count, CLI, last message");
     });
 
@@ -1116,6 +1116,40 @@ describe("BridgeEngine", () => {
       const summary = db.getLatestConvSummary("100");
       expect(summary).not.toBeNull();
       expect(summary!.summary_md).toContain("turns captured");
+    });
+
+    it("compact clears the CLI session so next prompt starts a fresh session seeded with the summary", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      db.addConvTurn("100", "user", "we are halfway through a big refactor");
+      db.addConvTurn("100", "assistant", "understood, continuing");
+      db.setSession("100", "claude", "existing-session-abc");
+
+      const runCli = vi.fn().mockResolvedValue("Current objective:\n- big refactor\n\nDurable facts:\n- none\n\nOpen state:\n- none");
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("/compact")]);
+
+      // Session must be cleared so the next execution starts a fresh CLI session
+      expect(db.getSession("100", "claude")).toBeNull();
+      // Summary must still be stored
+      const summary = db.getLatestConvSummary("100");
+      expect(summary).not.toBeNull();
+      expect(summary!.summary_md).toContain("big refactor");
     });
   });
 

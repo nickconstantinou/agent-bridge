@@ -388,8 +388,9 @@ export class BridgeEngine {
             }
 
             this.db.addConvSummary(ck, startId, endId, summaryMd);
+            if (isAgentKind(this.kind)) db_setSession(this.db, ck, this.kind, null);
             await this.sendText(chatId, {
-              text: `Context compacted. ${turns.length} turn${turns.length === 1 ? "" : "s"} summarised. Future prompts receive this semantic summary + new turns.`,
+              text: `Context compacted. ${turns.length} turn${turns.length === 1 ? "" : "s"} summarised. Session reset — next message starts fresh, seeded with this summary.`,
               message_thread_id: threadId,
             });
             return;

@@ -42,6 +42,7 @@ import type { BridgeConfig, BotKind, BotConfig, TelegramUpdate, TelegramMessage,
 import type { BridgeDb } from "./db.js";
 import { DEFAULT_CONTEXT_MAX_CHARS } from "./db.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
+import { extractProjectMemorySidecars, storeProjectMemoryCandidate } from "./projectMemory.js";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -592,6 +593,18 @@ export class BridgeEngine {
     this.db.addConvTurn(chatKey, "assistant", trimTurnText(assistantText), this.kind);
   }
 
+  private _applyMemorySidecars(chatKey: string, resultText: string): string {
+    const extracted = extractProjectMemorySidecars(resultText);
+    for (const candidate of extracted.candidates) {
+      storeProjectMemoryCandidate(this.db.raw, candidate, {
+        chatKey,
+        cliKind: this.kind,
+        repoPath: process.cwd(),
+      });
+    }
+    return extracted.cleanText;
+  }
+
   private _buildRecentContextPrompt(chatKey: string, prompt: string): string {
     if (this.db.getSetting(`ctx_suppress:${chatKey}`)) return prompt;
     const ctx = this.db.buildConvContext(chatKey, ENGINE_CONTEXT_MAX_CHARS);
@@ -709,6 +722,7 @@ export class BridgeEngine {
       if (result?.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
       if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
       result.text = scrubOutputDir(result.text, outDir);
+      result.text = this._applyMemorySidecars(chatKey, result.text);
       if (isAgentKind(this.kind)) {
         this._rememberTurn(chatKey, prompt, result.text);
       }
@@ -832,6 +846,7 @@ export class BridgeEngine {
       if (result.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
       if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
       result.text = scrubOutputDir(result.text, outDir);
+      result.text = this._applyMemorySidecars(chatKey, result.text);
       if (isAgentKind(this.kind)) {
         this._rememberTurn(chatKey, prompt, result.text);
       }
@@ -993,6 +1008,7 @@ export class BridgeEngine {
       runId,
       collect,
     );
+    retryResult.text = this._applyMemorySidecars(chatKey, retryResult.text);
     this._rememberTurn(chatKey, prompt, retryResult.text);
     if (this.hooks.onAfterExecute) {
       await this.hooks.onAfterExecute(prompt, retryResult.text, hookContext(chatId, chatKey, bodyThreadId));
@@ -1075,6 +1091,7 @@ export class BridgeEngine {
         ...result,
         text: `⚠️ Fell back to ${fallbackModel} (${currentModel || "default"} at capacity)\n\n${result.text}`,
       };
+      finalResult.text = this._applyMemorySidecars(chatKey, finalResult.text);
       if (isAgentKind(this.kind)) {
         this._rememberTurn(chatKey, prompt, finalResult.text);
       }

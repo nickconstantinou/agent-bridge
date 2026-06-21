@@ -166,11 +166,21 @@ For agent-driven writes, the helper also supports:
 - `agent-bridge-context --memory-add-json '<json>'` — stores a validated project
   memory candidate with chat, CLI, latest-turn, repo, and confidence provenance
 
-`--memory-add-json` rejects invalid type/scope, duplicate text, transient text,
-secret-looking values, empty text, and oversized text. This gives CLI agents
-queryable access to bridge conversation history and shared project memory
-without any MCP server. The bridge prompt preamble tells agents when
-`AGENT_BRIDGE_CONTEXT_AVAILABLE=1` and how to invoke it.
+Agents may also emit a hidden post-turn sidecar in the successful response:
+
+```html
+<!-- agent-bridge-memory
+[{ "type": "decision", "scope": "project", "text": "Durable project fact." }]
+-->
+```
+
+The engine strips `agent-bridge-memory` sidecars before Telegram delivery,
+conversation persistence, and `onAfterExecute` hooks, then stores valid
+candidates. `--memory-add-json` and sidecars both reject invalid type/scope,
+duplicate text, transient text, secret-looking values, empty text, and oversized
+text. This gives CLI agents queryable access to bridge conversation history and
+shared project memory without any MCP server. The bridge prompt preamble tells
+agents when `AGENT_BRIDGE_CONTEXT_AVAILABLE=1` and how to invoke it.
 
 Project memories live in `project_memories` with an FTS5 index. Existing
 external `agent-memory` rows are imported once at bridge startup. Retrieval

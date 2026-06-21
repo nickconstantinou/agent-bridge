@@ -1,6 +1,6 @@
 # Agent-Driven Memory Broker Research
 
-Research plus implementation plan. Phases 1-3 are implemented as of
+Research plus implementation plan. Phases 1-4 are implemented as of
 2026-06-21. This document defines how Agent Bridge can move from the external
 `agent-memory` CLI toward a bridge-owned, agent-driven memory broker.
 
@@ -80,7 +80,7 @@ distinguish useful precedent from noise.
 Implemented behavior: the bridge exposes helper commands inside spawned CLI
 environments. It does not inject raw memory text by default. Agents can retrieve
 conversation-aware memories via `--memory`, narrow with `--memory-query`, and
-write durable candidates via `--memory-add-json`.
+write durable candidates via `--memory-add-json` or a post-turn sidecar.
 
 ## Proposed Architecture
 
@@ -176,8 +176,22 @@ not the user:
 $AGENT_BRIDGE_CONTEXT_COMMAND --memory-add-json '<json>'
 ```
 
-Later, the bridge can parse a hidden final-output sidecar or run a post-turn
-memory extractor.
+The bridge also parses hidden post-turn sidecars from successful agent output,
+stores valid candidates, and strips the sidecar before delivery and history
+persistence:
+
+```html
+<!-- agent-bridge-memory
+[
+  {
+    "type": "decision",
+    "scope": "project",
+    "text": "Agent Bridge memory sidecars are stripped before Telegram delivery.",
+    "confidence": 0.8
+  }
+]
+-->
+```
 
 Implemented guardrails:
 
@@ -256,8 +270,7 @@ Acceptance:
 
 ### Phase 4: Post-Turn Memory Candidate Extraction
 
-Research-first. Do not ship until retrieval and explicit agent writes are
-stable.
+Status: implemented on 2026-06-21.
 
 Options:
 
@@ -268,6 +281,13 @@ Options:
 | Bridge extractor | Bridge runs a separate post-turn summarizer | Extra LLM call, cost, latency |
 
 Recommended first production path: agent self-write with strict validation.
+
+Implemented path: structured final sidecar. The bridge does not run a separate
+LLM extractor. Agents may include `<!-- agent-bridge-memory ... -->` or
+`<agent-bridge-memory>...</agent-bridge-memory>` containing one candidate object
+or an array of candidates. The engine strips the sidecar before Telegram
+delivery, conversation persistence, and `onAfterExecute` hooks. Valid candidates
+use the same validator as `--memory-add-json`; invalid candidates are ignored.
 
 ## Non-Goals
 

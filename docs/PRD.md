@@ -162,9 +162,9 @@ This gives CLI agents queryable access to bridge conversation history without an
 
 In the unified interactive bot (switchable CLI), if all model fallbacks of the user's preferred CLI are exhausted and the bot encounters a capacity/rate-limit error (e.g. `session limit` or `resets`), it automatically:
 1. Advances to the next CLI in the preference chain (default order: `codex` → `claude` → `antigravity`, configurable via `INTERACTIVE_CLI_CHAIN` in environment variables).
-2. Updates the user's CLI preference in SQLite (`interactive_cli_preference` column in `bridge_state` table).
-3. Notifies the user of the switch and updates the Telegram commands menu to match the active CLI.
-4. Prepends a context preamble (latest compact summary + recent turns from SQLite) to the prompt and retries the execution on the fallback CLI engine.
+2. Notifies the user of the switch and updates the Telegram commands menu to match the active CLI.
+3. Prepends a context preamble (latest compact summary + recent turns from SQLite) to the prompt and retries the execution on the fallback CLI engine.
+4. After a fallback CLI successfully completes the turn, promotes that CLI into the user's SQLite preference (`interactive_cli_preference` column in `bridge_state`) so the next message starts there instead of repeatedly retrying the exhausted CLI. If every CLI is exhausted, the stored preference is left unchanged.
 
 ### 4.6 Concurrency Lock & Message Queue
 

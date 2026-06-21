@@ -273,9 +273,6 @@ export async function dispatchInteractiveWithFallback(
     if (next) {
       fallbackChain.setActiveCli(chatKey, next);
       contextPreambles.set(chatKey, fallbackChain.buildContextPreamble(chatKey));
-      // Do NOT write setUserCliPreference here — auto-fallback is temporary and must
-      // not overwrite the user's explicit preference. Each new message resets to the
-      // stored preference, allowing the 1st choice to be retried on recovery.
 
       await notify(`Switching to ${next} (${activeCli} at capacity)`);
       if (onCliSwitched) {
@@ -286,5 +283,8 @@ export async function dispatchInteractiveWithFallback(
     } else {
       await notify("All CLIs are currently unavailable. Please try again later.");
     }
+  } else if (tried.size > 1) {
+    // Persist only the CLI that actually completed the fallback turn.
+    setUserCliPreference(db, chatKey, activeCli);
   }
 }

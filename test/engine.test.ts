@@ -1046,6 +1046,89 @@ describe("BridgeEngine", () => {
       expect(afterExecute.mock.calls[0][1]).toBe("CLI execution output");
       expect(afterExecute.mock.calls[0][2]).toEqual({ chatId: 100, chatKey: "100", threadId: undefined });
     });
+
+    it("stores post-turn memory sidecars and strips them from delivery and history", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+      const runCli = vi.fn().mockResolvedValue([
+        "Visible answer.",
+        "",
+        "<!-- agent-bridge-memory",
+        JSON.stringify([
+          {
+            type: "decision",
+            scope: "project",
+            text: "Agent Bridge stores memory sidecars after successful turns.",
+            confidence: 0.81,
+          },
+        ]),
+        "-->",
+      ].join("\n"));
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          fullConfig: makeFullConfig(dbPath),
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("finish phase four")]);
+
+      const sentBody = client.sendMessage.mock.calls.at(-1)?.[0];
+      expect(sentBody.text).toContain("Visible answer.");
+      expect(sentBody.text).not.toContain("agent-bridge-memory");
+      expect(db.searchMemories("memory sidecars successful turns").some((m) => m.text.includes("memory sidecars"))).toBe(true);
+      expect(db.buildConvContext("100")).toContain("Visible answer.");
+      expect(db.buildConvContext("100")).not.toContain("agent-bridge-memory");
+    });
+
+    it("rejects secret-looking post-turn memory sidecars", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+      const runCli = vi.fn().mockResolvedValue([
+        "Visible answer.",
+        "",
+        "<!-- agent-bridge-memory",
+        JSON.stringify([
+          {
+            type: "decision",
+            scope: "project",
+            text: "API_KEY=abc123 should never become durable memory.",
+          },
+        ]),
+        "-->",
+      ].join("\n"));
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          fullConfig: makeFullConfig(dbPath),
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("finish phase four safely")]);
+
+      const sentBody = client.sendMessage.mock.calls.at(-1)?.[0];
+      expect(sentBody.text).toContain("Visible answer.");
+      expect(sentBody.text).not.toContain("agent-bridge-memory");
+      expect(db.searchMemories("API_KEY abc123")).toEqual([]);
+    });
   });
 
   describe("/compact command", () => {

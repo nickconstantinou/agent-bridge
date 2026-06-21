@@ -548,8 +548,7 @@ describe("dispatchInteractiveWithFallback", () => {
 
     expect(codex.handleCount).toBe(1);
     expect(claude.handleCount).toBe(1);
-    // DB preference stays as codex — auto-fallback is temporary, not a permanent switch
-    expect(getUserCliPreference(db, "chat:1")).toBe("codex");
+    expect(getUserCliPreference(db, "chat:1")).toBe("claude");
     expect(sentMessages).toContain("Switching to claude (codex at capacity)");
     expect(onCliSwitchedCalls).toContain("claude");
   });
@@ -568,7 +567,7 @@ describe("dispatchInteractiveWithFallback", () => {
     expect(contextPreambles.get("chat:1")).toContain("previous question");
   });
 
-  it("auto-fallback does NOT overwrite the stored DB preference", async () => {
+  it("auto-fallback promotes the successful fallback CLI into the stored DB preference", async () => {
     setUserCliPreference(db, "chat:1", "codex");
     codex.handleUpdate = async () => {
       codex.handleCount++;
@@ -577,12 +576,11 @@ describe("dispatchInteractiveWithFallback", () => {
 
     await dispatchInteractiveWithFallback({ update_id: 1, message: { text: "hello", chat: { id: 1 } } } as any, "chat:1", deps());
 
-    // onCliSwitched fires (command menu update), but DB stays as user's explicit preference
     expect(onCliSwitchedCalls).toContain("claude");
-    expect(getUserCliPreference(db, "chat:1")).toBe("codex");
+    expect(getUserCliPreference(db, "chat:1")).toBe("claude");
   });
 
-  it("second message after codex exhaustion retries codex from the stored preference", async () => {
+  it("second message after fallback starts from the promoted CLI instead of retrying the exhausted one", async () => {
     setUserCliPreference(db, "chat:1", "codex");
     codex.handleUpdate = async () => {
       codex.handleCount++;
@@ -594,12 +592,11 @@ describe("dispatchInteractiveWithFallback", () => {
     expect(codex.handleCount).toBe(1);
     expect(claude.handleCount).toBe(1);
 
-    // Codex recovers; make it succeed now
+    // Codex stays available, but the promoted preference should start with claude.
     codex.handleUpdate = async () => { codex.handleCount++; };
 
-    // Second message: DB preference is still codex, so codex is tried first and succeeds
     await dispatchInteractiveWithFallback({ update_id: 2, message: { text: "next", chat: { id: 1 } } } as any, "chat:1", deps());
-    expect(codex.handleCount).toBe(2);
-    expect(claude.handleCount).toBe(1); // claude NOT called on second message
+    expect(codex.handleCount).toBe(1);
+    expect(claude.handleCount).toBe(2);
   });
 });

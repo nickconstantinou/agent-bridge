@@ -323,7 +323,7 @@ export class BridgeEngine {
             if (commandText === "/reset") {
               const pending = this.db.dequeueMsgs(chatKey);
               for (const m of pending) this.db.deletePendingMsg(m.id);
-              this.db.clearConvHistory(chatKey);
+              this.db.setSetting(`ctx_suppress:${chatKey}`, "1");
               abortCliProcess(chatKey);
               this.db.unlock(chatKey);
             }
@@ -388,6 +388,7 @@ export class BridgeEngine {
             }
 
             this.db.addConvSummary(ck, startId, endId, summaryMd);
+            this.db.setSetting(`ctx_suppress:${ck}`, null);
             if (isAgentKind(this.kind)) db_setSession(this.db, ck, this.kind, null);
             await this.sendText(chatId, {
               text: `Context compacted. ${turns.length} turn${turns.length === 1 ? "" : "s"} summarised. Session reset — next message starts fresh, seeded with this summary.`,
@@ -575,6 +576,7 @@ export class BridgeEngine {
   }
 
   private _buildRecentContextPrompt(chatKey: string, prompt: string): string {
+    if (this.db.getSetting(`ctx_suppress:${chatKey}`)) return prompt;
     const ctx = this.db.buildConvContext(chatKey, ENGINE_CONTEXT_TURNS * 2);
     return ctx ? `${ctx}${prompt}` : prompt;
   }

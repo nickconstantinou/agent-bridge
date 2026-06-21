@@ -1229,4 +1229,73 @@ describe("BridgeEngine", () => {
       expect(capturedPrompt).not.toContain("[Agent Bridge context]");
     });
   });
+
+  describe("/reset command", () => {
+    it("preserves conversation turns and summaries after reset", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      db.addConvTurn("100", "user", "important context");
+      db.addConvSummary("100", 1, 1, "Current objective:\n- important work");
+      db.setSession("100", "claude", "existing-session");
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+      );
+
+      await engine.handleMessages([makeMessage("/reset")]);
+
+      // Data must be preserved
+      const status = db.getConvStatus("100");
+      expect(status.turnCount).toBe(1);
+      const summary = db.getLatestConvSummary("100");
+      expect(summary).not.toBeNull();
+      // Session must be cleared
+      expect(db.getSession("100", "claude")).toBeNull();
+    });
+
+    it("suppresses context injection on the prompt following a reset", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      db.addConvTurn("100", "user", "prior context");
+      db.addConvSummary("100", 1, 1, "Current objective:\n- prior work");
+
+      let capturedPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompt = args[args.length - 1];
+        return "done";
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("/reset")]);
+      await engine.handleMessages([makeMessage("hello after reset")]);
+
+      // Summary must NOT be injected into the first prompt after reset
+      expect(capturedPrompt).not.toContain("Current objective:");
+      expect(capturedPrompt).toContain("hello after reset");
+    });
+  });
 });

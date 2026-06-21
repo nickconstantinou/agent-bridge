@@ -57,4 +57,11 @@ describe("systemd templates", () => {
     expect(deployment).toContain("NODE_BIN=${NODE_BIN}");
     expect(deployment).toContain('"${NODE_BIN}" ./node_modules/tsx/dist/cli.mjs');
   });
+
+  it("deployment update mode skips npm build when package has no build script", () => {
+    const deployment = readFileSync(new URL("../scripts/install-deployment.sh", import.meta.url), "utf8");
+
+    expect(deployment).toContain("npm run | grep -q");
+    expect(deployment).toContain("[update] No build script; skipping build");
+  });
 });

@@ -968,6 +968,14 @@ describe("BridgeDb project memories", () => {
     expect(results).toEqual([]);
   });
 
+  it("searchMemories expands bridge vocabulary synonyms", () => {
+    db.addMemory({ id: "mem_test_syn1", type: "decision", scope: "project", text: "chunked map-reduce compaction handles large histories" });
+    db.addMemory({ id: "mem_test_syn2", type: "decision", scope: "project", text: "context helper exposes recent conversation turns" });
+
+    expect(db.searchMemories("summaries").some((m) => m.id === "mem_test_syn1")).toBe(true);
+    expect(db.searchMemories("history affordance").some((m) => m.id === "mem_test_syn2")).toBe(true);
+  });
+
   it("getMemoryCount returns 0 on fresh DB, increments after add", () => {
     expect(db.getMemoryCount()).toBe(0);
     db.addMemory({ id: "mem_test3", type: "decision", scope: "project", text: "bridge is stable" });

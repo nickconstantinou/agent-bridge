@@ -107,4 +107,59 @@ describe("agent-bridge-context helper", () => {
       rmSync(path, { force: true });
     }
   });
+
+  it("--memory-add-json stores a valid project memory for the current chat", () => {
+    const { db, path } = makeDb();
+    try {
+      const output = renderAgentBridgeContext([
+        "--memory-add-json",
+        JSON.stringify({
+          type: "decision",
+          scope: "project",
+          text: "Agent-driven memory writes use validated JSON candidates.",
+          confidence: 0.8,
+        }),
+      ], {
+        AGENT_BRIDGE_CONTEXT_DB: path,
+        AGENT_BRIDGE_CHAT_KEY: "chat:1",
+        AGENT_BRIDGE_CLI_KIND: "codex",
+      });
+
+      expect(output).toContain("Memory stored");
+      expect(db.searchMemories("validated JSON candidates").at(0)?.text).toContain("Agent-driven memory writes");
+    } finally {
+      db.close();
+      rmSync(path, { force: true });
+    }
+  });
+
+  it("--memory-add-json rejects duplicates and secret-looking text", () => {
+    const { db, path } = makeDb();
+    try {
+      const env = {
+        AGENT_BRIDGE_CONTEXT_DB: path,
+        AGENT_BRIDGE_CHAT_KEY: "chat:1",
+        AGENT_BRIDGE_CLI_KIND: "codex",
+      };
+      const candidate = JSON.stringify({
+        type: "decision",
+        scope: "project",
+        text: "Duplicate durable memory candidate.",
+      });
+
+      expect(renderAgentBridgeContext(["--memory-add-json", candidate], env)).toContain("Memory stored");
+      expect(renderAgentBridgeContext(["--memory-add-json", candidate], env)).toContain("duplicate");
+      expect(db.getMemoryCount()).toBe(1);
+
+      const rejected = renderAgentBridgeContext([
+        "--memory-add-json",
+        JSON.stringify({ type: "decision", scope: "project", text: "API_KEY=abc123 should not be stored" }),
+      ], env);
+      expect(rejected).toContain("rejected");
+      expect(db.getMemoryCount()).toBe(1);
+    } finally {
+      db.close();
+      rmSync(path, { force: true });
+    }
+  });
 });

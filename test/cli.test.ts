@@ -730,4 +730,14 @@ describe("/context command", () => {
     expect(result?.kind).toBe("message");
     expect(result?.text).toContain("1 turn");
   });
+
+  it("nudges users to compact when stored turns are high", () => {
+    const db = openDb(":memory:");
+    for (let i = 0; i < 101; i++) {
+      db.addConvTurn("chat:1", "user", `turn ${i}`);
+    }
+    const result = handleCommand("claude", "/context", { db, chatId: "chat:1", config: stubConfig });
+    expect(result?.kind).toBe("message");
+    expect(result?.text).toContain("High turn count - consider /compact");
+  });
 });

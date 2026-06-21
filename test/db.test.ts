@@ -192,6 +192,38 @@ describe("BridgeDb session TTL", () => {
   });
 });
 
+describe("BridgeDb conversation startup pruning", () => {
+  it("openDb prunes only turns already covered by compact summaries", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agent-bridge-conv-prune-"));
+    const dbPath = join(dir, "bridge.sqlite");
+    try {
+      const first = openDb(dbPath);
+      first.addConvTurn("chat:1", "user", "covered one");
+      first.addConvTurn("chat:1", "assistant", "covered two");
+      first.addConvTurn("chat:1", "user", "uncovered three");
+      first.addConvTurn("chat:2", "user", "never summarized");
+      const raw = (first as any).raw as import("better-sqlite3").Database;
+      const coveredEnd = (raw
+        .prepare(`SELECT id FROM conversation_turns WHERE chat_key = ? AND text = ?`)
+        .get("chat:1", "covered two") as any).id;
+      first.addConvSummary("chat:1", 1, coveredEnd, "Summary for covered turns.");
+      first.close();
+
+      const reopened = openDb(dbPath);
+      const remaining = ((reopened as any).raw as import("better-sqlite3").Database)
+        .prepare(`SELECT chat_key, text FROM conversation_turns ORDER BY id`)
+        .all() as Array<{ chat_key: string; text: string }>;
+      expect(remaining).toEqual([
+        { chat_key: "chat:1", text: "uncovered three" },
+        { chat_key: "chat:2", text: "never summarized" },
+      ]);
+      reopened.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("Per-topic session isolation", () => {
   it("composite chat:thread key isolates sessions between forum topics", () => {
     db.setSession("100:10", "antigravity", "s-topic-10");

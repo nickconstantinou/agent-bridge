@@ -8,8 +8,6 @@ import { reduce as reduceEvents } from "./events/reducer.js";
 import { runViewToTelegramText } from "./events/telegramAdapter.js";
 import {
   documentFallbackEnabled,
-  flattenMarkdownTablesToCards,
-  markdownTableToRichHtml,
   richMessagesEnabled,
   routeNativeLayout,
 } from "./nativeLayout.js";
@@ -98,9 +96,7 @@ export async function sendTelegramMessage({
         chat_id: chatId,
         ...rest,
         rich_message: {
-          html: telegramMarkdownIrEnabled()
-            ? renderMarkerString(parseMarkdownToIR(text), TELEGRAM_RICH_HTML_MARKERS)
-            : markdownTableToRichHtml(text),
+          html: renderMarkerString(parseMarkdownToIR(text), TELEGRAM_RICH_HTML_MARKERS),
         },
       });
       return;
@@ -114,7 +110,7 @@ export async function sendTelegramMessage({
       await client.sendMessage({
         chat_id: chatId,
         ...rest,
-        text: flattenMarkdownTablesToCards(text),
+        text: renderMarkerString(parseMarkdownToIR(text), TELEGRAM_HTML_MARKERS),
         parse_mode: "HTML",
         disable_web_page_preview: true,
       });

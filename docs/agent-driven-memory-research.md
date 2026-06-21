@@ -250,13 +250,22 @@ Recommended first production path: agent self-write with strict validation.
 - Do not delete the external `agent-memory` DB until import/export parity exists.
 - Do not add embeddings on the first pass.
 
-## Open Questions
+## Decisions
 
-- Should project memory live in each bot DB or one shared bridge DB path?
-- Should Discord and Telegram share memory scope by repo path, channel, or both?
-- Should accepted memory candidates be visible to the user in a short audit line?
-- What is the minimum viable secret detector for first release?
-- How should superseded memories be hidden without deleting audit history?
+- Project memory should live in one shared bridge-owned DB path. Bot-specific
+  DBs should keep transport and runtime state, not independent memory copies.
+- Discord and Telegram should share project memory by repo path. `chatKey`,
+  channel, platform, and CLI kind should be stored as provenance metadata and
+  optional filters, not the default isolation boundary.
+- Accepted memory candidates should produce a short user-visible audit line,
+  for example: `Memory: stored 1 decision, rejected 1 duplicate`. Default
+  output should stay count-only unless a verbose/debug mode is requested.
+- The first secret detector should combine precise regexes, a denylist, and
+  entropy checks. It should reject obvious API keys, tokens, private keys,
+  password assignments, `.env`-style secrets, and long high-entropy strings.
+- Superseded memories should stay in the DB for audit history but be hidden
+  from default retrieval. Add an explicit `--include-superseded` path for
+  inspection and migration checks.
 
 ## Verification Plan
 
@@ -268,4 +277,3 @@ Recommended first production path: agent self-write with strict validation.
   - agent retrieves relevant memory through helper
   - agent stores a new durable implementation decision
   - next CLI can retrieve it without external `agent-memory`
-

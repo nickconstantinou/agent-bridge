@@ -368,6 +368,34 @@ describe("sendTelegramMessage rendering", () => {
     });
   });
 
+  it("renders standard markdown in rich messages even when the IR env flag is absent", async () => {
+    await withEnv({ TELEGRAM_RICH_MESSAGES_ENABLED: "true", TELEGRAM_MARKDOWN_IR_ENABLED: undefined }, async () => {
+      const client = {
+        ...createMockClient(),
+        sendRichMessage: vi.fn(async (body: any) => ({ ok: true, result: { message_id: 778, ...body } })),
+      } as any as TelegramClient;
+
+      await sendTelegramMessage({
+        client,
+        kind: "interactive",
+        chatId: 123,
+        body: { text: "**Bold**\n```text\nhello\n```" },
+      });
+
+      expect(client.sendRichMessage).toHaveBeenCalledWith(expect.objectContaining({
+        chat_id: 123,
+        rich_message: expect.objectContaining({
+          html: expect.stringContaining("<b>Bold</b>"),
+        }),
+      }));
+      const richHtml = (client.sendRichMessage as any).mock.calls[0][0].rich_message.html;
+      expect(richHtml).toContain("<pre>hello</pre>");
+      expect(richHtml).not.toContain("**Bold**");
+      expect(richHtml).not.toContain("```");
+      expect(client.sendMessage).not.toHaveBeenCalled();
+    });
+  });
+
   it("falls back to flattened Telegram HTML when rich message delivery fails", async () => {
     await withEnv({ TELEGRAM_RICH_MESSAGES_ENABLED: "true", TELEGRAM_MARKDOWN_IR_ENABLED: undefined }, async () => {
       const client = {

@@ -65,4 +65,12 @@ describe("systemd templates", () => {
     expect(deployment).toContain("npm run | grep -q");
     expect(deployment).toContain("[update] No build script; skipping build");
   });
+
+  it("deployment backfills Telegram Markdown IR defaults for interactive renderers", () => {
+    const deployment = readFileSync(new URL("../scripts/install-deployment.sh", import.meta.url), "utf8");
+
+    expect(deployment).toContain("ensure_markdown_ir_default");
+    expect(deployment).toContain("ensure_markdown_ir_default /etc/default/agent-bridge-interactive");
+    expect(deployment).toContain("ensure_markdown_ir_default /etc/default/agent-bridge-discord-interactive");
+  });
 });

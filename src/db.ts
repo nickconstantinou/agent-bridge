@@ -253,7 +253,7 @@ export function openDb(dbPath: string): BridgeDb {
   } catch (err) { console.warn('[db] approvals FK migration failed:', err); }
 
   // ── Conversation persistence (2026-06-20) ────────────────────────────────
-  // TODO: add TTL/pruning for conversation_turns and conversation_summaries — currently grow unboundedly
+  // conversation_turns are pruned post-/compact via pruneConvTurns(). Summaries are tiny and kept forever.
   try {
     raw.exec(`
       CREATE TABLE IF NOT EXISTS conversation_turns (

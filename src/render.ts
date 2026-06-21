@@ -177,6 +177,41 @@ export function renderTelegramEntitiesFromIR(ir: IRNode[]): { text: string; enti
     length += value.length;
   };
 
+  const pushSpans = (text: string) => {
+    let i = 0;
+    let buf = "";
+    const flushBuf = () => { if (buf) { push(buf); buf = ""; } };
+    while (i < text.length) {
+      if (text.startsWith("**", i)) {
+        const end = text.indexOf("**", i + 2);
+        if (end > i + 2) {
+          flushBuf();
+          const start = length;
+          const inner = text.slice(i + 2, end);
+          push(inner);
+          entities.push({ type: "bold", offset: start, length: inner.length });
+          i = end + 2;
+          continue;
+        }
+      }
+      if (text[i] === "`") {
+        const end = text.indexOf("`", i + 1);
+        if (end > i) {
+          flushBuf();
+          const start = length;
+          const inner = text.slice(i + 1, end);
+          push(inner);
+          entities.push({ type: "code", offset: start, length: inner.length });
+          i = end + 1;
+          continue;
+        }
+      }
+      buf += text[i]!;
+      i += 1;
+    }
+    flushBuf();
+  };
+
   for (let idx = 0; idx < ir.length; idx++) {
     const node = ir[idx];
     const isLast = idx === ir.length - 1;
@@ -224,10 +259,11 @@ export function renderTelegramEntitiesFromIR(ir: IRNode[]): { text: string; enti
       }
       if (!isLast) push("\n");
     } else if (node.type === "list") {
-      const listText = node.ordered
-        ? node.items.map((item, idx) => `${idx + 1}. ${item}`).join("\n")
-        : node.items.map((item) => `- ${item}`).join("\n");
-      push(listText);
+      node.items.forEach((item, idx) => {
+        push(node.ordered ? `${idx + 1}. ` : `- `);
+        pushSpans(item);
+        if (idx < node.items.length - 1) push("\n");
+      });
       if (!isLast) push("\n");
     }
   }

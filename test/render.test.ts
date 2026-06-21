@@ -104,6 +104,30 @@ describe("renderTelegramEntitiesFromIR", () => {
     });
   });
 
+  it("renders bold inside an unordered list item as a bold entity", () => {
+    const ir = parseMarkdownToIR("- **bold** item\n- plain item");
+    const result = renderTelegramEntitiesFromIR(ir);
+    expect(result.text).toBe("- bold item\n- plain item");
+    expect(result.entities).toEqual([{ type: "bold", offset: 2, length: 4 }]);
+  });
+
+  it("renders inline code inside a list item as a code entity", () => {
+    const ir = parseMarkdownToIR("- run `npm test` now");
+    const result = renderTelegramEntitiesFromIR(ir);
+    expect(result.text).toBe("- run npm test now");
+    expect(result.entities).toEqual([{ type: "code", offset: 6, length: 8 }]);
+  });
+
+  it("renders inline spans in ordered list items with correct offsets", () => {
+    const ir = parseMarkdownToIR("1. **first** item\n2. second `code`");
+    const result = renderTelegramEntitiesFromIR(ir);
+    expect(result.text).toBe("1. first item\n2. second code");
+    expect(result.entities).toEqual([
+      { type: "bold", offset: 3, length: 5 },
+      { type: "code", offset: 24, length: 4 },
+    ]);
+  });
+
   it("renders a table as a card list with bold header entities", () => {
     const ir = parseMarkdownToIR("| Name | Age |\n| --- | --- |\n| Alice | 30 |\n| Bob | 25 |");
     const result = renderTelegramEntitiesFromIR(ir);

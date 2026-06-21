@@ -11,6 +11,8 @@ import type { BridgeDb } from "./db.js";
 import { buildModelKeyboard, buildModelsText } from "./bridge.js";
 import { listLocalCatalog } from "./skills.js";
 
+const CONTEXT_COMPACT_NUDGE_TURNS = 100;
+
 export type CommandResult =
   | { kind: "message"; text: string }
   | { kind: "keyboard_message"; text: string; reply_markup: any }
@@ -177,6 +179,9 @@ export function handleCommand(
     if (summary) {
       const turnsSince = db.getRecentConvTurns(chatId, 1000, summary.range_end_turn_id).length;
       lines.push(`Turns since last compact: ${turnsSince}`);
+    }
+    if (status.turnCount > CONTEXT_COMPACT_NUDGE_TURNS) {
+      lines.push("High turn count - consider /compact");
     }
     return { kind: "message", text: lines.join("\n") };
   }

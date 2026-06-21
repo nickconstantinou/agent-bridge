@@ -289,6 +289,14 @@ export function openDb(dbPath: string): BridgeDb {
       CREATE INDEX IF NOT EXISTS idx_conv_summaries_chat_key ON conversation_summaries(chat_key, id);
     `);
   } catch { /* tables already exist on upgraded DBs */ }
+  raw.exec(`
+    DELETE FROM conversation_turns
+    WHERE id <= COALESCE((
+      SELECT MAX(range_end_turn_id)
+      FROM conversation_summaries
+      WHERE chat_key = conversation_turns.chat_key
+    ), 0)
+  `);
 
   // Clear any locks left held from a previous process that was killed mid-execution
   raw.exec(`UPDATE bridge_state SET active_execution_lock = 0 WHERE active_execution_lock = 1`);

@@ -114,7 +114,7 @@ Every user message and assistant response is persisted to SQLite in `conversatio
 5. Prunes raw turns up to `endId` via `pruneConvTurns` — keeps storage bounded.
 6. Clears the `ctx_suppress` flag and the CLI session — next prompt starts a fresh CLI seeded with the new summary.
 
-**`/context`** — Reports current conversation state: turn count, pending queue depth, last turn timestamp, and last compact time. Reads from `getConvStatus` and `getLatestConvSummary`.
+**`/context`** — Reports current conversation state: turn count, pending queue depth, last turn timestamp, and last compact time. Reads from `getConvStatus` and `getLatestConvSummary`. If stored turns exceed 100, it appends `High turn count - consider /compact`.
 
 **`/reset`** — Preserves conversation data but suppresses context injection. Sets a `ctx_suppress:<chatKey>` flag in the `settings` table and clears the CLI session. The next prompt starts a fresh CLI with no history preamble. The `ctx_suppress` flag is automatically cleared when `/compact` runs.
 
@@ -283,7 +283,7 @@ CREATE TABLE conversation_summaries (
 );
 ```
 
-> Note: `conversation_turns` are pruned after each successful `/compact` (rows up to `range_end_turn_id` deleted). `conversation_summaries` are small (< 1 KB each) and kept indefinitely.
+> Note: `conversation_turns` are pruned after each successful `/compact` (rows up to `range_end_turn_id` deleted). Startup also performs the same summary-gated cleanup for any already-summarized turns left behind by an interrupted process. Unsummarized turns are never TTL-deleted. `conversation_summaries` are small (< 1 KB each) and kept indefinitely.
 
 ---
 
@@ -411,7 +411,7 @@ isolated from each other while sharing the same CLI backend code.
 ## 11. Known Limitations
 
 - CLI sessions are provider thread IDs — bridge conversation history (turns/summaries) is separate and bridge-owned
-- `conversation_turns` are pruned post-compact; `conversation_summaries` are retained indefinitely (small footprint)
+- `conversation_turns` are pruned post-compact and at startup only when already covered by `conversation_summaries`; unsummarized history is retained
 - Sync path (`BRIDGE_ASYNC_ENABLED=false`) available but not the default
 - `abortCliProcess` SIGKILLs the top-level process only (not the full process group)
 - Antigravity model switching is applied by mutating `~/.gemini/antigravity-cli/settings.json`; concurrent interactive Agy sessions (if any) would see the same setting

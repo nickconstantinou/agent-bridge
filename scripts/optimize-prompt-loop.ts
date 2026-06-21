@@ -131,14 +131,14 @@ const DEFAULT_DATASET: DatasetCase[] = [
   {
     id: "memory-search",
     userRequest: [
-      "Explain the agent-memory search limitation we found and the safest next implementation step.",
+      "Explain the bridge memory search limitation we found and the safest next implementation step.",
       "Keep it Telegram-short.",
     ].join("\n"),
     expectedFacts: [
-      "memories_fts exists",
-      "recall currently uses LIKE",
-      "switch recall/search to FTS5 MATCH",
-      "keep SQLite CLI",
+      "project_memories_fts exists",
+      "retrieval is lexical",
+      "improve ranking/synonym expansion before vectors",
+      "keep bridge-owned SQLite",
     ],
   },
   {

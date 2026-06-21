@@ -1,8 +1,8 @@
 # Agent-Driven Memory Broker Research
 
 Research plus implementation plan. Phases 1-4 are implemented as of
-2026-06-21. This document defines how Agent Bridge can move from the external
-`agent-memory` CLI toward a bridge-owned, agent-driven memory broker.
+2026-06-21. Agent Bridge has moved from the external memory CLI to a
+bridge-owned, agent-driven memory broker.
 
 ## Goal
 
@@ -16,11 +16,8 @@ dedicated table, retrieval path, and write policy.
 
 ## Current State
 
-`agent-memory` is a shell-callable SQLite CLI at:
-
-```text
-/home/content-crawler/.agent-bridge/shared-memory/agent-memory.sqlite
-```
+The old shell-callable SQLite memory CLI has been migrated into bridge-owned
+`project_memories` and removed from the active code path.
 
 Observed audit on 2026-06-21:
 
@@ -46,8 +43,8 @@ Retrieval probes:
 
 The current memory layer depends on agent discipline:
 
-- Agents must remember to call `agent-memory recall`.
-- Agents must decide when to call `agent-memory add`.
+- Agents previously had to remember to call a separate memory CLI.
+- Agents previously had to decide manually when to write memory.
 - Retrieval is keyword-sensitive, not semantic.
 - Memory is not automatically scoped to the current conversation.
 - Type names drift (`bug_fix` vs `bugfix`).
@@ -212,7 +209,7 @@ Status: implemented on 2026-06-21.
 Red -> green requirements:
 
 - Add `project_memories` schema beside existing bridge DB tables.
-- Add import/migration from existing `agent-memory` DB.
+- Import/migrate existing memory rows before removing the old CLI.
 - Add read-only context helper flags:
   - `--memory`
   - `--memory-query <query>`
@@ -294,7 +291,7 @@ use the same validator as `--memory-add-json`; invalid candidates are ignored.
 - Do not replace `/compact`; it remains chat continuity.
 - Do not inject global top memories into every prompt.
 - Do not store secrets, tokens, private personal details, or raw long logs.
-- Do not delete the external `agent-memory` DB until import/export parity exists.
+- Keep memory inside bridge-owned SQLite tables after migration.
 - Do not add embeddings on the first pass.
 
 ## Decisions
@@ -323,4 +320,4 @@ use the same validator as `--memory-add-json`; invalid candidates are ignored.
   - ask about fallback CLI promotion
   - agent retrieves relevant memory through helper
   - agent stores a new durable implementation decision
-  - next CLI can retrieve it without external `agent-memory`
+  - next CLI can retrieve it without any external memory CLI

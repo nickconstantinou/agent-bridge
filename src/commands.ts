@@ -1,9 +1,9 @@
 /**
- * PURPOSE: Telegram bot commands routing and utility generation (e.g. models selection and memory smoke tests).
+ * PURPOSE: Telegram bot commands routing and utility generation.
  * INPUTS: Chat messages and bot kind, configuration, and database instances.
  * OUTPUTS: A CommandResult specifying messages to send or prompt execution overrides.
  * NEIGHBORS: src/index.ts, src/bridge.ts, src/types.ts
- * LOGIC: Normalizes user commands and routes "/start", "/reset", "/models", "/skills", "/memory" to appropriate action structures.
+ * LOGIC: Normalizes user commands and routes "/start", "/reset", "/models", "/skills" to appropriate action structures.
  */
 
 import type { BridgeConfig } from "./types.js";
@@ -20,7 +20,7 @@ export type CommandResult =
   | { kind: "codex_usage" }
   | { kind: "compact"; chatKey: string };
 
-const bridgeCommands = new Set(["/start", "/reset", "/models", "/skills", "/memory", "/usage", "/narration", "/compact", "/context"]);
+const bridgeCommands = new Set(["/start", "/reset", "/models", "/skills", "/usage", "/narration", "/compact", "/context"]);
 
 function normalizeCommand(text: string): string {
   const [command] = String(text || "").trim().toLowerCase().split(/\s+/, 1);
@@ -67,20 +67,6 @@ function handleNarrationCommand(kind: "codex" | "antigravity" | "claude", text: 
       ? "Agy narration is visible. STATUS updates may appear while Antigravity works."
       : "Agy narration is hidden. STATUS updates only refresh typing.",
   };
-}
-
-function buildMemorySmokePrompt(kind: "codex" | "antigravity" | "claude"): string {
-  return [
-    `Run a shared memory smoke test for the ${kind} bridge session.`,
-    `Use the local agent-memory CLI from the shell if needed.`,
-    `1. Run agent-memory recall with a query relevant to agent-bridge.`,
-    `2. Do not write or modify memory during this test.`,
-    `3. Reply in exactly this format:`,
-    `MEMORY_AVAILABLE: yes|no`,
-    `TOOL_USED: <tool-name-or-none>`,
-    `RESULT_SUMMARY: <short summary>`,
-    `ERROR: <none-or-short error>`,
-  ].join("\n");
 }
 
 function buildSkillsText(): string {
@@ -137,13 +123,6 @@ export function handleCommand(
     return {
       kind: "message",
       text: buildSkillsText(),
-    };
-  }
-
-  if (text === "/memory") {
-    return {
-      kind: "execute",
-      prompt: buildMemorySmokePrompt(kind),
     };
   }
 

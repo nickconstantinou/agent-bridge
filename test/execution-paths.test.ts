@@ -77,11 +77,12 @@ describe("Idle Timeout Config", () => {
     }
   });
 
-  it("install script runs shared-memory setup as the target user instead of the sudo home", async () => {
+  it("install script no longer runs legacy shared-memory setup", async () => {
     const fs = await import("fs");
     const installScript = fs.readFileSync("scripts/install.sh", "utf-8");
     expect(installScript).toContain('TARGET_USER="${SUDO_USER:-${USER}}"');
-    expect(installScript).toContain('SHARED_MEMORY_HOME="${TARGET_HOME}"');
+    expect(installScript).not.toContain("setup-shared-memory");
+    expect(installScript).not.toContain("AGENT_MEMORY_DB_PATH");
     expect(installScript).toContain('sudo -u "${TARGET_USER}"');
   });
 

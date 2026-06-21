@@ -67,56 +67,17 @@ All future path-related changes must be machine agnostic. Prefer explicit enviro
 
 ## Shared Memory
 
-The bridge utilizes two tiers of shared memory for agents to maintain context across tasks and sessions:
+Agent Bridge uses bridge-owned project memory in SQLite. Spawned agents receive
+`AGENT_BRIDGE_CONTEXT_COMMAND` when memory is available.
 
-### 1. Persistent memory (`agent-memory`)
-A local shell-callable CLI named `agent-memory` backed by SQLite. Used by agents to store project-specific decisions, architecture context, conventions, and outstanding tasks.
+Use:
 
-- **Default SQLite path**: `$HOME/.agent-bridge/shared-memory/agent-memory.sqlite`
-- **Wrapper command**: `$HOME/.local/bin/agent-memory`
-- **Managed configs**:
-  - `~/AGENTS.md`
-  - `~/GEMINI.md`
-  - `~/CLAUDE.md`
-
-#### Handshake & Rules:
-- Before making architectural decisions or modifying important behaviour, run:
-  ```bash
-  agent-memory recall --query "<short query>" --scope project --limit 10
-  ```
-- When learning a durable fact, bug fix, or convention, save it:
-  ```bash
-  agent-memory add --type decision --scope project --text "<concise memory>"
-  ```
-- Do not save secrets, passwords, transient logs, or private data.
-
-### 2. Shared Knowledge Graph (`knowledge-graph`)
-A shared SQLite database used for durable observations and context queries across the workspace.
-
-- **Shared SQLite path**: `$HOME/.agent-bridge/shared-memory/knowledgegraph.sqlite`
-- **Rules & conventions**:
-  - Use `search_knowledge` at the start of each task when prior project context may matter.
-  - Always include `project_id: "server"` when reading or writing shared memory.
-  - Record durable project facts and architectural decisions with `add_observations`.
-  - Do not store ephemeral chat noise or temporary brainstorm notes.
-
----
-
-### Setup & Administration
-
-#### Bootstrap:
 ```bash
-npm run setup:shared-memory
-```
-Run this as the target user, not with `sudo`. The setup script writes the `agent-memory` wrapper and updates the instruction files to write the memory handshake prompts as a managed markdown block so they can be updated without replacing other home-level configs.
-
-#### Verify:
-```bash
-npm run verify:shared-memory
+"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-query "<short query>"
+"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-add-json '<json>'
 ```
 
-#### Smoke test:
-Send the `/memory` slash command to the bridged agent. This asks the agent to run a live CLI path check on `agent-memory` and report if the tools are accessible.
+Do not save secrets, passwords, transient logs, or private data.
 
 ---
 

@@ -76,7 +76,7 @@ seed_from_env_file() {
               CODEX_PROJECT_DIR ANTIGRAVITY_PROJECT_DIR CLAUDE_PROJECT_DIR \
               AGENT_BRIDGE_SKILLS AGENT_BRIDGE_SKILL_LINK_MODE \
               BRIDGE_EXECUTION_MODE POLL_INTERVAL_MS FETCH_TIMEOUT_MS \
-              AGENT_MEMORY_DB_PATH AGENT_BRIDGE_SOUL_PATH AGENT_BRIDGE_SOUL_MODE \
+              AGENT_BRIDGE_SOUL_PATH AGENT_BRIDGE_SOUL_MODE \
               HEALTH_MONITOR_ENABLED HEALTH_MONITOR_CADENCE_SECONDS HEALTH_MONITOR_AUTONOMY \
               HEALTH_MONITOR_CHAT_ID HEALTH_SUGGEST_BOT \
               HEALTH_CONTENT_CRAWLER_ENABLED HEALTH_CONTENT_CRAWLER_SCRIPT \
@@ -180,7 +180,6 @@ prompt AGENT_BRIDGE_SKILLS "Bundled skills to install (comma-separated, none = s
 prompt AGENT_BRIDGE_SKILL_LINK_MODE "Shared skill link mode (symlink|copy)" "symlink"
 prompt BRIDGE_EXECUTION_MODE "Execution mode (safe|trusted)" "trusted"
 prompt POLL_INTERVAL_MS      "Poll interval ms"               "1000"
-prompt AGENT_MEMORY_DB_PATH  "Agent memory DB path (blank = default)" ""
 prompt HEALTH_MONITOR_ENABLED         "Enable health monitoring (true|false)"   "false"
 prompt HEALTH_MONITOR_CADENCE_SECONDS "Health check cadence (seconds)"           "3600"
 prompt HEALTH_MONITOR_AUTONOMY        "Health autonomy (report|suggest|auto)"    "report"
@@ -265,12 +264,6 @@ if [[ "${SKIP_CLI_INSTALL}" != "1" ]]; then
     CODEX_COMMAND="${CODEX_COMMAND:-$(resolve_binary codex)}"
     ANTIGRAVITY_COMMAND="${ANTIGRAVITY_COMMAND:-$(resolve_binary agy)}"
     CLAUDE_COMMAND="${CLAUDE_COMMAND:-$(resolve_binary claude)}"
-    if [[ "${USER}" == "${TARGET_USER}" ]]; then
-      (cd "${REPO_DIR}" && SHARED_MEMORY_HOME="${TARGET_HOME}" "${NODE_BIN}" ./node_modules/tsx/dist/cli.mjs scripts/setup-shared-memory.ts)
-    else
-      sudo -u "${TARGET_USER}" env HOME="${TARGET_HOME}" SHARED_MEMORY_HOME="${TARGET_HOME}" NODE_BIN="${NODE_BIN}" \
-        bash -lc "cd \"${REPO_DIR}\" && \"${NODE_BIN}\" ./node_modules/tsx/dist/cli.mjs scripts/setup-shared-memory.ts"
-    fi
     install_shared_skills
   fi
 elif [[ -n "${AGENT_BRIDGE_SKILLS:-}" ]]; then
@@ -308,7 +301,6 @@ _write_shared_defaults() {
     echo "BRIDGE_ASYNC_ENABLED=true"
     echo "POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-1000}"
     echo "FETCH_TIMEOUT_MS=${FETCH_TIMEOUT_MS:-45000}"
-    [[ -n "${AGENT_MEMORY_DB_PATH:-}" ]] && echo "AGENT_MEMORY_DB_PATH=${AGENT_MEMORY_DB_PATH}"
     [[ -n "${AGENT_BRIDGE_SOUL_PATH:-}" ]]  && echo "AGENT_BRIDGE_SOUL_PATH=${AGENT_BRIDGE_SOUL_PATH}"
     [[ -n "${AGENT_BRIDGE_SOUL_MODE:-}" ]]  && echo "AGENT_BRIDGE_SOUL_MODE=${AGENT_BRIDGE_SOUL_MODE}"
     echo "HEALTH_MONITOR_ENABLED=${HEALTH_MONITOR_ENABLED:-false}"
@@ -403,7 +395,6 @@ sudo systemctl enable --now ${UNITS_TO_ENABLE}
 
 echo "Installed and started: ${UNITS_TO_ENABLE}"
 echo "Defaults written to ${DEFAULTS_DIR}/"
-echo "Shared local memory configured for codex, antigravity, and claude"
 if [[ -n "${AGENT_BRIDGE_SKILLS:-}" && "${AGENT_BRIDGE_SKILLS}" != "none" && "${AGENT_BRIDGE_SKILLS}" != "skip" ]]; then
   echo "Shared skills installed: ${AGENT_BRIDGE_SKILLS}"
 fi

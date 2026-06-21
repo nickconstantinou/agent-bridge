@@ -182,8 +182,7 @@ text. This gives CLI agents queryable access to bridge conversation history and
 shared project memory without any MCP server. The bridge prompt preamble tells
 agents when `AGENT_BRIDGE_CONTEXT_AVAILABLE=1` and how to invoke it.
 
-Project memories live in `project_memories` with an FTS5 index. Existing
-external `agent-memory` rows are imported once at bridge startup. Retrieval
+Project memories live in `project_memories` with an FTS5 index. Retrieval
 normalizes punctuation, hyphens, simple plural/singular variants, and bridge
 vocabulary synonyms such as compact/summary, fallback/switch/promotion, and
 context/history.
@@ -333,7 +332,7 @@ src/
 ├── compactSummary.ts   — chunkCompactTurns, buildCompactSummaryPrompt, buildCompactReducePrompt, buildTombstone, compact constants
 ├── contextCommand.ts   — renderAgentBridgeContext: read-only DB helper for agent CLI access
 ├── timeouts.ts         — Timeout resolution (per-bot prefix → global → default)
-└── agentMemory.ts      — agent-memory DB path resolution
+└── projectMemory.ts    — guarded bridge-owned project memory validation
 
 bin/
 └── agent-bridge-context  — Shell wrapper: invokes contextCommand.ts via tsx (read-only agent helper)

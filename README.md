@@ -40,7 +40,7 @@ Interactive requests stream responses back to the chat. Background worker jobs r
 - **Agy stall detection** — monitors Antigravity log files for planner loops (`PlannerResponse without ModifiedResponse encountered`) and aborts execution early to prevent infinite churn
 - **Session TTL** — sessions older than 7 days are automatically cleared on startup to prevent stale resume loops
 - **Orphan and restart recovery** — kills leftover CLI subprocesses from previous runs on boot, transitions interrupted SQLite runs to `failed`, and notifies active Telegram/Discord chats to resume using `provide update` or `continue`
-- **Shared memory CLI** — local `agent-memory` commands store and recall durable project facts in SQLite
+- **Bridge-owned project memory** — conversation-aware memory retrieval and guarded agent writes through `AGENT_BRIDGE_CONTEXT_COMMAND`
 - **Shared skills installer** — optional SDLC skills can be installed across Codex, Antigravity, and Claude Code
 - **SOUL.md design** — proposed bridge-level persona contract for consistent voice, values, boundaries, and workflow across agents
 - **Rate limit handling** — automatic retry on Telegram 429 responses
@@ -64,7 +64,6 @@ Interactive requests stream responses back to the chat. Background worker jobs r
 **Recommended — let the installer generate env files:**
 
 ```bash
-npm run setup:shared-memory
 sudo bash scripts/install.sh
 ```
 
@@ -85,7 +84,6 @@ cp .env.interactive.example .env.interactive
 cp .env.worker.example .env.worker
 cp .env.discord.example .env.discord
 cp .env.discord-interactive.example .env.discord-interactive
-npm run setup:shared-memory
 ```
 
 Then fill in the relevant token(s) and paths in each file:
@@ -99,8 +97,7 @@ Then fill in the relevant token(s) and paths in each file:
 - `*_COMMAND` — absolute path to each CLI binary (use `which codex`, `which agy`, `which claude`)
 - `*_PROJECT_DIR` — working directory passed to the CLI (optional; defaults to `BRIDGE_PROJECT_DIR`)
 - `INTERACTIVE_CLI_CHAIN` / `WORKER_CLI_CHAIN` — CLI fallback order for unified and worker services
-- Shared memory instructions are written to `~/AGENTS.md`, `~/ANTIGRAVITY.md`, and `~/CLAUDE.md`
-- `agent-memory` is installed as a shell wrapper in `~/.local/bin/agent-memory`
+- Bridge-owned project memory is exposed to spawned agents through `AGENT_BRIDGE_CONTEXT_COMMAND`
 
 Run a single bot for development:
 
@@ -128,7 +125,6 @@ Important:
 | `/models` | Show and change the active model |
 | `/cli` | Interactive bot only: show/change active CLI |
 | `/skills` | List bundled shared skills and install/repair commands |
-| `/memory` | Run a shared-memory CLI smoke test through the live CLI path |
 | `/stop` | Abort the currently running CLI process |
 | `/cancel` | Same as `/stop` |
 
@@ -181,7 +177,6 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `CLI_IDLE_TIMEOUT_MS` | All | `1200000` (20m) | Kill CLI after this many ms with no output. Antigravity defaults to `3600000` (60m) |
 | `FETCH_TIMEOUT_MS` | All | `45000` | Telegram API fetch timeout (ms) |
 | `POLL_INTERVAL_MS` | All | `1000` | Telegram long-poll interval (ms) |
-| `AGENT_MEMORY_DB_PATH` | All | `~/.agent-bridge/shared-memory/agent-memory.sqlite` | Path to shared agent memory database |
 | `AGENT_BRIDGE_SOUL_PATH` | All | `$BRIDGE_PROJECT_DIR/SOUL.md` | Optional SOUL.md persona contract injected into each CLI prompt |
 | `AGENT_BRIDGE_SOUL_MODE` | All | `summary` | `summary`, `full`, or `off` persona injection mode |
 | `TELEGRAM_RICH_MESSAGES_ENABLED` | Telegram bots | `false` | Enable Bot API 10.1 rich final-message rendering for tables and diagnostic blocks |
@@ -252,30 +247,20 @@ Discord requirements:
 - Message Content intent must be enabled in the Discord Developer Portal for plain-message routing
 - Slash commands may be guild-scoped with `DISCORD_GUILD_ID` for immediate propagation
 
-## Shared memory
+## Project memory
 
-`agent-bridge` ships a local `agent-memory` CLI backed by SQLite.
-
-Default SQLite path:
-
-```bash
-$HOME/.agent-bridge/shared-memory/agent-memory.sqlite
-```
-
-Setup:
+Project memory is stored in the bridge SQLite database in `project_memories`
+with an FTS5 index. Spawned agents receive `AGENT_BRIDGE_CONTEXT_COMMAND` and
+can retrieve or write guarded memories with:
 
 ```bash
-npm run setup:shared-memory
+"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory
+"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-query "<query>"
+"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-add-json '<json>'
 ```
 
-This writes a shell wrapper to `~/.local/bin/agent-memory` and updates:
-- `~/AGENTS.md`
-- `~/ANTIGRAVITY.md`
-- `~/CLAUDE.md`
-
-The instructions tell each agent when to call `agent-memory recall`, `add`, `list`, `search`, `update`, and `delete`.
-
-The bridge runtime database remains separate from the shared memory database.
+Successful responses may also include a hidden `agent-bridge-memory` sidecar;
+the bridge strips it before delivery/history and stores valid candidates.
 
 ## Shared skills
 
@@ -517,7 +502,6 @@ See [`docs/soul.md`](docs/soul.md) for the full design, runtime injection order,
 Systemd deployments require Node 24+. The current motivation is operational as well as compatibility related: direct Codex usage checks against ChatGPT's Codex usage endpoint returned Cloudflare HTML 403 responses under Node 20 on this host, while the same token and headers returned JSON under Node 24.
 
 ```bash
-npm run setup:shared-memory
 sudo bash scripts/install.sh
 ```
 

@@ -7,9 +7,8 @@
  */
 
 import Database from "better-sqlite3";
-import { existsSync, mkdirSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { homedir } from "node:os";
+import { mkdirSync } from "node:fs";
+import { dirname } from "node:path";
 
 // Sentinel row keys stored in bridge_state for non-chat state
 const pollingKey = (bot: string) => `$polling:${bot}`;
@@ -375,24 +374,6 @@ export function openDb(dbPath: string): BridgeDb {
   try {
     raw.exec(`ALTER TABLE project_memories ADD COLUMN source_repo_path TEXT`);
   } catch { /* column already exists */ }
-
-  // One-time import from external agent-memory DB (skip in test environments)
-  if (dbPath !== ":memory:" && process.env.BRIDGE_SKIP_MEMORY_IMPORT !== "1") {
-    const importDone = raw.prepare("SELECT value FROM settings WHERE key = 'memory_import_v1_done'").get();
-    if (!importDone) {
-      try {
-        const agentMemPath = join(homedir(), ".agent-bridge/shared-memory/agent-memory.sqlite");
-        if (existsSync(agentMemPath)) {
-          const src = new Database(agentMemPath, { readonly: true });
-          const rows = src.prepare("SELECT id, type, scope, text, created_at FROM memories").all() as Array<{id: string; type: string; scope: string; text: string; created_at: string}>;
-          src.close();
-          const ins = raw.prepare("INSERT OR IGNORE INTO project_memories (id, type, scope, text, created_at) VALUES (?, ?, ?, ?, ?)");
-          raw.transaction(() => { for (const m of rows) ins.run(m.id, m.type ?? "decision", m.scope ?? "project", m.text, m.created_at); })();
-        }
-      } catch { /* soft fail — source DB may not exist or be locked */ }
-      raw.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('memory_import_v1_done', '1')").run();
-    }
-  }
 
   // Clear any locks left held from a previous process that was killed mid-execution
   raw.exec(`UPDATE bridge_state SET active_execution_lock = 0 WHERE active_execution_lock = 1`);

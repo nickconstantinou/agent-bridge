@@ -52,7 +52,7 @@ describe("agent bridge MVP", () => {
     expect(isBridgeCommand("/start")).toBe(true);
     expect(isBridgeCommand("/models")).toBe(true);
     expect(isBridgeCommand("/skills")).toBe(true);
-    expect(isBridgeCommand("/memory")).toBe(true);
+    expect(isBridgeCommand("/memory")).toBe(false);
     expect(isBridgeCommand("/usage")).toBe(true);
     expect(isBridgeCommand("hello")).toBe(false);
   });
@@ -596,13 +596,6 @@ describe("agent bridge MVP", () => {
       const text = result && "text" in result ? result.text : "";
       expect(text).toContain("red-green-refactor-tdd");
       expect(text).toContain("npm run skills -- install");
-    });
-
-    it("builds an executable memory smoke test command", () => {
-      const result = handleCommand("codex", "/memory", { db, chatId: "123", config });
-      expect(result?.kind).toBe("execute");
-      expect(result && "prompt" in result ? result.prompt : "").toContain("agent-memory recall");
-      expect(result && "prompt" in result ? result.prompt : "").toContain("MEMORY_AVAILABLE: yes|no");
     });
 
     it("builds a Codex usage command for /usage", () => {

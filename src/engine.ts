@@ -388,6 +388,7 @@ export class BridgeEngine {
             }
 
             this.db.addConvSummary(ck, startId, endId, summaryMd);
+            this.db.pruneConvTurns(ck, endId);
             this.db.setSetting(`ctx_suppress:${ck}`, null);
             if (isAgentKind(this.kind)) db_setSession(this.db, ck, this.kind, null);
             await this.sendText(chatId, {

@@ -1118,6 +1118,39 @@ describe("BridgeEngine", () => {
       expect(summary!.summary_md).toContain("turns captured");
     });
 
+    it("compact prunes raw turns up to endId after storing the summary", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      db.addConvTurn("100", "user", "first");
+      db.addConvTurn("100", "assistant", "second");
+      db.addConvTurn("100", "user", "third");
+
+      const runCli = vi.fn().mockResolvedValue("Current objective:\n- done\n\nDurable facts:\n- none\n\nOpen state:\n- none");
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("/compact")]);
+
+      // All 3 turns should be pruned (they're covered by the summary)
+      const remaining = db.getRecentConvTurns("100", 100);
+      expect(remaining.length).toBe(0);
+      // Summary still exists
+      expect(db.getLatestConvSummary("100")).not.toBeNull();
+    });
+
     it("compact clears the CLI session so next prompt starts a fresh session seeded with the summary", async () => {
       const { BridgeEngine } = await import("../src/engine.js");
       const client = makeMockClient();

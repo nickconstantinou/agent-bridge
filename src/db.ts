@@ -935,6 +935,12 @@ export class BridgeDb {
       .get(chatKey) as any) ?? null;
   }
 
+  pruneConvTurns(chatKey: string, upToTurnId: number): void {
+    this.raw
+      .prepare(`DELETE FROM conversation_turns WHERE chat_key = ? AND id <= ?`)
+      .run(chatKey, upToTurnId);
+  }
+
   clearConvHistory(chatKey: string): void {
     this.raw.prepare(`DELETE FROM conversation_turns WHERE chat_key = ?`).run(chatKey);
     this.raw.prepare(`DELETE FROM conversation_summaries WHERE chat_key = ?`).run(chatKey);

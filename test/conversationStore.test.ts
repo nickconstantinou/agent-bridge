@@ -132,6 +132,36 @@ describe("conversation summaries", () => {
   });
 });
 
+describe("pruneConvTurns", () => {
+  it("deletes turns up to and including the given id", () => {
+    db.addConvTurn("chat:1", "user", "a");
+    db.addConvTurn("chat:1", "assistant", "b");
+    db.addConvTurn("chat:1", "user", "c");
+    const all = db.getRecentConvTurns("chat:1", 10);
+    expect(all.length).toBe(3);
+    const cutoff = all[1].id; // prune first two turns
+    db.pruneConvTurns("chat:1", cutoff);
+    const remaining = db.getRecentConvTurns("chat:1", 10);
+    expect(remaining.length).toBe(1);
+    expect(remaining[0].text).toBe("c");
+  });
+
+  it("does not delete turns from other chat keys", () => {
+    db.addConvTurn("chat:1", "user", "keep");
+    db.addConvTurn("chat:2", "user", "prune me");
+    const t2 = db.getRecentConvTurns("chat:2", 1)[0];
+    db.pruneConvTurns("chat:2", t2.id);
+    expect(db.getRecentConvTurns("chat:1", 10).length).toBe(1);
+    expect(db.getRecentConvTurns("chat:2", 10).length).toBe(0);
+  });
+
+  it("is a no-op when id is below all stored turns", () => {
+    db.addConvTurn("chat:1", "user", "x");
+    db.pruneConvTurns("chat:1", 0);
+    expect(db.getRecentConvTurns("chat:1", 10).length).toBe(1);
+  });
+});
+
 describe("getConvStatus", () => {
   it("returns zeros and nulls for new chatKey", () => {
     const s = db.getConvStatus("chat:1");

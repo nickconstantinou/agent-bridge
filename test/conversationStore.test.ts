@@ -78,6 +78,34 @@ describe("buildConvContext", () => {
     expect(ctx).toContain("## Summary");
     expect(ctx).toContain("Assistant: turn2");
   });
+
+  it("excludes turns that exceed the char budget", () => {
+    // Two turns: first is large (exceeds budget), second is small
+    db.addConvTurn("chat:1", "user", "x".repeat(400));   // older
+    db.addConvTurn("chat:1", "assistant", "short reply"); // newer
+    // budget of 100 — only the short newer turn should fit
+    const ctx = db.buildConvContext("chat:1", 100);
+    expect(ctx).toContain("short reply");
+    expect(ctx).not.toContain("x".repeat(10)); // large turn excluded
+  });
+
+  it("always includes summary even when it alone exceeds char budget", () => {
+    db.addConvTurn("chat:1", "user", "t1");
+    const [t1] = db.getRecentConvTurns("chat:1", 1);
+    db.addConvSummary("chat:1", t1.id, t1.id, "A".repeat(200));
+    const ctx = db.buildConvContext("chat:1", 10); // tiny budget
+    expect(ctx).toContain("A".repeat(200));
+  });
+
+  it("includes newest turns first within budget, oldest dropped", () => {
+    for (let i = 1; i <= 10; i++) {
+      db.addConvTurn("chat:1", "user", `turn_number_${i}_end`);
+    }
+    // budget tight enough to exclude early turns but include recent ones
+    const ctx = db.buildConvContext("chat:1", 120);
+    expect(ctx).toContain("turn_number_10_end");
+    expect(ctx).not.toContain("turn_number_1_end");
+  });
 });
 
 describe("pending messages", () => {

@@ -7,8 +7,7 @@
  */
 
 import type { BridgeDb } from "./db.js";
-
-export const CONTEXT_TURNS = 5;
+import { DEFAULT_CONTEXT_MAX_CHARS } from "./db.js";
 
 export class WorkerFallbackChain {
   private readonly chain: string[];
@@ -58,6 +57,6 @@ export class WorkerFallbackChain {
   }
 
   buildContextPreamble(chatKey: string): string {
-    return this.db.buildConvContext(chatKey, CONTEXT_TURNS * 2);
+    return this.db.buildConvContext(chatKey, parseInt(process.env.BRIDGE_CONTEXT_MAX_CHARS ?? "") || DEFAULT_CONTEXT_MAX_CHARS);
   }
 }

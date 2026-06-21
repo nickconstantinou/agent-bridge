@@ -3,7 +3,8 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
-import { WorkerFallbackChain, CONTEXT_TURNS } from "../src/workerFallback.js";
+import { WorkerFallbackChain } from "../src/workerFallback.js";
+import { DEFAULT_CONTEXT_MAX_CHARS } from "../src/db.js";
 import { openDb, BridgeDb } from "../src/db.js";
 
 describe("WorkerFallbackChain", () => {
@@ -102,18 +103,18 @@ describe("WorkerFallbackChain", () => {
       expect(preamble).toContain("Assistant:");
     });
 
-    it(`retains only the last ${CONTEXT_TURNS} full turns (user+assistant pairs)`, () => {
-      // Add more than CONTEXT_TURNS pairs
-      for (let i = 1; i <= CONTEXT_TURNS + 2; i++) {
-        chain.addTurn("chat:1", "user", `question ${i}`);
-        chain.addTurn("chat:1", "assistant", `answer ${i}`);
-      }
+    it("drops oldest turns when char budget is exceeded", () => {
+      // bigText chosen so that "User: <newest>" + "User: <bigText>" nearly fills the
+      // budget, leaving < 17 chars — not enough room for "User: oldest turn" (17 chars).
+      // Formula: budget(8000) - 17(newest line) - 6(prefix) - bigTextLen < 17
+      //          → bigTextLen > 7960; use 7970 for a clean margin.
+      const bigText = "x".repeat(DEFAULT_CONTEXT_MAX_CHARS - 30); // 7970 chars
+      chain.addTurn("chat:1", "user", "oldest turn");
+      chain.addTurn("chat:1", "user", bigText);
+      chain.addTurn("chat:1", "user", "newest turn");
       const preamble = chain.buildContextPreamble("chat:1");
-      // The oldest turns should have been dropped
-      expect(preamble).not.toContain("question 1");
-      expect(preamble).not.toContain("answer 1");
-      // The most recent turns should be present
-      expect(preamble).toContain(`question ${CONTEXT_TURNS + 2}`);
+      expect(preamble).toContain("newest turn");
+      expect(preamble).not.toContain("oldest turn");
     });
 
     it("preamble starts with a context header and ends with a separator", () => {

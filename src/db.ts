@@ -12,6 +12,7 @@ import { dirname } from "node:path";
 
 // Sentinel row keys stored in bridge_state for non-chat state
 const pollingKey = (bot: string) => `$polling:${bot}`;
+export const DEFAULT_CONTEXT_MAX_CHARS = 8_000;
 
 export function openDb(dbPath: string): BridgeDb {
   if (dbPath !== ":memory:") {
@@ -864,17 +865,31 @@ export class BridgeDb {
       .all(chatKey, limit) as any;
   }
 
-  buildConvContext(chatKey: string, maxTurns = 10): string {
+  buildConvContext(chatKey: string, maxChars = DEFAULT_CONTEXT_MAX_CHARS): string {
     const summary = this.getLatestConvSummary(chatKey);
     const sinceId = summary?.range_end_turn_id;
-    const turns = this.getRecentConvTurns(chatKey, maxTurns, sinceId);
-    if (!summary && turns.length === 0) return "";
+    // Fetch up to 200 candidates; char budget culls them below
+    const candidates = this.getRecentConvTurns(chatKey, 200, sinceId);
+    if (!summary && candidates.length === 0) return "";
+
+    // Walk newest-first, accumulate until char budget is exhausted
+    let budget = maxChars - (summary ? summary.summary_md.length : 0);
+    const selected: Array<{ role: string; text: string }> = [];
+    for (let i = candidates.length - 1; i >= 0; i--) {
+      const t = candidates[i];
+      const line = `${t.role === "user" ? "User" : "Assistant"}: ${t.text}`;
+      if (line.length <= budget) {
+        selected.unshift({ role: t.role, text: t.text });
+        budget -= line.length;
+      }
+    }
+
     const lines = ["[Context from previous conversation]"];
     if (summary) {
       lines.push(summary.summary_md);
       lines.push("");
     }
-    for (const t of turns) {
+    for (const t of selected) {
       lines.push(`${t.role === "user" ? "User" : "Assistant"}: ${t.text}`);
     }
     lines.push("[End context — continue naturally]");

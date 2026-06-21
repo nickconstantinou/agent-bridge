@@ -40,6 +40,7 @@ import type { BridgeEvent } from "./events/types.js";
 import { EventStore } from "./events/store.js";
 import type { BridgeConfig, BotKind, BotConfig, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult, CliOptions } from "./types.js";
 import type { BridgeDb } from "./db.js";
+import { DEFAULT_CONTEXT_MAX_CHARS } from "./db.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -91,7 +92,7 @@ export interface ExecFns {
 // ── Internals ────────────────────────────────────────────────────────────────
 
 const MAX_QUEUE_DEPTH = 5;
-const ENGINE_CONTEXT_TURNS = 5;
+const ENGINE_CONTEXT_MAX_CHARS = parseInt(process.env.BRIDGE_CONTEXT_MAX_CHARS ?? "") || DEFAULT_CONTEXT_MAX_CHARS;
 const ENGINE_TURN_TEXT_LIMIT = 1_200;
 
 const AGENT_KINDS = new Set<string>(["codex", "antigravity", "claude"]);
@@ -578,7 +579,7 @@ export class BridgeEngine {
 
   private _buildRecentContextPrompt(chatKey: string, prompt: string): string {
     if (this.db.getSetting(`ctx_suppress:${chatKey}`)) return prompt;
-    const ctx = this.db.buildConvContext(chatKey, ENGINE_CONTEXT_TURNS * 2);
+    const ctx = this.db.buildConvContext(chatKey, ENGINE_CONTEXT_MAX_CHARS);
     return ctx ? `${ctx}${prompt}` : prompt;
   }
 

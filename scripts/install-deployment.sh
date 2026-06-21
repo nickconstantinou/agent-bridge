@@ -68,6 +68,55 @@ install_shared_skills() {
 
 require_node
 
+# ── --update mode: update CLIs + build + test + safe service restart ──────────
+# Does NOT reinstall systemd units.
+if [[ "${1:-}" == "--update" ]]; then
+  echo "[update] Updating CLI packages..."
+  if command -v npm >/dev/null 2>&1; then
+    (cd "${REPO_DIR}" && npm install)
+    npm update -g @anthropic-ai/claude-code 2>/dev/null || true
+  fi
+
+  echo "[update] Updating agy (antigravity)..."
+  bash -c 'curl -fsSL https://antigravity.google/cli/install.sh | bash'
+
+  echo "[update] Building bridge..."
+  (cd "${REPO_DIR}" && npm run build)
+
+  echo "[update] Running tests..."
+  if ! (cd "${REPO_DIR}" && npm test); then
+    echo "[update] Tests FAILED — aborting service restarts" >&2
+    exit 1
+  fi
+
+  echo "[update] Restarting active services..."
+  UPDATE_SERVICES=(
+    agent-bridge-claude
+    agent-bridge-codex
+    agent-bridge-antigravity
+    agent-bridge-interactive
+    agent-bridge-discord
+    agent-bridge-discord-interactive
+  )
+  for svc in "${UPDATE_SERVICES[@]}"; do
+    if systemctl is-active --quiet "${svc}" 2>/dev/null; then
+      echo "[update]   Restarting ${svc}..."
+      sudo systemctl restart "${svc}"
+      sleep 2
+      if systemctl is-active --quiet "${svc}"; then
+        echo "[update]   ${svc}: running"
+      else
+        echo "[update]   ${svc}: FAILED — check: sudo journalctl -u ${svc} -n 50" >&2
+      fi
+    else
+      echo "[update]   Skipping ${svc} (not active)"
+    fi
+  done
+
+  echo "[update] Done"
+  exit 0
+fi
+
 run_as_target_user() {
   if [[ "${USER}" == "${TARGET_USER}" ]]; then
     "$@"

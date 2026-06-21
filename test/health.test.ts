@@ -975,26 +975,23 @@ describe("SelfPlugin — extended checks", () => {
     expect(claudeCheck).toBeDefined();
     expect(claudeCheck?.status).toBe("red"); // 10 versions behind
     expect(claudeCheck?.message).toContain("2.1.158 -> 2.1.168");
-    expect(claudeCheck?.message).toContain("deploy-clis.sh");
+    expect(claudeCheck?.message).toContain("install-deployment.sh --update");
 
     const codexCheck = report.checks.find(c => c.name === "cli-update-codex");
     expect(codexCheck).toBeDefined();
     expect(codexCheck?.status).toBe("green"); // 2 versions behind
     expect(codexCheck?.message).toContain("0.135.0 -> 0.137.0");
-    expect(codexCheck?.message).toContain("deploy-clis.sh");
+    expect(codexCheck?.message).toContain("install-deployment.sh --update");
 
-    const antigravityCheck = report.checks.find(c => c.name === "cli-update-antigravity");
-    expect(antigravityCheck).toBeDefined();
-    expect(antigravityCheck?.status).toBe("amber"); // 3 versions behind
-    expect(antigravityCheck?.message).toContain("1.0.6 -> 1.0.9");
-    expect(antigravityCheck?.message).toContain("deploy-clis.sh");
+    // agy is now checked directly via agy --version, not npm outdated
+    const antigravityNpmCheck = report.checks.find(c => c.name === "cli-update-antigravity");
+    expect(antigravityNpmCheck).toBeUndefined();
   });
 
   it("reports green status when agent CLIs are up to date", async () => {
     (globalThis as any).__mockExecSync = (cmd: string) => {
-      if (cmd.includes("npm outdated --json")) {
-        return ""; // status 0, empty output
-      }
+      if (cmd.includes("npm outdated --json")) return "";
+      if (cmd.includes("agy --version")) return "1.0.10";
       return undefined;
     };
 
@@ -1012,10 +1009,13 @@ describe("SelfPlugin — extended checks", () => {
     expect(codexCheck?.status).toBe("green");
     expect(codexCheck?.message).toContain("up to date");
 
-    const antigravityCheck = report.checks.find(c => c.name === "cli-update-antigravity");
-    expect(antigravityCheck).toBeDefined();
-    expect(antigravityCheck?.status).toBe("green");
-    expect(antigravityCheck?.message).toContain("up to date");
+    // agy checked via direct binary, not npm outdated
+    const antigravityNpmCheck = report.checks.find(c => c.name === "cli-update-antigravity");
+    expect(antigravityNpmCheck).toBeUndefined();
+
+    const agyCheck = report.checks.find(c => c.name === "agy-version");
+    expect(agyCheck?.status).toBe("green");
+    expect(agyCheck?.message).toContain("1.0.10");
   });
 
   it("handles npm outdated errors gracefully without failing the entire plugin", async () => {
@@ -1034,6 +1034,39 @@ describe("SelfPlugin — extended checks", () => {
     expect(report.status).toBe("green");
     const claudeCheck = report.checks.find(c => c.name === "cli-update-claude-code");
     expect(claudeCheck).toBeUndefined();
+  });
+  it("reports agy version as green when agy is installed", async () => {
+    (globalThis as any).__mockExecSync = (cmd: string) => {
+      if (cmd.includes("npm outdated --json")) return "";
+      if (cmd.includes("agy --version")) return "1.0.10";
+      return undefined;
+    };
+
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const plugin = new SelfPlugin(db as any, dbPath);
+    const report = await plugin.check();
+
+    const agyCheck = report.checks.find(c => c.name === "agy-version");
+    expect(agyCheck).toBeDefined();
+    expect(agyCheck?.status).toBe("green");
+    expect(agyCheck?.message).toContain("1.0.10");
+  });
+
+  it("reports agy-version as red when agy is not installed", async () => {
+    (globalThis as any).__mockExecSync = (cmd: string) => {
+      if (cmd.includes("npm outdated --json")) return "";
+      if (cmd.includes("agy --version")) throw new Error("command not found: agy");
+      return undefined;
+    };
+
+    const { SelfPlugin } = await import("../src/health/plugins/self.js");
+    const plugin = new SelfPlugin(db as any, dbPath);
+    const report = await plugin.check();
+
+    const agyCheck = report.checks.find(c => c.name === "agy-version");
+    expect(agyCheck).toBeDefined();
+    expect(agyCheck?.status).toBe("red");
+    expect(agyCheck?.message).toContain("not found");
   });
 });
 

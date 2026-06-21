@@ -169,10 +169,9 @@ export class SelfPlugin implements HealthPlugin {
         const outdated = outdatedStdout && outdatedStdout.trim()
           ? JSON.parse(outdatedStdout)
           : {};
-        const cliNames = ["@anthropic-ai/claude-code", "@openai/codex", "@google/agy-cli"];
+        const cliNames = ["@anthropic-ai/claude-code", "@openai/codex"];
         for (const cli of cliNames) {
-          let nameToken = cli.split("/").pop()!;
-          if (nameToken === "agy-cli") nameToken = "antigravity";
+          const nameToken = cli.split("/").pop()!;
           const checkName = `cli-update-${nameToken}`;
           if (outdated[cli]) {
             const current = outdated[cli].current;
@@ -189,7 +188,7 @@ export class SelfPlugin implements HealthPlugin {
             checks.push({
               name: checkName,
               status: status,
-              message: `${cli} update available: ${current} -> ${latest} (${behind} version${behind === 1 ? "" : "s"} behind). Run: ~/agent-bridge/scripts/deploy-clis.sh`,
+              message: `${cli} update available: ${current} -> ${latest} (${behind} version${behind === 1 ? "" : "s"} behind). Run: ~/agent-bridge/scripts/install-deployment.sh --update`,
             });
           } else {
             const version = getInstalledVersion(cli);
@@ -205,6 +204,25 @@ export class SelfPlugin implements HealthPlugin {
       }
     }
 
+
+    // ── Agy (Antigravity) version check ───────────────────────────────────────
+    try {
+      const agyVersion = execSync("agy --version", {
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 5000,
+      }).toString().trim();
+      checks.push({
+        name: "agy-version",
+        status: "green",
+        message: `agy installed: ${agyVersion}. Run: ~/agent-bridge/scripts/install-deployment.sh --update to upgrade`,
+      });
+    } catch {
+      checks.push({
+        name: "agy-version",
+        status: "red",
+        message: "agy not found — run: ~/agent-bridge/scripts/install-deployment.sh to install",
+      });
+    }
 
     // ── PR lifecycle gauges ────────────────────────────────────────────────────
     try {

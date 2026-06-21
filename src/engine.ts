@@ -607,6 +607,7 @@ export class BridgeEngine {
     const memoryHint = this.db.getMemoryCount() > 0 ? [
       '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory',
       '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-query "<specific query>"',
+      '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-add-json \'<json>\'',
     ] : [];
     return {
       prompt: [
@@ -622,6 +623,8 @@ export class BridgeEngine {
         AGENT_BRIDGE_CONTEXT_COMMAND: commandPath,
         AGENT_BRIDGE_CONTEXT_DB: dbPath,
         AGENT_BRIDGE_CHAT_KEY: chatKey,
+        AGENT_BRIDGE_CLI_KIND: this.kind,
+        AGENT_BRIDGE_REPO_PATH: process.cwd(),
       },
     };
   }

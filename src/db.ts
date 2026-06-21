@@ -15,6 +15,46 @@ import { homedir } from "node:os";
 const pollingKey = (bot: string) => `$polling:${bot}`;
 export const DEFAULT_CONTEXT_MAX_CHARS = 8_000;
 
+const MEMORY_SYNONYMS: Record<string, string[]> = {
+  affordance: ["helper", "command", "context"],
+  compact: ["compact", "compaction", "summary", "summarise", "summarize"],
+  compaction: ["compact", "compaction", "summary", "summarise", "summarize"],
+  context: ["context", "conversation", "history", "turns"],
+  fallback: ["fallback", "switch", "promotion", "persistent", "preference"],
+  histories: ["history", "conversation", "context", "turns"],
+  history: ["history", "conversation", "context", "turns"],
+  memory: ["memory", "memories", "remember", "recall"],
+  memories: ["memory", "memories", "remember", "recall"],
+  persistent: ["persistent", "preference", "fallback", "promotion"],
+  promote: ["promotion", "fallback", "switch", "persistent"],
+  promotion: ["promotion", "fallback", "switch", "persistent"],
+  summaries: ["summary", "summaries", "summarise", "summarize", "compact", "compaction"],
+  summarisation: ["summary", "summaries", "summarise", "summarize", "compact", "compaction"],
+  summarization: ["summary", "summaries", "summarise", "summarize", "compact", "compaction"],
+  summary: ["summary", "summaries", "summarise", "summarize", "compact", "compaction"],
+  switch: ["switch", "fallback", "promotion", "persistent"],
+};
+
+function normalizeMemoryTokens(raw: string): string[] {
+  const base = raw
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2);
+  const tokens = new Set<string>();
+  for (const word of base) {
+    tokens.add(word);
+    if (word.endsWith("ies") && word.length > 4) tokens.add(`${word.slice(0, -3)}y`);
+    if (word.endsWith("s") && word.length > 4) tokens.add(word.slice(0, -1));
+    for (const alias of MEMORY_SYNONYMS[word] ?? []) tokens.add(alias);
+  }
+  return [...tokens].slice(0, 32);
+}
+
+export function buildMemoryFtsQuery(raw: string): string {
+  return normalizeMemoryTokens(raw).map((w) => `${w}*`).join(" OR ");
+}
+
 export function openDb(dbPath: string): BridgeDb {
   if (dbPath !== ":memory:") {
     mkdirSync(dirname(dbPath), { recursive: true });
@@ -309,6 +349,8 @@ export function openDb(dbPath: string): BridgeDb {
         text            TEXT NOT NULL,
         source_chat_key TEXT,
         source_cli      TEXT,
+        source_turn_id  INTEGER,
+        source_repo_path TEXT,
         confidence      REAL NOT NULL DEFAULT 1.0,
         created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
         updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -327,6 +369,12 @@ export function openDb(dbPath: string): BridgeDb {
       END;
     `);
   } catch { /* tables already exist on upgraded DBs */ }
+  try {
+    raw.exec(`ALTER TABLE project_memories ADD COLUMN source_turn_id INTEGER`);
+  } catch { /* column already exists */ }
+  try {
+    raw.exec(`ALTER TABLE project_memories ADD COLUMN source_repo_path TEXT`);
+  } catch { /* column already exists */ }
 
   // One-time import from external agent-memory DB (skip in test environments)
   if (dbPath !== ":memory:" && process.env.BRIDGE_SKIP_MEMORY_IMPORT !== "1") {
@@ -1053,25 +1101,41 @@ export class BridgeDb {
 
   // ── Project memory ────────────────────────────────────────────────────────
 
-  addMemory(mem: { id: string; type: string; scope?: string; text: string; source_chat_key?: string; source_cli?: string; confidence?: number }): void {
+  addMemory(mem: { id: string; type: string; scope?: string; text: string; source_chat_key?: string; source_cli?: string; source_turn_id?: number; source_repo_path?: string; confidence?: number }): void {
     this.raw.prepare(`
-      INSERT OR REPLACE INTO project_memories (id, type, scope, text, source_chat_key, source_cli, confidence)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(mem.id, mem.type, mem.scope ?? "project", mem.text, mem.source_chat_key ?? null, mem.source_cli ?? null, mem.confidence ?? 1.0);
+      INSERT OR REPLACE INTO project_memories (id, type, scope, text, source_chat_key, source_cli, source_turn_id, source_repo_path, confidence)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      mem.id,
+      mem.type,
+      mem.scope ?? "project",
+      mem.text,
+      mem.source_chat_key ?? null,
+      mem.source_cli ?? null,
+      mem.source_turn_id ?? null,
+      mem.source_repo_path ?? null,
+      mem.confidence ?? 1.0,
+    );
   }
 
-  searchMemories(query: string, limit = 5): Array<{ id: string; type: string; text: string }> {
+  searchMemories(query: string, limit = 5): Array<{ id: string; type: string; text: string; score: number; snippet: string }> {
     if (!query.trim()) return [];
-    const ftsQuery = query.trim().split(/\s+/).filter(Boolean).map(w => `${w}*`).join(" OR ");
+    const ftsQuery = buildMemoryFtsQuery(query);
+    if (!ftsQuery) return [];
     try {
       return this.raw.prepare(`
-        SELECT pm.id, pm.type, pm.text
+        SELECT
+          pm.id,
+          pm.type,
+          pm.text,
+          rank AS score,
+          snippet(project_memories_fts, 1, '', '', '...', 12) AS snippet
         FROM project_memories_fts fts
         JOIN project_memories pm ON pm.rowid = fts.rowid
         WHERE project_memories_fts MATCH ?
         ORDER BY rank
         LIMIT ?
-      `).all(ftsQuery, limit) as Array<{ id: string; type: string; text: string }>;
+      `).all(ftsQuery, limit) as Array<{ id: string; type: string; text: string; score: number; snippet: string }>;
     } catch {
       return [];
     }

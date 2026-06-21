@@ -1,7 +1,7 @@
 # Agent-Driven Memory Broker Research
 
-Research plus implementation plan. This document does not change production
-behavior yet. It defines how Agent Bridge can move from the external
+Research plus implementation plan. Phases 1-3 are implemented as of
+2026-06-21. This document defines how Agent Bridge can move from the external
 `agent-memory` CLI toward a bridge-owned, agent-driven memory broker.
 
 ## Goal
@@ -77,6 +77,11 @@ The bridge should provide memory affordances and candidate packs. The agent
 should make final relevance decisions because it sees the actual task and can
 distinguish useful precedent from noise.
 
+Implemented behavior: the bridge exposes helper commands inside spawned CLI
+environments. It does not inject raw memory text by default. Agents can retrieve
+conversation-aware memories via `--memory`, narrow with `--memory-query`, and
+write durable candidates via `--memory-add-json`.
+
 ## Proposed Architecture
 
 ### Memory Tables
@@ -129,6 +134,7 @@ The bridge should not inject all matches. It should expose:
 Conversation-aware project memory is available.
 "$AGENT_BRIDGE_CONTEXT_COMMAND" --memory
 "$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-query "<query>"
+"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-add-json '<json>'
 ```
 
 The default `--memory` query should use the bridge-built query pack. The agent
@@ -173,9 +179,21 @@ $AGENT_BRIDGE_CONTEXT_COMMAND --memory-add-json '<json>'
 Later, the bridge can parse a hidden final-output sidecar or run a post-turn
 memory extractor.
 
+Implemented guardrails:
+
+- allowed types: `decision`, `bug`, `bugfix`, `bug_fix`, `convention`, `todo`,
+  `note`
+- allowed scopes: `project`, `chat`, `global`
+- rejects empty, short, long, duplicate, transient, and secret-looking text
+- stores `source_chat_key`, `source_cli`, latest turn id, repo path, confidence
+- returns a short status such as `Memory stored: <id>`,
+  `Memory duplicate: <id>`, or `Memory rejected: <reason>`
+
 ## Phased Implementation Plan
 
 ### Phase 1: Retrieval Broker, Read-Only
+
+Status: implemented on 2026-06-21.
 
 Red -> green requirements:
 
@@ -198,6 +216,8 @@ Acceptance:
 
 ### Phase 2: Better Lexical Retrieval
 
+Status: implemented on 2026-06-21.
+
 Red -> green requirements:
 
 - Normalize tokens: hyphens, slashes, stemming-like aliases, singular/plural.
@@ -212,7 +232,14 @@ Acceptance:
 - Current failed probes from the audit become hits.
 - Results include `id`, `type`, `score`, `snippet`, and full text on demand.
 
+Implementation note: the first pass remains deterministic. It normalizes
+hyphens, punctuation, singular/plural-ish endings, and expands a small bridge
+vocabulary map for compact/summary, fallback/switch/promotion, context/history,
+and memory/recall terms before querying FTS5.
+
 ### Phase 3: Agent-Driven Writes
+
+Status: implemented on 2026-06-21.
 
 Red -> green requirements:
 

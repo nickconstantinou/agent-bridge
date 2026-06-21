@@ -152,12 +152,31 @@ CLI agents spawned by the bridge receive three environment variables injected by
 | `AGENT_BRIDGE_CONTEXT_COMMAND` | Absolute path to `bin/agent-bridge-context` |
 | `AGENT_BRIDGE_CONTEXT_DB` | DB path for the current bot instance |
 | `AGENT_BRIDGE_CHAT_KEY` | Current chat key (`chatId:threadId`) |
+| `AGENT_BRIDGE_CLI_KIND` | Current CLI kind (`codex`, `claude`, or `antigravity`) |
+| `AGENT_BRIDGE_REPO_PATH` | Workspace path for memory provenance |
 
-The `agent-bridge-context` binary (in `bin/`) opens the DB **read-only** and outputs:
+The `agent-bridge-context` binary (in `bin/`) opens the DB read-only for
+inspection commands and outputs:
 - `agent-bridge-context` (no args) — latest compact summary
 - `agent-bridge-context --recent [N]` — N most recent turns (default 20, max 100)
+- `agent-bridge-context --memory` — conversation-aware project memory matches
+- `agent-bridge-context --memory-query "<query>"` — explicit project memory query
 
-This gives CLI agents queryable access to bridge conversation history without any MCP server. The bridge prompt preamble tells agents when `AGENT_BRIDGE_CONTEXT_AVAILABLE=1` and how to invoke it.
+For agent-driven writes, the helper also supports:
+- `agent-bridge-context --memory-add-json '<json>'` — stores a validated project
+  memory candidate with chat, CLI, latest-turn, repo, and confidence provenance
+
+`--memory-add-json` rejects invalid type/scope, duplicate text, transient text,
+secret-looking values, empty text, and oversized text. This gives CLI agents
+queryable access to bridge conversation history and shared project memory
+without any MCP server. The bridge prompt preamble tells agents when
+`AGENT_BRIDGE_CONTEXT_AVAILABLE=1` and how to invoke it.
+
+Project memories live in `project_memories` with an FTS5 index. Existing
+external `agent-memory` rows are imported once at bridge startup. Retrieval
+normalizes punctuation, hyphens, simple plural/singular variants, and bridge
+vocabulary synonyms such as compact/summary, fallback/switch/promotion, and
+context/history.
 
 ### 4.5 Interactive Bot CLI-to-CLI Fallback
 

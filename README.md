@@ -179,7 +179,8 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `POLL_INTERVAL_MS` | All | `1000` | Telegram long-poll interval (ms) |
 | `AGENT_BRIDGE_SOUL_PATH` | All | `$BRIDGE_PROJECT_DIR/SOUL.md` | Optional SOUL.md persona contract injected into each CLI prompt |
 | `AGENT_BRIDGE_SOUL_MODE` | All | `summary` | `summary`, `full`, or `off` persona injection mode |
-| `TELEGRAM_RICH_MESSAGES_ENABLED` | Telegram bots | `false` | Enable Bot API 10.1 rich final-message rendering for tables and diagnostic blocks |
+| `TELEGRAM_MARKDOWN_IR_ENABLED` | Telegram bots | `false` | Parse markdown via IR pipeline, rendering bold/code/pre/headings/lists as native Telegram entities instead of raw text |
+| `TELEGRAM_RICH_MESSAGES_ENABLED` | Telegram bots | `false` | Reserved — no-op; the Bot API rich-message endpoint does not exist. Do not set to `true`. |
 | `TELEGRAM_DOCUMENT_FALLBACK_ENABLED` | Telegram bots | `false` | Opt in to in-memory `response.md` attachments for exceptional oversized/code-heavy final responses |
 | `TELEGRAM_LAYOUT_DOCUMENT_THRESHOLD` | Telegram bots | `3500` | Attachment threshold used only when `TELEGRAM_DOCUMENT_FALLBACK_ENABLED=true` |
 | `TELEGRAM_LAYOUT_CODE_BLOCK_THRESHOLD` | Telegram bots | `3` | Code-block attachment threshold used only when `TELEGRAM_DOCUMENT_FALLBACK_ENABLED=true` |

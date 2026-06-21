@@ -122,7 +122,37 @@ export function extractProjectMemorySidecars(text: string): {
   candidates: ProjectMemoryCandidate[];
 } {
   const candidates: ProjectMemoryCandidate[] = [];
-  const cleanText = text
+  let cleanText = "";
+  let outsideFence = "";
+  let inFence = false;
+  const lines = text.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+
+  for (const line of lines) {
+    if (/^\s*```/.test(line)) {
+      if (!inFence) {
+        cleanText += stripSidecarsFromSegment(outsideFence, candidates);
+        outsideFence = "";
+        inFence = true;
+      } else {
+        inFence = false;
+      }
+      cleanText += line;
+    } else if (inFence) {
+      cleanText += line;
+    } else {
+      outsideFence += line;
+    }
+  }
+
+  cleanText += stripSidecarsFromSegment(outsideFence, candidates);
+  cleanText = cleanText
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { cleanText, candidates };
+}
+
+function stripSidecarsFromSegment(segment: string, candidates: ProjectMemoryCandidate[]): string {
+  return segment
     .replace(/<!--\s*agent-bridge-memory\s*([\s\S]*?)\s*-->/gi, (_match, json) => {
       collectCandidates(json, candidates);
       return "";
@@ -130,10 +160,7 @@ export function extractProjectMemorySidecars(text: string): {
     .replace(/<agent-bridge-memory>\s*([\s\S]*?)\s*<\/agent-bridge-memory>/gi, (_match, json) => {
       collectCandidates(json, candidates);
       return "";
-    })
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-  return { cleanText, candidates };
+    });
 }
 
 function collectCandidates(rawJson: string, out: ProjectMemoryCandidate[]): void {

@@ -1151,6 +1151,50 @@ describe("BridgeEngine", () => {
       expect(db.getLatestConvSummary("100")).not.toBeNull();
     });
 
+    it("compact chunks histories over 1000 turns and prunes the full covered range", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      for (let i = 0; i < 1005; i++) {
+        db.addConvTurn("100", i % 2 === 0 ? "user" : "assistant", `turn-${i}`);
+      }
+
+      const capturedPrompts: string[] = [];
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        const prompt = args[args.length - 1];
+        capturedPrompts.push(prompt);
+        if (prompt.includes("Merge these compact summaries")) {
+          return "Current objective:\n- reduced all chunks\n\nDurable facts:\n- all 1005 turns covered\n\nOpen state:\n- none";
+        }
+        return `Current objective:\n- chunk ${capturedPrompts.length}\n\nDurable facts:\n- ${prompt.includes("turn-0") ? "includes first turn" : "later chunk"}\n\nOpen state:\n- none`;
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("/compact")]);
+
+      expect(runCli.mock.calls.length).toBeGreaterThan(1);
+      expect(capturedPrompts[0]).toContain("turn-0");
+      expect(capturedPrompts.at(-1)).toContain("Merge these compact summaries");
+      expect(db.getRecentConvTurns("100", 2000)).toEqual([]);
+      const summary = db.getLatestConvSummary("100");
+      expect(summary?.summary_md).toContain("all 1005 turns covered");
+      expect(summary?.range_start_turn_id).toBe(1);
+      expect(summary?.range_end_turn_id).toBe(1005);
+    });
+
     it("compact clears the CLI session so next prompt starts a fresh session seeded with the summary", async () => {
       const { BridgeEngine } = await import("../src/engine.js");
       const client = makeMockClient();

@@ -73,15 +73,19 @@ require_node
 if [[ "${1:-}" == "--update" ]]; then
   echo "[update] Updating CLI packages..."
   if command -v npm >/dev/null 2>&1; then
-    (cd "${REPO_DIR}" && npm install)
+    (cd "${REPO_DIR}" && npm install --include=dev)
     npm update -g @anthropic-ai/claude-code 2>/dev/null || true
   fi
 
   echo "[update] Updating agy (antigravity)..."
   bash -c 'curl -fsSL https://antigravity.google/cli/install.sh | bash'
 
-  echo "[update] Building bridge..."
-  (cd "${REPO_DIR}" && npm run build)
+  if (cd "${REPO_DIR}" && npm run | grep -q '^  build$'); then
+    echo "[update] Building bridge..."
+    (cd "${REPO_DIR}" && npm run build)
+  else
+    echo "[update] No build script; skipping build"
+  fi
 
   echo "[update] Running tests..."
   if ! (cd "${REPO_DIR}" && npm test); then

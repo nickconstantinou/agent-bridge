@@ -3,6 +3,9 @@ import { existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 
 export default defineConfig({
+  test: {
+    env: { BRIDGE_SKIP_MEMORY_IMPORT: "1" },
+  },
   plugins: [
     {
       name: "prefer-ts-over-js",

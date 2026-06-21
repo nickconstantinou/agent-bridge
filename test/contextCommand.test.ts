@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { rmSync } from "node:fs";
 import { openDb } from "../src/db.js";
+import type { BridgeDb } from "../src/db.js";
 import { renderAgentBridgeContext } from "../src/contextCommand.js";
 
 describe("agent-bridge-context helper", () => {
@@ -55,5 +56,55 @@ describe("agent-bridge-context helper", () => {
   it("requires context env vars", () => {
     expect(() => renderAgentBridgeContext(["--summary"], {})).toThrow(/AGENT_BRIDGE_CONTEXT_DB/);
     expect(() => renderAgentBridgeContext(["--summary"], { AGENT_BRIDGE_CONTEXT_DB: "x" })).toThrow(/AGENT_BRIDGE_CHAT_KEY/);
+  });
+
+  it("--memory flag returns memories matching conversation context", () => {
+    const { db, path } = makeDb();
+    try {
+      db.addMemory({ id: "mem_ctx1", type: "decision", scope: "project", text: "fallback CLI persists after successful switch" });
+      db.addConvTurn("chat:1", "user", "the fallback keeps resetting to claude", "codex");
+
+      const output = renderAgentBridgeContext(["--memory"], {
+        AGENT_BRIDGE_CONTEXT_DB: path,
+        AGENT_BRIDGE_CHAT_KEY: "chat:1",
+      });
+
+      expect(output).toContain("fallback");
+    } finally {
+      db.close();
+      rmSync(path, { force: true });
+    }
+  });
+
+  it("--memory-query flag returns memories for explicit query", () => {
+    const { db, path } = makeDb();
+    try {
+      db.addMemory({ id: "mem_ctx2", type: "decision", scope: "project", text: "chunked map-reduce compaction handles large histories" });
+
+      const output = renderAgentBridgeContext(["--memory-query", "compact summaries"], {
+        AGENT_BRIDGE_CONTEXT_DB: path,
+        AGENT_BRIDGE_CHAT_KEY: "chat:1",
+      });
+
+      expect(output).toContain("compaction");
+    } finally {
+      db.close();
+      rmSync(path, { force: true });
+    }
+  });
+
+  it("--memory flag returns empty message when no memories exist", () => {
+    const { db, path } = makeDb();
+    try {
+      const output = renderAgentBridgeContext(["--memory"], {
+        AGENT_BRIDGE_CONTEXT_DB: path,
+        AGENT_BRIDGE_CHAT_KEY: "chat:1",
+      });
+
+      expect(output).toContain("No project memories");
+    } finally {
+      db.close();
+      rmSync(path, { force: true });
+    }
   });
 });

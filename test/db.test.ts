@@ -948,3 +948,29 @@ describe("github_links pr_state", () => {
     expect(row.last_activity_at).toBe(ts);
   });
 });
+
+describe("BridgeDb project memories", () => {
+  it("creates project_memories table on openDb", () => {
+    const row = db.raw.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='project_memories'").get();
+    expect(row).toBeDefined();
+  });
+
+  it("addMemory inserts and searchMemories finds by keyword", () => {
+    db.addMemory({ id: "mem_test1", type: "decision", scope: "project", text: "fallback CLI persists after successful switch" });
+    const results = db.searchMemories("fallback");
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0].text).toContain("fallback");
+  });
+
+  it("searchMemories returns empty when no relevant match", () => {
+    db.addMemory({ id: "mem_test2", type: "decision", scope: "project", text: "compact summarises conversation history" });
+    const results = db.searchMemories("xylophone");
+    expect(results).toEqual([]);
+  });
+
+  it("getMemoryCount returns 0 on fresh DB, increments after add", () => {
+    expect(db.getMemoryCount()).toBe(0);
+    db.addMemory({ id: "mem_test3", type: "decision", scope: "project", text: "bridge is stable" });
+    expect(db.getMemoryCount()).toBe(1);
+  });
+});

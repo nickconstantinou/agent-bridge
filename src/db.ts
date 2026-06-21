@@ -7,8 +7,9 @@
  */
 
 import Database from "better-sqlite3";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { homedir } from "node:os";
 
 // Sentinel row keys stored in bridge_state for non-chat state
 const pollingKey = (bot: string) => `$polling:${bot}`;
@@ -297,6 +298,53 @@ export function openDb(dbPath: string): BridgeDb {
       WHERE chat_key = conversation_turns.chat_key
     ), 0)
   `);
+
+  // ── Project memories (2026-06-21) ─────────────────────────────────────────
+  try {
+    raw.exec(`
+      CREATE TABLE IF NOT EXISTS project_memories (
+        id              TEXT PRIMARY KEY,
+        scope           TEXT NOT NULL DEFAULT 'project',
+        type            TEXT NOT NULL DEFAULT 'decision',
+        text            TEXT NOT NULL,
+        source_chat_key TEXT,
+        source_cli      TEXT,
+        confidence      REAL NOT NULL DEFAULT 1.0,
+        created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+        updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE VIRTUAL TABLE IF NOT EXISTS project_memories_fts
+      USING fts5(id UNINDEXED, text, tokenize='unicode61');
+      CREATE TRIGGER IF NOT EXISTS pm_ai AFTER INSERT ON project_memories BEGIN
+        INSERT INTO project_memories_fts(rowid, id, text) VALUES (new.rowid, new.id, new.text);
+      END;
+      CREATE TRIGGER IF NOT EXISTS pm_ad AFTER DELETE ON project_memories BEGIN
+        INSERT INTO project_memories_fts(project_memories_fts, rowid, id, text) VALUES('delete', old.rowid, old.id, old.text);
+      END;
+      CREATE TRIGGER IF NOT EXISTS pm_au AFTER UPDATE ON project_memories BEGIN
+        INSERT INTO project_memories_fts(project_memories_fts, rowid, id, text) VALUES('delete', old.rowid, old.id, old.text);
+        INSERT INTO project_memories_fts(rowid, id, text) VALUES (new.rowid, new.id, new.text);
+      END;
+    `);
+  } catch { /* tables already exist on upgraded DBs */ }
+
+  // One-time import from external agent-memory DB (skip in test environments)
+  if (dbPath !== ":memory:" && process.env.BRIDGE_SKIP_MEMORY_IMPORT !== "1") {
+    const importDone = raw.prepare("SELECT value FROM settings WHERE key = 'memory_import_v1_done'").get();
+    if (!importDone) {
+      try {
+        const agentMemPath = join(homedir(), ".agent-bridge/shared-memory/agent-memory.sqlite");
+        if (existsSync(agentMemPath)) {
+          const src = new Database(agentMemPath, { readonly: true });
+          const rows = src.prepare("SELECT id, type, scope, text, created_at FROM memories").all() as Array<{id: string; type: string; scope: string; text: string; created_at: string}>;
+          src.close();
+          const ins = raw.prepare("INSERT OR IGNORE INTO project_memories (id, type, scope, text, created_at) VALUES (?, ?, ?, ?, ?)");
+          raw.transaction(() => { for (const m of rows) ins.run(m.id, m.type ?? "decision", m.scope ?? "project", m.text, m.created_at); })();
+        }
+      } catch { /* soft fail — source DB may not exist or be locked */ }
+      raw.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('memory_import_v1_done', '1')").run();
+    }
+  }
 
   // Clear any locks left held from a previous process that was killed mid-execution
   raw.exec(`UPDATE bridge_state SET active_execution_lock = 0 WHERE active_execution_lock = 1`);
@@ -1001,6 +1049,36 @@ export class BridgeDb {
       latestSummaryAt: ls?.created_at ?? null,
       latestTurnAt: lt?.created_at ?? null,
     };
+  }
+
+  // ── Project memory ────────────────────────────────────────────────────────
+
+  addMemory(mem: { id: string; type: string; scope?: string; text: string; source_chat_key?: string; source_cli?: string; confidence?: number }): void {
+    this.raw.prepare(`
+      INSERT OR REPLACE INTO project_memories (id, type, scope, text, source_chat_key, source_cli, confidence)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(mem.id, mem.type, mem.scope ?? "project", mem.text, mem.source_chat_key ?? null, mem.source_cli ?? null, mem.confidence ?? 1.0);
+  }
+
+  searchMemories(query: string, limit = 5): Array<{ id: string; type: string; text: string }> {
+    if (!query.trim()) return [];
+    const ftsQuery = query.trim().split(/\s+/).filter(Boolean).map(w => `${w}*`).join(" OR ");
+    try {
+      return this.raw.prepare(`
+        SELECT pm.id, pm.type, pm.text
+        FROM project_memories_fts fts
+        JOIN project_memories pm ON pm.rowid = fts.rowid
+        WHERE project_memories_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+      `).all(ftsQuery, limit) as Array<{ id: string; type: string; text: string }>;
+    } catch {
+      return [];
+    }
+  }
+
+  getMemoryCount(): number {
+    return (this.raw.prepare("SELECT COUNT(*) AS n FROM project_memories").get() as { n: number }).n;
   }
 
   close(): void {

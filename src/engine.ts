@@ -604,12 +604,17 @@ export class BridgeEngine {
     const status = this.db.getConvStatus(chatKey);
     if (status.turnCount === 0 && !status.latestSummaryAt) return null;
     const commandPath = join(process.cwd(), "bin", "agent-bridge-context");
+    const memoryHint = this.db.getMemoryCount() > 0 ? [
+      '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory',
+      '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-query "<specific query>"',
+    ] : [];
     return {
       prompt: [
         "[Agent Bridge context]",
         "More conversation history is available if needed:",
         '"$AGENT_BRIDGE_CONTEXT_COMMAND" --summary',
         '"$AGENT_BRIDGE_CONTEXT_COMMAND" --recent 20',
+        ...memoryHint,
         "",
       ].join("\n"),
       env: {

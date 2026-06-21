@@ -189,7 +189,7 @@ export class SelfPlugin implements HealthPlugin {
             checks.push({
               name: checkName,
               status: status,
-              message: `${cli} update available: ${current} -> ${latest} (${behind} version${behind === 1 ? "" : "s"} behind)`,
+              message: `${cli} update available: ${current} -> ${latest} (${behind} version${behind === 1 ? "" : "s"} behind). Run: ~/agent-bridge/scripts/deploy-clis.sh`,
             });
           } else {
             const version = getInstalledVersion(cli);

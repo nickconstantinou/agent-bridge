@@ -975,16 +975,19 @@ describe("SelfPlugin — extended checks", () => {
     expect(claudeCheck).toBeDefined();
     expect(claudeCheck?.status).toBe("red"); // 10 versions behind
     expect(claudeCheck?.message).toContain("2.1.158 -> 2.1.168");
+    expect(claudeCheck?.message).toContain("deploy-clis.sh");
 
     const codexCheck = report.checks.find(c => c.name === "cli-update-codex");
     expect(codexCheck).toBeDefined();
     expect(codexCheck?.status).toBe("green"); // 2 versions behind
     expect(codexCheck?.message).toContain("0.135.0 -> 0.137.0");
+    expect(codexCheck?.message).toContain("deploy-clis.sh");
 
     const antigravityCheck = report.checks.find(c => c.name === "cli-update-antigravity");
     expect(antigravityCheck).toBeDefined();
     expect(antigravityCheck?.status).toBe("amber"); // 3 versions behind
     expect(antigravityCheck?.message).toContain("1.0.6 -> 1.0.9");
+    expect(antigravityCheck?.message).toContain("deploy-clis.sh");
   });
 
   it("reports green status when agent CLIs are up to date", async () => {

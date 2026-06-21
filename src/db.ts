@@ -958,6 +958,17 @@ export class BridgeDb {
       .get(chatKey) as any) ?? null;
   }
 
+  getConvTurnsForCompaction(chatKey: string): Array<{ id: number; role: string; text: string; cli: string | null; created_at: string }> {
+    const summary = this.getLatestConvSummary(chatKey);
+    return this.raw
+      .prepare(
+        `SELECT id, role, text, cli, created_at FROM conversation_turns
+         WHERE chat_key = ? AND id > ?
+         ORDER BY id ASC`
+      )
+      .all(chatKey, summary?.range_end_turn_id ?? 0) as any;
+  }
+
   pruneConvTurns(chatKey: string, upToTurnId: number): void {
     this.raw
       .prepare(`DELETE FROM conversation_turns WHERE chat_key = ? AND id <= ?`)

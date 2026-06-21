@@ -35,7 +35,7 @@ import { sendTelegramMessage, sendMessageWithProgress } from "./messageDelivery.
 import { buildModelKeyboard, buildModelsText, getCliWorkingDir, extractPromptText, extractThreadId, isAuthorizedMessage } from "./bridge.js";
 import { handleCommand, isBridgeCommand, buildTelegramCommands, isAntigravityNarrationVisible } from "./commands.js";
 import { getCodexUsageText } from "./codexUsage.js";
-import { buildCompactSummaryPrompt, buildTombstone, COMPACT_TIMEOUT_MS } from "./compactSummary.js";
+import { buildCompactReducePrompt, buildCompactSummaryPrompt, buildTombstone, chunkCompactTurns, COMPACT_TIMEOUT_MS } from "./compactSummary.js";
 import type { BridgeEvent } from "./events/types.js";
 import { EventStore } from "./events/store.js";
 import type { BridgeConfig, BotKind, BotConfig, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult, CliOptions } from "./types.js";
@@ -355,7 +355,8 @@ export class BridgeEngine {
           }
           if (commandResponse.kind === "compact") {
             const ck = commandResponse.chatKey;
-            const turns = this.db.getRecentConvTurns(ck, 1000);
+            const previousSummary = this.db.getLatestConvSummary(ck);
+            const turns = this.db.getConvTurnsForCompaction(ck);
             if (turns.length === 0) {
               await this.sendText(chatId, { text: "Nothing to compact — no conversation turns yet.", message_thread_id: threadId });
               return;
@@ -364,8 +365,7 @@ export class BridgeEngine {
             const endId = turns[turns.length - 1].id;
 
             let summaryMd: string;
-            try {
-              const summaryPrompt = buildCompactSummaryPrompt(turns);
+            const summarizePrompt = async (summaryPrompt: string): Promise<string> => {
               const model = this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null;
               const invocation = buildCliInvocation({
                 bot: this.kind,
@@ -381,9 +381,24 @@ export class BridgeEngine {
                   setTimeout(() => reject(new Error("compact timeout")), COMPACT_TIMEOUT_MS)
                 ),
               ]);
-              summaryMd = typeof raw === "string" && raw.trim().length > 0
-                ? raw.trim()
-                : buildTombstone(turns, this.kind);
+              if (typeof raw === "string" && raw.trim().length > 0) return raw.trim();
+              throw new Error("empty compact summary");
+            };
+            try {
+              const chunks = chunkCompactTurns(turns);
+              if (chunks.length === 1 && !previousSummary) {
+                summaryMd = await summarizePrompt(buildCompactSummaryPrompt(turns));
+              } else {
+                const chunkSummaries = [];
+                for (const chunk of chunks) {
+                  chunkSummaries.push({
+                    startId: chunk[0].id!,
+                    endId: chunk[chunk.length - 1].id!,
+                    summary: await summarizePrompt(buildCompactSummaryPrompt(chunk)),
+                  });
+                }
+                summaryMd = await summarizePrompt(buildCompactReducePrompt(previousSummary?.summary_md ?? null, chunkSummaries));
+              }
             } catch {
               summaryMd = buildTombstone(turns, this.kind);
             }

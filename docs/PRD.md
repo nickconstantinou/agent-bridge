@@ -107,12 +107,13 @@ Every user message and assistant response is persisted to SQLite in `conversatio
 `buildConvContext(chatKey, maxChars)` composes the latest compact summary (if any) plus recent raw turns into a context preamble prepended to CLI prompts. It walks turns newest-first, accumulating character count, and stops when the char budget is exhausted. The summary always takes priority and is included even if it alone exceeds the budget. Default budget: `BRIDGE_CONTEXT_MAX_CHARS = 8_000` (~2K tokens); override via env var.
 
 **`/compact`** — Creates a semantic checkpoint and starts a fresh CLI session. The engine:
-1. Loads all turns for the chat key via `getRecentConvTurns`.
-2. Builds a summarization prompt via `buildCompactSummaryPrompt` (≤ 7,500 chars, trimmed to fit).
-3. Calls the active CLI in single-shot print mode (`sessionId: null`) with a 60s `Promise.race` timeout.
-4. Stores LLM output as `summary_md` via `addConvSummary`. Falls back to a tombstone on any failure.
-5. Prunes raw turns up to `endId` via `pruneConvTurns` — keeps storage bounded.
-6. Clears the `ctx_suppress` flag and the CLI session — next prompt starts a fresh CLI seeded with the new summary.
+1. Loads all un-compacted turns for the chat key via `getConvTurnsForCompaction` (`id > latest_summary.range_end_turn_id`).
+2. Chunks the loaded turns by prompt budget (`COMPACT_CHUNK_MAX_CHARS = 6_500`).
+3. Summarises each chunk with `buildCompactSummaryPrompt` in single-shot print mode (`sessionId: null`) with a 60s `Promise.race` timeout.
+4. If multiple chunks or a previous summary exists, reduce-merges the previous compact summary plus chunk summaries into one durable `summary_md`.
+5. If any summariser call fails or returns empty output, stores a tombstone covering the exact loaded turn range instead of pruning uncovered turns.
+6. Stores the final summary via `addConvSummary`, then prunes raw turns up to `endId` via `pruneConvTurns`.
+7. Clears the `ctx_suppress` flag and the CLI session — next prompt starts a fresh CLI seeded with the new summary.
 
 **`/context`** — Reports current conversation state: turn count, pending queue depth, last turn timestamp, and last compact time. Reads from `getConvStatus` and `getLatestConvSummary`. If stored turns exceed 100, it appends `High turn count - consider /compact`.
 
@@ -283,7 +284,7 @@ CREATE TABLE conversation_summaries (
 );
 ```
 
-> Note: `conversation_turns` are pruned after each successful `/compact` (rows up to `range_end_turn_id` deleted). Startup also performs the same summary-gated cleanup for any already-summarized turns left behind by an interrupted process. Unsummarized turns are never TTL-deleted. `conversation_summaries` are small (< 1 KB each) and kept indefinitely.
+> Note: `conversation_turns` are pruned after `/compact` only after a final summary or tombstone is stored for the exact loaded range (rows up to `range_end_turn_id` deleted). Startup also performs the same summary-gated cleanup for any already-summarized turns left behind by an interrupted process. Unsummarized turns are never TTL-deleted. `conversation_summaries` are small and kept indefinitely.
 
 ---
 
@@ -300,7 +301,7 @@ src/
 ├── db.ts               — BridgeDb (SQLite via better-sqlite3); conversation_turns/summaries/pending
 ├── types.ts            — TypeScript interfaces
 ├── commands.ts         — /reset, /models, /compact, /context (synchronous, returns string | null)
-├── compactSummary.ts   — buildCompactSummaryPrompt, buildTombstone, COMPACT_PROMPT_MAX_CHARS, COMPACT_TIMEOUT_MS
+├── compactSummary.ts   — chunkCompactTurns, buildCompactSummaryPrompt, buildCompactReducePrompt, buildTombstone, compact constants
 ├── contextCommand.ts   — renderAgentBridgeContext: read-only DB helper for agent CLI access
 ├── timeouts.ts         — Timeout resolution (per-bot prefix → global → default)
 └── agentMemory.ts      — agent-memory DB path resolution

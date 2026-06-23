@@ -544,12 +544,6 @@ To update an existing deployment (updates npm packages, Claude Code CLI, and res
 sudo bash scripts/upgrade.sh
 ```
 
-For nvm-based hosts, run deployment from a shell where Node 24 is active, or pass `NODE_BIN` explicitly:
-
-```bash
-NODE_BIN="$HOME/.nvm/versions/node/v24.15.0/bin/node" sudo -E bash scripts/upgrade.sh
-```
-
 ## Development
 
 ```bash

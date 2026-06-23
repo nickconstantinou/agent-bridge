@@ -5,9 +5,17 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SYSTEMD_DIR="/etc/systemd/system"
 DEFAULTS_DIR="/etc/default"
 NODE_MIN_MAJOR=24
-NODE_BIN="${NODE_BIN:-$(command -v node 2>/dev/null || true)}"
 TARGET_USER="${SUDO_USER:-${USER}}"
 TARGET_HOME="$(getent passwd "${TARGET_USER}" | cut -d: -f6)"
+
+# Resolve node: explicit env var → PATH → nvm directory under the target user's home
+if [[ -z "${NODE_BIN:-}" ]]; then
+  if command -v node >/dev/null 2>&1; then
+    NODE_BIN="$(command -v node)"
+  else
+    NODE_BIN="$(find "${TARGET_HOME}/.nvm/versions/node" -maxdepth 3 -name node -type f 2>/dev/null | sort -t/ -k7 -V | tail -1 || true)"
+  fi
+fi
 DEFAULT_AGENT_BRIDGE_SKILLS="red-green-refactor-tdd,requirements-to-acceptance,risk-based-test-strategy,release-readiness-review"
 
 # Parse flags

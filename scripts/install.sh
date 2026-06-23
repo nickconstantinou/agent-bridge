@@ -246,31 +246,20 @@ resolve_binary() {
   echo ""
 }
 
-# Verify that required CLI tools are on PATH; print install hint if missing.
-check_cli_prerequisites() {
-  local missing=0
-  for binary in codex claude; do
-    if ! command -v "${binary}" >/dev/null 2>&1; then
-      echo "  MISSING: ${binary} not found on PATH" >&2
-      missing=1
-    fi
-  done
-  if [[ "${missing}" == "1" ]]; then
-    echo "" >&2
-    echo "Install missing CLIs:" >&2
-    echo "  codex:  npm install -g @openai/codex" >&2
-    echo "  claude: npm install -g @anthropic-ai/claude-code" >&2
-    echo "" >&2
-    echo "Then re-run: sudo bash scripts/install.sh" >&2
+# Install or upgrade codex and claude via npm; exit with install hint if npm unavailable.
+install_or_upgrade_npm_clis() {
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "npm not found — install Node 24+ first" >&2
     exit 1
   fi
+  npm update -g @anthropic-ai/claude-code @openai/codex 2>/dev/null || \
+    npm install -g @anthropic-ai/claude-code @openai/codex
+  export PATH="${TARGET_HOME}/.local/bin:${PATH}"
 }
 
+# Install or upgrade agy via the Google Antigravity installer (idempotent).
 ensure_agy_cli() {
-  if command -v agy >/dev/null 2>&1; then
-    return
-  fi
-  echo "Installing agy via Google Antigravity installer"
+  echo "Installing/updating agy via Google Antigravity installer..."
   curl -fsSL https://antigravity.google/cli/install.sh | bash
   export PATH="${TARGET_HOME}/.local/bin:${PATH}"
 }
@@ -279,15 +268,13 @@ require_node
 ensure_target_user
 
 if [[ "${SKIP_CLI_INSTALL}" != "1" ]]; then
-  if command -v npm >/dev/null 2>&1; then
-    (cd "${REPO_DIR}" && npm install)
-    ensure_agy_cli
-    check_cli_prerequisites
-    CODEX_COMMAND="${CODEX_COMMAND:-$(resolve_binary codex)}"
-    ANTIGRAVITY_COMMAND="${ANTIGRAVITY_COMMAND:-$(resolve_binary agy)}"
-    CLAUDE_COMMAND="${CLAUDE_COMMAND:-$(resolve_binary claude)}"
-    install_shared_skills
-  fi
+  (cd "${REPO_DIR}" && npm install)
+  install_or_upgrade_npm_clis
+  ensure_agy_cli
+  CODEX_COMMAND="${CODEX_COMMAND:-$(resolve_binary codex)}"
+  ANTIGRAVITY_COMMAND="${ANTIGRAVITY_COMMAND:-$(resolve_binary agy)}"
+  CLAUDE_COMMAND="${CLAUDE_COMMAND:-$(resolve_binary claude)}"
+  install_shared_skills
 elif [[ -n "${AGENT_BRIDGE_SKILLS:-}" ]]; then
   install_shared_skills
 fi

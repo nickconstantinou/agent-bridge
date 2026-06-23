@@ -37,7 +37,7 @@ describe("shared skills catalog", () => {
 
   it("keeps the bundled skills list in the install scripts as the default", () => {
     const installScript = readFileSync("scripts/install.sh", "utf8");
-    const deployScript = readFileSync("scripts/install-deployment.sh", "utf8");
+    const deployScript = readFileSync("scripts/upgrade.sh", "utf8");
     for (const name of listLocalCatalog().map((entry) => entry.name)) {
       expect(installScript).toContain(name);
       expect(deployScript).toContain(name);

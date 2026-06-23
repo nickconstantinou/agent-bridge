@@ -15,6 +15,17 @@ describe("Execution Path Selection - TDD", () => {
       expect(hasImport).toBe(false);
     });
 
+    it("REMOVE: Gemini env aliases from runtime config", async () => {
+      const fs = await import("fs");
+      const index = fs.readFileSync("src/index.ts", "utf-8");
+      const bridge = fs.readFileSync("src/bridge.ts", "utf-8");
+
+      expect(index).not.toContain("TELEGRAM_BOT_TOKEN_GEMINI");
+      expect(index).not.toContain("GEMINI_MODEL_PREFERENCE");
+      expect(index).not.toContain('name.includes("gemini")');
+      expect(bridge).not.toContain("GEMINI_PROJECT_DIR");
+    });
+
     it("timeout-based fallback removed; capacity-based fallback uses isCapacityExhaustedError", async () => {
       const fs = await import("fs");
       // Execution logic now lives in engine.ts (extracted from index.ts)
@@ -89,7 +100,7 @@ describe("Idle Timeout Config", () => {
   it("install scripts support non-interactive shared skill installation for the target home", async () => {
     const fs = await import("fs");
     const installScript = fs.readFileSync("scripts/install.sh", "utf-8");
-    const deploymentScript = fs.readFileSync("scripts/install-deployment.sh", "utf-8");
+    const deploymentScript = fs.readFileSync("scripts/upgrade.sh", "utf-8");
 
     for (const script of [installScript, deploymentScript]) {
       expect(script).toContain("AGENT_BRIDGE_SKILLS");

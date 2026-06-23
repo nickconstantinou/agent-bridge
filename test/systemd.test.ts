@@ -48,7 +48,7 @@ describe("systemd templates", () => {
 
   it("requires and records Node 24+ for service runtime", () => {
     const install = readFileSync(new URL("../scripts/install.sh", import.meta.url), "utf8");
-    const deployment = readFileSync(new URL("../scripts/install-deployment.sh", import.meta.url), "utf8");
+    const deployment = readFileSync(new URL("../scripts/upgrade.sh", import.meta.url), "utf8");
 
     expect(install).toContain("NODE_MIN_MAJOR=24");
     expect(install).toContain("NODE_BIN=${NODE_BIN}");
@@ -59,18 +59,17 @@ describe("systemd templates", () => {
   });
 
   it("deployment update mode skips npm build when package has no build script", () => {
-    const deployment = readFileSync(new URL("../scripts/install-deployment.sh", import.meta.url), "utf8");
+    const deployment = readFileSync(new URL("../scripts/upgrade.sh", import.meta.url), "utf8");
 
     expect(deployment).toContain("npm install --include=dev");
     expect(deployment).toContain("npm run | grep -q");
     expect(deployment).toContain("[update] No build script; skipping build");
   });
 
-  it("deployment backfills Telegram Markdown IR defaults for interactive renderers", () => {
-    const deployment = readFileSync(new URL("../scripts/install-deployment.sh", import.meta.url), "utf8");
+  it("deployment does not write retired Telegram Markdown IR defaults", () => {
+    const deployment = readFileSync(new URL("../scripts/upgrade.sh", import.meta.url), "utf8");
 
-    expect(deployment).toContain("ensure_markdown_ir_default");
-    expect(deployment).toContain("ensure_markdown_ir_default /etc/default/agent-bridge-interactive");
-    expect(deployment).toContain("ensure_markdown_ir_default /etc/default/agent-bridge-discord-interactive");
+    expect(deployment).not.toContain("ensure_markdown_ir_default");
+    expect(deployment).not.toContain("TELEGRAM_MARKDOWN_IR_ENABLED");
   });
 });

@@ -390,7 +390,7 @@ The installer (`scripts/install.sh`) requires Node 24+, generates local env
 files from the `.env.*.example` templates, writes machine-specific values
 (home dir, Node binary path, CLI binary paths, tokens) to service defaults, and
 installs the standard services whose tokens/default files are present. Existing
-deployments can be refreshed with `scripts/install-deployment.sh`, which also
+deployments can be refreshed with `scripts/upgrade.sh`, which also
 requires Node 24+ and updates `NODE_BIN` in `/etc/default/agent-bridge-*`.
 
 The interactive Telegram bot and worker bot are operator-enabled services:

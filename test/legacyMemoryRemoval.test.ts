@@ -26,7 +26,7 @@ describe("legacy shared-memory CLI removal", () => {
   it("removes the old /memory command and install-time shared-memory setup", () => {
     const commands = readFileSync("src/commands.ts", "utf8");
     const install = readFileSync("scripts/install.sh", "utf8");
-    const deployment = readFileSync("scripts/install-deployment.sh", "utf8");
+    const deployment = readFileSync("scripts/upgrade.sh", "utf8");
 
     expect(commands).not.toContain("/memory");
     expect(commands).not.toContain("agent-memory");

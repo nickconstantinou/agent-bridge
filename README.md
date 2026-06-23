@@ -314,7 +314,7 @@ Optional install variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AGENT_BRIDGE_SKILLS` | all bundled skills | Comma-separated bundled skills to install during `install.sh` or `install-deployment.sh`; use `none` to skip. |
+| `AGENT_BRIDGE_SKILLS` | all bundled skills | Comma-separated bundled skills to install during `install.sh` or `upgrade.sh`; use `none` to skip. |
 | `AGENT_BRIDGE_SKILL_LINK_MODE` | `symlink` | Native CLI projection mode: `symlink` or `copy`. |
 
 If verification reports stale symlinks or missing native entries, repair them with:
@@ -541,13 +541,13 @@ journalctl -u agent-bridge-discord-interactive -f
 To update an existing deployment (updates npm packages, Claude Code CLI, and restarts services):
 
 ```bash
-sudo bash scripts/install-deployment.sh
+sudo bash scripts/upgrade.sh
 ```
 
 For nvm-based hosts, run deployment from a shell where Node 24 is active, or pass `NODE_BIN` explicitly:
 
 ```bash
-NODE_BIN="$HOME/.nvm/versions/node/v24.15.0/bin/node" sudo -E bash scripts/install-deployment.sh
+NODE_BIN="$HOME/.nvm/versions/node/v24.15.0/bin/node" sudo -E bash scripts/upgrade.sh
 ```
 
 ## Development

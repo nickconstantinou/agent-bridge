@@ -459,7 +459,7 @@ agent-bridge/
 │   └── agent-bridge-claude.service
 ├── scripts/
 │   ├── install.sh          — First-time install (prompts for tokens, creates systemd units)
-│   └── install-deployment.sh — Update existing deployment (npm, CLI update, service reload)
+│   └── upgrade.sh — Update existing deployment (npm, CLI update, service reload)
 ├── .env.shared            — Live shared config for all bots (gitignored)
 ├── .env.shared.example    — Shared config template (committed)
 ├── .env.antigravity       — Live Antigravity config (gitignored)
@@ -492,7 +492,6 @@ agent-bridge/
 | `BRIDGE_PROJECT_DIR` | All | Repo path (used for default `DB_PATH`) |
 | `AGENT_BRIDGE_SOUL_PATH` | All | Optional persona contract path (default: `<project-dir>/SOUL.md`) |
 | `AGENT_BRIDGE_SOUL_MODE` | All | `summary`, `full`, or `off` (default: `summary`) |
-| `TELEGRAM_RICH_MESSAGES_ENABLED` | Telegram bots | `true` enables Bot API 10.1 rich final-message rendering for tables and diagnostic blocks |
 | `TELEGRAM_DOCUMENT_FALLBACK_ENABLED` | Telegram bots | `true` opts in to in-memory `response.md` attachments for exceptional oversized/code-heavy final responses (default: off) |
 | `TELEGRAM_LAYOUT_DOCUMENT_THRESHOLD` | Telegram bots | Attachment threshold used only when `TELEGRAM_DOCUMENT_FALLBACK_ENABLED=true` (default: 3500) |
 | `TELEGRAM_LAYOUT_CODE_BLOCK_THRESHOLD` | Telegram bots | Code-block attachment threshold used only when `TELEGRAM_DOCUMENT_FALLBACK_ENABLED=true` (default: 3) |

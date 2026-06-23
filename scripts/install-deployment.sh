@@ -66,18 +66,6 @@ install_shared_skills() {
   done
 }
 
-ensure_markdown_ir_default() {
-  local file="$1"
-  if [[ ! -f "${file}" ]]; then
-    return
-  fi
-  if sudo grep -q '^TELEGRAM_MARKDOWN_IR_ENABLED=' "${file}"; then
-    sudo sed -i 's|^TELEGRAM_MARKDOWN_IR_ENABLED=.*|TELEGRAM_MARKDOWN_IR_ENABLED=true|' "${file}"
-  else
-    printf '\nTELEGRAM_MARKDOWN_IR_ENABLED=true\n' | sudo tee -a "${file}" > /dev/null
-  fi
-}
-
 require_node
 
 # ── --update mode: update CLIs + build + test + safe service restart ──────────
@@ -86,7 +74,7 @@ if [[ "${1:-}" == "--update" ]]; then
   echo "[update] Updating CLI packages..."
   if command -v npm >/dev/null 2>&1; then
     (cd "${REPO_DIR}" && npm install --include=dev)
-    npm update -g @anthropic-ai/claude-code 2>/dev/null || true
+    npm update -g @anthropic-ai/claude-code @openai/codex 2>/dev/null || true
   fi
 
   echo "[update] Updating agy (antigravity)..."
@@ -104,9 +92,6 @@ if [[ "${1:-}" == "--update" ]]; then
     echo "[update] Tests FAILED — aborting service restarts" >&2
     exit 1
   fi
-
-  ensure_markdown_ir_default /etc/default/agent-bridge-interactive
-  ensure_markdown_ir_default /etc/default/agent-bridge-discord-interactive
 
   echo "[update] Restarting active services..."
   UPDATE_SERVICES=(
@@ -147,7 +132,7 @@ run_as_target_user() {
 if [[ "${1:-}" != "--skip-cli-install" ]]; then
   if command -v npm >/dev/null 2>&1; then
     (cd "${REPO_DIR}" && npm install)
-    npm update -g @anthropic-ai/claude-code 2>/dev/null || true
+    npm update -g @anthropic-ai/claude-code @openai/codex 2>/dev/null || true
     install_shared_skills
   fi
 
@@ -209,11 +194,8 @@ DISCORD_INT_DEFAULTS="/etc/default/agent-bridge-discord-interactive"
 if [[ -f "${DISCORD_INT_DEFAULTS}" ]]; then
   install_unit agent-bridge-discord-interactive
   ensure_node_default "${DISCORD_INT_DEFAULTS}"
-  ensure_markdown_ir_default /etc/default/agent-bridge-discord-interactive
   UNITS_TO_ENABLE="${UNITS_TO_ENABLE} agent-bridge-discord-interactive"
 fi
-
-ensure_markdown_ir_default /etc/default/agent-bridge-interactive
 
 sudo systemctl daemon-reload
 # shellcheck disable=SC2086

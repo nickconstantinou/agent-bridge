@@ -1,5 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync } from "node:fs";
 import https from "node:https";
 import { execSync } from "node:child_process";
 import { getHeapStatistics } from "node:v8";
@@ -148,59 +147,70 @@ export class SelfPlugin implements HealthPlugin {
       checks.push({ name: "service-restarts", status: restartStatus, message: restartMsg, value: totalRestarts });
     }
 
-    // Agent CLI update checks
-    let outdatedStdout: string | null = null;
-    let commandSuccess = false;
+    // Agent CLI update checks — CLIs are external global installs, not local deps
+    let globalListParsed: Record<string, { version?: string }> = {};
+    let globalListSuccess = false;
     try {
-      outdatedStdout = execSync("npm outdated --json", {
+      const stdout = execSync("npm list -g --depth=0 --json", {
         stdio: ["ignore", "pipe", "ignore"],
         timeout: 10000,
       }).toString();
-      commandSuccess = true;
+      globalListParsed = (JSON.parse(stdout).dependencies ?? {}) as Record<string, { version?: string }>;
+      globalListSuccess = true;
     } catch (err: any) {
       if (err.stdout) {
-        outdatedStdout = err.stdout.toString();
-        commandSuccess = true;
+        try {
+          globalListParsed = (JSON.parse(err.stdout.toString()).dependencies ?? {}) as Record<string, { version?: string }>;
+          globalListSuccess = true;
+        } catch { /* ignore */ }
       }
     }
 
-    if (commandSuccess) {
-      try {
-        const outdated = outdatedStdout && outdatedStdout.trim()
-          ? JSON.parse(outdatedStdout)
-          : {};
-        const cliNames = ["@anthropic-ai/claude-code", "@openai/codex"];
-        for (const cli of cliNames) {
-          const nameToken = cli.split("/").pop()!;
-          const checkName = `cli-update-${nameToken}`;
-          if (outdated[cli]) {
-            const current = outdated[cli].current;
-            const latest = outdated[cli].latest;
-            const behind = getVersionsBehind(cli, current, latest);
-
+    if (globalListSuccess) {
+      const cliSpecs = [
+        { pkg: "@anthropic-ai/claude-code", checkName: "cli-update-claude-code" },
+        { pkg: "@openai/codex", checkName: "cli-update-codex" },
+      ];
+      for (const { pkg, checkName } of cliSpecs) {
+        const installed = globalListParsed[pkg];
+        if (!installed?.version) {
+          checks.push({
+            name: checkName,
+            status: "red",
+            message: `${pkg} not found globally — install: npm install -g ${pkg}`,
+          });
+          continue;
+        }
+        const current = installed.version;
+        try {
+          const latest = execSync(`npm view ${pkg} version`, {
+            stdio: ["ignore", "pipe", "ignore"],
+            timeout: 5000,
+          }).toString().trim();
+          if (current !== latest) {
+            const behind = getVersionsBehind(pkg, current, latest);
             let status: "green" | "amber" | "red" = "green";
-            if (behind >= 10) {
-              status = "red";
-            } else if (behind >= 3) {
-              status = "amber";
-            }
-
+            if (behind >= 10) status = "red";
+            else if (behind >= 3) status = "amber";
             checks.push({
               name: checkName,
-              status: status,
-              message: `${cli} update available: ${current} -> ${latest} (${behind} version${behind === 1 ? "" : "s"} behind). Run: ~/agent-bridge/scripts/install-deployment.sh --update`,
+              status,
+              message: `${pkg} update available: ${current} -> ${latest} (${behind} version${behind === 1 ? "" : "s"} behind). Run: ~/agent-bridge/scripts/install-deployment.sh --update`,
             });
           } else {
-            const version = getInstalledVersion(cli);
             checks.push({
               name: checkName,
               status: "green",
-              message: `${cli} is up to date${version ? ` (${version})` : ""}`,
+              message: `${pkg} is up to date (${current})`,
             });
           }
+        } catch {
+          checks.push({
+            name: checkName,
+            status: "green",
+            message: `${pkg} is up to date (${current})`,
+          });
         }
-      } catch {
-        // Ignore JSON parsing errors
       }
     }
 
@@ -275,21 +285,6 @@ export class SelfPlugin implements HealthPlugin {
   }
 }
 
-function getInstalledVersion(packageName: string): string | null {
-  try {
-    const pkgPath = join(process.cwd(), "node_modules", packageName, "package.json");
-    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-    return pkg.version || null;
-  } catch {
-    try {
-      const pkgPath = join(import.meta.dirname, "..", "..", "..", "node_modules", packageName, "package.json");
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
-      return pkg.version || null;
-    } catch {
-      return null;
-    }
-  }
-}
 
 function getVersionsBehind(cliName: string, current: string, latest: string): number {
   if (current === latest) return 0;

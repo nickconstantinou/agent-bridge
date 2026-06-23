@@ -34,8 +34,19 @@ vi.mock("node:child_process", async (importOriginal) => {
         const res = (globalThis as any).__mockExecSync(cmd, options);
         if (res !== undefined) return res;
       }
-      if (cmd.includes("npm outdated")) {
-        return "";
+      if (cmd.includes("npm list -g --depth=0 --json")) {
+        return JSON.stringify({
+          dependencies: {
+            "@anthropic-ai/claude-code": { version: "2.1.185" },
+            "@openai/codex": { version: "0.141.0" }
+          }
+        });
+      }
+      if (cmd.includes("npm view @anthropic-ai/claude-code version") && !cmd.includes("versions")) {
+        return "2.1.185";
+      }
+      if (cmd.includes("npm view @openai/codex version") && !cmd.includes("versions")) {
+        return "0.141.0";
       }
       return actual.execSync(cmd, options);
     }
@@ -930,27 +941,19 @@ describe("SelfPlugin — extended checks", () => {
 
   it("reports appropriate status for agent CLI updates based on version distance thresholds", async () => {
     (globalThis as any).__mockExecSync = (cmd: string) => {
-      if (cmd.includes("npm outdated --json")) {
-        const err = new Error("Command failed");
-        (err as any).status = 1;
-        (err as any).stdout = Buffer.from(JSON.stringify({
-          "@anthropic-ai/claude-code": {
-            "current": "2.1.158",
-            "wanted": "2.1.168",
-            "latest": "2.1.168"
-          },
-          "@openai/codex": {
-            "current": "0.135.0",
-            "wanted": "0.137.0",
-            "latest": "0.137.0"
-          },
-          "@google/agy-cli": {
-            "current": "1.0.6",
-            "wanted": "1.0.9",
-            "latest": "1.0.9"
+      if (cmd.includes("npm list -g --depth=0 --json")) {
+        return JSON.stringify({
+          dependencies: {
+            "@anthropic-ai/claude-code": { version: "2.1.158" },
+            "@openai/codex": { version: "0.135.0" }
           }
-        }));
-        throw err;
+        });
+      }
+      if (cmd.includes("npm view @anthropic-ai/claude-code version") && !cmd.includes("versions")) {
+        return "2.1.168";
+      }
+      if (cmd.includes("npm view @openai/codex version") && !cmd.includes("versions")) {
+        return "0.137.0";
       }
       if (cmd.includes("npm view @anthropic-ai/claude-code versions --json")) {
         return JSON.stringify([
@@ -960,9 +963,6 @@ describe("SelfPlugin — extended checks", () => {
       }
       if (cmd.includes("npm view @openai/codex versions --json")) {
         return JSON.stringify(["0.135.0", "0.136.0", "0.137.0"]);
-      }
-      if (cmd.includes("npm view @google/agy-cli versions --json")) {
-        return JSON.stringify(["1.0.6", "1.0.7", "1.0.8", "1.0.9"]);
       }
       return undefined;
     };
@@ -990,7 +990,16 @@ describe("SelfPlugin — extended checks", () => {
 
   it("reports green status when agent CLIs are up to date", async () => {
     (globalThis as any).__mockExecSync = (cmd: string) => {
-      if (cmd.includes("npm outdated --json")) return "";
+      if (cmd.includes("npm list -g --depth=0 --json")) {
+        return JSON.stringify({
+          dependencies: {
+            "@anthropic-ai/claude-code": { version: "2.1.185" },
+            "@openai/codex": { version: "0.141.0" }
+          }
+        });
+      }
+      if (cmd.includes("npm view @anthropic-ai/claude-code version") && !cmd.includes("versions")) return "2.1.185";
+      if (cmd.includes("npm view @openai/codex version") && !cmd.includes("versions")) return "0.141.0";
       if (cmd.includes("agy --version")) return "1.0.10";
       return undefined;
     };
@@ -1018,9 +1027,9 @@ describe("SelfPlugin — extended checks", () => {
     expect(agyCheck?.message).toContain("1.0.10");
   });
 
-  it("handles npm outdated errors gracefully without failing the entire plugin", async () => {
+  it("handles npm list errors gracefully without failing the entire plugin", async () => {
     (globalThis as any).__mockExecSync = (cmd: string) => {
-      if (cmd.includes("npm outdated --json")) {
+      if (cmd.includes("npm list -g --depth=0 --json")) {
         throw new Error("npm command completely failed");
       }
       return undefined;
@@ -1037,7 +1046,11 @@ describe("SelfPlugin — extended checks", () => {
   });
   it("reports agy version as green when agy is installed", async () => {
     (globalThis as any).__mockExecSync = (cmd: string) => {
-      if (cmd.includes("npm outdated --json")) return "";
+      if (cmd.includes("npm list -g --depth=0 --json")) {
+        return JSON.stringify({ dependencies: { "@anthropic-ai/claude-code": { version: "2.1.185" }, "@openai/codex": { version: "0.141.0" } } });
+      }
+      if (cmd.includes("npm view @anthropic-ai/claude-code version") && !cmd.includes("versions")) return "2.1.185";
+      if (cmd.includes("npm view @openai/codex version") && !cmd.includes("versions")) return "0.141.0";
       if (cmd.includes("agy --version")) return "1.0.10";
       return undefined;
     };
@@ -1054,7 +1067,11 @@ describe("SelfPlugin — extended checks", () => {
 
   it("reports agy-version as red when agy is not installed", async () => {
     (globalThis as any).__mockExecSync = (cmd: string) => {
-      if (cmd.includes("npm outdated --json")) return "";
+      if (cmd.includes("npm list -g --depth=0 --json")) {
+        return JSON.stringify({ dependencies: { "@anthropic-ai/claude-code": { version: "2.1.185" }, "@openai/codex": { version: "0.141.0" } } });
+      }
+      if (cmd.includes("npm view @anthropic-ai/claude-code version") && !cmd.includes("versions")) return "2.1.185";
+      if (cmd.includes("npm view @openai/codex version") && !cmd.includes("versions")) return "0.141.0";
       if (cmd.includes("agy --version")) throw new Error("command not found: agy");
       return undefined;
     };

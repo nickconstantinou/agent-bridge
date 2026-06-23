@@ -228,19 +228,34 @@ install_unit() {
   sudo chmod 0644 "${SYSTEMD_DIR}/${name}.service"
 }
 
-# Returns the path to a binary: prefers global PATH, then local node_modules/.bin
+# Returns the path to a binary from PATH only (CLIs are external global installs)
 resolve_binary() {
   local binary="$1"
   if command -v "${binary}" >/dev/null 2>&1; then
     command -v "${binary}"
     return
   fi
-  local local_bin="${REPO_DIR}/node_modules/.bin/${binary}"
-  if [[ -x "${local_bin}" ]]; then
-    echo "${local_bin}"
-    return
-  fi
   echo ""
+}
+
+# Verify that required CLI tools are on PATH; print install hint if missing.
+check_cli_prerequisites() {
+  local missing=0
+  for binary in codex claude; do
+    if ! command -v "${binary}" >/dev/null 2>&1; then
+      echo "  MISSING: ${binary} not found on PATH" >&2
+      missing=1
+    fi
+  done
+  if [[ "${missing}" == "1" ]]; then
+    echo "" >&2
+    echo "Install missing CLIs:" >&2
+    echo "  codex:  npm install -g @openai/codex" >&2
+    echo "  claude: npm install -g @anthropic-ai/claude-code" >&2
+    echo "" >&2
+    echo "Then re-run: sudo bash scripts/install.sh" >&2
+    exit 1
+  fi
 }
 
 ensure_agy_cli() {
@@ -257,10 +272,9 @@ ensure_target_user
 
 if [[ "${SKIP_CLI_INSTALL}" != "1" ]]; then
   if command -v npm >/dev/null 2>&1; then
-    # npm install pulls codex and claude-code into ./node_modules as local deps
     (cd "${REPO_DIR}" && npm install)
     ensure_agy_cli
-    # Resolve CLI binary paths: global path first, then local node_modules/.bin
+    check_cli_prerequisites
     CODEX_COMMAND="${CODEX_COMMAND:-$(resolve_binary codex)}"
     ANTIGRAVITY_COMMAND="${ANTIGRAVITY_COMMAND:-$(resolve_binary agy)}"
     CLAUDE_COMMAND="${CLAUDE_COMMAND:-$(resolve_binary claude)}"

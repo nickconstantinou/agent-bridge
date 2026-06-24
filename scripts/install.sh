@@ -252,8 +252,7 @@ install_or_upgrade_npm_clis() {
     echo "npm not found — install Node 24+ first" >&2
     exit 1
   fi
-  npm update -g @anthropic-ai/claude-code @openai/codex 2>/dev/null || \
-    npm install -g @anthropic-ai/claude-code @openai/codex
+  npm install -g @anthropic-ai/claude-code @openai/codex
   export PATH="${TARGET_HOME}/.local/bin:${PATH}"
 }
 

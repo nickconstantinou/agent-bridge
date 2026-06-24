@@ -586,6 +586,14 @@ function extractAntigravityError(logContent: string | null | undefined): Error |
   return null;
 }
 
+function stripStatusLines(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .filter((line) => !/^STATUS:\s+\S/i.test(line.trim()))
+    .join("\n")
+    .trim();
+}
+
 function parseAntigravityResult(stdout: string, logContent?: string | null): CliResult {
   const logErr = extractAntigravityError(logContent);
   if (logErr) {
@@ -601,13 +609,15 @@ function parseAntigravityResult(stdout: string, logContent?: string | null): Cli
     const lines = text.split(/\r?\n/);
     let separatorIdx = -1;
     for (let i = lines.length - 1; i >= 0; i -= 1) {
-      if (lines[i].trim() === ANTIGRAVITY_FINAL_RESPONSE_DELIMITER) {
+      const trimmed = lines[i].trim();
+      // Match lines that ARE "***" or that END with "***" (e.g. "STATUS: done***")
+      if (trimmed === ANTIGRAVITY_FINAL_RESPONSE_DELIMITER || trimmed.endsWith(ANTIGRAVITY_FINAL_RESPONSE_DELIMITER)) {
         separatorIdx = i;
         break;
       }
     }
     if (separatorIdx !== -1) {
-      text = lines.slice(separatorIdx + 1).join("\n").trim();
+      text = stripStatusLines(lines.slice(separatorIdx + 1).join("\n").trim());
       if (!text) {
         throw new Error(JSON.stringify({ type: "error", message: "Agy execution returned empty response" }));
       }
@@ -624,6 +634,8 @@ function parseAntigravityResult(stdout: string, logContent?: string | null): Cli
       text = text.substring(lineEndIndex + 1).trim();
     }
   }
+
+  text = stripStatusLines(text);
 
   if (!text) {
     throw new Error(JSON.stringify({ type: "error", message: "Agy execution returned empty response" }));

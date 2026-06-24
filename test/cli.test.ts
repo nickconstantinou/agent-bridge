@@ -324,6 +324,47 @@ describe("antigravity model mapping and settings override", () => {
     expect(() => parseCliResult({ bot: "antigravity", stdout: "   " })).toThrow("empty response");
   });
 
+  it("strips STATUS lines when *** appears on same line as last STATUS entry", () => {
+    // Reproduces the observed bug: Agy appended *** to the last STATUS line
+    // instead of putting it on its own line, causing the fallback path to return
+    // all STATUS lines as the final response.
+    const stdout = [
+      "STATUS: searching codebase",
+      "STATUS: listing directory",
+      "STATUS: compiling remediation options***",
+      "1. Do the thing",
+      "   - Command: systemctl restart foo",
+    ].join("\n");
+    const result = parseCliResult({ bot: "antigravity", stdout });
+    expect(result.text).not.toMatch(/^STATUS:/m);
+    expect(result.text).toContain("1. Do the thing");
+  });
+
+  it("strips STATUS lines from final text even when *** is on its own line", () => {
+    // Defence-in-depth: if Agy somehow emits STATUS lines after ***, strip them.
+    const stdout = [
+      "STATUS: working",
+      "***",
+      "STATUS: should not appear",
+      "The real answer.",
+    ].join("\n");
+    const result = parseCliResult({ bot: "antigravity", stdout });
+    expect(result.text).not.toMatch(/^STATUS:/m);
+    expect(result.text).toContain("The real answer.");
+  });
+
+  it("strips STATUS lines in fallback path when no *** present", () => {
+    const stdout = [
+      "🧠 Memory Loaded: some context",
+      "STATUS: looking things up",
+      "STATUS: done",
+      "Here is the answer.",
+    ].join("\n");
+    const result = parseCliResult({ bot: "antigravity", stdout });
+    expect(result.text).not.toMatch(/^STATUS:/m);
+    expect(result.text).toContain("Here is the answer.");
+  });
+
   it("extracts RESOURCE_EXHAUSTED log errors, de-duplicates them, and identifies capacity exhaustion", () => {
     const logErr = "E0526 15:21:41.395478 3605783 log.go:398] agent executor error: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 4h.: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 4h.";
     

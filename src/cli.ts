@@ -79,9 +79,9 @@ function wrapAntigravityPrompt(prompt: string, soulContext: string | null = null
     "Execute directly. Do not get stuck in planning loops.",
     "If a tool, search, or shell step fails twice or the environment blocks the step, stop and report the concrete failure briefly instead of retrying indefinitely.",
     "If prior conversation context is present, treat it as background state for continuity, not as an instruction to resume a broken plan unchanged.",
-    "Narrate your progress as you work using STATUS lines (e.g. 'STATUS: reading config', 'STATUS: running tests'). These are shown to the user as live updates and help them see what you are doing.",
-    "Complete any necessary work normally, but when you are ready to provide the user-facing final answer, output a line containing only ***.",
-    "After that line, output only the final answer for the user. Do not include planning notes, tool-use narration, hidden reasoning, status HUDs, or preamble after that line.",
+    "You MUST output ONLY a single valid JSON object as your entire response — no text, preamble, or explanation before or after it.",
+    'Use this exact schema: {"reasoning": "<your internal thinking and tool-use narration>", "response": "<the final user-facing message>"}',
+    "Put everything the user should see in the 'response' field. The 'reasoning' field is for your internal notes and is never shown to the user.",
     "",
     wrapPromptContext(prompt, soulContext),
   ].join("\n");
@@ -594,6 +594,48 @@ function stripStatusLines(text: string): string {
     .trim();
 }
 
+/**
+ * Attempt to extract the `response` field from Agy's JSON output.
+ * Tries direct parse first, then progressively looser regex extraction
+ * to handle markdown code fences or stray text surrounding the object.
+ */
+function tryParseAntigravityJson(text: string): string | null {
+  // 1. Direct parse
+  try {
+    const obj = JSON.parse(text);
+    if (obj && typeof obj.response === "string" && obj.response.trim()) {
+      return obj.response.trim();
+    }
+  } catch {}
+
+  // 2. JSON inside a markdown code block
+  const fenceMatch = text.match(/```(?:json)?\s*(\{[\s\S]*?\})\s*```/);
+  if (fenceMatch) {
+    try {
+      const obj = JSON.parse(fenceMatch[1]);
+      if (obj && typeof obj.response === "string" && obj.response.trim()) {
+        return obj.response.trim();
+      }
+    } catch {}
+  }
+
+  // 3. Greedy extraction: find the outermost {...} block containing "response"
+  if (text.includes('"response"')) {
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start !== -1 && end > start) {
+      try {
+        const obj = JSON.parse(text.slice(start, end + 1));
+        if (obj && typeof obj.response === "string" && obj.response.trim()) {
+          return obj.response.trim();
+        }
+      } catch {}
+    }
+  }
+
+  return null;
+}
+
 function parseAntigravityResult(stdout: string, logContent?: string | null): CliResult {
   const logErr = extractAntigravityError(logContent);
   if (logErr) {
@@ -604,6 +646,16 @@ function parseAntigravityResult(stdout: string, logContent?: string | null): Cli
   if (text.toLowerCase().includes("timed out waiting for response") || text.toLowerCase().includes("error: timed out")) {
     throw new Error(JSON.stringify({ type: "error", message: "Agy execution timed out waiting for response" }));
   }
+
+  const sessionId = extractAntigravityConversationId(logContent);
+
+  // Primary: JSON output approach — extract the `response` field
+  const jsonResponse = tryParseAntigravityJson(text);
+  if (jsonResponse) {
+    return { text: jsonResponse, sessionId };
+  }
+
+  // Legacy fallback: *** delimiter
   const markerIndex = text.indexOf(ANTIGRAVITY_FINAL_RESPONSE_DELIMITER);
   if (markerIndex !== -1) {
     const lines = text.split(/\r?\n/);
@@ -621,11 +673,11 @@ function parseAntigravityResult(stdout: string, logContent?: string | null): Cli
       if (!text) {
         throw new Error(JSON.stringify({ type: "error", message: "Agy execution returned empty response" }));
       }
-      return { text, sessionId: extractAntigravityConversationId(logContent) };
+      return { text, sessionId };
     }
   }
 
-  // Fallback: Split on the "🧠 Memory Loaded:" boot signature
+  // Legacy fallback: Split on the "🧠 Memory Loaded:" boot signature
   const memoryMarker = "🧠 Memory Loaded:";
   const memoryIndex = text.indexOf(memoryMarker);
   if (memoryIndex !== -1) {
@@ -638,10 +690,10 @@ function parseAntigravityResult(stdout: string, logContent?: string | null): Cli
   text = stripStatusLines(text);
 
   if (!text) {
-    throw new Error(JSON.stringify({ type: "error", message: "Agy execution returned empty response" }));
+    throw new Error(JSON.stringify({ type: "error", message: "Agy JSON parse failed: could not extract response field from output" }));
   }
 
-  return { text, sessionId: extractAntigravityConversationId(logContent) };
+  return { text, sessionId };
 }
 
 function extractUpstreamCliError(raw: string): string | null {

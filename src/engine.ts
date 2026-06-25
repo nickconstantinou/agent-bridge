@@ -107,7 +107,7 @@ function isAntigravityPrintTimeoutError(error: Error): boolean {
 
 function isRecoverableAntigravityExecutionError(error: Error): boolean {
   const message = error.message ?? "";
-  return /error executing cascade step:|agent executor error:|PlannerResponse without ModifiedResponse|Agy stalled in planner loop without usable output/i.test(message);
+  return /error executing cascade step:|agent executor error:|PlannerResponse without ModifiedResponse|Agy stalled in planner loop without usable output|Agy JSON parse failed/i.test(message);
 }
 
 function topicChatKey(chatId: number, chatType: string, threadId?: number): string {

@@ -320,11 +320,36 @@ describe("antigravity model mapping and settings override", () => {
   });
 
   it("throws error when Antigravity returns empty response", () => {
-    expect(() => parseCliResult({ bot: "antigravity", stdout: "" })).toThrow("empty response");
-    expect(() => parseCliResult({ bot: "antigravity", stdout: "   " })).toThrow("empty response");
+    expect(() => parseCliResult({ bot: "antigravity", stdout: "" })).toThrow(/empty response|JSON parse failed/i);
+    expect(() => parseCliResult({ bot: "antigravity", stdout: "   " })).toThrow(/empty response|JSON parse failed/i);
   });
 
-  it("strips STATUS lines when *** appears on same line as last STATUS entry", () => {
+  it("extracts response from clean JSON output", () => {
+    const stdout = JSON.stringify({ reasoning: "I checked the config.", response: "The server is running on port 3000." });
+    const result = parseCliResult({ bot: "antigravity", stdout });
+    expect(result.text).toBe("The server is running on port 3000.");
+  });
+
+  it("extracts response from pretty-printed JSON output", () => {
+    const stdout = JSON.stringify({ reasoning: "multi-step work done", response: "Done. **3 files** updated." }, null, 2);
+    const result = parseCliResult({ bot: "antigravity", stdout });
+    expect(result.text).toBe("Done. **3 files** updated.");
+  });
+
+  it("extracts response from JSON inside a markdown code fence", () => {
+    const stdout = "```json\n" + JSON.stringify({ reasoning: "internal notes", response: "Answer here." }) + "\n```";
+    const result = parseCliResult({ bot: "antigravity", stdout });
+    expect(result.text).toBe("Answer here.");
+  });
+
+  it("extracts response when JSON is surrounded by extra text", () => {
+    const inner = JSON.stringify({ reasoning: "thinking...", response: "Clean answer." });
+    const stdout = `Here is my output:\n${inner}\nEnd of output.`;
+    const result = parseCliResult({ bot: "antigravity", stdout });
+    expect(result.text).toBe("Clean answer.");
+  });
+
+  it("falls back to *** delimiter when JSON parse fails", () => {
     // Reproduces the observed bug: Agy appended *** to the last STATUS line
     // instead of putting it on its own line, causing the fallback path to return
     // all STATUS lines as the final response.
@@ -725,9 +750,11 @@ describe("wrapAntigravityPrompt — liveness and narration", () => {
     expect(prompt).not.toMatch(/'PING'/);
   });
 
-  it("contains a STATUS narration instruction for user visibility", () => {
+  it("contains a JSON output instruction instead of STATUS narration", () => {
     const prompt = getAgyPrompt();
-    expect(prompt).toContain("STATUS:");
+    expect(prompt).toContain('"response"');
+    expect(prompt).toContain('"reasoning"');
+    expect(prompt).not.toContain("STATUS:");
   });
 });
 

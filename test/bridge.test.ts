@@ -104,6 +104,25 @@ describe("agent bridge MVP", () => {
     if (prevClaudeProjectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = prevClaudeProjectDir;
   });
 
+  it("ignores retired GEMINI_PROJECT_DIR alias for antigravity cwd", () => {
+    const prevBridgeProject = process.env.BRIDGE_PROJECT_DIR;
+    const prevBridgeRoot = process.env.BRIDGE_ROOT_DIR;
+    const prevAntigravityProjectDir = process.env.ANTIGRAVITY_PROJECT_DIR;
+    const prevGeminiProjectDir = process.env.GEMINI_PROJECT_DIR;
+
+    process.env.BRIDGE_PROJECT_DIR = "/tmp/bridge-project";
+    process.env.BRIDGE_ROOT_DIR = "/tmp/bridge-root";
+    delete process.env.ANTIGRAVITY_PROJECT_DIR;
+    process.env.GEMINI_PROJECT_DIR = "/tmp/gemini-repo";
+
+    expect(getCliWorkingDir("antigravity")).toBe("/tmp/bridge-project");
+
+    if (prevBridgeProject === undefined) delete process.env.BRIDGE_PROJECT_DIR; else process.env.BRIDGE_PROJECT_DIR = prevBridgeProject;
+    if (prevBridgeRoot === undefined) delete process.env.BRIDGE_ROOT_DIR; else process.env.BRIDGE_ROOT_DIR = prevBridgeRoot;
+    if (prevAntigravityProjectDir === undefined) delete process.env.ANTIGRAVITY_PROJECT_DIR; else process.env.ANTIGRAVITY_PROJECT_DIR = prevAntigravityProjectDir;
+    if (prevGeminiProjectDir === undefined) delete process.env.GEMINI_PROJECT_DIR; else process.env.GEMINI_PROJECT_DIR = prevGeminiProjectDir;
+  });
+
   it("defaults the bridge project dir to the current working directory", () => {
     const prevBridgeProjectDir = process.env.BRIDGE_PROJECT_DIR;
     delete process.env.BRIDGE_PROJECT_DIR;
@@ -205,7 +224,7 @@ describe("agent bridge MVP", () => {
     expect(args.indexOf("--dangerously-skip-permissions")).toBeLessThan(args.indexOf("--print"));
   });
 
-  it("wraps antigravity prompts with a final-response delimiter instruction", () => {
+  it("wraps antigravity prompts with a JSON output instruction", () => {
     const { args } = buildCliInvocation({
       bot: "antigravity",
       prompt: "hello",
@@ -218,8 +237,8 @@ describe("agent bridge MVP", () => {
     expect(printedPrompt).toContain("hello");
     expect(printedPrompt).toContain("Execute directly. Do not get stuck in planning loops.");
     expect(printedPrompt).toContain("If a tool, search, or shell step fails twice");
-    expect(printedPrompt).toContain("line containing only ***");
-    expect(printedPrompt).toContain("after that line");
+    expect(printedPrompt).toContain('"response"');
+    expect(printedPrompt).toContain('"reasoning"');
   });
 
   it("keeps antigravity delimiter outside SOUL.md and Telegram style context", () => {

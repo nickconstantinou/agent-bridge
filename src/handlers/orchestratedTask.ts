@@ -6,6 +6,7 @@
  */
 
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
+import { isCodeCliAllowed } from "../workerCliPolicy.js";
 
 type CliKind = "codex" | "claude" | "antigravity";
 type RunCli = (command: string, args: string[], cwd?: string) => Promise<string>;
@@ -80,6 +81,9 @@ export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHa
     if (!item) throw new Error(`Work item ${workItemId} not found`);
 
     const selectedCli = preferredCli(input) ?? phaseData.preferredCli ?? null;
+    if (selectedCli && !isCodeCliAllowed(selectedCli)) {
+      throw new Error(`CLI ${selectedCli} is not allowed for orchestrated_task code-writing phases`);
+    }
     const command = commandFor(deps, selectedCli);
     const branchName = phaseData.branchName ?? `agent/work-${workItemId}`;
 

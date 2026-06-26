@@ -46,6 +46,7 @@ import { captureFeatureBrief } from "./featureBriefCapture.js";
 import { runCli } from "./cli.js";
 import { createRunCommand } from "./runCommandAsync.js";
 import { prepareWorkspace, createWorkspaceCleanup, resolveLocalRepoPath } from "./workspace.js";
+import { resolveWorkerCliPolicy } from "./workerCliPolicy.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 
 dotenv.config({
@@ -65,9 +66,12 @@ const workerEnabled = process.env.WORKER_ENABLED === "true";
 const jobPollIntervalMs = Number(process.env.WORKER_JOB_POLL_INTERVAL_MS || 10_000);
 const prWatchIntervalMs = Number(process.env.WORKER_PR_WATCH_INTERVAL || 3_600_000); // 1h default
 const prStaleHours = Number(process.env.WORKER_PR_STALE_HOURS || 72);
-const defectScanCommand = process.env.DEFECT_SCAN_CLI_COMMAND || "claude";
-const cliChain = (process.env.WORKER_CLI_CHAIN || "codex,claude,antigravity")
-  .split(",").map(s => s.trim()).filter(Boolean);
+const workerCliPolicy = resolveWorkerCliPolicy(process.env);
+const cliChain = workerCliPolicy.interactiveChain;
+const codeCliChain = workerCliPolicy.codeChain;
+const scribeCliChain = workerCliPolicy.scribeChain;
+const codeCommand = process.env.WORKER_CODE_CLI_COMMAND || codeCliChain[0];
+const scribeCommand = process.env.WORKER_SCRIBE_CLI_COMMAND || process.env.DEFECT_SCAN_CLI_COMMAND || scribeCliChain[0];
 const dbPath = process.env.DB_PATH || `${getBridgeProjectDir()}/.data/bridge.sqlite`;
 const pollIntervalMs = Number(process.env.POLL_INTERVAL_MS || 1000);
 const executionMode = (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") || "safe";
@@ -190,17 +194,17 @@ const jobExecutor = startJobExecutorLoop({
   workerId: `worker-bot-${process.pid}`,
   handlers: {
     defect_scan: createDefectScanHandler({
-      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), cliChain),
-      command: defectScanCommand,
+      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), scribeCliChain),
+      command: scribeCommand,
       resolveRepoPath: (repository) => resolveLocalRepoPath(repository),
     }),
     feature_plan: createFeaturePlanHandler({
-      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), cliChain, { timeoutMs: 20 * 60 * 1000 }),
-      command: defectScanCommand,
+      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), scribeCliChain, { timeoutMs: 20 * 60 * 1000 }),
+      command: scribeCommand,
     }),
     tdd_implementation: createTddImplementationHandler({
-      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), cliChain, { timeoutMs: 15 * 60 * 1000 }),
-      command: defectScanCommand,
+      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), codeCliChain, { timeoutMs: 15 * 60 * 1000 }),
+      command: codeCommand,
       // File edits only — bash stays gated; the handler runs tests itself
       cliExtraArgs: ["--permission-mode", "acceptEdits"],
       runGit: (args, cwd) => runWorkerCommand("git", args, { cwd }),
@@ -215,12 +219,11 @@ const jobExecutor = startJobExecutorLoop({
       cleanupWorkspace,
     }),
     orchestrated_task: createOrchestratedTaskHandler({
-      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), cliChain, { timeoutMs: 15 * 60 * 1000 }),
-      command: defectScanCommand,
+      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), codeCliChain, { timeoutMs: 15 * 60 * 1000 }),
+      command: codeCommand,
       commands: {
         codex: process.env.CODEX_COMMAND || "codex",
         claude: process.env.CLAUDE_COMMAND || "claude",
-        antigravity: process.env.ANTIGRAVITY_COMMAND || "agy",
       },
       cliExtraArgs: ["--permission-mode", "acceptEdits"],
       runGit: (args, cwd) => runWorkerCommand("git", args, { cwd }),
@@ -307,7 +310,11 @@ function enqueuePrWatch() {
 enqueuePrWatch();
 setInterval(enqueuePrWatch, prWatchIntervalMs);
 
-console.log(`[worker-bot] starting (workerEnabled=${workerEnabled}, cliChain=${cliChain.join(",")}, jobPollIntervalMs=${jobPollIntervalMs})`);
+console.log(
+  `[worker-bot] starting (workerEnabled=${workerEnabled}, ` +
+  `interactiveChain=${cliChain.join(",")}, codeChain=${codeCliChain.join(",")}, ` +
+  `scribeChain=${scribeCliChain.join(",")}, jobPollIntervalMs=${jobPollIntervalMs})`,
+);
 
 let offset = 0;
 

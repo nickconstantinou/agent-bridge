@@ -99,6 +99,19 @@ describe("createOrchestratedTaskHandler", () => {
     expect(db.getWorkItem(item.id)!.status).toBe("in_progress");
   });
 
+  it("rejects antigravity as preferred_cli for code-writing phases", async () => {
+    const stubs = makeStubs();
+    const item = db.createWorkItem({
+      kind: "feature", source: "telegram", repository: "owner/repo",
+      title: "Add orchestration", created_by: "worker",
+    });
+
+    await expect(createOrchestratedTaskHandler(stubs)(
+      { work_item_id: item.id, repository_path: "/tmp/repo", preferred_cli: "antigravity" },
+      { db, workerId: "w", phase: "initial", phaseData: {} },
+    )).rejects.toThrow(/not allowed.*orchestrated_task/i);
+  });
+
   it("fails executing when no files are staged", async () => {
     const stubs = makeStubs();
     stubs.runGit.mockImplementation((args: string[]) => {

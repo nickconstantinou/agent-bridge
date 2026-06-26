@@ -411,6 +411,13 @@ and `phase_data_json`; after verification passes it queues `pr_lifecycle` so
 branch push, draft PR creation, proof comments, and merge approval stay behind
 the existing human gate.
 
+The worker separates CLI routing by risk. Code-writing jobs use
+`WORKER_CODE_CLI_CHAIN` (`codex,claude` by default, with `antigravity` stripped
+if configured). Scribe/read-only jobs use `WORKER_SCRIBE_CLI_CHAIN`
+(`antigravity,codex,claude` by default) for defect scans, feature plans, and
+operator prose so Agy can save coding-model capacity without mutating
+production code.
+
 ### Database
 
 Each service instance has its own `DB_PATH` to avoid SQLite lock contention.

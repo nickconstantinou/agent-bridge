@@ -93,7 +93,11 @@ Set in the worker's env file (`.env.worker` or the systemd default file):
 | `TELEGRAM_BOT_TOKEN_WORKER` | — | Worker bot token (required) |
 | `WORKER_ENABLED` | `false` | Master switch for job commands |
 | `WORKER_JOB_POLL_INTERVAL_MS` | `10000` | Queue poll interval (ms) |
-| `WORKER_CLI_CHAIN` | `codex,claude,antigravity` | CLI fallback order |
+| `WORKER_CLI_CHAIN` | `codex,claude,antigravity` | Worker interactive-chat fallback order |
+| `WORKER_CODE_CLI_CHAIN` | `codex,claude` | Code-writing fallback order; `antigravity` is stripped if present |
+| `WORKER_SCRIBE_CLI_CHAIN` | `antigravity,codex,claude` | Read-only/prose fallback order for scans, plans, docs, summaries |
+| `WORKER_CODE_CLI_COMMAND` | first code-chain entry | Primary command for code-writing jobs |
+| `WORKER_SCRIBE_CLI_COMMAND` | `DEFECT_SCAN_CLI_COMMAND` or first scribe-chain entry | Primary command for read-only/prose jobs |
 | `WORKER_DEFAULT_REPO` | — | Repository attached to `/feature` plans |
 | `WORKER_REPO_ROOT` | `$HOME` | Where repo names resolve to local checkouts |
 | `WORKER_WORKSPACE_DIR` | `~/.agent-bridge/workspaces` | Per-job clone location |
@@ -106,6 +110,11 @@ Set in the worker's env file (`.env.worker` or the systemd default file):
 | `WORKER_NOTIFY_CHAT_ID` | — | Telegram chat ID for stale PR digest messages |
 | `WORKER_GIT_NAME` | `agent-bridge worker` | Git author name used in workspace commits |
 | `WORKER_GIT_EMAIL` | `agent-bridge-worker@...` | Git author email used in workspace commits |
+
+Code-writing jobs (`tdd_implementation`, `orchestrated_task`) use the code
+chain and never fall back to Agy. Scribe/read-only jobs (`defect_scan`,
+`feature_plan`, summaries, PR/doc prose) use the scribe chain, which defaults
+to Agy first to conserve Codex/Claude coding capacity.
 
 Repository names resolve to `$WORKER_REPO_ROOT/<name>` (the part after `/` for
 `owner/name` forms). The directory must be a git checkout; workspaces clone

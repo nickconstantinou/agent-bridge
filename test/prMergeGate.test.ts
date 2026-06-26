@@ -272,6 +272,57 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
     });
   });
 
+  it("resolves the approval even when branch deletion fails after merge", async () => {
+    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+    const { item, approval } = makeApprovedItem({ head_sha: "abc123" });
+
+    const runCommand = vi.fn(async (_binary: string, args: string[]) => {
+      if (args.includes("view")) {
+        return JSON.stringify({ headRefOid: "abc123", statusCheckRollup: [] });
+      }
+      if (args.includes("merge")) return "Pull request #3 was merged";
+      // branch deletion via gh api fails
+      throw new Error("422 Reference does not exist");
+    });
+    const answerCbq = vi.fn().mockResolvedValue(undefined);
+    const editMessage = vi.fn().mockResolvedValue(undefined);
+
+    await handlePrMergeCallback(
+      { type: "wi_mrgpr", id: item.id },
+      { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
+    );
+
+    // Approval must be resolved even though branch deletion failed
+    const resolved = db.raw.prepare("SELECT * FROM approvals WHERE id = ?").get(approval.id) as any;
+    expect(resolved.status).toBe("approved");
+    expect(db.getWorkItem(item.id)!.status).toBe("resolved");
+    expect(editMessage).toHaveBeenCalledWith(expect.stringMatching(/merged/i));
+  });
+
+  it("treats already-merged error as idempotent success", async () => {
+    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+    const { item, approval } = makeApprovedItem({ head_sha: "abc123" });
+
+    const runCommand = vi.fn(async (_binary: string, args: string[]) => {
+      if (args.includes("view")) {
+        return JSON.stringify({ headRefOid: "abc123", statusCheckRollup: [] });
+      }
+      if (args.includes("merge")) throw new Error("Pull request #3 is already merged");
+      return ""; // branch deletion or other ops succeed
+    });
+    const answerCbq = vi.fn().mockResolvedValue(undefined);
+    const editMessage = vi.fn().mockResolvedValue(undefined);
+
+    await handlePrMergeCallback(
+      { type: "wi_mrgpr", id: item.id },
+      { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
+    );
+
+    const resolved = db.raw.prepare("SELECT * FROM approvals WHERE id = ?").get(approval.id) as any;
+    expect(resolved.status).toBe("approved");
+    expect(db.getWorkItem(item.id)!.status).toBe("resolved");
+  });
+
   it("answers the callback instead of throwing when no pending approval exists", async () => {
     const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
 
@@ -335,7 +386,7 @@ describe("handlePrMergeCallback — wi_clspr", () => {
     expect(db.getWorkItem(item.id)!.status).toBe("closed");
   });
 
-  it("answers the callback with an error message when gh pr close fails — does not throw", async () => {
+  it("answers the callback with an error message when gh pr close fails with a non-idempotent error", async () => {
     const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
 
     const item = db.createWorkItem({
@@ -349,7 +400,7 @@ describe("handlePrMergeCallback — wi_clspr", () => {
       payload: { pr_url: "https://github.com/owner/repo/pull/5", pr_number: 5, branch_name: "agent/work-1", repository: "owner/repo" },
     });
 
-    const runCommand = vi.fn().mockRejectedValue(new Error("PR already closed"));
+    const runCommand = vi.fn().mockRejectedValue(new Error("HTTP 502: Bad gateway"));
     const answerCbq = vi.fn().mockResolvedValue(undefined);
     const editMessage = vi.fn().mockResolvedValue(undefined);
 
@@ -361,11 +412,39 @@ describe("handlePrMergeCallback — wi_clspr", () => {
     ).resolves.toBeUndefined();
 
     expect(answerCbq).toHaveBeenCalled();
-    expect(editMessage).toHaveBeenCalledWith(expect.stringMatching(/failed|close|PR already closed/i));
+    expect(editMessage).toHaveBeenCalledWith(expect.stringMatching(/failed|close|502/i));
     // Approval must remain pending — close did not succeed
     const row = db.raw.prepare("SELECT * FROM approvals WHERE id = ?").get(approval.id) as any;
     expect(row.status).toBe("pending");
     expect(db.getWorkItem(item.id)!.status).not.toBe("closed");
+  });
+
+  it("treats already-closed error as idempotent success — resolves approval and closes work item", async () => {
+    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram", title: "Bug", created_by: "worker",
+      repository: "owner/repo",
+    });
+    const approval = db.createApproval({
+      approval_type: "merge_pr",
+      requested_by: "agent",
+      work_item_id: item.id,
+      payload: { pr_url: "https://github.com/owner/repo/pull/5", pr_number: 5, branch_name: "agent/work-1", repository: "owner/repo" },
+    });
+
+    const runCommand = vi.fn().mockRejectedValue(new Error("Pull request #5 is already closed"));
+    const answerCbq = vi.fn().mockResolvedValue(undefined);
+    const editMessage = vi.fn().mockResolvedValue(undefined);
+
+    await handlePrMergeCallback(
+      { type: "wi_clspr", id: item.id },
+      { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
+    );
+
+    const row = db.raw.prepare("SELECT * FROM approvals WHERE id = ?").get(approval.id) as any;
+    expect(row.status).toBe("rejected");
+    expect(db.getWorkItem(item.id)!.status).toBe("closed");
   });
 
   it("answers the callback when gh pr close fails with an auth error — does not throw", async () => {

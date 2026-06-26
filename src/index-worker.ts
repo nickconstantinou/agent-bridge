@@ -20,8 +20,19 @@ import { BridgeEngine } from "./engine.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
 import { handleWorkerCommand, isWorkerCommand, buildWorkerCommands } from "./workerBot.js";
 import { WorkerFallbackChain } from "./workerFallback.js";
-import { dispatchWithFallback, runCliWithFallback } from "./workerDispatch.js";
+import { runCliWithFallback } from "./workerDispatch.js";
 import { handleWorkerCallback } from "./workCallbacks.js";
+import {
+  dispatchInteractiveWithFallback,
+  getUserCliPreference,
+  setUserCliPreference,
+  handleCliSwitchCallback,
+  buildInteractiveCommands,
+  isCliCommandText,
+  buildCliStatusText,
+  buildCliKeyboard,
+  type CliKind,
+} from "./interactiveBot.js";
 import { startJobExecutorLoop } from "./jobExecutorLoop.js";
 import { createDefectScanHandler } from "./handlers/defectScan.js";
 import { createFeaturePlanHandler } from "./handlers/featurePlan.js";
@@ -141,9 +152,15 @@ const engines = Object.fromEntries(
   }),
 ) as Record<string, BridgeEngine>;
 
-// ── setMyCommands ─────────────────────────────────────────────────────────────
+// ── setMyCommands — merge worker + interactive (CLI) commands ─────────────────
 
-await client.setMyCommands({ commands: buildWorkerCommands() })
+const defaultCli: CliKind = "codex";
+const workerCmds = buildWorkerCommands();
+const interactiveCmds = buildInteractiveCommands(defaultCli);
+const workerCmdSet = new Set(workerCmds.map(c => c.command));
+const mergedCommands = [...workerCmds, ...interactiveCmds.filter(c => !workerCmdSet.has(c.command))];
+
+await client.setMyCommands({ commands: mergedCommands })
   .catch((err: unknown) => console.warn("[worker-bot] setMyCommands failed", err));
 
 // ── Background job executor loop ──────────────────────────────────────────────
@@ -287,6 +304,29 @@ for (;;) {
       try {
         const callbackQuery = update.callback_query;
         if (callbackQuery) {
+          // Handle CLI switch callbacks (cli:codex, cli:claude, cli:antigravity)
+          const cbqUserId = callbackQuery.from ? String(callbackQuery.from.id) : null;
+          if (cbqUserId && allowedUserIds.has(cbqUserId)) {
+            const cliSwitch = handleCliSwitchCallback(callbackQuery.data || "");
+            if (cliSwitch) {
+              const cbqChatId = callbackQuery.message?.chat?.id;
+              const cbqChatKey = cbqChatId ? String(cbqChatId) : null;
+              if (cbqChatKey) {
+                setUserCliPreference(db, cbqChatKey, cliSwitch);
+                fallbackChain.setActiveCli(cbqChatKey, cliSwitch);
+                await client.answerCallbackQuery({ callback_query_id: callbackQuery.id });
+                if (callbackQuery.message?.message_id && cbqChatId) {
+                  await client.editMessageText({
+                    chat_id: cbqChatId,
+                    message_id: callbackQuery.message.message_id,
+                    text: buildCliStatusText(cliSwitch),
+                    reply_markup: buildCliKeyboard(cliSwitch),
+                  }).catch(() => {});
+                }
+              }
+              continue;
+            }
+          }
           await handleWorkerCallback(callbackQuery, db, client, allowedUserIds);
           continue;
         }
@@ -299,6 +339,17 @@ for (;;) {
         const chatId = message.chat.id;
         const chatKey = String(chatId);
         const userId = message.from ? String(message.from.id) : "unknown";
+
+        // /cli — show active CLI with switch keyboard (same as interactive bot)
+        if (isCliCommandText(rawText)) {
+          const activeCli = getUserCliPreference(db, chatKey);
+          fallbackChain.setActiveCli(chatKey, activeCli);
+          await sendTelegramMessage({
+            client, kind: "worker-bot", chatId,
+            body: { text: buildCliStatusText(activeCli), reply_markup: buildCliKeyboard(activeCli) },
+          });
+          continue;
+        }
 
         // Worker commands (/jobs, /issues, /review, /feature, /models) take priority
         if (isWorkerCommand(rawText)) {
@@ -325,16 +376,20 @@ for (;;) {
           continue;
         }
 
-        // Plain message — record user turn, route to active CLI with fallback
+        // Plain message — record user turn, route to preferred CLI with interactive fallback
         fallbackChain.addTurn(chatKey, "user", rawText);
 
-        await dispatchWithFallback(update as TelegramUpdate, chatKey, {
+        await dispatchInteractiveWithFallback(update as TelegramUpdate, chatKey, {
           engines,
           fallbackChain,
           exhaustedChats,
           contextPreambles,
+          db,
           notify: async (msg: string) => {
             await sendTelegramMessage({ client, kind: "worker-bot", chatId, body: { text: msg } });
+          },
+          onCliSwitched: async (newCli: CliKind) => {
+            setUserCliPreference(db, chatKey, newCli);
           },
         });
       } catch (err) {

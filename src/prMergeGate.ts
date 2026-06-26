@@ -170,20 +170,35 @@ export async function handlePrMergeCallback(
       return;
     }
 
-    // Execute squash merge
-    const mergeArgs = ["pr", "merge", "--squash", "--delete-branch", ...repoFlag, ...prRef];
+    // Execute squash merge (without --delete-branch so branch deletion errors don't mask merge success)
+    const mergeArgs = ["pr", "merge", "--squash", ...repoFlag, ...prRef];
+    let mergeSucceeded = false;
     try {
       await runCommand("gh", mergeArgs);
+      mergeSucceeded = true;
     } catch (err) {
-      const branch = payload.branch_name || `agent/work-${action.id}`;
-      const sha = view.headRefOid || payload.head_sha || "unknown";
-      enqueueMergeFixJob(db, action.id, prNumber || 0, repo, branch, sha);
-      await answerCbq();
-      await editMessage(
-        `Merge failed: ${err instanceof Error ? err.message : String(err)}. Enqueued a fix job to resolve issues.`,
-        keyboard,
-      );
-      return;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/already merged/i.test(msg)) {
+        mergeSucceeded = true;
+      } else {
+        const branch = payload.branch_name || `agent/work-${action.id}`;
+        const sha = view.headRefOid || payload.head_sha || "unknown";
+        enqueueMergeFixJob(db, action.id, prNumber || 0, repo, branch, sha);
+        await answerCbq();
+        await editMessage(
+          `Merge failed: ${msg}. Enqueued a fix job to resolve issues.`,
+          keyboard,
+        );
+        return;
+      }
+    }
+
+    // Delete branch separately — non-fatal if already gone
+    const branchName = payload.branch_name;
+    if (branchName && repo) {
+      try {
+        await runCommand("gh", ["api", `repos/${repo}/git/refs/heads/${branchName}`, "-X", "DELETE"]);
+      } catch { /* branch deletion is best-effort */ }
     }
 
     db.resolveApproval(approval.id, "approved", ctx.userId ?? "user");
@@ -193,28 +208,42 @@ export async function handlePrMergeCallback(
     await editMessage(`PR merged and branch deleted. Work item #${action.id} resolved.`);
   } else {
     // Close PR without merging
-    const closeArgs = ["pr", "close"];
-    if (repo) closeArgs.push("--repo", repo);
+    const closeArgs = ["pr", "close", ...repoFlag];
     if (prNumber != null) {
       closeArgs.push(String(prNumber));
     } else if (payload.pr_url) {
       closeArgs.push(payload.pr_url);
     }
 
+    let closeSucceeded = false;
     try {
       await runCommand("gh", closeArgs);
+      closeSucceeded = true;
     } catch (err) {
-      await answerCbq();
-      await editMessage(
-        `PR close failed: ${err instanceof Error ? err.message : String(err)}. Approval kept pending.`,
-      );
-      return;
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/already closed/i.test(msg)) {
+        closeSucceeded = true;
+      } else {
+        await answerCbq();
+        await editMessage(`PR close failed: ${msg}. Approval kept pending.`);
+        return;
+      }
     }
 
-    db.resolveApproval(approval.id, "rejected", ctx.userId ?? "user");
-    db.updateWorkItemStatus(action.id, "closed");
+    if (closeSucceeded) {
+      // Delete branch separately — non-fatal if already gone
+      const branchName = payload.branch_name;
+      if (branchName && repo) {
+        try {
+          await runCommand("gh", ["api", `repos/${repo}/git/refs/heads/${branchName}`, "-X", "DELETE"]);
+        } catch { /* branch deletion is best-effort */ }
+      }
 
-    await answerCbq();
-    await editMessage(`PR closed. Work item #${action.id} closed.`);
+      db.resolveApproval(approval.id, "rejected", ctx.userId ?? "user");
+      db.updateWorkItemStatus(action.id, "closed");
+
+      await answerCbq();
+      await editMessage(`PR closed. Work item #${action.id} closed.`);
+    }
   }
 }

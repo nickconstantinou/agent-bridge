@@ -34,6 +34,7 @@ import { createPollErrorState, planPollError, notePollSuccess } from "./polling.
 import { sendTelegramMessage, sendMessageWithProgress } from "./messageDelivery.js";
 import { buildModelKeyboard, buildModelsText, getCliWorkingDir, extractPromptText, extractThreadId, isAuthorizedMessage } from "./bridge.js";
 import { handleCommand, isBridgeCommand, buildTelegramCommands, isAntigravityNarrationVisible } from "./commands.js";
+import { buildEffortKeyboard, buildEffortText, effortSettingKey, resolveDefaultEffort, resolveEffort, isEffortLevel } from "./effort.js";
 import { getCodexUsageText } from "./codexUsage.js";
 import { buildCompactReducePrompt, buildCompactSummaryPrompt, buildTombstone, chunkCompactTurns, COMPACT_TIMEOUT_MS } from "./compactSummary.js";
 import type { BridgeEvent } from "./events/types.js";
@@ -379,6 +380,7 @@ export class BridgeEngine {
                 sessionId: null,
                 command: this.opts.botConfig.command,
                 model,
+                effort: resolveEffort(this.kind as BotKind, this.db),
                 executionMode: "safe",
               });
               const raw = await Promise.race([
@@ -627,6 +629,7 @@ export class BridgeEngine {
       bot: executionKind,
       command: this.opts.botConfig.command,
       model,
+      effort: resolveEffort(executionKind, this.db),
       prompt,
       sessionId: null,
       executionMode: this.opts.executionMode,
@@ -737,6 +740,7 @@ export class BridgeEngine {
       bot: executionKind,
       command: this.opts.botConfig.command,
       model,
+      effort: resolveEffort(executionKind, this.db),
       prompt: promptForCli.prompt,
       sessionId,
       executionMode: this.opts.executionMode,
@@ -1100,6 +1104,7 @@ export class BridgeEngine {
       bot: executionKind,
       command: this.opts.botConfig.command,
       model: fallbackModel,
+      effort: resolveEffort(executionKind, this.db),
       prompt: this._buildRecentContextPrompt(chatKey, prompt),
       sessionId: null,
       sessionMode: "resume",
@@ -1187,12 +1192,30 @@ export class BridgeEngine {
 
     const data = String(callbackQuery?.data || "");
     const [action, targetKind, ...rest] = data.split(":");
-    if (action !== "model" || targetKind !== this.kind) return;
+    if (!["model", "effort"].includes(action) || targetKind !== this.kind) return;
 
     const value = rest.join(":").trim();
     const messageId = callbackQuery.message?.message_id;
     const chatId = callbackQuery.message?.chat?.id;
     if (!chatId || !messageId) return;
+
+    if (action === "effort") {
+      const next = value === "reset" ? resolveDefaultEffort(this.kind) : value;
+      if (!isEffortLevel(next)) {
+        await this.client.answerCallbackQuery({ callback_query_id: callbackQuery.id, text: "Unsupported effort" });
+        return;
+      }
+      this.db.setSetting(effortSettingKey(this.kind), value === "reset" ? null : next);
+      await this.client.answerCallbackQuery({ callback_query_id: callbackQuery.id });
+      await this.client.editMessageText({
+        chat_id: chatId,
+        message_id: messageId,
+        text: buildEffortText(this.kind, next),
+        reply_markup: buildEffortKeyboard(this.kind, next),
+      });
+      await this.sendText(chatId, { text: `✓ Effort set to ${next}` });
+      return;
+    }
 
     if (value === "reset") {
       this.db.setSetting(this.kind, null);

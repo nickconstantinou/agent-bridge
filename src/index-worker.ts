@@ -47,6 +47,7 @@ import { runCli } from "./cli.js";
 import { createRunCommand } from "./runCommandAsync.js";
 import { prepareWorkspace, createWorkspaceCleanup, resolveLocalRepoPath } from "./workspace.js";
 import { resolveWorkerCliPolicy } from "./workerCliPolicy.js";
+import { workerEffortForTask } from "./effort.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 
 dotenv.config({
@@ -194,16 +195,16 @@ const jobExecutor = startJobExecutorLoop({
   workerId: `worker-bot-${process.pid}`,
   handlers: {
     defect_scan: createDefectScanHandler({
-      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), scribeCliChain),
+      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), scribeCliChain, { effort: workerEffortForTask("defect_scan") }),
       command: scribeCommand,
       resolveRepoPath: (repository) => resolveLocalRepoPath(repository),
     }),
     feature_plan: createFeaturePlanHandler({
-      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), scribeCliChain, { timeoutMs: 20 * 60 * 1000 }),
+      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), scribeCliChain, { timeoutMs: 20 * 60 * 1000, effort: workerEffortForTask("feature_plan") }),
       command: scribeCommand,
     }),
     tdd_implementation: createTddImplementationHandler({
-      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), codeCliChain, { timeoutMs: 15 * 60 * 1000 }),
+      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), codeCliChain, { timeoutMs: 15 * 60 * 1000, effort: workerEffortForTask("tdd_implementation") }),
       command: codeCommand,
       // File edits only — bash stays gated; the handler runs tests itself
       cliExtraArgs: ["--permission-mode", "acceptEdits"],
@@ -219,7 +220,7 @@ const jobExecutor = startJobExecutorLoop({
       cleanupWorkspace,
     }),
     orchestrated_task: createOrchestratedTaskHandler({
-      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), codeCliChain, { timeoutMs: 15 * 60 * 1000 }),
+      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), codeCliChain, { timeoutMs: 15 * 60 * 1000, effort: workerEffortForTask("orchestrated_task") }),
       command: codeCommand,
       commands: {
         codex: process.env.CODEX_COMMAND || "codex",

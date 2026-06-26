@@ -1,6 +1,7 @@
 import { buildCliInvocation, runCli, parseCliResult } from "../cli.js";
 import type { HealthReport } from "./types.js";
 import type { BotKind } from "../types.js";
+import { resolveDefaultEffort } from "../effort.js";
 
 const SUGGEST_TIMEOUT_MS = 600_000;
 
@@ -33,6 +34,7 @@ export function buildSuggestionInvocation(
     model: botConfig.modelPreference[0] ?? null,
     prompt,
     sessionId: null,
+    effort: resolveDefaultEffort(bot),
     executionMode: "safe",
     outputFormat: bot !== "antigravity" ? "json" : null,
   });

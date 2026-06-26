@@ -152,6 +152,28 @@ describe("runCliWithFallback", () => {
     expect(runCli).toHaveBeenCalledWith(getCliCommandForKind("claude"), ["args"], "cwd", undefined);
   });
 
+  it("injects requested effort into worker CLI calls", async () => {
+    vi.mocked(runCli).mockResolvedValue("ok");
+    await runCliWithFallback("claude", ["--print", "prompt"], "cwd", ["claude"], { effort: "high" });
+    expect(runCli).toHaveBeenCalledWith(
+      getCliCommandForKind("claude"),
+      ["--effort", "high", "--print", "prompt"],
+      "cwd",
+      { effort: "high" },
+    );
+  });
+
+  it("does not inject effort into Agy worker calls", async () => {
+    vi.mocked(runCli).mockResolvedValue("ok");
+    await runCliWithFallback("antigravity", ["--print", "prompt"], "cwd", ["antigravity"], { effort: "high" });
+    expect(runCli).toHaveBeenCalledWith(
+      getCliCommandForKind("antigravity"),
+      ["--print", "prompt"],
+      "cwd",
+      { effort: "high" },
+    );
+  });
+
   it("retries with the next CLI in the chain when encountering capacity exhaustion", async () => {
     vi.mocked(runCli)
       .mockRejectedValueOnce(new Error("rateLimitExceeded"))

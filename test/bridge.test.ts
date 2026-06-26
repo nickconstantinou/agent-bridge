@@ -51,6 +51,7 @@ describe("agent bridge MVP", () => {
   it("recognizes supported bridge commands", () => {
     expect(isBridgeCommand("/start")).toBe(true);
     expect(isBridgeCommand("/models")).toBe(true);
+    expect(isBridgeCommand("/effort")).toBe(true);
     expect(isBridgeCommand("/skills")).toBe(true);
     expect(isBridgeCommand("/memory")).toBe(false);
     expect(isBridgeCommand("/usage")).toBe(true);
@@ -739,6 +740,43 @@ describe("/models command returns keyboard_message", () => {
   });
 });
 
+describe("/effort command returns keyboard_message", () => {
+  const config = {
+    allowedUserIds: new Set(["1"]),
+    serviceEnvFile: null,
+    serviceKind: "codex",
+    pollIntervalMs: 1000,
+    executionMode: "safe",
+    asyncEnabled: true,
+    dbPath: ":memory:",
+    bots: {
+      codex: { token: "t", command: "codex", modelPreference: [] },
+      antigravity: { token: "t", command: "agy", modelPreference: [] },
+      claude: { token: "t", command: "claude", modelPreference: [] },
+    },
+  } as any;
+
+  it("returns an effort keyboard with medium default", () => {
+    const result = handleCommand("codex", "/effort", {
+      db: { getSetting: () => null } as any,
+      chatId: "1",
+      config,
+    }) as any;
+    expect(result.kind).toBe("keyboard_message");
+    expect(result.text).toContain("medium");
+    expect(result.reply_markup.inline_keyboard.flat().some((b: any) => b.callback_data === "effort:codex:high")).toBe(true);
+  });
+
+  it("makes Agy unsupported status explicit", () => {
+    const result = handleCommand("antigravity", "/effort", {
+      db: { getSetting: () => null } as any,
+      chatId: "1",
+      config,
+    }) as any;
+    expect(result.text).toContain("unsupported");
+  });
+});
+
 describe("handleMessages sends reply_markup for /models", () => {
   it("handleMessages passes reply_markup to sendText for keyboard_message commands", () => {
     const src = readFileSync("src/engine.ts", "utf-8");
@@ -748,6 +786,15 @@ describe("handleMessages sends reply_markup for /models", () => {
 });
 
 describe("Telegram command menu", () => {
+  it("adds /effort to every agent menu", () => {
+    for (const kind of ["codex", "antigravity", "claude"] as const) {
+      expect(buildTelegramCommands(kind)).toContainEqual({
+        command: "effort",
+        description: "Switch reasoning effort",
+      });
+    }
+  });
+
   it("adds /usage to the Codex menu only", () => {
     expect(buildTelegramCommands("codex")).toContainEqual({
       command: "usage",

@@ -545,6 +545,41 @@ describe("buildCliInvocation — attachment injection", () => {
   });
 });
 
+describe("buildCliInvocation — effort flags", () => {
+  const base = { prompt: "hello", sessionId: null, model: null };
+
+  it("maps Codex effort to model_reasoning_effort config", () => {
+    const { args } = buildCliInvocation({
+      ...base,
+      bot: "codex",
+      command: "codex",
+      effort: "high",
+    });
+    expect(args.slice(0, 3)).toEqual(["exec", "-c", "model_reasoning_effort=\"high\""]);
+  });
+
+  it("maps Claude effort to --effort", () => {
+    const { args } = buildCliInvocation({
+      ...base,
+      bot: "claude",
+      command: "claude",
+      effort: "xhigh",
+    });
+    expect(args.slice(0, 2)).toEqual(["--effort", "xhigh"]);
+  });
+
+  it("leaves Agy effort unimplemented because the CLI has no effort flag", () => {
+    const { args } = buildCliInvocation({
+      ...base,
+      bot: "antigravity",
+      command: "agy",
+      effort: "max",
+    });
+    expect(args).not.toContain("--effort");
+    expect(args).not.toContain("model_reasoning_effort=\"max\"");
+  });
+});
+
 describe("buildSafeChildEnv", () => {
   it("strips TELEGRAM_BOT_TOKEN_* vars from the env", async () => {
     const { buildSafeChildEnv } = await import("../src/cli.js");
@@ -666,6 +701,18 @@ describe("normalizeCliArgs — CLI argument translator", () => {
       "--dangerously-bypass-approvals-and-sandbox",
       "--skip-git-repo-check",
       "--json",
+      "hello",
+    ]);
+  });
+
+  it("preserves Codex effort config during argument translation", async () => {
+    const { normalizeCliArgs } = await import("../src/cli.js");
+    const args = ["--print", "-c", "model_reasoning_effort=\"high\"", "hello"];
+    expect(normalizeCliArgs("codex", args)).toEqual([
+      "exec",
+      "-c",
+      "model_reasoning_effort=\"high\"",
+      "--skip-git-repo-check",
       "hello",
     ]);
   });

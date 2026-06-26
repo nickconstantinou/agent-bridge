@@ -100,6 +100,21 @@ If the bot becomes unresponsive after a bad restart, send `/reset` to the affect
 
 ---
 
+# CLI Effort Policy
+
+Supported effort levels are `low`, `medium`, `high`, `xhigh`, and `max`;
+default is `medium`. `/effort` changes the interactive setting.
+
+- Codex maps effort to `-c model_reasoning_effort="<level>"`
+- Claude maps effort to `--effort <level>`
+- Agy has no separate effort flag; the bridge stores/displays the setting only
+  so the unsupported state is explicit. Use Agy model labels for low/high.
+
+Worker jobs select effort by task: scribe/read-only jobs use `medium`;
+`tdd_implementation` and `orchestrated_task` use `high`.
+
+---
+
 # Autonomous Worker Loop — invariants
 
 When working on the worker lane (`src/index-worker.ts`, `src/jobExecutor*.ts`,

@@ -111,6 +111,22 @@ affected bot on Telegram to clear any stale execution lock.
 
 ---
 
+# CLI Effort Policy
+
+Supported effort levels are `low`, `medium`, `high`, `xhigh`, and `max`;
+default is `medium`. Users can change interactive bot effort with `/effort`.
+
+- Codex: pass effort as `-c model_reasoning_effort="<level>"`
+- Claude: pass effort as `--effort <level>`
+- Antigravity/Agy: no separate effort CLI flag exists. Keep the setting visible
+  as unsupported/no-op and use Agy model labels for low/high variants.
+
+Worker jobs choose effort by task: scribe/read-only jobs use `medium`, while
+`tdd_implementation` and `orchestrated_task` use `high`. Do not route Agy into
+code-writing chains.
+
+---
+
 # Autonomous Worker Loop — invariants
 
 When working on the worker lane (`src/index-worker.ts`, `src/jobExecutor*.ts`,

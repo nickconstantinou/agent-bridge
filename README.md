@@ -125,6 +125,7 @@ Important:
 |---|---|
 | `/reset` | Clear the current CLI session (start fresh) |
 | `/models` | Show and change the active model |
+| `/effort` | Show and change reasoning effort |
 | `/cli` | Interactive bot only: show/change active CLI |
 | `/skills` | List bundled shared skills and install/repair commands |
 | `/stop` | Abort the currently running CLI process |
@@ -143,7 +144,7 @@ run in disposable git clones, never in live checkouts, and merges are blocked
 unless the PR head SHA still matches the approval and CI checks are green.
 
 Worker commands: `/review`, `/feature`, `/issues`, `/issue`, `/jobs`, `/job`,
-`/approvals`, `/models`. The worker also schedules `pr_watch` jobs to react to
+`/approvals`, `/models`, `/effort`. The worker also schedules `pr_watch` jobs to react to
 CI status, stale PRs, and held/refresh/close decisions.
 
 Full guide: `docs/WORKER-GUIDE.md`. Architecture: `agents.md` → "Autonomous
@@ -171,6 +172,9 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `CODEX_MODEL_PREFERENCE` | Codex | — | Comma-separated model list; first = default, rest = fallbacks |
 | `ANTIGRAVITY_MODEL_PREFERENCE` | Antigravity | — | Comma-separated model list; first = default, rest = fallbacks |
 | `CLAUDE_MODEL_PREFERENCE` | Claude | — | Comma-separated model list; first = default, rest = fallbacks |
+| `CODEX_EFFORT` | Codex | `medium` | Reasoning effort; mapped to `model_reasoning_effort` |
+| `ANTIGRAVITY_EFFORT` | Antigravity | `medium` | Recorded/displayed for parity only; Agy has no separate effort CLI flag |
+| `CLAUDE_EFFORT` | Claude | `medium` | Reasoning effort; mapped to `--effort` |
 | `CODEX_PROJECT_DIR` | Codex | — | Working dir for CLI execution (overrides `BRIDGE_PROJECT_DIR`) |
 | `ANTIGRAVITY_PROJECT_DIR` | Antigravity | — | Working dir for CLI execution (overrides `BRIDGE_PROJECT_DIR`) |
 | `CLAUDE_PROJECT_DIR` | Claude | — | Working dir for CLI execution (overrides `BRIDGE_PROJECT_DIR`) |
@@ -197,6 +201,13 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `BRIDGE_EXECUTION_MODE` | All | `safe` | `safe` or `trusted` (bypasses CLI approval prompts) |
 | `BRIDGE_PROJECT_DIR` | All | current working directory | Repo path (used as default CLI working dir and DB location) |
 | `BRIDGE_ROOT_DIR` | All | `$HOME` | Fallback working dir when no `*_PROJECT_DIR` is set |
+
+Effort levels are standardized as `low`, `medium`, `high`, `xhigh`, and `max`;
+default is `medium`. Manual `/effort` overrides are persisted in SQLite. Worker
+jobs select effort by task: scribe/read-only jobs use `medium`; code-writing
+jobs (`tdd_implementation`, `orchestrated_task`) use `high`. Agy effort is an
+explicit no-op because the current CLI exposes low/high variants through model
+labels, not a standalone effort parameter.
 
 ## Group and multi-user usage
 
@@ -610,6 +621,7 @@ also stores `work_items`, `work_jobs`, `approvals`, and `github_links`.
 | `<chatId>` | — | Per-chat row; holds session IDs and execution lock |
 | `$polling:codex` / `:antigravity` / `:claude` | last update_id | Telegram polling offset per bot |
 | `codex` / `antigravity` / `claude` (in `settings`) | model name | Per-bot model override (set via `/models`) |
+| `effort:codex` / `effort:antigravity` / `effort:claude` (in `settings`) | effort level | Per-bot effort override (set via `/effort`; Agy stored for parity only) |
 | `interactive_cli_preference` | CLI kind | Per-chat active CLI for the unified interactive bot |
 
 Session IDs are stored as columns (`codex_session_id`, `antigravity_session_id`, legacy `gemini_session_id`, `claude_session_id`) on the chat row. The migration adds `antigravity_session_id` and backfills it from legacy `gemini_session_id` automatically on first run.
@@ -628,3 +640,7 @@ Antigravity session capture follows the same durable pattern as Codex, but Agy e
 5. Later turns resume explicitly with `agy --conversation <uuid> [flags] --print <prompt>`.
 
 **Antigravity model switching**: Agy does not expose a `--model` CLI flag. The bridge applies model selection (including capacity fallbacks) by writing the chosen model name into `~/.gemini/antigravity-cli/settings.json` before spawning the process. Resetting to the default (via `/models → Reset to Default`) removes the `model` key from that file so Agy falls back to its own default. The selected model is also persisted in the bridge's SQLite `settings` table so it survives service restarts.
+
+**Effort switching**: Codex receives `-c model_reasoning_effort="<level>"`.
+Claude receives `--effort <level>`. Agy receives no effort flag; `/effort`
+shows an explicit unsupported note so the gap is intentional, not forgotten.

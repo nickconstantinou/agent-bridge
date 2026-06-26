@@ -7,6 +7,7 @@
 
 import { WorkerFallbackChain } from "./workerFallback.js";
 import { runCli, isCapacityExhaustedError } from "./cli.js";
+import { appendEffortArgs, type EffortLevel } from "./effort.js";
 
 export interface DispatchEngine {
   handleUpdate(update: any): Promise<void>;
@@ -58,7 +59,7 @@ export async function runCliWithFallback(
   args: string[],
   cwd: string,
   cliChain: string[],
-  options?: any,
+  options?: any & { effort?: EffortLevel },
 ): Promise<string> {
   const resolvedChain = cliChain.map(getCliCommandForKind);
 
@@ -72,7 +73,7 @@ export async function runCliWithFallback(
 
   for (;;) {
     try {
-      return await runCli(currentCmd, args, cwd, options);
+      return await runCli(currentCmd, appendEffortArgs(currentCmd, args, options?.effort), cwd, options);
     } catch (err: any) {
       if (isCapacityExhaustedError(err instanceof Error ? err : new Error(String(err)))) {
         if (nextIdx < resolvedChain.length) {

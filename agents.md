@@ -112,6 +112,7 @@ CREATE TABLE settings (
 | `<chatId>` | Per-chat session IDs and execution lock |
 | `$polling:antigravity` / `$polling:codex` / `$polling:claude` | Global polling offset per bot (sentinel rows) |
 | `antigravity` / `codex` / `claude` (in `settings`) | Active model override set via `/models` |
+| `effort:antigravity` / `effort:codex` / `effort:claude` (in `settings`) | Active effort override set via `/effort` |
 
 **BridgeDb API:**
 
@@ -212,13 +213,14 @@ db.unlock(chatKey);
 
 | Bot | Flags |
 |-----|-------|
-| **Codex** | `exec [resume <sessionId>]`, `--skip-git-repo-check`, `--model <m>`, `--json`, `--dangerously-bypass-approvals-and-sandbox` (trusted) |
+| **Codex** | `exec [resume <sessionId>]`, `-c model_reasoning_effort="<level>"`, `--skip-git-repo-check`, `--model <m>`, `--json`, `--dangerously-bypass-approvals-and-sandbox` (trusted) |
 | **Antigravity** | `--conversation <sessionId>` for resumes, `--dangerously-skip-permissions` (trusted), `--log-file <path>`, `--print <prompt>` |
-| **Claude** | `--print`, `--model <m>`, `--resume <sessionId>`, `--dangerously-skip-permissions` (trusted), `--output-format json` |
+| **Claude** | `--effort <level>`, `--print`, `--model <m>`, `--resume <sessionId>`, `--dangerously-skip-permissions` (trusted), `--output-format json` |
 
 Session handling differs per bot:
 - **Codex / Claude** — pass `sessionId` directly; new sessions receive no session arg (the CLI creates one)
 - **Antigravity** — new sessions receive no conversation arg; existing sessions use `--conversation <uuid>`. Agy requires all flags before `--print <prompt>` because `--print` consumes the prompt as its value. Agy does not accept a `--model` CLI flag; instead, model selection is applied by mapping the chosen model ID to its display label (e.g. `gemini-3.5-flash-high` to `Gemini 3.5 Flash (High)`) and writing it to `~/.gemini/antigravity-cli/settings.json` before execution.
+- **Effort** — valid levels are `low`, `medium`, `high`, `xhigh`, `max`; default `medium`. Codex maps effort to `model_reasoning_effort`, Claude maps it to `--effort`, and Agy is an explicit unsupported/no-op because its CLI has no separate effort flag.
 
 ### Parse Phase (`parseCliResult`)
 
@@ -300,7 +302,7 @@ const mediaBuffer = new MediaGroupBuffer({
 
 ### Callback Query — Model Selector
 
-Callback data format: `model:<kind>:<value>` or `model:<kind>:reset`
+Callback data format: `model:<kind>:<value>` / `model:<kind>:reset` and `effort:<kind>:<level>` / `effort:<kind>:reset`
 
 On receipt:
 1. `db.setSetting(kind, value)` (or `null` for reset)
@@ -482,6 +484,7 @@ agent-bridge/
 | `BRIDGE_ENV_FILE` | Service | Path to `.env.codex` / `.env.antigravity` / `.env.claude` |
 | `CODEX_COMMAND` / `ANTIGRAVITY_COMMAND` / `CLAUDE_COMMAND` | Each | CLI binary path |
 | `CODEX_MODEL_PREFERENCE` / `ANTIGRAVITY_MODEL_PREFERENCE` / `CLAUDE_MODEL_PREFERENCE` | Each | Comma-delimited model list; first = default, rest = fallbacks |
+| `CODEX_EFFORT` / `ANTIGRAVITY_EFFORT` / `CLAUDE_EFFORT` | Each | Effort default (`medium`). Agy value is stored/displayed only; no CLI effort flag exists |
 | `CODEX_PROJECT_DIR` / `ANTIGRAVITY_PROJECT_DIR` / `CLAUDE_PROJECT_DIR` | Each | Override CLI working directory for this bot |
 | `BRIDGE_EXECUTION_MODE` | All | `safe` (approval prompts) / `trusted` (bypass) |
 | `BRIDGE_ASYNC_ENABLED` | All | `true` = streaming, `false` = sync (default: `true`) |

@@ -16,6 +16,7 @@ import { renderSoulContract } from "./soul.js";
 import { buildClaudeStreamJsonInput, parseClaudeStreamJsonOutput } from "./claudeStreamJson.js";
 import { type as evtType } from "./events/types.js";
 import type { BridgeEvent } from "./events/types.js";
+import { appendEffortArgs, type EffortLevel } from "./effort.js";
 
 const activeProcesses = new Map<number | string, ChildProcess>();
 const abortedChildren = new WeakSet<ChildProcess>();
@@ -189,6 +190,7 @@ export function buildCliInvocation({
   soulContext = null,
   attachments = [],
   outputDir = null,
+  effort = null,
 }: {
   bot: string;
   prompt: string;
@@ -202,6 +204,7 @@ export function buildCliInvocation({
   soulContext?: string | null;
   attachments?: string[];
   outputDir?: string | null;
+  effort?: EffortLevel | null;
 }): { command: string; args: string[]; stdin?: string } {
   const args = [];
 
@@ -234,7 +237,7 @@ export function buildCliInvocation({
         args.push("-i", att);
       }
       args.push("--", "-");
-      return { command, args, stdin: finalPrompt };
+      return { command, args: appendEffortArgs(command, args, effort), stdin: finalPrompt };
     }
     args.push(finalPrompt);
   } else if (bot === "claude") {
@@ -248,7 +251,7 @@ export function buildCliInvocation({
       if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
       args.push("--input-format", "stream-json", "--output-format", "stream-json", "--verbose");
       const stdinPayload = buildClaudeStreamJsonInput(finalPrompt, attachments);
-      return { command, args, stdin: stdinPayload };
+      return { command, args: appendEffortArgs(command, args, effort), stdin: stdinPayload };
     }
     args.push("--print");
     const pluginSettings = buildClaudeExcludedPluginSettings();
@@ -276,7 +279,7 @@ export function buildCliInvocation({
     args.push("--print", finalPrompt);
   }
 
-  return { command, args };
+  return { command, args: appendEffortArgs(command, args, effort) };
 }
 
 const DEFAULT_CLAUDE_EXCLUDED_PLUGINS = ["telegram@claude-plugins-official"];
@@ -1065,6 +1068,7 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
   let logFile: string | null = null;
   let printTimeout: string | null = null;
   let model: string | null = null;
+  let effort: EffortLevel | null = null;
   let resumeSessionId: string | null = null;
   const attachments: string[] = [];
   let hasDoubleDash = false;
@@ -1084,10 +1088,13 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
         "--output-format",
         "--input-format",
         "--settings",
+        "--effort",
         "--log-file",
         "-i",
         "--conversation",
         "--print-timeout",
+        "-c",
+        "--config",
       ].includes(arg);
 
       if (arg === "--conversation") {
@@ -1101,6 +1108,9 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
         i++;
       } else if (arg === "--model") {
         model = args[i + 1] ?? null;
+        i++;
+      } else if (arg === "--effort") {
+        effort = args[i + 1] as EffortLevel ?? null;
         i++;
       } else if (arg === "--resume") {
         resumeSessionId = args[i + 1] ?? null;
@@ -1171,8 +1181,19 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
 
   if (isCodex) {
     const newArgs: string[] = ["exec"];
+    if (!effort) {
+      for (let i = 0; i < args.length - 1; i += 1) {
+        if ((args[i] === "-c" || args[i] === "--config") && args[i + 1]?.startsWith("model_reasoning_effort=")) {
+          effort = args[i + 1].split("=", 2)[1]?.replace(/^"|"$/g, "") as EffortLevel;
+          break;
+        }
+      }
+    }
     if (resumeSessionId) {
       newArgs.push("resume", resumeSessionId);
+    }
+    if (effort) {
+      newArgs.push("-c", `model_reasoning_effort="${effort}"`);
     }
     if (model) {
       newArgs.push("--model", model);

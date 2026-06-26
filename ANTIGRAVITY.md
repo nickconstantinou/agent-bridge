@@ -32,3 +32,16 @@ The helper sleeps for 5 seconds before restarting the fixed bridge unit list so
 the bot can notify the user first. It must be granted through a narrow sudoers
 rule for only `/usr/local/sbin/restart-agent-bridge`; never use `NOPASSWD: ALL`
 or passwordless raw `systemctl`.
+
+# CLI Effort Policy
+
+Supported effort levels are `low`, `medium`, `high`, `xhigh`, and `max`;
+default is `medium`. `/effort` changes the interactive setting.
+
+- Codex maps effort to `-c model_reasoning_effort="<level>"`
+- Claude maps effort to `--effort <level>`
+- Agy has no separate effort flag; the bridge stores/displays the setting only
+  so the unsupported state is explicit. Use Agy model labels for low/high.
+
+Worker jobs select effort by task: scribe/read-only jobs use `medium`;
+`tdd_implementation` and `orchestrated_task` use `high`. Agy remains scribe-only.

@@ -10,6 +10,7 @@ import type { BridgeConfig } from "./types.js";
 import type { BridgeDb } from "./db.js";
 import { buildModelKeyboard, buildModelsText } from "./bridge.js";
 import { listLocalCatalog } from "./skills.js";
+import { buildEffortKeyboard, buildEffortText, resolveEffort } from "./effort.js";
 
 const CONTEXT_COMPACT_NUDGE_TURNS = 100;
 
@@ -20,7 +21,7 @@ export type CommandResult =
   | { kind: "codex_usage" }
   | { kind: "compact"; chatKey: string };
 
-const bridgeCommands = new Set(["/start", "/reset", "/models", "/skills", "/usage", "/narration", "/compact", "/context"]);
+const bridgeCommands = new Set(["/start", "/reset", "/models", "/effort", "/skills", "/usage", "/narration", "/compact", "/context"]);
 
 function normalizeCommand(text: string): string {
   const [command] = String(text || "").trim().toLowerCase().split(/\s+/, 1);
@@ -119,6 +120,15 @@ export function handleCommand(
     };
   }
 
+  if (text === "/effort") {
+    const current = resolveEffort(kind, db);
+    return {
+      kind: "keyboard_message",
+      text: buildEffortText(kind, current),
+      reply_markup: buildEffortKeyboard(kind, current),
+    };
+  }
+
   if (text === "/skills") {
     return {
       kind: "message",
@@ -171,6 +181,7 @@ export function handleCommand(
 export function buildTelegramCommands(kind: "codex" | "antigravity" | "claude"): Array<{ command: string; description: string }> {
   const commands = [
     { command: "models",   description: "Switch model" },
+    { command: "effort",   description: "Switch reasoning effort" },
     { command: "reset",    description: "Clear current session" },
     { command: "stop",     description: "Abort running execution" },
     { command: "compact",  description: "Compact conversation context" },

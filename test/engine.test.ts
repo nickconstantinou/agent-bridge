@@ -53,13 +53,21 @@ function makeFullConfig(dbPath: string): BridgeConfig {
 describe("BridgeEngine", () => {
   let dbPath: string;
   let db: ReturnType<typeof openDb>;
+  let originalMemoryExtractorEnabled: string | undefined;
 
   beforeEach(() => {
+    originalMemoryExtractorEnabled = process.env.BRIDGE_MEMORY_EXTRACTOR_ENABLED;
+    delete process.env.BRIDGE_MEMORY_EXTRACTOR_ENABLED;
     dbPath = join(tmpdir(), `engine-test-${Date.now()}.sqlite`);
     db = openDb(dbPath);
   });
 
   afterEach(() => {
+    if (originalMemoryExtractorEnabled === undefined) {
+      delete process.env.BRIDGE_MEMORY_EXTRACTOR_ENABLED;
+    } else {
+      process.env.BRIDGE_MEMORY_EXTRACTOR_ENABLED = originalMemoryExtractorEnabled;
+    }
     db.close();
     try { rmSync(dbPath); } catch {}
   });
@@ -1128,6 +1136,46 @@ describe("BridgeEngine", () => {
       expect(sentBody.text).toContain("Visible answer.");
       expect(sentBody.text).not.toContain("agent-bridge-memory");
       expect(db.searchMemories("API_KEY abc123")).toEqual([]);
+    });
+
+    it("runs post-turn memory extraction and stores accepted candidates", async () => {
+      process.env.BRIDGE_MEMORY_EXTRACTOR_ENABLED = "1";
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+      const runCli = vi.fn()
+        .mockResolvedValueOnce("Visible answer about fixing memory health.")
+        .mockResolvedValueOnce(JSON.stringify([
+          {
+            type: "decision",
+            scope: "project",
+            text: "Agent Bridge automatically extracts durable project memories after successful turns.",
+            confidence: 0.88,
+          },
+        ]));
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          fullConfig: makeFullConfig(dbPath),
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("fix memory health")]);
+
+      expect(runCli).toHaveBeenCalledTimes(2);
+      const extractorPrompt = runCli.mock.calls[1][1].at(-1);
+      expect(extractorPrompt).toContain("Output ONLY a JSON array");
+      const sentBody = client.sendMessage.mock.calls.at(-1)?.[0];
+      expect(sentBody.text).toBe("Visible answer about fixing memory health.");
+      expect(db.searchMemories("automatically extracts durable project memories").some((m) => m.text.includes("automatically extracts"))).toBe(true);
     });
   });
 

@@ -342,7 +342,7 @@ describe("sendTelegramMessage rendering", () => {
     expect(client.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({ parse_mode: "MarkdownV2" }));
   });
 
-  it("uses parse_mode HTML with table markup regardless of removed rich env flag", async () => {
+  it("renders tables as card-style HTML (not <table> tags, which Telegram rejects)", async () => {
     await withEnv({ TELEGRAM_RICH_MESSAGES_ENABLED: "true" }, async () => {
       const client = createMockClient();
 
@@ -356,7 +356,11 @@ describe("sendTelegramMessage rendering", () => {
       expect(client.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
         chat_id: 123,
         parse_mode: "HTML",
-        text: expect.stringContaining("<table bordered striped>"),
+        text: expect.stringContaining("<b>Service</b>"),
+      }));
+      // Must NOT contain <table> — Telegram HTML parse_mode rejects it with HTTP 400
+      expect(client.sendMessage).not.toHaveBeenCalledWith(expect.objectContaining({
+        text: expect.stringContaining("<table"),
       }));
     });
   });
@@ -466,26 +470,33 @@ describe("typingInterval cleanup on isAborted early return", () => {
 describe("sendTelegramMessage table rendering", () => {
   const tableMarkdown = "| Name | Age |\n| --- | --- |\n| Alice | 30 |";
 
-  it("always renders tables as HTML with <table> markup (no flag required)", async () => {
+  it("renders tables as card-style HTML lines, not <table> tags", async () => {
     const client = createMockClient();
     await sendTelegramMessage({ client, kind: "claude", chatId: 1, body: { text: tableMarkdown } });
     expect(client.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         parse_mode: "HTML",
-        text: "<table bordered striped><thead><tr><th>Name</th><th>Age</th></tr></thead><tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>",
+        // First column rendered as bold label, remaining as bullet lines
+        text: expect.stringContaining("<b>Name</b> Alice"),
       }),
+    );
+    expect(client.sendMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("<table") }),
     );
   });
 
-  it("uses HTML delivery even when removed TELEGRAM_RICH_MESSAGES_ENABLED is set", async () => {
+  it("card rendering applies regardless of TELEGRAM_RICH_MESSAGES_ENABLED", async () => {
     await withEnv({ TELEGRAM_RICH_MESSAGES_ENABLED: "true" }, async () => {
       const client = createMockClient();
       await sendTelegramMessage({ client, kind: "claude", chatId: 1, body: { text: tableMarkdown } });
       expect(client.sendMessage).toHaveBeenCalledWith(
         expect.objectContaining({
           parse_mode: "HTML",
-          text: expect.stringContaining("<table bordered striped>"),
+          text: expect.stringContaining("<b>Name</b>"),
         }),
+      );
+      expect(client.sendMessage).not.toHaveBeenCalledWith(
+        expect.objectContaining({ text: expect.stringContaining("<table") }),
       );
     });
   });

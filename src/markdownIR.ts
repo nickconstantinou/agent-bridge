@@ -245,8 +245,9 @@ export const TELEGRAM_HTML_MARKERS: MarkerTable = {
     ordered
       ? items.map((item, i) => `${i + 1}. ${escapeHtml(item)}`).join("\n")
       : items.map((item) => `• ${escapeHtml(item)}`).join("\n"),
+  // Telegram HTML parse_mode does not support <table> — render as card lines instead
   table: (headers, rows) =>
-    `<table bordered striped><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${headers.map((_, i) => `<td>${escapeHtml(row[i] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`,
+    renderTableAsCards(headers, rows, (label) => `<b>${label}</b>`, "• ", escapeHtml),
 };
 
 export function discordMarkdownIrEnabled(): boolean {

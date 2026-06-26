@@ -500,6 +500,45 @@ describe("sendTelegramMessage table rendering", () => {
       );
     });
   });
+
+  it("falls back to card-style when sendRichMessage rejects with HTTP 400", async () => {
+    const richError = Object.assign(new Error("Telegram HTTP 400: Bad Request"), { status: 400 });
+    const client = {
+      ...createMockClient(),
+      sendRichMessage: vi.fn(async () => { throw richError; }),
+    } as any;
+
+    await sendTelegramMessage({ client, kind: "claude", chatId: 1, body: { text: tableMarkdown } });
+
+    expect(client.sendRichMessage).toHaveBeenCalledOnce();
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parse_mode: "HTML",
+        text: expect.stringContaining("<b>Name</b> Alice"),
+      }),
+    );
+    expect(client.sendMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ text: expect.stringContaining("<table") }),
+    );
+  });
+
+  it("uses sendRichMessage with <table> HTML when it succeeds", async () => {
+    const client = {
+      ...createMockClient(),
+      sendRichMessage: vi.fn(async () => ({ ok: true, result: { message_id: 1 } })),
+    } as any;
+
+    await sendTelegramMessage({ client, kind: "claude", chatId: 1, body: { text: tableMarkdown } });
+
+    expect(client.sendRichMessage).toHaveBeenCalledOnce();
+    expect(client.sendRichMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parse_mode: "HTML",
+        text: expect.stringContaining("<table"),
+      }),
+    );
+    expect(client.sendMessage).not.toHaveBeenCalled();
+  });
 });
 
 describe("sendMessageWithProgress Option 1 validation", () => {

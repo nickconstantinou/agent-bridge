@@ -15,15 +15,16 @@ describe("Execution Path Selection - TDD", () => {
       expect(hasImport).toBe(false);
     });
 
-    it("REMOVE: Gemini env aliases from runtime config", async () => {
+    it("keeps deprecated Gemini env aliases as Agy compatibility shims", async () => {
       const fs = await import("fs");
       const index = fs.readFileSync("src/index.ts", "utf-8");
       const bridge = fs.readFileSync("src/bridge.ts", "utf-8");
 
-      expect(index).not.toContain("TELEGRAM_BOT_TOKEN_GEMINI");
-      expect(index).not.toContain("GEMINI_MODEL_PREFERENCE");
-      expect(index).not.toContain('name.includes("gemini")');
-      expect(bridge).not.toContain("GEMINI_PROJECT_DIR");
+      expect(index).toContain("TELEGRAM_BOT_TOKEN_GEMINI");
+      expect(index).toContain("GEMINI_COMMAND");
+      expect(index).toContain("GEMINI_MODEL_PREFERENCE");
+      expect(index).toContain('name.includes("gemini")');
+      expect(bridge).toContain("GEMINI_PROJECT_DIR");
     });
 
     it("timeout-based fallback removed; capacity-based fallback uses isCapacityExhaustedError", async () => {

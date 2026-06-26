@@ -490,6 +490,10 @@ agent-bridge/
 | `BRIDGE_ASYNC_ENABLED` | All | `true` = streaming, `false` = sync (default: `true`) |
 | `CLI_TIMEOUT_MS` | All | Hard timeout per CLI execution (default: 1 800 000ms for Codex; 600 000ms for others) |
 | `CLI_IDLE_TIMEOUT_MS` | All | Kill CLI after this many ms with no stdout output (default: 240 000ms Codex; 480 000ms Antigravity; 180 000ms Claude) |
+
+`GEMINI_*` env names are deprecated compatibility aliases for Antigravity/Agy
+only. Keep them working for existing VPS defaults, but use `ANTIGRAVITY_*` for
+new config because Agy has replaced the older Gemini CLI naming.
 | `FETCH_TIMEOUT_MS` | All | Telegram API fetch timeout (default: 45 000ms) |
 | `DB_PATH` | Each | Path to SQLite database (default: `<project-dir>/.data/bridge.sqlite`) |
 | `BRIDGE_PROJECT_DIR` | All | Repo path (used for default `DB_PATH`) |

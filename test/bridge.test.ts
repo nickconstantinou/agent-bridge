@@ -105,7 +105,7 @@ describe("agent bridge MVP", () => {
     if (prevClaudeProjectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = prevClaudeProjectDir;
   });
 
-  it("ignores retired GEMINI_PROJECT_DIR alias for antigravity cwd", () => {
+  it("keeps deprecated GEMINI_PROJECT_DIR alias for antigravity cwd compatibility", () => {
     const prevBridgeProject = process.env.BRIDGE_PROJECT_DIR;
     const prevBridgeRoot = process.env.BRIDGE_ROOT_DIR;
     const prevAntigravityProjectDir = process.env.ANTIGRAVITY_PROJECT_DIR;
@@ -116,7 +116,7 @@ describe("agent bridge MVP", () => {
     delete process.env.ANTIGRAVITY_PROJECT_DIR;
     process.env.GEMINI_PROJECT_DIR = "/tmp/gemini-repo";
 
-    expect(getCliWorkingDir("antigravity")).toBe("/tmp/bridge-project");
+    expect(getCliWorkingDir("antigravity")).toBe("/tmp/gemini-repo");
 
     if (prevBridgeProject === undefined) delete process.env.BRIDGE_PROJECT_DIR; else process.env.BRIDGE_PROJECT_DIR = prevBridgeProject;
     if (prevBridgeRoot === undefined) delete process.env.BRIDGE_ROOT_DIR; else process.env.BRIDGE_ROOT_DIR = prevBridgeRoot;

@@ -209,6 +209,12 @@ jobs (`tdd_implementation`, `orchestrated_task`) use `high`. Agy effort is an
 explicit no-op because the current CLI exposes low/high variants through model
 labels, not a standalone effort parameter.
 
+`GEMINI_*` env names remain as deprecated compatibility aliases for
+Antigravity/Agy deployments (`TELEGRAM_BOT_TOKEN_GEMINI`, `GEMINI_COMMAND`,
+`GEMINI_MODEL_PREFERENCE`, `GEMINI_PROJECT_DIR`). Prefer the `ANTIGRAVITY_*`
+names for new config; Agy is the supported replacement path for the older Gemini
+CLI naming.
+
 ## Group and multi-user usage
 
 The bot works in Telegram groups and supergroups.

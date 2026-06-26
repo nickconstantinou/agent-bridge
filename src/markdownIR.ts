@@ -1,5 +1,3 @@
-import { escapeHtml } from "./nativeLayout.js";
-
 export type IRNode =
   | { type: "text"; value: string }
   | { type: "bold"; value: string }
@@ -229,38 +227,28 @@ export const DISCORD_MARKERS: MarkerTable = {
     renderTableAsCards(headers, rows, (label) => `**${label}:**`, "- ", (text) => text),
 };
 
+function escapeHtml(text: string): string {
+  return text
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
 export const TELEGRAM_HTML_MARKERS: MarkerTable = {
   text: (text) => escapeHtml(text),
   bold: (text) => `<b>${escapeHtml(text)}</b>`,
   code_inline: (text) => `<code>${escapeHtml(text)}</code>`,
-  code_block: (text) => `<pre>${escapeHtml(text)}</pre>`,
+  code_block: (text, language) => language ? `<pre language="${escapeHtml(language)}">${escapeHtml(text)}</pre>` : `<pre>${escapeHtml(text)}</pre>`,
   heading: (text) => `<b>${escapeHtml(text)}</b>`,
   list: (items, ordered) =>
     ordered
       ? items.map((item, i) => `${i + 1}. ${escapeHtml(item)}`).join("\n")
       : items.map((item) => `• ${escapeHtml(item)}`).join("\n"),
   table: (headers, rows) =>
-    renderTableAsCards(headers, rows, (label) => `<b>${label}:</b>`, "• ", (text) => text),
-};
-
-export const TELEGRAM_RICH_HTML_MARKERS: MarkerTable = {
-  text: (text) => escapeHtml(text),
-  bold: (text) => `<b>${escapeHtml(text)}</b>`,
-  code_inline: (text) => `<code>${escapeHtml(text)}</code>`,
-  code_block: (text) => `<pre>${escapeHtml(text)}</pre>`,
-  heading: (text, level) => `<h${level}>${escapeHtml(text)}</h${level}>`,
-  list: (items, ordered) =>
-    ordered
-      ? `<ol>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ol>`
-      : `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`,
-  table: (headers, rows) =>
     `<table bordered striped><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${headers.map((_, i) => `<td>${escapeHtml(row[i] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`,
 };
 
 export function discordMarkdownIrEnabled(): boolean {
   return process.env.DISCORD_MARKDOWN_IR_ENABLED === "true";
-}
-
-export function telegramMarkdownIrEnabled(): boolean {
-  return process.env.TELEGRAM_MARKDOWN_IR_ENABLED === "true";
 }

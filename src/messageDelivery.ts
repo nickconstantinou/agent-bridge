@@ -1,4 +1,4 @@
-import { splitTelegramText, toTelegramEntitiesText, renderTelegramEntitiesFromIR } from "./render.js";
+import { splitTelegramText, toTelegramEntitiesText } from "./render.js";
 import { toUserMessage, isCapacityExhaustedError } from "./cli.js";
 import type { MessagingPlatform } from "./platform.js";
 import type { CliResult } from "./types.js";
@@ -8,10 +8,9 @@ import { reduce as reduceEvents } from "./events/reducer.js";
 import { runViewToTelegramText } from "./events/telegramAdapter.js";
 import {
   documentFallbackEnabled,
-  richMessagesEnabled,
   routeNativeLayout,
 } from "./nativeLayout.js";
-import { telegramMarkdownIrEnabled, parseMarkdownToIR, renderMarkerString, TELEGRAM_HTML_MARKERS, TELEGRAM_RICH_HTML_MARKERS } from "./markdownIR.js";
+import { parseMarkdownToIR, renderMarkerString, TELEGRAM_HTML_MARKERS } from "./markdownIR.js";
 
 const MAX_TELEGRAM_TEXT = 4096;
 
@@ -75,7 +74,6 @@ export async function sendTelegramMessage({
   const { text: _ignored, ...rest } = body;
   const route = routeNativeLayout(text, {
     documentEnabled: documentFallbackEnabled(),
-    richEnabled: richMessagesEnabled() && typeof client.sendRichMessage === "function",
   });
 
   if (route.kind === "document" && typeof client.sendDocumentBuffer === "function") {
@@ -88,36 +86,6 @@ export async function sendTelegramMessage({
       caption: `Full response attached as response.md (${route.reason})`,
     });
     return;
-  }
-
-  if (route.kind === "rich" && typeof client.sendRichMessage === "function") {
-    try {
-      await client.sendRichMessage({
-        chat_id: chatId,
-        ...rest,
-        rich_message: {
-          html: renderMarkerString(parseMarkdownToIR(text), TELEGRAM_RICH_HTML_MARKERS),
-        },
-      });
-      return;
-    } catch (err) {
-      console.warn(`[${kind}] rich message failed; falling back to native HTML`, err);
-    }
-  }
-
-  if ((route.kind === "html" || route.kind === "rich") && !telegramMarkdownIrEnabled()) {
-    try {
-      await client.sendMessage({
-        chat_id: chatId,
-        ...rest,
-        text: renderMarkerString(parseMarkdownToIR(text), TELEGRAM_HTML_MARKERS),
-        parse_mode: "HTML",
-        disable_web_page_preview: true,
-      });
-      return;
-    } catch (err) {
-      console.warn(`[${kind}] native HTML message failed; falling back to plain text`, err);
-    }
   }
 
   await sendEntityMessages({ client, chatId, body: { ...rest, text } });
@@ -144,11 +112,8 @@ async function sendEntityMessages({
     };
 
     if (i > 0) delete chunkBody.reply_markup;
-    const ep = telegramMarkdownIrEnabled()
-      ? renderTelegramEntitiesFromIR(parseMarkdownToIR(chunkText))
-      : toTelegramEntitiesText(chunkText);
-    chunkBody.text = ep.text;
-    if (ep.entities.length > 0) chunkBody.entities = ep.entities;
+    chunkBody.text = renderMarkerString(parseMarkdownToIR(chunkText), TELEGRAM_HTML_MARKERS);
+    chunkBody.parse_mode = "HTML";
     await client.sendMessage(chunkBody);
   }
 }

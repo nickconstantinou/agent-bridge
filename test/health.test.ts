@@ -975,13 +975,13 @@ describe("SelfPlugin — extended checks", () => {
     expect(claudeCheck).toBeDefined();
     expect(claudeCheck?.status).toBe("red"); // 10 versions behind
     expect(claudeCheck?.message).toContain("2.1.158 -> 2.1.168");
-    expect(claudeCheck?.message).toContain("upgrade.sh --update");
+    expect(claudeCheck?.message).toContain("install.sh");
 
     const codexCheck = report.checks.find(c => c.name === "cli-update-codex");
     expect(codexCheck).toBeDefined();
     expect(codexCheck?.status).toBe("green"); // 2 versions behind
     expect(codexCheck?.message).toContain("0.135.0 -> 0.137.0");
-    expect(codexCheck?.message).toContain("upgrade.sh --update");
+    expect(codexCheck?.message).toContain("install.sh");
 
     // agy is now checked directly via agy --version, not npm outdated
     const antigravityNpmCheck = report.checks.find(c => c.name === "cli-update-antigravity");
@@ -1452,8 +1452,8 @@ describe("health bot scheduled delivery", () => {
     });
 
     expect(client.sendMessage).toHaveBeenCalledOnce();
-    expect(sent[0].body.text).toBe("sudo systemctl restart agent-bridge-health\n");
-    expect(sent[0].body.entities[0]).toMatchObject({ type: "pre", language: "bash" });
+    expect(sent[0].body.parse_mode).toBe("HTML");
+    expect(sent[0].body.text).toContain("<pre");
   });
 });
 

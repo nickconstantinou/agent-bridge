@@ -1,7 +1,7 @@
 # Agent-Driven Memory Broker Research
 
 Research plus implementation plan. Phases 1-4 are implemented as of
-2026-06-21. Agent Bridge has moved from the external memory CLI to a
+2026-06-26. Agent Bridge has moved from the external memory CLI to a
 bridge-owned, agent-driven memory broker.
 
 ## Goal
@@ -77,7 +77,8 @@ distinguish useful precedent from noise.
 Implemented behavior: the bridge exposes helper commands inside spawned CLI
 environments. It does not inject raw memory text by default. Agents can retrieve
 conversation-aware memories via `--memory`, narrow with `--memory-query`, and
-write durable candidates via `--memory-add-json` or a post-turn sidecar.
+write durable candidates via `--memory-add-json`, a post-turn sidecar, or the
+opt-in post-turn extractor.
 
 ## Proposed Architecture
 
@@ -267,7 +268,7 @@ Acceptance:
 
 ### Phase 4: Post-Turn Memory Candidate Extraction
 
-Status: implemented on 2026-06-21.
+Status: implemented on 2026-06-26.
 
 Options:
 
@@ -277,14 +278,23 @@ Options:
 | Structured final sidecar | Agent includes memory candidates in a hidden parseable block | Output parsing risk |
 | Bridge extractor | Bridge runs a separate post-turn summarizer | Extra LLM call, cost, latency |
 
-Recommended first production path: agent self-write with strict validation.
+Recommended first production path: agent self-write with strict validation,
+then structured final sidecars, then opt-in automatic extraction once validation
+and dedupe are stable.
 
-Implemented path: structured final sidecar. The bridge does not run a separate
-LLM extractor. Agents may include `<!-- agent-bridge-memory ... -->` or
+Implemented path:
+
+- Structured final sidecar. Agents may include `<!-- agent-bridge-memory ... -->` or
 `<agent-bridge-memory>...</agent-bridge-memory>` containing one candidate object
 or an array of candidates. The engine strips the sidecar before Telegram
 delivery, conversation persistence, and `onAfterExecute` hooks. Valid candidates
 use the same validator as `--memory-add-json`; invalid candidates are ignored.
+- Opt-in bridge extractor. Set `BRIDGE_MEMORY_EXTRACTOR_ENABLED=1` to run a
+  bounded JSON-only post-turn extractor after successful agent replies. The
+  extractor uses the configured CLI, does not reuse the user session, emits no
+  Telegram progress, parses a JSON candidate array, and stores accepted
+  candidates through the same validator. Extractor failures warn only and do not
+  block reply delivery.
 
 ## Non-Goals
 
@@ -316,6 +326,8 @@ use the same validator as `--memory-add-json`; invalid candidates are ignored.
 - Unit tests for schema, import, retrieval, and validation.
 - Regression tests for the five audit queries listed above.
 - Integration test that a fallback CLI receives the same memory affordance.
+- Integration test that `BRIDGE_MEMORY_EXTRACTOR_ENABLED=1` runs post-turn
+  extraction, stores accepted candidates, and leaves Telegram output unchanged.
 - Manual smoke test using a real bridge turn:
   - ask about fallback CLI promotion
   - agent retrieves relevant memory through helper

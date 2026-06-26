@@ -38,6 +38,7 @@ import { createDefectScanHandler } from "./handlers/defectScan.js";
 import { createFeaturePlanHandler } from "./handlers/featurePlan.js";
 import { createGithubIssueHandler } from "./handlers/githubIssue.js";
 import { createTddImplementationHandler } from "./handlers/tddImplementation.js";
+import { createOrchestratedTaskHandler } from "./handlers/orchestratedTask.js";
 import { createPrLifecycleHandler } from "./handlers/prLifecycle.js";
 import { createPrWatchHandler } from "./handlers/prWatch.js";
 import { createPrRefreshHandler } from "./handlers/prRefresh.js";
@@ -209,6 +210,24 @@ const jobExecutor = startJobExecutorLoop({
         workItemId,
         // --include=dev: the service runs with NODE_ENV=production, which would
         // otherwise omit devDependencies — and the test runner lives there
+        installDeps: (dir) => runWorkerCommand("npm", ["ci", "--no-audit", "--no-fund", "--include=dev"], { cwd: dir }).then(() => undefined),
+      }),
+      cleanupWorkspace,
+    }),
+    orchestrated_task: createOrchestratedTaskHandler({
+      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), cliChain, { timeoutMs: 15 * 60 * 1000 }),
+      command: defectScanCommand,
+      commands: {
+        codex: process.env.CODEX_COMMAND || "codex",
+        claude: process.env.CLAUDE_COMMAND || "claude",
+        antigravity: process.env.ANTIGRAVITY_COMMAND || "agy",
+      },
+      cliExtraArgs: ["--permission-mode", "acceptEdits"],
+      runGit: (args, cwd) => runWorkerCommand("git", args, { cwd }),
+      runTests,
+      prepareWorkspace: (repository, workItemId) => prepareWorkspace({
+        repository,
+        workItemId,
         installDeps: (dir) => runWorkerCommand("npm", ["ci", "--no-audit", "--no-fund", "--include=dev"], { cwd: dir }).then(() => undefined),
       }),
       cleanupWorkspace,

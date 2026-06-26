@@ -405,6 +405,12 @@ create `/etc/default/agent-bridge-interactive` or
 `/etc/default/agent-bridge-worker-bot` from their examples before enabling
 those units.
 
+Worker implementation jobs support resumable checkpoints. `orchestrated_task`
+stores `planning`, `executing`, and `verifying` progress in `work_jobs.phase`
+and `phase_data_json`; after verification passes it queues `pr_lifecycle` so
+branch push, draft PR creation, proof comments, and merge approval stay behind
+the existing human gate.
+
 ### Database
 
 Each service instance has its own `DB_PATH` to avoid SQLite lock contention.

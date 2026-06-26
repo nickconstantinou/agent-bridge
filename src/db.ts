@@ -111,7 +111,7 @@ export function openDb(dbPath: string): BridgeDb {
     CREATE TABLE IF NOT EXISTS work_jobs (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
       work_item_id     INTEGER,
-      task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','pr_lifecycle')),
+      task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','orchestrated_task','pr_lifecycle')),
       status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','leased','running','waiting_approval','completed','failed','cancelled')),
       bot              TEXT CHECK (bot IN ('codex','antigravity','claude')),
       lease_owner      TEXT,
@@ -205,15 +205,32 @@ export function openDb(dbPath: string): BridgeDb {
     raw.exec(`ALTER TABLE github_links ADD COLUMN proof_comment_sha TEXT`);
   } catch { /* column already exists */ }
   // Migrate work_jobs task_type CHECK constraint to include feature_plan, pr_lifecycle,
-  // pr_watch, and pr_refresh. SQLite cannot ALTER CHECK constraints; use rename-recreate.
+  // pr_watch, pr_refresh, and orchestrated_task. SQLite cannot ALTER CHECK
+  // constraints; use rename-recreate.
   // We disable FK enforcement and legacy-alter-table mode to prevent SQLite 3.26+ from
   // auto-rewriting FK references in other tables (e.g. approvals.job_id) during the
   // rename, which would otherwise cause the DROP TABLE to fail.
   try {
-    const hasPrWatch = (raw.prepare(
+    const hasCurrentTaskTypes = (raw.prepare(
       `SELECT sql FROM sqlite_master WHERE type='table' AND name='work_jobs'`
-    ).get() as { sql: string } | undefined)?.sql?.includes("'pr_watch'");
-    if (!hasPrWatch) {
+    ).get() as { sql: string } | undefined)?.sql?.includes("'orchestrated_task'");
+    if (!hasCurrentTaskTypes) {
+      const existingColumns = (raw.prepare(`PRAGMA table_info(work_jobs)`).all() as Array<{ name: string }>)
+        .map(c => c.name);
+      const hasPhase = existingColumns.includes("phase");
+      const hasPhaseData = existingColumns.includes("phase_data_json");
+      const baseColumns = [
+        "id", "work_item_id", "task_type", "status", "bot", "lease_owner",
+        "lease_expires_at", "heartbeat_at", "attempt_count", "max_attempts",
+        "idempotency_key", "input_json", "result_json", "error",
+        "created_at", "updated_at",
+      ];
+      const targetColumns = [...baseColumns, "phase", "phase_data_json"].join(", ");
+      const sourceColumns = [
+        ...baseColumns,
+        hasPhase ? "phase" : "'initial'",
+        hasPhaseData ? "phase_data_json" : "NULL",
+      ].join(", ");
       raw.pragma("foreign_keys = OFF");
       raw.pragma("legacy_alter_table = ON");
       try {
@@ -222,7 +239,7 @@ export function openDb(dbPath: string): BridgeDb {
           CREATE TABLE work_jobs (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             work_item_id     INTEGER,
-            task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','pr_lifecycle','pr_watch','pr_refresh')),
+            task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','orchestrated_task','pr_lifecycle','pr_watch','pr_refresh')),
             status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','leased','running','waiting_approval','completed','failed','cancelled')),
             bot              TEXT CHECK (bot IN ('codex','antigravity','claude')),
             lease_owner      TEXT,
@@ -236,9 +253,12 @@ export function openDb(dbPath: string): BridgeDb {
             error            TEXT,
             created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            phase            TEXT NOT NULL DEFAULT 'initial',
+            phase_data_json  TEXT,
             FOREIGN KEY(work_item_id) REFERENCES work_items(id)
           );
-          INSERT INTO work_jobs SELECT * FROM work_jobs_migrate_tmp;
+          INSERT INTO work_jobs (${targetColumns})
+          SELECT ${sourceColumns} FROM work_jobs_migrate_tmp;
           DROP TABLE work_jobs_migrate_tmp;
         `);
       } finally {
@@ -373,6 +393,16 @@ export function openDb(dbPath: string): BridgeDb {
   } catch { /* column already exists */ }
   try {
     raw.exec(`ALTER TABLE project_memories ADD COLUMN source_repo_path TEXT`);
+  } catch { /* column already exists */ }
+
+  // ── Job checkpointing (Phase A) ───────────────────────────────────────────
+  // Adds phase + phase_data_json to work_jobs so handlers can yield mid-job
+  // and resume from a named phase with accumulated state.
+  try {
+    raw.exec(`ALTER TABLE work_jobs ADD COLUMN phase TEXT NOT NULL DEFAULT 'initial'`);
+  } catch { /* column already exists */ }
+  try {
+    raw.exec(`ALTER TABLE work_jobs ADD COLUMN phase_data_json TEXT`);
   } catch { /* column already exists */ }
 
   // Clear any locks left held from a previous process that was killed mid-execution
@@ -742,6 +772,18 @@ export class BridgeDb {
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND lease_owner = ? AND status != 'cancelled'`
     ).run(error, jobId, workerId);
+  }
+
+  /** Re-queue a job as pending with an updated phase and phaseData checkpoint. */
+  continueWorkJob(jobId: number, phase: string, phaseData: object, workerId: string): void {
+    this.raw.prepare(
+      `UPDATE work_jobs
+       SET status = 'pending', phase = ?, phase_data_json = ?,
+           attempt_count = attempt_count + 1,
+           lease_owner = NULL, lease_expires_at = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND lease_owner = ? AND status != 'cancelled'`
+    ).run(phase, JSON.stringify(phaseData), jobId, workerId);
   }
 
   recoverExpiredWorkJobs(now: string): number {
@@ -1162,6 +1204,8 @@ export interface WorkJob {
   input_json: string;
   result_json: string | null;
   error: string | null;
+  phase: string;
+  phase_data_json: string | null;
   created_at: string;
   updated_at: string;
 }

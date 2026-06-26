@@ -982,3 +982,56 @@ describe("BridgeDb project memories", () => {
     expect(db.getMemoryCount()).toBe(1);
   });
 });
+
+describe("BridgeDb work_jobs task_type migration", () => {
+  it("preserves phase columns while adding orchestrated_task to existing DBs", () => {
+    db.close();
+    const dir = mkdtempSync(join(tmpdir(), "bridge-db-migration-"));
+    const dbPath = join(dir, "bridge.sqlite");
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+      CREATE TABLE work_jobs (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        work_item_id     INTEGER,
+        task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','pr_lifecycle','pr_watch','pr_refresh')),
+        status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','leased','running','waiting_approval','completed','failed','cancelled')),
+        bot              TEXT CHECK (bot IN ('codex','antigravity','claude')),
+        lease_owner      TEXT,
+        lease_expires_at TEXT,
+        heartbeat_at     TEXT,
+        attempt_count    INTEGER NOT NULL DEFAULT 0,
+        max_attempts     INTEGER NOT NULL DEFAULT 2,
+        idempotency_key  TEXT NOT NULL UNIQUE,
+        input_json       TEXT NOT NULL DEFAULT '{}',
+        result_json      TEXT,
+        error            TEXT,
+        created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        phase            TEXT NOT NULL DEFAULT 'initial',
+        phase_data_json  TEXT
+      );
+      INSERT INTO work_jobs (task_type, idempotency_key, phase, phase_data_json)
+      VALUES ('defect_scan', 'legacy:phase:1', 'verifying', '{"ok":true}');
+    `);
+    legacy.close();
+
+    const migrated = openDb(dbPath);
+    try {
+      const existing = migrated.raw.prepare(
+        "SELECT phase, phase_data_json FROM work_jobs WHERE idempotency_key = ?"
+      ).get("legacy:phase:1") as any;
+      expect(existing.phase).toBe("verifying");
+      expect(JSON.parse(existing.phase_data_json)).toEqual({ ok: true });
+
+      const job = migrated.createWorkJob({
+        task_type: "orchestrated_task",
+        idempotency_key: "orch:migrated:1",
+      });
+      expect(job.task_type).toBe("orchestrated_task");
+    } finally {
+      migrated.close();
+      rmSync(dir, { recursive: true, force: true });
+      db = openDb(":memory:");
+    }
+  });
+});

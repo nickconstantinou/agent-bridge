@@ -2,8 +2,8 @@
 
 The worker bot is a second Telegram bot that runs engineering jobs in the
 background: scanning repositories for defects, planning features, implementing
-approved fixes with strict TDD, and opening draft PRs that wait for your merge
-approval. You talk to it on Telegram; it does the work in disposable git
+approved fixes with strict TDD, running resumable orchestrated implementation
+jobs, and opening draft PRs that wait for your merge approval. You talk to it on Telegram; it does the work in disposable git
 workspaces and reports back at each boundary.
 
 **The one invariant: nothing merges without your explicit approval.** The
@@ -19,6 +19,8 @@ Merging — and anything destructive — always comes back to you.
                    →  red tests → green fix → verification  (in a clone)
                    →  branch pushed → draft PR opened
                    →  merge keyboard arrives in your chat
+orchestrated_task  →  plan checkpoint → execute checkpoint → verify
+                   →  pr_lifecycle job → draft PR + merge gate
    [Merge PR]      →  head SHA + CI checks verified → squash merge
 ```
 
@@ -68,6 +70,9 @@ interactive chat.
 
 ## Failure Behaviour
 
+- `orchestrated_task` checkpoints each phase in `work_jobs.phase` and
+  `phase_data_json`: planning, executing, then verifying. A successful verify
+  queues `pr_lifecycle`; it does not merge directly.
 - Failed jobs are retried once (`max_attempts` 2), then marked `failed`. The
   failure reason lands in your chat and in `/job <id>`.
 - A failed implementation job deletes its workspace, so the retry starts from

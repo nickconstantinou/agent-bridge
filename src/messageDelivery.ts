@@ -10,7 +10,7 @@ import {
   documentFallbackEnabled,
   routeNativeLayout,
 } from "./nativeLayout.js";
-import { parseMarkdownToIR, renderMarkerString, TELEGRAM_HTML_MARKERS } from "./markdownIR.js";
+import { parseMarkdownToIR, renderMarkerString, TELEGRAM_HTML_MARKERS, markdownTableToRichHtml } from "./markdownIR.js";
 
 const MAX_TELEGRAM_TEXT = 4096;
 
@@ -86,6 +86,18 @@ export async function sendTelegramMessage({
       caption: `Full response attached as response.md (${route.reason})`,
     });
     return;
+  }
+
+  // Tables route through sendRichMessage (Telegram Bot API 10.1+) which accepts <table> HTML.
+  // Falls back to card-style entity messages when sendRichMessage isn't available.
+  if (route.kind === "html" && typeof client.sendRichMessage === "function") {
+    const richHtml = markdownTableToRichHtml(text);
+    try {
+      await client.sendRichMessage({ chat_id: chatId, ...rest, text: richHtml, parse_mode: "HTML" });
+      return;
+    } catch {
+      // sendRichMessage unsupported or rejected — fall through to card-style delivery
+    }
   }
 
   await sendEntityMessages({ client, chatId, body: { ...rest, text } });

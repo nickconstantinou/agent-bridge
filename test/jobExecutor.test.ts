@@ -345,4 +345,115 @@ describe("executeNextJob", () => {
     expect(result).toBeNull();
     expect(handler).not.toHaveBeenCalled();
   });
+
+  it("passes phase='initial' and phaseData={} to a new job's handler context", async () => {
+    db.createWorkJob({
+      task_type: "defect_scan",
+      idempotency_key: "scan:phase:ctx:1",
+    });
+
+    let capturedCtx: any;
+    const handler = vi.fn(async (_input: any, ctx: any) => {
+      capturedCtx = ctx;
+      return { summary: "ok" };
+    });
+
+    await executeNextJob({
+      db,
+      workerId: "test-worker",
+      handlers: { defect_scan: handler },
+      notify: vi.fn(),
+    });
+
+    expect(capturedCtx.phase).toBe("initial");
+    expect(capturedCtx.phaseData).toEqual({});
+  });
+
+  it("re-queues a job as pending when handler returns status='continue'", async () => {
+    const job = db.createWorkJob({
+      task_type: "defect_scan",
+      idempotency_key: "scan:continue:1",
+      max_attempts: 10,
+    });
+
+    const handler = vi.fn().mockResolvedValue({
+      status: "continue",
+      phase: "step_two",
+      phaseData: { step: 2, foo: "bar" },
+      summary: "Phase 1 done, continuing to step_two",
+    });
+
+    const notify = vi.fn();
+    const result = await executeNextJob({
+      db,
+      workerId: "test-worker",
+      handlers: { defect_scan: handler },
+      notify,
+    });
+
+    const updated = db.getWorkJob(result!.jobId);
+    expect(updated?.status).toBe("pending");
+    expect(updated?.phase).toBe("step_two");
+    expect(JSON.parse(updated?.phase_data_json ?? "{}")).toEqual({ step: 2, foo: "bar" });
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("continuing to step_two"));
+  });
+
+  it("passes accumulated phase and phaseData from a continued job back to the handler", async () => {
+    const job = db.createWorkJob({
+      task_type: "defect_scan",
+      idempotency_key: "scan:continue:2",
+      max_attempts: 10,
+    });
+
+    let runCount = 0;
+    const ctxCaptures: any[] = [];
+    const handler = vi.fn(async (_input: any, ctx: any) => {
+      ctxCaptures.push({ phase: ctx.phase, phaseData: ctx.phaseData });
+      runCount++;
+      if (runCount === 1) {
+        return { status: "continue", phase: "phase_b", phaseData: { x: 42 }, summary: "moving to b" };
+      }
+      return { summary: "done" };
+    });
+
+    const deps = {
+      db,
+      workerId: "test-worker",
+      handlers: { defect_scan: handler },
+      notify: vi.fn(),
+    };
+
+    await executeNextJob(deps);
+    await executeNextJob(deps);
+
+    expect(ctxCaptures[0]).toEqual({ phase: "initial", phaseData: {} });
+    expect(ctxCaptures[1]).toEqual({ phase: "phase_b", phaseData: { x: 42 } });
+    expect(db.getWorkJob(job.id)?.status).toBe("completed");
+  });
+
+  it("does not mark a continued job as completed", async () => {
+    const job = db.createWorkJob({
+      task_type: "defect_scan",
+      idempotency_key: "scan:continue:3",
+      max_attempts: 10,
+    });
+
+    const handler = vi.fn().mockResolvedValue({
+      status: "continue",
+      phase: "next",
+      phaseData: {},
+      summary: "continuing",
+    });
+
+    await executeNextJob({
+      db,
+      workerId: "test-worker",
+      handlers: { defect_scan: handler },
+      notify: vi.fn(),
+    });
+
+    const updated = db.getWorkJob(job.id);
+    expect(updated?.status).not.toBe("completed");
+    expect(updated?.result_json).toBeNull();
+  });
 });

@@ -37,6 +37,7 @@ orchestrated_task  →  plan checkpoint → execute checkpoint → verify
 | `/approvals` | Re-list every pending approval with its action buttons. Use this if you lost or dismissed a merge keyboard. |
 | `/models` | Show the CLI fallback chain (`codex → claude → antigravity`). |
 | `/effort` | Show/change manual effort for interactive worker chat. Job effort is task-selected. |
+| `/cli` | Show active CLI with switch keyboard. |
 
 Plain messages (not commands) are routed to the CLI chain like a normal
 interactive chat.
@@ -52,7 +53,7 @@ interactive chat.
 3. Tap **Approve** on a finding. Two jobs queue: a GitHub issue is created
    first, then a TDD implementation job.
 4. The implementation job **clones the repo into a disposable workspace**
-   (`~/.agent-bridge/workspaces/work-<id>`) — your live checkouts are never
+   (`~/agent-bridge-workspaces/work-<id>`) — your live checkouts are never
    touched. Inside the clone it:
    - creates branch `agent/work-<id>`
    - writes failing tests, **verifies they actually fail**, commits tests only
@@ -92,17 +93,16 @@ Set in the worker's env file (`.env.worker` or the systemd default file):
 | Variable | Default | Purpose |
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN_WORKER` | — | Worker bot token (required) |
+| `TELEGRAM_ALLOWED_USER_IDS` | — | Comma-separated allowed Telegram user IDs |
 | `WORKER_ENABLED` | `false` | Master switch for job commands |
 | `WORKER_JOB_POLL_INTERVAL_MS` | `10000` | Queue poll interval (ms) |
-| `WORKER_CLI_CHAIN` | `codex,claude,antigravity` | Worker interactive-chat fallback order |
-| `WORKER_CODE_CLI_CHAIN` | `codex,claude` | Code-writing fallback order; `antigravity` is stripped if present |
-| `WORKER_SCRIBE_CLI_CHAIN` | `antigravity,codex,claude` | Read-only/prose fallback order for scans, plans, docs, summaries |
-| `WORKER_CODE_CLI_COMMAND` | first code-chain entry | Primary command for code-writing jobs |
+| `WORKER_CLI_CHAIN` | `codex,claude,antigravity` | CLI fallback order |
+| `WORKER_CODE_CLI_CHAIN` | `codex,claude` | Code-writing fallback order (no Antigravity) |
+| `WORKER_SCRIBE_CLI_CHAIN` | `antigravity,codex,claude` | Scribe/read-only fallback order |
 | `CODEX_EFFORT` / `CLAUDE_EFFORT` / `ANTIGRAVITY_EFFORT` | `medium` | Shared effort defaults. Agy is recorded/displayed only; no CLI effort flag exists |
-| `WORKER_SCRIBE_CLI_COMMAND` | `DEFECT_SCAN_CLI_COMMAND` or first scribe-chain entry | Primary command for read-only/prose jobs |
 | `WORKER_DEFAULT_REPO` | — | Repository attached to `/feature` plans |
 | `WORKER_REPO_ROOT` | `$HOME` | Where repo names resolve to local checkouts |
-| `WORKER_WORKSPACE_DIR` | `~/.agent-bridge/workspaces` | Per-job clone location |
+| `WORKER_WORKSPACE_DIR` | `~/agent-bridge-workspaces` | Per-job clone location |
 | `DEFECT_SCAN_CLI_COMMAND` | `claude` | CLI used for scans/plans/implementation |
 | `GITHUB_TOKEN_FILE` | `~/.secrets/GITHUB_TOKEN.TXT` | Token for `gh` API calls |
 | `WORKER_MAX_OPEN_PRS` | `3` | Max simultaneous open agent PRs per repo |
@@ -111,7 +111,9 @@ Set in the worker's env file (`.env.worker` or the systemd default file):
 | `WORKER_PR_WATCH_INTERVAL` | `3600000` | How often (ms) to enqueue a `pr_watch` job |
 | `WORKER_NOTIFY_CHAT_ID` | — | Telegram chat ID for stale PR digest messages |
 | `WORKER_GIT_NAME` | `agent-bridge worker` | Git author name used in workspace commits |
-| `WORKER_GIT_EMAIL` | `agent-bridge-worker@...` | Git author email used in workspace commits |
+| `WORKER_GIT_EMAIL` | `agent-bridge-worker@users.noreply.github.com` | Git author email used in workspace commits |
+| `DB_PATH` | `.data/bridge.sqlite` | SQLite database path |
+| `BRIDGE_EXECUTION_MODE` | `safe` | Execution mode (`safe` or `trusted`) |
 
 Code-writing jobs (`tdd_implementation`, `orchestrated_task`) use the code
 chain and never fall back to Agy. Scribe/read-only jobs (`defect_scan`,

@@ -20,10 +20,23 @@ export type JobHandlerInput = Record<string, unknown>;
 export interface JobHandlerContext {
   db: BridgeDb;
   workerId: string;
+  /** Current job phase — 'initial' for new jobs. */
+  phase: string;
+  /** Opaque state blob written by the last continue result. */
+  phaseData: object;
 }
 
 export interface JobHandlerResult {
+  /**
+   * 'continue' re-queues this job as pending with a new phase/phaseData checkpoint.
+   * Omitting status (or 'completed') transitions the job to completed.
+   */
+  status?: 'completed' | 'continue';
   summary: string;
+  /** Required when status='continue'. */
+  phase?: string;
+  /** Required when status='continue'. */
+  phaseData?: object;
   [key: string]: unknown;
 }
 
@@ -88,6 +101,14 @@ export async function executeNextJob(
     // non-fatal — proceed with empty input
   }
 
+  const phase = (job as any).phase ?? 'initial';
+  let phaseData: object = {};
+  try {
+    if ((job as any).phase_data_json) {
+      phaseData = JSON.parse((job as any).phase_data_json);
+    }
+  } catch { /* non-fatal */ }
+
   // Keep the lease alive while the handler runs so a long job is never
   // reclaimed (and duplicated) by another worker or a later tick.
   const heartbeat = setInterval(() => {
@@ -97,9 +118,14 @@ export async function executeNextJob(
   }, heartbeatIntervalMs);
 
   try {
-    const result = await handler(input, { db, workerId });
-    db.completeWorkJob(job.id, result, workerId);
-    await notify(result.summary, result);
+    const result = await handler(input, { db, workerId, phase, phaseData });
+    if (result.status === 'continue') {
+      db.continueWorkJob(job.id, result.phase ?? 'initial', result.phaseData ?? {}, workerId);
+      if (result.summary) await notify(result.summary);
+    } else {
+      db.completeWorkJob(job.id, result, workerId);
+      await notify(result.summary, result);
+    }
     return { jobId: job.id, handlerResult: result };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -82,21 +82,19 @@ sudo systemctl restart agent-bridge-codex
 sudo systemctl restart agent-bridge-claude
 ```
 
-2. From inside an active bot session, schedule the restart into a separate
-   transient systemd unit and delay it long enough for the bot to send the final
-   reply:
+2. From inside an active bot session, use the narrow safe restart helper. It
+   sleeps for 5 seconds before restarting services, giving the bridge time to
+   send the final Telegram reply:
 
 ```bash
-sudo systemd-run --unit=agent-bridge-safe-restart --collect --on-active=10s \
-  /usr/bin/systemctl restart \
-  agent-bridge-codex \
-  agent-bridge-claude \
-  agent-bridge-antigravity \
-  agent-bridge-interactive
+sudo -n /usr/local/sbin/restart-agent-bridge
 ```
 
-Do not use the scheduled path for destructive operations or worker deploys that
-need drain semantics; worker restarts must use the worker-specific drain flow.
+The helper must be root-owned and granted via a narrow sudoers rule for only
+`/usr/local/sbin/restart-agent-bridge`. Do not grant `NOPASSWD: ALL` or raw
+passwordless `systemctl`. Do not use the helper for destructive operations or
+worker deploys that need drain semantics; worker restarts that may interrupt
+active jobs still require the worker-specific drain flow.
 
 If the bot becomes unresponsive after a bad restart, send `/reset` to the affected bot on Telegram to clear any stale execution lock.
 

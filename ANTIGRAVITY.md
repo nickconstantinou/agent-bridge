@@ -18,3 +18,17 @@ recurring issue, write a guarded candidate with:
 
 Do not save secrets, API keys, passwords, transient logs, or private personal
 information.
+
+# Service Restart Safety
+
+Do not run direct `sudo systemctl restart agent-bridge-<bot>` from an active
+bot session. Use the root-owned safe helper instead:
+
+```bash
+sudo -n /usr/local/sbin/restart-agent-bridge
+```
+
+The helper sleeps for 5 seconds before restarting the fixed bridge unit list so
+the bot can notify the user first. It must be granted through a narrow sudoers
+rule for only `/usr/local/sbin/restart-agent-bridge`; never use `NOPASSWD: ALL`
+or passwordless raw `systemctl`.

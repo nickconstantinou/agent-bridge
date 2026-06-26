@@ -534,6 +534,32 @@ sudo systemctl enable --now agent-bridge-antigravity agent-bridge-codex
 
 The repo service templates intentionally use `User=BRIDGE_USER` as an install-time placeholder. If you copy units manually, replace that placeholder with the real runtime account before starting the service; otherwise systemd fails with `status=217/USER`.
 
+### Safe remote restart helper
+
+For restarts triggered from an active bridge session, install the narrow helper
+instead of granting passwordless `systemctl`:
+
+```bash
+sudo install -D -m 0750 -o root -g root scripts/restart-agent-bridge.sh /usr/local/sbin/restart-agent-bridge
+sudo visudo -f /etc/sudoers.d/agent-bridge-restart
+```
+
+Sudoers content:
+
+```sudoers
+content-crawler ALL=(root) NOPASSWD: /usr/local/sbin/restart-agent-bridge
+```
+
+Use:
+
+```bash
+sudo -n /usr/local/sbin/restart-agent-bridge
+```
+
+The helper waits 5 seconds before restarting the fixed `agent-bridge-*` unit
+list, giving the current bot response time to reach Telegram. Do not grant
+`NOPASSWD: ALL` or passwordless raw `systemctl`.
+
 Only enable optional services after their `/etc/default/agent-bridge-*` file
 exists and contains a real token.
 

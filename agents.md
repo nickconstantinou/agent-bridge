@@ -641,18 +641,22 @@ sudo systemctl restart agent-bridge-claude
 
 #### From within an active bot session (safe restart)
 
-Restarts from within a session are permitted using a grace-period pattern. Systemd uses `KillMode=control-group`, so a direct `systemctl restart` would kill the bridge process before it can deliver its final Telegram message to the user. The safe pattern avoids this:
+Restarts from within a session are permitted only through the narrow safe
+restart helper. Systemd uses `KillMode=control-group`, so a direct
+`systemctl restart` would kill the bridge process before it can deliver its
+final Telegram message to the user. The helper avoids this with a 5-second
+delay and a fixed unit list:
 
 1. **Notify the user first** — include the restart warning in your response text (e.g. *"Restarting bridge in 5 seconds — reconnect to continue."*).
-2. **Schedule the restart in the background** so the current request can complete and the message can be delivered:
+2. **Run the helper**:
 
 ```bash
-(sleep 5 && sudo systemctl restart agent-bridge-claude) &
+sudo -n /usr/local/sbin/restart-agent-bridge
 ```
 
-Replace `agent-bridge-claude` with the appropriate service name. The 5-second sleep lets the bridge finish its current HTTP response cycle and deliver the Telegram notification. `sudo systemctl restart` works by sending a D-Bus signal to systemd and then exiting — systemd handles the actual cgroup teardown and new-instance start asynchronously, so it does not matter that the background process is killed shortly after the signal is dispatched.
-
-**Do not `await` or block on this command** — run it as a fire-and-forget background job from within the agent's tool execution, then end your response normally.
+Install `scripts/restart-agent-bridge.sh` as root-owned
+`/usr/local/sbin/restart-agent-bridge`, then grant only that exact command via
+sudoers. Do not grant `NOPASSWD: ALL` or raw passwordless `systemctl`.
 
 ### Monitoring
 

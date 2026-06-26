@@ -65,17 +65,38 @@ information.
 
 # Service Restart Safety
 
-**Never trigger `sudo systemctl restart agent-bridge-<bot>` from within an active bot session.**
+**Never trigger direct `sudo systemctl restart agent-bridge-<bot>` from within an active bot session.**
 
-When the restart command runs inside a bot session, systemd sends SIGTERM to the entire control group — which includes the currently-running Claude CLI process. This kills the session that issued the restart, which looks like the bot went unresponsive.
+When a direct restart command runs inside a bot session, systemd sends SIGTERM
+to the entire service control group, including the currently-running CLI
+process. That kills the session issuing the restart before it can report the
+result.
 
-The correct restart pattern is to run restarts from outside any active bot session (e.g. from the server terminal or Claude Code desktop), one service at a time with a short timeout:
+Approved restart paths:
+
+1. From outside any active bot session, use direct restarts:
 
 ```bash
 sudo systemctl restart agent-bridge-antigravity
 sudo systemctl restart agent-bridge-codex
 sudo systemctl restart agent-bridge-claude
 ```
+
+2. From inside an active bot session, schedule the restart into a separate
+   transient systemd unit and delay it long enough for the bot to send the final
+   reply:
+
+```bash
+sudo systemd-run --unit=agent-bridge-safe-restart --collect --on-active=10s \
+  /usr/bin/systemctl restart \
+  agent-bridge-codex \
+  agent-bridge-claude \
+  agent-bridge-antigravity \
+  agent-bridge-interactive
+```
+
+Do not use the scheduled path for destructive operations or worker deploys that
+need drain semantics; worker restarts must use the worker-specific drain flow.
 
 If the bot becomes unresponsive after a bad restart, send `/reset` to the affected bot on Telegram to clear any stale execution lock.
 

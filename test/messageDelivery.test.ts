@@ -533,8 +533,7 @@ describe("sendTelegramMessage table rendering", () => {
     expect(client.sendRichMessage).toHaveBeenCalledOnce();
     expect(client.sendRichMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        parse_mode: "HTML",
-        text: expect.stringContaining("<table"),
+        rich_message: expect.objectContaining({ html: expect.stringContaining("<table") }),
       }),
     );
     expect(client.sendMessage).not.toHaveBeenCalled();

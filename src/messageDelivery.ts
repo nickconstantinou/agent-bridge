@@ -93,7 +93,7 @@ export async function sendTelegramMessage({
   if (route.kind === "html" && typeof client.sendRichMessage === "function") {
     const richHtml = markdownTableToRichHtml(text);
     try {
-      await client.sendRichMessage({ chat_id: chatId, ...rest, text: richHtml, parse_mode: "HTML" });
+      await client.sendRichMessage({ chat_id: chatId, ...rest, rich_message: { html: richHtml } });
       return;
     } catch {
       // sendRichMessage unsupported or rejected — fall through to card-style delivery

@@ -101,8 +101,10 @@ export class TelegramClient implements MessagingPlatform {
     return this.call("sendMessage", body);
   }
 
-  // sendRichMessage / sendRichMessageDraft: Bot API 10.1 not yet available.
-  // messageDelivery falls back to card-style when these methods are absent.
+  // Bot API 10.1: payload shape is { chat_id, rich_message: { html: "..." } }
+  async sendRichMessage(body: { chat_id: number | string; rich_message: { html: string }; [key: string]: any }): Promise<TelegramResponse<TelegramMessage>> {
+    return this.call("sendRichMessage", body);
+  }
 
   async answerCallbackQuery(body: any): Promise<TelegramResponse<boolean>> {
     return this.call("answerCallbackQuery", body);

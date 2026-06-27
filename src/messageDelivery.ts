@@ -330,7 +330,7 @@ export async function sendMessageWithProgress({
     await deliverFinal(finalText);
 
     clearInterval(typingInterval);
-    return { ...result, onProgress: wrappedOnProgress };
+    return result ?? null;
   } catch (err: any) {
     clearInterval(typingInterval);
     if (isCapacityExhaustedError(err instanceof Error ? err : new Error(String(err)))) {

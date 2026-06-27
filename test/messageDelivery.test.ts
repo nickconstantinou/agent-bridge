@@ -166,6 +166,33 @@ describe("sendMessageWithProgress", () => {
     );
   });
 
+  it("returns only CliResult fields (text, sessionId) — no onProgress on returned object", async () => {
+    const client = createMockClient();
+    const chatId = 123;
+    const execution = Promise.resolve({ text: "Final answer", sessionId: "s1" } as CliResult);
+
+    const result = await sendMessageWithProgress({ client, kind: "codex", chatId, execution });
+
+    expect(result).not.toBeNull();
+    expect(result).not.toHaveProperty("onProgress");
+    expect(result).toEqual({ text: "Final answer", sessionId: "s1" });
+  });
+
+  it("returns only CliResult fields when execution is a function — no onProgress on returned object", async () => {
+    const client = createMockClient();
+    const chatId = 123;
+    const execution = async (onProgress: (chunk: string) => void) => {
+      onProgress("chunk");
+      return { text: "Answer from fn", sessionId: "s2" } as CliResult;
+    };
+
+    const result = await sendMessageWithProgress({ client, kind: "codex", chatId, execution });
+
+    expect(result).not.toBeNull();
+    expect(result).not.toHaveProperty("onProgress");
+    expect(result).toEqual({ text: "Answer from fn", sessionId: "s2" });
+  });
+
   it("handles execution as a function and passes onProgress", async () => {
     const client = createMockClient();
     const chatId = 123;

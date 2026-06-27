@@ -365,6 +365,13 @@ describe("BridgeDb runs and events persistence", () => {
     expect(run.ended_at).toBeDefined();
   });
 
+  it("persists cancellation reason in error column", () => {
+    db.insertRun("run-1", "chat-123", "codex");
+    db.updateRunCancelled("run-1", "user requested reset");
+    const run = db.getRun("run-1");
+    expect(run.error).toBe("user requested reset");
+  });
+
   it("inserts and retrieves events for a run", () => {
     db.insertRun("run-1", "chat-123", "codex");
     db.insertEvent("run-1", 1, "run.started", new Date().toISOString(), { command: "codex" });

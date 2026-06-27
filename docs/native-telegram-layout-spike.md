@@ -1,5 +1,10 @@
 # Native Telegram Layout Spike
 
+**Status:** Superseded. Agent Bridge retired the rich-message and Telegram HTML
+renderer paths; production Telegram delivery now uses Bot API `sendMessage`
+entities, with optional in-memory `response.md` document fallback for
+oversized/code-heavy responses. This document remains historical research only.
+
 ## Executive Summary
 
 The safe path is a hybrid native pipeline:

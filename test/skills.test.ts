@@ -35,15 +35,12 @@ describe("shared skills catalog", () => {
     expect(names).toContain("release-readiness-review");
   });
 
-  it("keeps the bundled skills list in the install scripts as the default", () => {
+  it("keeps the bundled skills list in install.sh as the default", () => {
     const installScript = readFileSync("scripts/install.sh", "utf8");
-    const deployScript = readFileSync("scripts/upgrade.sh", "utf8");
     for (const name of listLocalCatalog().map((entry) => entry.name)) {
       expect(installScript).toContain(name);
-      expect(deployScript).toContain(name);
     }
     expect(installScript).toContain("DEFAULT_AGENT_BRIDGE_SKILLS");
-    expect(deployScript).toContain("DEFAULT_AGENT_BRIDGE_SKILLS");
   });
 
   it("prefers SHARED_MEMORY_HOME for path resolution", () => {

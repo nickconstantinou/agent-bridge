@@ -3,10 +3,7 @@ import {
   parseMarkdownToIR,
   renderMarkerString,
   DISCORD_MARKERS,
-  TELEGRAM_HTML_MARKERS,
-  TELEGRAM_RICH_HTML_MARKERS,
   discordMarkdownIrEnabled,
-  telegramMarkdownIrEnabled,
 } from "../src/markdownIR.js";
 
 describe("parseMarkdownToIR", () => {
@@ -215,67 +212,6 @@ describe("renderMarkerString with DISCORD_MARKERS", () => {
   });
 });
 
-describe("renderMarkerString with TELEGRAM_HTML_MARKERS", () => {
-  it("escapes and bolds text", () => {
-    const ir = parseMarkdownToIR("**a < b && c > d**");
-    expect(renderMarkerString(ir, TELEGRAM_HTML_MARKERS)).toBe("<b>a &lt; b &amp;&amp; c &gt; d</b>");
-  });
-
-  it("renders a code block wrapped in <pre>, escaped", () => {
-    const ir = parseMarkdownToIR("```\nif (x < 1) {}\n```");
-    expect(renderMarkerString(ir, TELEGRAM_HTML_MARKERS)).toBe("<pre>if (x &lt; 1) {}</pre>");
-  });
-
-  it("renders a table as escaped bold-label cards", () => {
-    const ir = parseMarkdownToIR("| Name | Age |\n| --- | --- |\n| Alice | 30 |");
-    expect(renderMarkerString(ir, TELEGRAM_HTML_MARKERS)).toBe("<b>Name:</b> Alice\n• <b>Age:</b> 30");
-  });
-
-  it("renders an ordered list with numbered prefix", () => {
-    const ir = parseMarkdownToIR("1. first\n2. second");
-    expect(renderMarkerString(ir, TELEGRAM_HTML_MARKERS)).toBe("1. first\n2. second");
-  });
-});
-
-describe("renderMarkerString with TELEGRAM_RICH_HTML_MARKERS", () => {
-  it("renders bold as <b> with HTML escaping", () => {
-    const ir = parseMarkdownToIR("**a < b**");
-    expect(renderMarkerString(ir, TELEGRAM_RICH_HTML_MARKERS)).toBe("<b>a &lt; b</b>");
-  });
-
-  it("renders inline code as <code>", () => {
-    const ir = parseMarkdownToIR("run `npm test`");
-    expect(renderMarkerString(ir, TELEGRAM_RICH_HTML_MARKERS)).toBe("run <code>npm test</code>");
-  });
-
-  it("renders a code block as <pre>", () => {
-    const ir = parseMarkdownToIR("```js\nconsole.log(1);\n```");
-    expect(renderMarkerString(ir, TELEGRAM_RICH_HTML_MARKERS)).toBe("<pre>console.log(1);</pre>");
-  });
-
-  it("renders heading as <h> tag", () => {
-    const ir = parseMarkdownToIR("## Section");
-    expect(renderMarkerString(ir, TELEGRAM_RICH_HTML_MARKERS)).toBe("<h2>Section</h2>");
-  });
-
-  it("renders unordered list as <ul><li> elements", () => {
-    const ir = parseMarkdownToIR("- one\n- two");
-    expect(renderMarkerString(ir, TELEGRAM_RICH_HTML_MARKERS)).toBe("<ul><li>one</li><li>two</li></ul>");
-  });
-
-  it("renders ordered list as <ol><li> elements", () => {
-    const ir = parseMarkdownToIR("1. first\n2. second");
-    expect(renderMarkerString(ir, TELEGRAM_RICH_HTML_MARKERS)).toBe("<ol><li>first</li><li>second</li></ol>");
-  });
-
-  it("renders a table as <table bordered striped> with thead and tbody", () => {
-    const ir = parseMarkdownToIR("| Name | Age |\n| --- | --- |\n| Alice | 30 |");
-    expect(renderMarkerString(ir, TELEGRAM_RICH_HTML_MARKERS)).toBe(
-      "<table bordered striped><thead><tr><th>Name</th><th>Age</th></tr></thead><tbody><tr><td>Alice</td><td>30</td></tr></tbody></table>"
-    );
-  });
-});
-
 describe("feature flags", () => {
   it("discordMarkdownIrEnabled defaults to false", () => {
     delete process.env.DISCORD_MARKDOWN_IR_ENABLED;
@@ -286,16 +222,5 @@ describe("feature flags", () => {
     process.env.DISCORD_MARKDOWN_IR_ENABLED = "true";
     expect(discordMarkdownIrEnabled()).toBe(true);
     delete process.env.DISCORD_MARKDOWN_IR_ENABLED;
-  });
-
-  it("telegramMarkdownIrEnabled defaults to false", () => {
-    delete process.env.TELEGRAM_MARKDOWN_IR_ENABLED;
-    expect(telegramMarkdownIrEnabled()).toBe(false);
-  });
-
-  it("telegramMarkdownIrEnabled is true when env var is 'true'", () => {
-    process.env.TELEGRAM_MARKDOWN_IR_ENABLED = "true";
-    expect(telegramMarkdownIrEnabled()).toBe(true);
-    delete process.env.TELEGRAM_MARKDOWN_IR_ENABLED;
   });
 });

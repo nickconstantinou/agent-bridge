@@ -319,6 +319,7 @@ _write_shared_defaults() {
     echo "HEALTH_CONTENT_CRAWLER_ENABLED=${HEALTH_CONTENT_CRAWLER_ENABLED:-0}"
     [[ -n "${HEALTH_CONTENT_CRAWLER_SCRIPT:-}" ]]   && echo "HEALTH_CONTENT_CRAWLER_SCRIPT=${HEALTH_CONTENT_CRAWLER_SCRIPT}"
     [[ -n "${TELEGRAM_BOT_TOKEN_HEALTH:-}" ]]        && echo "TELEGRAM_BOT_TOKEN_HEALTH=${TELEGRAM_BOT_TOKEN_HEALTH}"
+    true
   } | sudo tee "${dest}" > /dev/null
   echo "  wrote ${dest}"
 }
@@ -336,6 +337,7 @@ _write_systemd_defaults() {
     echo "${token_var}=${!token_var:-}"
     echo "${cmd_var}=${!cmd_var:-}"
     [[ -n "${!proj_var:-}" ]] && echo "${proj_var}=${!proj_var}"
+    true
   } | sudo tee "${dest}" > /dev/null
   echo "  wrote ${dest}"
 }
@@ -368,6 +370,7 @@ _write_discord_defaults() {
       echo "CLAUDE_COMMAND=${CLAUDE_COMMAND:-claude}"
       echo "ANTIGRAVITY_COMMAND=${ANTIGRAVITY_COMMAND:-agy}"
     fi
+    true
   } | sudo tee "${dest}" > /dev/null
   echo "  wrote ${dest}"
 }

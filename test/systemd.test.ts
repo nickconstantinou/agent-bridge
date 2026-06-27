@@ -48,28 +48,17 @@ describe("systemd templates", () => {
 
   it("requires and records Node 24+ for service runtime", () => {
     const install = readFileSync(new URL("../scripts/install.sh", import.meta.url), "utf8");
-    const deployment = readFileSync(new URL("../scripts/upgrade.sh", import.meta.url), "utf8");
 
     expect(install).toContain("NODE_MIN_MAJOR=24");
     expect(install).toContain("NODE_BIN=${NODE_BIN}");
     expect(install).toContain('"${NODE_BIN}" ./node_modules/tsx/dist/cli.mjs');
-    expect(deployment).toContain("NODE_MIN_MAJOR=24");
-    expect(deployment).toContain("NODE_BIN=${NODE_BIN}");
-    expect(deployment).toContain('"${NODE_BIN}" ./node_modules/tsx/dist/cli.mjs');
   });
 
-  it("deployment update mode skips npm build when package has no build script", () => {
-    const deployment = readFileSync(new URL("../scripts/upgrade.sh", import.meta.url), "utf8");
+  it("install script does not write retired Telegram Markdown IR defaults", () => {
+    const install = readFileSync(new URL("../scripts/install.sh", import.meta.url), "utf8");
 
-    expect(deployment).toContain("npm install --include=dev");
-    expect(deployment).toContain("npm run | grep -q");
-    expect(deployment).toContain("[update] No build script; skipping build");
+    expect(install).not.toContain("ensure_markdown_ir_default");
+    expect(install).not.toContain("TELEGRAM_MARKDOWN_IR_ENABLED");
   });
 
-  it("deployment does not write retired Telegram Markdown IR defaults", () => {
-    const deployment = readFileSync(new URL("../scripts/upgrade.sh", import.meta.url), "utf8");
-
-    expect(deployment).not.toContain("ensure_markdown_ir_default");
-    expect(deployment).not.toContain("TELEGRAM_MARKDOWN_IR_ENABLED");
-  });
 });

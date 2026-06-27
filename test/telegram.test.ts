@@ -92,57 +92,6 @@ describe("TelegramClient", () => {
     expect(calls[0].options).toEqual({ chat_id: 1, action: "typing" });
   });
 
-  it("sendRichMessage posts Bot API 10.1 rich message JSON", async () => {
-    const calls: any[] = [];
-    const fakeFetch = (async (url: string, options: any) => {
-      calls.push({ url, options: JSON.parse(options.body) });
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ ok: true, result: { message_id: 321 } }),
-      };
-    }) as any;
-
-    const client = new TelegramClient("token", fakeFetch);
-    await client.sendRichMessage({
-      chat_id: 1,
-      rich_message: { html: "<table bordered><tr><td>ok</td></tr></table>" },
-    });
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0].url).toContain("/sendRichMessage");
-    expect(calls[0].options).toEqual({
-      chat_id: 1,
-      rich_message: { html: "<table bordered><tr><td>ok</td></tr></table>" },
-    });
-  });
-
-  it("sendRichMessageDraft posts Bot API 10.1 draft JSON", async () => {
-    const calls: any[] = [];
-    const fakeFetch = (async (url: string, options: any) => {
-      calls.push({ url, options: JSON.parse(options.body) });
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ ok: true, result: true }),
-      };
-    }) as any;
-
-    const client = new TelegramClient("token", fakeFetch);
-    await client.sendRichMessageDraft({
-      chat_id: 1,
-      draft_id: 42,
-      rich_message: { html: "<tg-thinking>Running</tg-thinking>" },
-    });
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0].url).toContain("/sendRichMessageDraft");
-    expect(calls[0].options).toEqual({
-      chat_id: 1,
-      draft_id: 42,
-      rich_message: { html: "<tg-thinking>Running</tg-thinking>" },
-    });
-  });
 
   // Step 1: download methods
 

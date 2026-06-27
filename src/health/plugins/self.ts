@@ -195,7 +195,7 @@ export class SelfPlugin implements HealthPlugin {
             checks.push({
               name: checkName,
               status,
-              message: `${pkg} update available: ${current} -> ${latest} (${behind} version${behind === 1 ? "" : "s"} behind). Run: ~/agent-bridge/scripts/upgrade.sh --update`,
+              message: `${pkg} update available: ${current} -> ${latest} (${behind} version${behind === 1 ? "" : "s"} behind). Run: ~/agent-bridge/scripts/install.sh`,
             });
           } else {
             checks.push({
@@ -224,13 +224,13 @@ export class SelfPlugin implements HealthPlugin {
       checks.push({
         name: "agy-version",
         status: "green",
-        message: `agy installed: ${agyVersion}. Run: ~/agent-bridge/scripts/upgrade.sh --update to upgrade`,
+        message: `agy installed: ${agyVersion}. Run: ~/agent-bridge/scripts/install.sh to upgrade`,
       });
     } catch {
       checks.push({
         name: "agy-version",
         status: "red",
-        message: "agy not found — run: ~/agent-bridge/scripts/upgrade.sh to install",
+        message: "agy not found — run: ~/agent-bridge/scripts/install.sh",
       });
     }
 

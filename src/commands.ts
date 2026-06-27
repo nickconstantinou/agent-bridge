@@ -36,6 +36,10 @@ export function antigravityNarrationSettingKey(chatId: string): string {
   return `antigravity:narration:${chatId}`;
 }
 
+export function compactInProgressSettingKey(chatId: string): string {
+  return `compact_in_progress:${chatId}`;
+}
+
 export function isAntigravityNarrationVisible(db: BridgeDb, chatId: string): boolean {
   return db.getSetting(antigravityNarrationSettingKey(chatId)) === "visible";
 }
@@ -157,6 +161,7 @@ export function handleCommand(
   if (text === "/context") {
     const status = db.getConvStatus(chatId);
     const summary = db.getLatestConvSummary(chatId);
+    const compactStartedAt = db.getSetting(compactInProgressSettingKey(chatId));
     const turnWord = status.turnCount === 1 ? "1 turn" : `${status.turnCount} turns`;
     const lines = [
       `**Context status** for \`${chatId}\``,
@@ -165,6 +170,9 @@ export function handleCommand(
       `Latest turn: ${status.latestTurnAt ?? "none"}`,
       `Latest compact: ${status.latestSummaryAt ?? "never"}`,
     ];
+    if (compactStartedAt) {
+      lines.push(`Compact: in progress since ${compactStartedAt}`);
+    }
     if (summary) {
       const turnsSince = db.getRecentConvTurns(chatId, 1000, summary.range_end_turn_id).length;
       lines.push(`Turns since last compact: ${turnsSince}`);

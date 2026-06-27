@@ -4,6 +4,8 @@ import {
   buildTombstone,
   COMPACT_PROMPT_MAX_CHARS,
   COMPACT_TIMEOUT_MS,
+  COMPACT_CHUNK_MAX_CHARS,
+  COMPACT_PARALLELISM,
 } from "../src/compactSummary.js";
 
 describe("buildCompactSummaryPrompt", () => {
@@ -73,8 +75,10 @@ describe("buildTombstone", () => {
 });
 
 describe("constants", () => {
-  it("COMPACT_PROMPT_MAX_CHARS is 7500", () => {
-    expect(COMPACT_PROMPT_MAX_CHARS).toBe(7_500);
+  it("uses larger default compact chunks to reduce CLI round trips", () => {
+    expect(COMPACT_PROMPT_MAX_CHARS).toBe(18_000);
+    expect(COMPACT_CHUNK_MAX_CHARS).toBe(16_000);
+    expect(COMPACT_PARALLELISM).toBe(2);
   });
 
   it("COMPACT_TIMEOUT_MS is 60000", () => {

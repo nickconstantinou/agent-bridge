@@ -855,4 +855,14 @@ describe("/context command", () => {
     expect(result?.kind).toBe("message");
     expect(result?.text).toContain("High turn count - consider /compact");
   });
+
+  it("shows when compact is already in progress", () => {
+    const db = openDb(":memory:");
+    db.setSetting("compact_in_progress:chat:1", "2026-06-27T13:35:20.000Z");
+
+    const result = handleCommand("claude", "/context", { db, chatId: "chat:1", config: stubConfig });
+
+    expect(result?.kind).toBe("message");
+    expect(result?.text).toContain("Compact: in progress since 2026-06-27T13:35:20.000Z");
+  });
 });

@@ -63,6 +63,8 @@ describe("BridgeEngine", () => {
   });
 
   afterEach(() => {
+    delete process.env.BRIDGE_COMPACT_CHUNK_MAX_CHARS;
+    delete process.env.BRIDGE_COMPACT_PARALLELISM;
     if (originalMemoryExtractorEnabled === undefined) {
       delete process.env.BRIDGE_MEMORY_EXTRACTOR_ENABLED;
     } else {
@@ -1214,9 +1216,85 @@ describe("BridgeEngine", () => {
       expect(summary).not.toBeNull();
       expect(summary!.summary_md).toContain("fix auth bug");
       expect(capturedPrompt).toContain("Current objective:");
+      expect(client.sendMessage.mock.calls[0]?.[0].text).toContain("Compacting context");
       const sentBody = client.sendMessage.mock.calls.at(-1)?.[0];
       expect(sentBody.text).toContain("Session reset");
       expect(sentBody.text).not.toContain("turn count, CLI, last message");
+      expect(db.getSetting("compact_in_progress:100")).toBeNull();
+    });
+
+    it("reports an existing compact run instead of starting a duplicate", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      db.addConvTurn("100", "user", "hello");
+      db.setSetting("compact_in_progress:100", "2026-06-27T13:35:20.000Z");
+
+      const runCli = vi.fn().mockResolvedValue("should not run");
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("/compact")]);
+
+      expect(runCli).not.toHaveBeenCalled();
+      expect(client.sendMessage.mock.calls.at(-1)?.[0].text).toContain("Compact already in progress");
+    });
+
+    it("summarises compact chunks with bounded parallelism", async () => {
+      vi.resetModules();
+      process.env.BRIDGE_COMPACT_CHUNK_MAX_CHARS = "120";
+      process.env.BRIDGE_COMPACT_PARALLELISM = "2";
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      for (let i = 0; i < 8; i++) {
+        db.addConvTurn("100", "user", `turn-${i} ${"x".repeat(80)}`);
+      }
+
+      let active = 0;
+      let maxActive = 0;
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active -= 1;
+        const prompt = args[args.length - 1];
+        if (prompt.includes("Merge these compact summaries")) {
+          return "Current objective:\n- reduced\n\nDurable facts:\n- none\n\nOpen state:\n- none";
+        }
+        return "Current objective:\n- chunk\n\nDurable facts:\n- none\n\nOpen state:\n- none";
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("/compact")]);
+
+      expect(maxActive).toBe(2);
+      expect(runCli.mock.calls.length).toBeGreaterThan(2);
     });
 
     it("compact handler falls back to tombstone when runCli fails", async () => {

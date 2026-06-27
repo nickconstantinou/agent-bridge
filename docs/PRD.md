@@ -108,14 +108,15 @@ Every user message and assistant response is persisted to SQLite in `conversatio
 
 **`/compact`** — Creates a semantic checkpoint and starts a fresh CLI session. The engine:
 1. Loads all un-compacted turns for the chat key via `getConvTurnsForCompaction` (`id > latest_summary.range_end_turn_id`).
-2. Chunks the loaded turns by prompt budget (`COMPACT_CHUNK_MAX_CHARS = 6_500`).
-3. Summarises each chunk with `buildCompactSummaryPrompt` in single-shot print mode (`sessionId: null`) with a 60s `Promise.race` timeout.
-4. If multiple chunks or a previous summary exists, reduce-merges the previous compact summary plus chunk summaries into one durable `summary_md`.
-5. If any summariser call fails or returns empty output, stores a tombstone covering the exact loaded turn range instead of pruning uncovered turns.
-6. Stores the final summary via `addConvSummary`, then prunes raw turns up to `endId` via `pruneConvTurns`.
-7. Clears the `ctx_suppress` flag and the CLI session — next prompt starts a fresh CLI seeded with the new summary.
+2. Sends an immediate `Compacting context...` acknowledgement, records `compact_in_progress:<chatKey>` in `settings`, and logs compact lifecycle events.
+3. Chunks the loaded turns by prompt budget (`COMPACT_CHUNK_MAX_CHARS = 16_000`, override with `BRIDGE_COMPACT_CHUNK_MAX_CHARS`).
+4. Summarises each chunk with `buildCompactSummaryPrompt` in single-shot print mode (`sessionId: null`) with a 60s `Promise.race` timeout. Chunk summaries run with bounded parallelism (`COMPACT_PARALLELISM = 2`, override with `BRIDGE_COMPACT_PARALLELISM`, max 8).
+5. If multiple chunks or a previous summary exists, reduce-merges the previous compact summary plus chunk summaries into one durable `summary_md`.
+6. If any summariser call fails or returns empty output, stores a tombstone covering the exact loaded turn range instead of pruning uncovered turns.
+7. Stores the final summary via `addConvSummary`, then prunes raw turns up to `endId` via `pruneConvTurns`.
+8. Clears the `compact_in_progress` / `ctx_suppress` flags and the CLI session — next prompt starts a fresh CLI seeded with the new summary.
 
-**`/context`** — Reports current conversation state: turn count, pending queue depth, last turn timestamp, and last compact time. Reads from `getConvStatus` and `getLatestConvSummary`. If stored turns exceed 100, it appends `High turn count - consider /compact`.
+**`/context`** — Reports current conversation state: turn count, pending queue depth, last turn timestamp, last compact time, and any active `compact_in_progress:<chatKey>` marker. Reads from `getConvStatus` and `getLatestConvSummary`. If stored turns exceed 100, it appends `High turn count - consider /compact`.
 
 **`/reset`** — Preserves conversation data but suppresses context injection. Sets a `ctx_suppress:<chatKey>` flag in the `settings` table and clears the CLI session. The next prompt starts a fresh CLI with no history preamble. The `ctx_suppress` flag is automatically cleared when `/compact` runs.
 

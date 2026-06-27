@@ -3,9 +3,29 @@
  * NEIGHBORS: src/engine.ts (compact handler)
  */
 
-export const COMPACT_PROMPT_MAX_CHARS = 7_500;
+export const COMPACT_PROMPT_MAX_CHARS = 18_000;
 export const COMPACT_TIMEOUT_MS = 60_000;
-export const COMPACT_CHUNK_MAX_CHARS = 6_500;
+export const COMPACT_CHUNK_MAX_CHARS = 16_000;
+export const COMPACT_PARALLELISM = 2;
+
+function positiveIntFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function compactPromptMaxChars(): number {
+  return positiveIntFromEnv("BRIDGE_COMPACT_PROMPT_MAX_CHARS", COMPACT_PROMPT_MAX_CHARS);
+}
+
+export function compactChunkMaxChars(): number {
+  return positiveIntFromEnv("BRIDGE_COMPACT_CHUNK_MAX_CHARS", COMPACT_CHUNK_MAX_CHARS);
+}
+
+export function compactParallelism(): number {
+  return Math.min(8, positiveIntFromEnv("BRIDGE_COMPACT_PARALLELISM", COMPACT_PARALLELISM));
+}
 
 export type CompactTurn = { id?: number; role: string; text: string };
 
@@ -25,7 +45,7 @@ Be dense. Omit pleasantries, filler turns, and completed sub-steps.`;
 
 export function buildCompactSummaryPrompt(
   turns: CompactTurn[],
-  maxChars = COMPACT_PROMPT_MAX_CHARS,
+  maxChars = compactPromptMaxChars(),
 ): string {
   const header = `${SUMMARY_SYSTEM_HEADER}\n\n--- Conversation ---\n`;
   const footer = `\n--- End ---\n\nSummarise now:`;
@@ -49,7 +69,7 @@ export function buildCompactSummaryPrompt(
 
 export function chunkCompactTurns(
   turns: CompactTurn[],
-  maxChars = COMPACT_CHUNK_MAX_CHARS,
+  maxChars = compactChunkMaxChars(),
 ): CompactTurn[][] {
   const chunks: CompactTurn[][] = [];
   let current: CompactTurn[] = [];
@@ -74,7 +94,7 @@ export function chunkCompactTurns(
 export function buildCompactReducePrompt(
   previousSummary: string | null,
   chunkSummaries: Array<{ startId: number; endId: number; summary: string }>,
-  maxChars = COMPACT_PROMPT_MAX_CHARS,
+  maxChars = compactPromptMaxChars(),
 ): string {
   const previousText = previousSummary?.trim();
   const previous = previousText

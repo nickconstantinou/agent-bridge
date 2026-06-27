@@ -124,7 +124,7 @@ async function sendEntityMessages({
     };
 
     if (i > 0) delete chunkBody.reply_markup;
-    chunkBody.text = renderMarkerString(parseMarkdownToIR(chunkText), TELEGRAM_HTML_MARKERS);
+    chunkBody.text = renderMarkerString(parseMarkdownToIR(chunkText), TELEGRAM_HTML_MARKERS, "\n\n");
     chunkBody.parse_mode = "HTML";
     await client.sendMessage(chunkBody);
   }

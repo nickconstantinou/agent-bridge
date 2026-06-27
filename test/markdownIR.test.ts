@@ -234,6 +234,27 @@ describe("renderMarkerString with TELEGRAM_HTML_MARKERS", () => {
       "<b>Bot</b> <b>Codex</b>\n• <b>Status</b> <code>trusted</code>",
     );
   });
+
+  it("separates a heading from following body text with a blank line", () => {
+    const ir = parseMarkdownToIR("## Summary\nBody text here");
+    expect(renderMarkerString(ir, TELEGRAM_HTML_MARKERS, "\n\n")).toBe(
+      "<b>Summary</b>\n\nBody text here",
+    );
+  });
+
+  it("separates a list from following text with a blank line", () => {
+    const ir = parseMarkdownToIR("intro:\n- one\n- two\noutro");
+    expect(renderMarkerString(ir, TELEGRAM_HTML_MARKERS, "\n\n")).toBe(
+      "intro:\n• one\n• two\n\noutro",
+    );
+  });
+
+  it("separates a code block from following text with a blank line", () => {
+    const ir = parseMarkdownToIR("before\n```\ncode\n```\nafter");
+    expect(renderMarkerString(ir, TELEGRAM_HTML_MARKERS, "\n\n")).toBe(
+      "before\n<pre>code</pre>\n\nafter",
+    );
+  });
 });
 
 describe("feature flags", () => {

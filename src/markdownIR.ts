@@ -158,7 +158,7 @@ export type MarkerTable = {
   list: (items: string[], ordered?: boolean) => string;
 };
 
-export function renderMarkerString(ir: IRNode[], markers: MarkerTable): string {
+export function renderMarkerString(ir: IRNode[], markers: MarkerTable, blockSeparator = "\n"): string {
   const parts: string[] = [];
   for (let idx = 0; idx < ir.length; idx++) {
     const node = ir[idx];
@@ -175,19 +175,19 @@ export function renderMarkerString(ir: IRNode[], markers: MarkerTable): string {
         break;
       case "code_block":
         parts.push(markers.code_block(node.value, node.language));
-        if (!isLast) parts.push("\n");
+        if (!isLast) parts.push(blockSeparator);
         break;
       case "heading":
         parts.push(markers.heading(node.value, node.level));
-        if (!isLast) parts.push("\n");
+        if (!isLast) parts.push(blockSeparator);
         break;
       case "table":
         parts.push(markers.table(node.headers, node.rows));
-        if (!isLast) parts.push("\n");
+        if (!isLast) parts.push(blockSeparator);
         break;
       case "list":
         parts.push(markers.list(node.items, node.ordered));
-        if (!isLast) parts.push("\n");
+        if (!isLast) parts.push(blockSeparator);
         break;
     }
   }

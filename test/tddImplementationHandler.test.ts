@@ -306,7 +306,7 @@ describe("createTddImplementationHandler", () => {
     ).rejects.toThrow(/verification|failing/i);
   });
 
-  it("returns a summary with branch name and verification result", async () => {
+  it("returns a summary with branch name (no raw test output)", async () => {
     const stubs = makeStubs();
     stubs.runTests = vi.fn()
       .mockResolvedValueOnce({ ok: false, output: "1 failing" })
@@ -322,7 +322,10 @@ describe("createTddImplementationHandler", () => {
     );
 
     expect(result.summary).toMatch(/agent\/work-\d+/);
-    expect(result.summary).toContain("All 42 tests passed.");
+    // verifyOutput is still available for callers that want the raw output
+    expect(result.verifyOutput).toContain("All 42 tests passed.");
+    // but summary must not flood Telegram with test runner noise
+    expect(result.summary).not.toContain("All 42 tests passed.");
   });
 
   it("prepares a workspace when repository_path is not provided", async () => {
@@ -456,6 +459,27 @@ describe("createTddImplementationHandler", () => {
     const jobs = db.raw.prepare("SELECT * FROM work_jobs WHERE task_type = 'pr_lifecycle' AND work_item_id = ?").all(item.id) as any[];
     expect(jobs).toHaveLength(1);
     expect(JSON.parse(jobs[0].input_json).notify_chat_id).toBe(4242);
+  });
+
+  it("summary does not include raw test runner output", async () => {
+    const stubs = makeStubs();
+    stubs.runTests = vi.fn()
+      .mockResolvedValueOnce({ ok: false, output: "1 failing" })
+      .mockResolvedValue({ ok: true, output: "42 tests passed\nsome noise\nmore details\n" });
+
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Fix timeout bug", created_by: "worker",
+    });
+
+    const result = await createTddImplementationHandler(stubs)(
+      { work_item_id: item.id, repository_path: "/tmp/repo" },
+      { db, workerId: "w" },
+    );
+
+    expect(result.summary).not.toContain("42 tests passed");
+    expect(result.summary).not.toContain("some noise");
+    expect(result.summary).toContain("agent/work-");
   });
 });
 

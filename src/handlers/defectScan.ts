@@ -14,6 +14,8 @@ interface DefectScanDeps {
   command?: string;
   /** Map a repository name to its local checkout; null when unknown. */
   resolveRepoPath?: (repository: string) => string | null;
+  /** When true, runs a second CLI pass to approve/reject each finding automatically. */
+  autoTriage?: boolean;
 }
 
 interface DefectFinding {
@@ -85,8 +87,48 @@ function extractSummaryLine(output: string): string {
   return lines.at(-1) ?? "Scan complete.";
 }
 
+interface TriageDecision {
+  index: number;
+  decision: "APPROVE" | "REJECT";
+  reason?: string;
+}
+
+function buildTriagePrompt(repository: string, findings: Array<{ title: string; evidence?: string; confidence?: string; impact?: string }>): string {
+  const list = findings.map((f, i) =>
+    `${i + 1}. Title: ${f.title}\n   Evidence: ${f.evidence ?? "none"}\n   Impact: ${f.impact ?? "unknown"}\n   Confidence: ${f.confidence ?? "unknown"}`
+  ).join("\n\n");
+
+  return `You are a senior engineer evaluating defect scan findings for an automated TDD agent working on: ${repository}.
+
+Review each finding and decide whether it should be auto-approved for immediate implementation.
+
+${list}
+
+Return ONLY a JSON array (no markdown fences, no explanation), one entry per finding in order:
+[{"index":0,"decision":"APPROVE","reason":"..."},{"index":1,"decision":"REJECT","reason":"..."}]
+
+Approve if: the finding is well-evidenced, reproducible, and safe to fix with a small targeted change.
+Reject if: the finding is speculative, too broad, or would require risky structural changes.`;
+}
+
+function parseTriageDecisions(output: string): TriageDecision[] {
+  const jsonMatch = output.match(/\[[\s\S]*\]/);
+  if (!jsonMatch) return [];
+  try {
+    const parsed = JSON.parse(jsonMatch[0]) as unknown[];
+    return parsed.filter(
+      (d): d is TriageDecision =>
+        typeof d === "object" && d !== null &&
+        typeof (d as any).index === "number" &&
+        ((d as any).decision === "APPROVE" || (d as any).decision === "REJECT"),
+    );
+  } catch {
+    return [];
+  }
+}
+
 export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
-  const { runCli, command = "claude", resolveRepoPath } = deps;
+  const { runCli, command = "claude", resolveRepoPath, autoTriage = false } = deps;
 
   return async function defectScanHandler(
     input: JobHandlerInput,
@@ -113,29 +155,73 @@ export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
     const summaryLine = extractSummaryLine(rawOutput);
 
     // Persist high/medium confidence findings as proposed work_items
-    for (const f of findings) {
-      if (f.confidence === "high" || f.confidence === "medium") {
-        const body = [
-          f.evidence ? `Evidence: ${f.evidence}` : null,
-          f.impact ? `Impact: ${f.impact}` : null,
-          `Confidence: ${f.confidence}`,
-          `Source: defect_scan of ${repository}`,
-        ].filter(Boolean).join("\n");
+    const actionableFindings = findings.filter(f => f.confidence === "high" || f.confidence === "medium");
+    const createdItems: Array<{ itemId: number; finding: DefectFinding }> = [];
 
-        ctx.db.createWorkItem({
-          kind: "defect",
-          source: "defect_scan",
-          repository,
-          title: f.title,
-          body,
-          created_by: "worker",
-        });
+    for (const f of actionableFindings) {
+      const body = [
+        f.evidence ? `Evidence: ${f.evidence}` : null,
+        f.impact ? `Impact: ${f.impact}` : null,
+        `Confidence: ${f.confidence}`,
+        `Source: defect_scan of ${repository}`,
+      ].filter(Boolean).join("\n");
+
+      const item = ctx.db.createWorkItem({
+        kind: "defect",
+        source: "defect_scan",
+        repository,
+        title: f.title,
+        body,
+        created_by: "worker",
+      });
+      createdItems.push({ itemId: item.id, finding: f });
+    }
+
+    // Auto-triage: run a second CLI pass to approve or reject each finding
+    if (autoTriage && createdItems.length > 0) {
+      const triagePrompt = buildTriagePrompt(repository, actionableFindings);
+      const triageOutput = await runCli(command, ["--print", "--output-format", "text", triagePrompt], scanCwd);
+      const decisions = parseTriageDecisions(triageOutput);
+
+      const notifyChatId = typeof input.notify_chat_id === "number" ? input.notify_chat_id : undefined;
+
+      for (const decision of decisions) {
+        const entry = createdItems[decision.index];
+        if (!entry) continue;
+
+        if (decision.decision === "APPROVE") {
+          ctx.db.updateWorkItemStatus(entry.itemId, "approved");
+          if (repository) {
+            ctx.db.createWorkJob({
+              task_type: "open_github_issue",
+              idempotency_key: `gh_issue:${entry.itemId}`,
+              work_item_id: entry.itemId,
+              input_json: {
+                work_item_id: entry.itemId,
+                repository,
+                ...(notifyChatId != null ? { notify_chat_id: notifyChatId } : {}),
+              },
+            });
+          }
+          ctx.db.createWorkJob({
+            task_type: "tdd_implementation",
+            idempotency_key: `tdd:${entry.itemId}`,
+            work_item_id: entry.itemId,
+            input_json: {
+              work_item_id: entry.itemId,
+              ...(repository ? { repository } : {}),
+              ...(notifyChatId != null ? { notify_chat_id: notifyChatId } : {}),
+            },
+          });
+        } else {
+          ctx.db.updateWorkItemStatus(entry.itemId, "closed");
+        }
       }
     }
 
-    const created = findings.filter(f => f.confidence === "high" || f.confidence === "medium").length;
+    const created = createdItems.length;
     const summary = created > 0
-      ? `${summaryLine} — ${created} work item(s) queued for review.`
+      ? `${summaryLine} — ${created} work item(s) ${autoTriage ? "auto-triaged." : "queued for review."}`
       : summaryLine;
 
     return { summary, rawOutput, findings };

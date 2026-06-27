@@ -198,6 +198,7 @@ const jobExecutor = startJobExecutorLoop({
       runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), scribeCliChain, { effort: workerEffortForTask("defect_scan") }),
       command: scribeCommand,
       resolveRepoPath: (repository) => resolveLocalRepoPath(repository),
+      autoTriage: true,
     }),
     feature_plan: createFeaturePlanHandler({
       runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), scribeCliChain, { timeoutMs: 20 * 60 * 1000, effort: workerEffortForTask("feature_plan") }),

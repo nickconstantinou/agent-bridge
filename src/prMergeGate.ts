@@ -239,6 +239,14 @@ export async function handlePrMergeCallback(
         } catch { /* branch deletion is best-effort */ }
       }
 
+      // Mark the github_links row closed so listOpenAgentPrs() stops returning it
+      if (prNumber != null) {
+        const closedLink = db.raw.prepare(
+          "SELECT id FROM github_links WHERE work_item_id = ? AND pr_number = ?"
+        ).get(action.id, prNumber) as { id: number } | undefined;
+        if (closedLink) db.updatePrState(closedLink.id, "closed");
+      }
+
       db.resolveApproval(approval.id, "rejected", ctx.userId ?? "user");
       db.updateWorkItemStatus(action.id, "closed");
 

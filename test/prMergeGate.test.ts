@@ -447,6 +447,40 @@ describe("handlePrMergeCallback — wi_clspr", () => {
     expect(db.getWorkItem(item.id)!.status).toBe("closed");
   });
 
+  it("updates github_links pr_state to 'closed' when PR close succeeds", async () => {
+    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram", title: "Bug", created_by: "worker",
+      repository: "owner/repo",
+    });
+    const link = db.linkGithubPr({
+      work_item_id: item.id,
+      repository: "owner/repo",
+      pr_number: 5,
+      branch_name: "agent/work-1",
+      commit_sha: "abc123",
+    });
+    db.createApproval({
+      approval_type: "merge_pr",
+      requested_by: "agent",
+      work_item_id: item.id,
+      payload: { pr_url: "https://github.com/owner/repo/pull/5", pr_number: 5, branch_name: "agent/work-1", repository: "owner/repo" },
+    });
+
+    const runCommand = vi.fn().mockResolvedValue("");
+    const answerCbq = vi.fn().mockResolvedValue(undefined);
+    const editMessage = vi.fn().mockResolvedValue(undefined);
+
+    await handlePrMergeCallback(
+      { type: "wi_clspr", id: item.id },
+      { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
+    );
+
+    const updatedLink = db.raw.prepare("SELECT * FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(updatedLink.pr_state).toBe("closed");
+  });
+
   it("answers the callback when gh pr close fails with an auth error — does not throw", async () => {
     const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
 

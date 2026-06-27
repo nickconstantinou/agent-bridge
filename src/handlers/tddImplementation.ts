@@ -182,7 +182,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
         });
       }
 
-      const summary = `TDD implementation complete on **${branchName}**\n\n${greenRun.output}`;
+      const summary = `TDD implementation complete on **${branchName}**`;
       return { summary, branchName, verifyOutput: greenRun.output };
     } catch (err) {
       // Failed jobs must not leave a half-finished workspace for the retry

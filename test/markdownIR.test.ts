@@ -3,6 +3,7 @@ import {
   parseMarkdownToIR,
   renderMarkerString,
   DISCORD_MARKERS,
+  TELEGRAM_HTML_MARKERS,
   discordMarkdownIrEnabled,
 } from "../src/markdownIR.js";
 
@@ -209,6 +210,29 @@ describe("renderMarkerString with DISCORD_MARKERS", () => {
   it("renders a table as a bold-label card list", () => {
     const ir = parseMarkdownToIR("| Name | Age |\n| --- | --- |\n| Alice | 30 |");
     expect(renderMarkerString(ir, DISCORD_MARKERS)).toBe("**Name:** Alice\n- **Age:** 30");
+  });
+});
+
+describe("renderMarkerString with TELEGRAM_HTML_MARKERS", () => {
+  it("renders bold and inline code inside unordered list items", () => {
+    const ir = parseMarkdownToIR("- **Codex:** run `npm test`\n- **Agy:** restarted");
+    expect(renderMarkerString(ir, TELEGRAM_HTML_MARKERS)).toBe(
+      "• <b>Codex:</b> run <code>npm test</code>\n• <b>Agy:</b> restarted",
+    );
+  });
+
+  it("renders bold and inline code inside ordered list items", () => {
+    const ir = parseMarkdownToIR("1. **First:** check `logs`\n2. **Second:** restart");
+    expect(renderMarkerString(ir, TELEGRAM_HTML_MARKERS)).toBe(
+      "1. <b>First:</b> check <code>logs</code>\n2. <b>Second:</b> restart",
+    );
+  });
+
+  it("renders inline spans inside table cells", () => {
+    const ir = parseMarkdownToIR("| Bot | Status |\n| --- | --- |\n| **Codex** | `trusted` |");
+    expect(renderMarkerString(ir, TELEGRAM_HTML_MARKERS)).toBe(
+      "<b>Bot</b> <b>Codex</b>\n• <b>Status</b> <code>trusted</code>",
+    );
   });
 });
 

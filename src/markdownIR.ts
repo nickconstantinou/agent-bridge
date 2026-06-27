@@ -199,15 +199,15 @@ function renderTableAsCards(
   rows: string[][],
   formatLabel: (label: string) => string,
   bulletPrefix: string,
-  escape: (text: string) => string,
+  renderValue: (text: string) => string,
 ): string {
   const lines: string[] = [];
   for (const row of rows) {
     const [firstHeader, ...restHeaders] = headers;
     const [firstCell, ...restCells] = row;
-    lines.push(`${formatLabel(escape(firstHeader ?? "Item"))} ${escape(firstCell ?? "")}`);
+    lines.push(`${formatLabel(firstHeader ?? "Item")} ${renderValue(firstCell ?? "")}`);
     for (let c = 0; c < restHeaders.length; c += 1) {
-      lines.push(`${bulletPrefix}${formatLabel(escape(restHeaders[c] ?? `Field ${c + 2}`))} ${escape(restCells[c] ?? "")}`);
+      lines.push(`${bulletPrefix}${formatLabel(restHeaders[c] ?? `Field ${c + 2}`)} ${renderValue(restCells[c] ?? "")}`);
     }
   }
   return lines.join("\n");
@@ -235,6 +235,34 @@ function escapeHtml(text: string): string {
     .replaceAll('"', "&quot;");
 }
 
+function renderInlineMarkerText(text: string, markers: Pick<MarkerTable, "text" | "bold" | "code_inline">): string {
+  const parts: string[] = [];
+  for (const node of parseMarkdownToIR(text)) {
+    if (node.type === "bold") {
+      parts.push(markers.bold(node.value));
+    } else if (node.type === "code_inline") {
+      parts.push(markers.code_inline(node.value));
+    } else if (node.type === "text") {
+      parts.push(markers.text(node.value));
+    } else if (node.type === "code_block") {
+      parts.push(markers.code_inline(node.value));
+    } else if (node.type === "heading") {
+      parts.push(markers.bold(node.value));
+    } else if (node.type === "list") {
+      parts.push(node.items.map((item) => renderInlineMarkerText(item, markers)).join("\n"));
+    } else if (node.type === "table") {
+      parts.push(node.rows.flat().map((cell) => renderInlineMarkerText(cell, markers)).join(" "));
+    }
+  }
+  return parts.join("");
+}
+
+const renderTelegramInlineHtml = (text: string) => renderInlineMarkerText(text, {
+  text: escapeHtml,
+  bold: (value) => `<b>${escapeHtml(value)}</b>`,
+  code_inline: (value) => `<code>${escapeHtml(value)}</code>`,
+});
+
 export const TELEGRAM_HTML_MARKERS: MarkerTable = {
   text: (text) => escapeHtml(text),
   bold: (text) => `<b>${escapeHtml(text)}</b>`,
@@ -243,11 +271,11 @@ export const TELEGRAM_HTML_MARKERS: MarkerTable = {
   heading: (text) => `<b>${escapeHtml(text)}</b>`,
   list: (items, ordered) =>
     ordered
-      ? items.map((item, i) => `${i + 1}. ${escapeHtml(item)}`).join("\n")
-      : items.map((item) => `• ${escapeHtml(item)}`).join("\n"),
+      ? items.map((item, i) => `${i + 1}. ${renderTelegramInlineHtml(item)}`).join("\n")
+      : items.map((item) => `• ${renderTelegramInlineHtml(item)}`).join("\n"),
   // Telegram HTML parse_mode does not support <table> — render as card lines instead
   table: (headers, rows) =>
-    renderTableAsCards(headers, rows, (label) => `<b>${label}</b>`, "• ", escapeHtml),
+    renderTableAsCards(headers, rows, (label) => `<b>${escapeHtml(label)}</b>`, "• ", renderTelegramInlineHtml),
 };
 
 /** Render markdown with <table> HTML for sendRichMessage (Telegram Bot API 10.1+). */
@@ -263,8 +291,8 @@ export const TELEGRAM_RICH_HTML_MARKERS: MarkerTable = {
   heading: (text) => `<b>${escapeHtml(text)}</b>`,
   list: (items, ordered) =>
     ordered
-      ? items.map((item, i) => `${i + 1}. ${escapeHtml(item)}`).join("\n")
-      : items.map((item) => `• ${escapeHtml(item)}`).join("\n"),
+      ? items.map((item, i) => `${i + 1}. ${renderTelegramInlineHtml(item)}`).join("\n")
+      : items.map((item) => `• ${renderTelegramInlineHtml(item)}`).join("\n"),
   table: (headers, rows) =>
     `<table bordered striped><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${headers.map((_, i) => `<td>${escapeHtml(row[i] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`,
 };

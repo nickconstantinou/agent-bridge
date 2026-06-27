@@ -324,6 +324,23 @@ describe("sendMessageWithProgress", () => {
 });
 
 describe("sendTelegramMessage rendering", () => {
+  it("renders markdown markers inside Telegram bullet lists", async () => {
+    const client = createMockClient();
+
+    await sendTelegramMessage({
+      client,
+      kind: "codex",
+      chatId: 123,
+      body: { text: "- **Codex:** run `npm test`\n- **Agy:** restarted" },
+    });
+
+    expect(client.sendMessage).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: 123,
+      parse_mode: "HTML",
+      text: "• <b>Codex:</b> run <code>npm test</code>\n• <b>Agy:</b> restarted",
+    }));
+  });
+
   it("renders Codex fenced code blocks with HTML pre tags instead of visible backticks", async () => {
     const client = createMockClient();
 

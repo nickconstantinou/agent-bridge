@@ -174,6 +174,10 @@ prompt TELEGRAM_BOT_TOKEN_CODEX       "Codex bot token"
 prompt TELEGRAM_BOT_TOKEN_ANTIGRAVITY "Antigravity bot token"
 prompt TELEGRAM_BOT_TOKEN_CLAUDE      "Claude bot token (leave blank to skip)"
 prompt TELEGRAM_BOT_TOKEN_HEALTH      "Health bot token (leave blank to skip)"
+prompt TELEGRAM_BOT_TOKEN_WORKER      "Worker bot token (leave blank to skip)"
+prompt GITHUB_USERNAME                "GitHub username for worker repo picker"
+prompt WORKER_DEFAULT_REPO            "Default worker repo (blank = ask with repo picker)" ""
+prompt WORKER_ENABLED                 "Enable worker bot (true|false)" "false"
 prompt DISCORD_BOT_TOKEN              "Discord bot token (leave blank to skip)"
 prompt DISCORD_APPLICATION_ID         "Discord application ID (leave blank to skip)"
 prompt DISCORD_ALLOWED_USER_IDS       "Discord allowed user IDs (leave blank to skip)"
@@ -349,6 +353,25 @@ if [[ -n "${TELEGRAM_BOT_TOKEN_HEALTH:-}" ]]; then
   _write_systemd_defaults health TELEGRAM_BOT_TOKEN_HEALTH HEALTH_CLI_COMMAND HEALTH_CLI_BOT
 fi
 
+_write_worker_defaults() {
+  local dest="${DEFAULTS_DIR}/agent-bridge-worker-bot"
+
+  {
+    echo "BRIDGE_ENV_FILE=${dest}"
+    echo "TELEGRAM_BOT_TOKEN_WORKER=${TELEGRAM_BOT_TOKEN_WORKER:-}"
+    echo "WORKER_ENABLED=${WORKER_ENABLED:-false}"
+    echo "GITHUB_USERNAME=${GITHUB_USERNAME:-}"
+    [[ -n "${WORKER_DEFAULT_REPO:-}" ]] && echo "WORKER_DEFAULT_REPO=${WORKER_DEFAULT_REPO}"
+    echo "WORKER_CLI_CHAIN=${WORKER_CLI_CHAIN:-codex,claude,antigravity}"
+    echo "CODEX_COMMAND=${CODEX_COMMAND:-codex}"
+    echo "CLAUDE_COMMAND=${CLAUDE_COMMAND:-claude}"
+    echo "ANTIGRAVITY_COMMAND=${ANTIGRAVITY_COMMAND:-agy}"
+    echo "DB_PATH=${DB_PATH:-${BRIDGE_ROOT_DIR}/runtime/agent-bridge/worker/bridge.sqlite}"
+    true
+  } | sudo tee "${dest}" > /dev/null
+  echo "  wrote ${dest}"
+}
+
 _write_discord_defaults() {
   local bot="$1"
   local dest="${DEFAULTS_DIR}/agent-bridge-${bot}"
@@ -390,6 +413,12 @@ if [[ -n "${TELEGRAM_BOT_TOKEN_CLAUDE:-}" ]]; then
   _write_systemd_defaults claude TELEGRAM_BOT_TOKEN_CLAUDE CLAUDE_COMMAND CLAUDE_PROJECT_DIR
   install_unit agent-bridge-claude
   UNITS_TO_ENABLE="${UNITS_TO_ENABLE} agent-bridge-claude"
+fi
+
+if [[ -n "${TELEGRAM_BOT_TOKEN_WORKER:-}" ]]; then
+  _write_worker_defaults
+  install_unit agent-bridge-worker-bot
+  UNITS_TO_ENABLE="${UNITS_TO_ENABLE} agent-bridge-worker-bot"
 fi
 
 if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then

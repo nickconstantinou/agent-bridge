@@ -81,23 +81,23 @@ describe("handleWorkerCommand — bare /feature sets pending brief", () => {
     clearPendingFeatureBrief("300");
   });
 
-  it("returns the 'describe the feature' prompt when brief is missing", () => {
-    const result = handleWorkerCommand("/feature", {
+  it("returns the 'describe the feature' prompt when brief is missing", async () => {
+    const result = await handleWorkerCommand("/feature", {
       workerEnabled: true, db, chatId: 200, userId: "u1",
     });
     expect(result?.kind).toBe("message");
     expect(result?.text).toMatch(/describe|feature/i);
   });
 
-  it("sets a pending brief capture for the chat after bare /feature", () => {
-    handleWorkerCommand("/feature", {
+  it("sets a pending brief capture for the chat after bare /feature", async () => {
+    await handleWorkerCommand("/feature", {
       workerEnabled: true, db, chatId: 200, userId: "u1",
     });
     expect(hasPendingFeatureBrief("200")).toBe(true);
   });
 
-  it("does NOT set pending brief when a brief is already provided", () => {
-    handleWorkerCommand("/feature build a thing", {
+  it("does NOT set pending brief when a brief is already provided", async () => {
+    await handleWorkerCommand("/feature build a thing", {
       workerEnabled: true, db, chatId: 300, userId: "u1",
     });
     expect(hasPendingFeatureBrief("300")).toBe(false);

@@ -1041,4 +1041,70 @@ describe("BridgeDb work_jobs task_type migration", () => {
       db = openDb(":memory:");
     }
   });
+
+  it("preserves legacy rows while adding refactor work item and job types", () => {
+    db.close();
+    const dir = mkdtempSync(join(tmpdir(), "bridge-db-refactor-migration-"));
+    const dbPath = join(dir, "bridge.sqlite");
+    const legacy = new Database(dbPath);
+    legacy.exec(`
+      CREATE TABLE work_items (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind        TEXT NOT NULL CHECK (kind IN ('defect','feature','maintenance','research','ops')),
+        source      TEXT NOT NULL CHECK (source IN ('telegram','health','defect_scan','schedule','github','manual')),
+        repository  TEXT,
+        title       TEXT NOT NULL,
+        body        TEXT,
+        status      TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','needs_approval','approved','in_progress','blocked','resolved','closed','rejected')),
+        priority    TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('low','normal','high','urgent')),
+        created_by  TEXT NOT NULL,
+        created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE work_jobs (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        work_item_id     INTEGER,
+        task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','orchestrated_task','pr_lifecycle','pr_watch','pr_refresh')),
+        status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','leased','running','waiting_approval','completed','failed','cancelled')),
+        bot              TEXT CHECK (bot IN ('codex','antigravity','claude')),
+        lease_owner      TEXT,
+        lease_expires_at TEXT,
+        heartbeat_at     TEXT,
+        attempt_count    INTEGER NOT NULL DEFAULT 0,
+        max_attempts     INTEGER NOT NULL DEFAULT 2,
+        idempotency_key  TEXT NOT NULL UNIQUE,
+        input_json       TEXT NOT NULL DEFAULT '{}',
+        result_json      TEXT,
+        error            TEXT,
+        created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        phase            TEXT NOT NULL DEFAULT 'initial',
+        phase_data_json  TEXT
+      );
+      INSERT INTO work_items (kind, source, title, created_by)
+      VALUES ('feature', 'telegram', 'Legacy feature', 'worker');
+    `);
+    legacy.close();
+
+    const migrated = openDb(dbPath);
+    try {
+      const item = migrated.createWorkItem({
+        kind: "refactor",
+        source: "refactor_scan",
+        title: "Extract worker router",
+        created_by: "worker",
+      });
+      expect(item.kind).toBe("refactor");
+      const job = migrated.createWorkJob({
+        task_type: "refactor_scan",
+        idempotency_key: "refactor:migrated:1",
+      });
+      expect(job.task_type).toBe("refactor_scan");
+      expect(migrated.listWorkItems().some((row) => row.title === "Legacy feature")).toBe(true);
+    } finally {
+      migrated.close();
+      rmSync(dir, { recursive: true, force: true });
+      db = openDb(":memory:");
+    }
+  });
 });

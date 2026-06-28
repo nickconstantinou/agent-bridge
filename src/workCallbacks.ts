@@ -15,6 +15,8 @@ import { parsePrMergeCallback, handlePrMergeCallback } from "./prMergeGate.js";
 import { createRunCommand } from "./runCommandAsync.js";
 import { toTelegramEntitiesText } from "./render.js";
 import { activeWorkItemSettingKey, clearActiveWorkItem } from "./workerBot.js";
+import { consumePendingRepoBrief } from "./featureBriefCapture.js";
+import { parseRepoSelectCallback, resolveGithubOwner } from "./repoRegistry.js";
 
 /** Edit a message converting bold/code markdown markers to native Telegram entities. */
 function editWithEntities(
@@ -204,6 +206,10 @@ function getApprovalDetailsText(appr: any): { text: string; inline_keyboard: any
   return { text: textOut.trim(), inline_keyboard };
 }
 
+function resolveSelectedRepository(repo: string): string {
+  return repo.includes("/") ? repo : `${resolveGithubOwner()}/${repo}`;
+}
+
 export async function handleWorkerCallback(
   cbq: any,
   db: any,
@@ -223,6 +229,96 @@ export async function handleWorkerCallback(
   const parsed = parseWorkCallback(cbq.data || "");
   const messageId = cbq.message?.message_id;
   const chatId = cbq.message?.chat?.id;
+  const repoSelect = parseRepoSelectCallback(cbq.data || "");
+
+  if (repoSelect) {
+    let repository: string;
+    try {
+      repository = resolveSelectedRepository(repoSelect.repo);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await client.answerCallbackQuery({ callback_query_id: cbq.id, text: message.slice(0, 200) });
+      return;
+    }
+    if (repoSelect.ctx === "r") {
+      const job = db.createWorkJob({
+        task_type: "defect_scan",
+        idempotency_key: `scan:${repository}:${Date.now()}`,
+        input_json: {
+          repository,
+          ...(chatId != null ? { notify_chat_id: chatId } : {}),
+        },
+      });
+      await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `Review queued for ${repository}` });
+      if (chatId && messageId) {
+        await editWithEntities(client, {
+          chat_id: chatId,
+          message_id: messageId,
+          text: `Defect scan queued for **${repository}** (Job #${job.id}).`,
+        });
+      }
+      return;
+    }
+
+    if (repoSelect.ctx === "rf") {
+      const job = db.createWorkJob({
+        task_type: "refactor_scan",
+        idempotency_key: `refactor:${repository}:${Date.now()}`,
+        input_json: {
+          repository,
+          ...(chatId != null ? { notify_chat_id: chatId } : {}),
+        },
+      });
+      await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `Refactor scan queued for ${repository}` });
+      if (chatId && messageId) {
+        await editWithEntities(client, {
+          chat_id: chatId,
+          message_id: messageId,
+          text: `Refactor scan queued for **${repository}** (Job #${job.id}).`,
+        });
+      }
+      return;
+    }
+
+    if (repoSelect.ctx === "f") {
+      if (chatId == null) {
+        await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "Missing chat context." });
+        return;
+      }
+      const brief = consumePendingRepoBrief(String(chatId));
+      if (!brief) {
+        await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "No pending feature brief." });
+        return;
+      }
+      const plan = db.createFeaturePlan({
+        chatId: String(chatId),
+        userId,
+        brief,
+      });
+      const job = db.createWorkJob({
+        task_type: "feature_plan",
+        idempotency_key: `feature_plan:${plan.id}`,
+        input_json: {
+          plan_id: plan.id,
+          repository,
+          notify_chat_id: chatId,
+          start_message: `Analysing codebase and drafting plan for **${brief}**... This takes 1–3 minutes.`,
+        },
+      });
+      await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `Feature plan queued for ${repository}` });
+      if (chatId && messageId) {
+        await editWithEntities(client, {
+          chat_id: chatId,
+          message_id: messageId,
+          text: `Feature plan queued for **${repository}** (Job #${job.id}).`,
+        });
+      }
+      return;
+    }
+
+    await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "Unknown repo action." });
+    return;
+  }
 
   // Check for merge-gate callbacks before falling through
   if (!parsed) {

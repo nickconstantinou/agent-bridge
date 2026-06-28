@@ -10,6 +10,7 @@
 
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
 import type { GithubLink } from "../db.js";
+import { resolveGithubOwner } from "../repoRegistry.js";
 
 type RunCommand = (binary: string, args: string[]) => Promise<string>;
 
@@ -88,7 +89,7 @@ export function createPrWatchHandler(deps: PrWatchDeps): JobHandler {
 
       const viewOutput = await runCommand("gh", [
         "pr", "view", String(link.pr_number),
-        "--repo", link.repository.includes("/") ? link.repository : `nickconstantinou/${link.repository}`,
+        "--repo", link.repository.includes("/") ? link.repository : `${resolveGithubOwner()}/${link.repository}`,
         "--json", "headRefOid,statusCheckRollup,mergeable,updatedAt",
       ]);
 

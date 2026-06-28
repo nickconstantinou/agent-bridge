@@ -42,6 +42,7 @@ import { createOrchestratedTaskHandler } from "./handlers/orchestratedTask.js";
 import { createPrLifecycleHandler } from "./handlers/prLifecycle.js";
 import { createPrWatchHandler } from "./handlers/prWatch.js";
 import { createPrRefreshHandler } from "./handlers/prRefresh.js";
+import { createRefactorScanHandler } from "./handlers/refactorScan.js";
 import { captureFeatureBrief } from "./featureBriefCapture.js";
 import { runCli } from "./cli.js";
 import { createRunCommand } from "./runCommandAsync.js";
@@ -211,6 +212,11 @@ const jobExecutor = startJobExecutorLoop({
     feature_plan: createFeaturePlanHandler({
       runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), scribeCliChain, { timeoutMs: 20 * 60 * 1000, effort: workerEffortForTask("feature_plan") }),
       command: scribeCommand,
+    }),
+    refactor_scan: createRefactorScanHandler({
+      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), scribeCliChain, { timeoutMs: 10 * 60 * 1000, effort: workerEffortForTask("defect_scan") }),
+      command: scribeCommand,
+      resolveRepoPath: (repository) => resolveLocalRepoPath(repository),
     }),
     tdd_implementation: createTddImplementationHandler({
       runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), codeCliChain, { timeoutMs: 15 * 60 * 1000, effort: workerEffortForTask("tdd_implementation") }),
@@ -391,7 +397,7 @@ for (;;) {
 
         // Worker commands (/jobs, /issues, /review, /feature, /models) take priority
         if (isWorkerCommand(rawText)) {
-          const result = handleWorkerCommand(rawText, { workerEnabled, cliChain, db, chatId, userId, defaultRepo: process.env.WORKER_DEFAULT_REPO });
+          const result = await handleWorkerCommand(rawText, { workerEnabled, cliChain, db, chatId, userId, defaultRepo: process.env.WORKER_DEFAULT_REPO });
           if (result) {
             const body = result.kind === "keyboard_message"
               ? { text: result.text, reply_markup: result.reply_markup }
@@ -404,7 +410,7 @@ for (;;) {
         // Check if this plain message is a pending feature brief
         const capturedBrief = captureFeatureBrief(chatKey, rawText);
         if (capturedBrief) {
-          const briefResult = handleWorkerCommand(`/feature ${capturedBrief}`, { workerEnabled, cliChain, db, chatId, userId, defaultRepo: process.env.WORKER_DEFAULT_REPO });
+          const briefResult = await handleWorkerCommand(`/feature ${capturedBrief}`, { workerEnabled, cliChain, db, chatId, userId, defaultRepo: process.env.WORKER_DEFAULT_REPO });
           if (briefResult) {
             const body = briefResult.kind === "keyboard_message"
               ? { text: briefResult.text, reply_markup: briefResult.reply_markup }

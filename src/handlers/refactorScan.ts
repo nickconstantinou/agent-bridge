@@ -62,7 +62,7 @@ export function createRefactorScanHandler(deps: RefactorScanDeps): JobHandler {
         created_by: "worker",
         body: [f.rationale, f.files?.join(", ")].filter(Boolean).join("\n"),
         repository,
-        priority: "medium",
+        priority: "normal",
       });
     }
 

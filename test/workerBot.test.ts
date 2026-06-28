@@ -1,8 +1,24 @@
 /**
- * Tests for the worker bot's command handling (Phase 0 — no job execution yet).
+ * Tests for the worker bot's command handling.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+
+// Mock repoRegistry before importing workerBot
+vi.mock("../src/repoRegistry.js", () => ({
+  buildRepoKeyboard: vi.fn().mockResolvedValue({
+    inline_keyboard: [[{ text: "agent-bridge", callback_data: "rs:agent-bridge:r" }]],
+  }),
+  resolveGithubOwner: vi.fn().mockReturnValue("testuser"),
+}));
+vi.mock("../src/featureBriefCapture.js", () => ({
+  setPendingFeatureBrief: vi.fn(),
+  setPendingRepoBrief: vi.fn(),
+  captureFeatureBrief: vi.fn().mockReturnValue(null),
+  hasPendingFeatureBrief: vi.fn().mockReturnValue(false),
+  clearPendingFeatureBrief: vi.fn(),
+}));
+
 import {
   handleWorkerCommand,
   handleWorkerConversationText,
@@ -22,60 +38,60 @@ describe("isWorkerCommand", () => {
 });
 
 describe("handleWorkerCommand /jobs", () => {
-  it("returns a message result", () => {
-    const result = handleWorkerCommand("/jobs", { workerEnabled: false });
-    expect(result.kind).toBe("message");
+  it("returns a message result", async () => {
+    const result = await handleWorkerCommand("/jobs", { workerEnabled: false });
+    expect(result!.kind).toBe("message");
   });
 
-  it("indicates worker is not yet active when WORKER_ENABLED=false", () => {
-    const result = handleWorkerCommand("/jobs", { workerEnabled: false });
-    expect(result.kind).toBe("message");
-    if (result.kind === "message") {
-      expect(result.text.toLowerCase()).toMatch(/no jobs|worker.*not.*active|enabled/i);
+  it("indicates worker is not yet active when WORKER_ENABLED=false", async () => {
+    const result = await handleWorkerCommand("/jobs", { workerEnabled: false });
+    expect(result!.kind).toBe("message");
+    if (result!.kind === "message") {
+      expect(result!.text.toLowerCase()).toMatch(/no jobs|worker.*not.*active|enabled/i);
     }
   });
 });
 
 describe("handleWorkerCommand /issues", () => {
-  it("returns a message result", () => {
-    const result = handleWorkerCommand("/issues", { workerEnabled: false });
-    expect(result.kind).toBe("message");
+  it("returns a message result", async () => {
+    const result = await handleWorkerCommand("/issues", { workerEnabled: false });
+    expect(result!.kind).toBe("message");
   });
 
-  it("indicates no issues when worker is inactive", () => {
-    const result = handleWorkerCommand("/issues", { workerEnabled: false });
-    if (result.kind === "message") {
-      expect(result.text.toLowerCase()).toMatch(/no issues|worker.*not.*active|enabled/i);
+  it("indicates no issues when worker is inactive", async () => {
+    const result = await handleWorkerCommand("/issues", { workerEnabled: false });
+    if (result!.kind === "message") {
+      expect(result!.text.toLowerCase()).toMatch(/no issues|worker.*not.*active|enabled/i);
     }
   });
 });
 
 describe("handleWorkerCommand /review", () => {
-  it("returns a message result", () => {
-    const result = handleWorkerCommand("/review", { workerEnabled: false });
-    expect(result.kind).toBe("message");
+  it("returns a message result", async () => {
+    const result = await handleWorkerCommand("/review", { workerEnabled: false });
+    expect(result!.kind).toBe("message");
   });
 
-  it("acknowledges the review request even when worker inactive", () => {
-    const result = handleWorkerCommand("/review", { workerEnabled: false });
-    if (result.kind === "message") {
-      expect(result.text.toLowerCase()).toMatch(/review|worker.*not.*active|enabled/i);
+  it("acknowledges the review request even when worker inactive", async () => {
+    const result = await handleWorkerCommand("/review", { workerEnabled: false });
+    if (result!.kind === "message") {
+      expect(result!.text.toLowerCase()).toMatch(/review|worker.*not.*active|enabled/i);
     }
   });
 
-  it("extracts repo arg from /review agent-bridge", () => {
-    const result = handleWorkerCommand("/review agent-bridge", { workerEnabled: false });
-    expect(result.kind).toBe("message");
-    if (result.kind === "message") {
-      expect(result.text).toContain("agent-bridge");
+  it("extracts repo arg from /review agent-bridge", async () => {
+    const result = await handleWorkerCommand("/review agent-bridge", { workerEnabled: false });
+    expect(result!.kind).toBe("message");
+    if (result!.kind === "message") {
+      expect(result!.text).toContain("agent-bridge");
     }
   });
 });
 
 describe("handleWorkerCommand unknown", () => {
-  it("returns null for unrecognised commands", () => {
-    expect(handleWorkerCommand("/reset", { workerEnabled: false })).toBeNull();
-    expect(handleWorkerCommand("hello", { workerEnabled: false })).toBeNull();
+  it("returns null for unrecognised commands", async () => {
+    expect(await handleWorkerCommand("/reset", { workerEnabled: false })).toBeNull();
+    expect(await handleWorkerCommand("hello", { workerEnabled: false })).toBeNull();
   });
 });
 
@@ -86,14 +102,14 @@ describe("isWorkerCommand /models", () => {
 });
 
 describe("handleWorkerCommand /models", () => {
-  it("returns a keyboard_message result", () => {
-    const result = handleWorkerCommand("/models", { workerEnabled: false, cliChain: ["codex", "claude", "antigravity"] });
+  it("returns a keyboard_message result", async () => {
+    const result = await handleWorkerCommand("/models", { workerEnabled: false, cliChain: ["codex", "claude", "antigravity"] });
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("keyboard_message");
   });
 
-  it("keyboard includes one button per CLI in the chain", () => {
-    const result = handleWorkerCommand("/models", { workerEnabled: false, cliChain: ["codex", "claude", "antigravity"] });
+  it("keyboard includes one button per CLI in the chain", async () => {
+    const result = await handleWorkerCommand("/models", { workerEnabled: false, cliChain: ["codex", "claude", "antigravity"] });
     expect(result!.kind).toBe("keyboard_message");
     const kb = result as WorkerKeyboardMessageResult;
     const allButtons = kb.reply_markup.inline_keyboard.flat();
@@ -103,8 +119,8 @@ describe("handleWorkerCommand /models", () => {
     expect(texts.some((t: string) => t.includes("antigravity"))).toBe(true);
   });
 
-  it("uses default chain when cliChain not provided", () => {
-    const result = handleWorkerCommand("/models", { workerEnabled: false });
+  it("uses default chain when cliChain not provided", async () => {
+    const result = await handleWorkerCommand("/models", { workerEnabled: false });
     expect(result!.kind).toBe("keyboard_message");
   });
 });
@@ -150,9 +166,9 @@ describe("worker commands with DB (Slice 4)", () => {
     db.close();
   });
 
-  it("lists active and pending jobs on /jobs", () => {
+  it("lists active and pending jobs on /jobs", async () => {
     db.createWorkJob({ task_type: "defect_scan", idempotency_key: "scan:1" });
-    const result = handleWorkerCommand("/jobs", { workerEnabled: true, db });
+    const result = await handleWorkerCommand("/jobs", { workerEnabled: true, db });
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("keyboard_message");
     expect(result!.text).toContain("Active and Pending Jobs");
@@ -160,18 +176,18 @@ describe("worker commands with DB (Slice 4)", () => {
     expect((result as any).reply_markup.inline_keyboard.flat().length).toBe(1);
   });
 
-  it("shows job details on /job <id>", () => {
+  it("shows job details on /job <id>", async () => {
     const job = db.createWorkJob({ task_type: "defect_scan", idempotency_key: "scan:1" });
-    const result = handleWorkerCommand(`/job ${job.id}`, { workerEnabled: true, db });
+    const result = await handleWorkerCommand(`/job ${job.id}`, { workerEnabled: true, db });
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("keyboard_message");
     expect(result!.text).toContain(`**Job ID**: ${job.id}`);
     expect(result!.text).toContain("defect_scan");
   });
 
-  it("lists proposed issues on /issues", () => {
+  it("lists proposed issues on /issues", async () => {
     db.createWorkItem({ kind: "defect", source: "defect_scan", title: "A bug", created_by: "worker", repository: "agent-bridge" });
-    const result = handleWorkerCommand("/issues", { workerEnabled: true, db });
+    const result = await handleWorkerCommand("/issues", { workerEnabled: true, db });
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("keyboard_message");
     expect(result!.text).toContain("Proposed Work Items");
@@ -180,9 +196,9 @@ describe("worker commands with DB (Slice 4)", () => {
     expect((result as any).reply_markup.inline_keyboard.flat().length).toBe(3); // view, approve, close buttons
   });
 
-  it("shows issue details on /issue <id>", () => {
+  it("shows issue details on /issue <id>", async () => {
     const item = db.createWorkItem({ kind: "defect", source: "defect_scan", title: "A bug", created_by: "worker" });
-    const result = handleWorkerCommand(`/issue ${item.id}`, { workerEnabled: true, db, chatId: 123 });
+    const result = await handleWorkerCommand(`/issue ${item.id}`, { workerEnabled: true, db, chatId: 123 });
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("keyboard_message");
     expect(result!.text).toContain(`**Work Item ID**: ${item.id}`);
@@ -190,8 +206,8 @@ describe("worker commands with DB (Slice 4)", () => {
     expect(db.getSetting("active_work_item:123")).toBe(String(item.id));
   });
 
-  it("creates a defect scan job on /review", () => {
-    const result = handleWorkerCommand("/review", { workerEnabled: true, db, defaultRepo: "agent-bridge" });
+  it("creates a defect scan job on /review", async () => {
+    const result = await handleWorkerCommand("/review", { workerEnabled: true, db, defaultRepo: "agent-bridge" });
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("message");
     expect(result!.text).toContain("Defect scan queued");
@@ -201,41 +217,41 @@ describe("worker commands with DB (Slice 4)", () => {
     expect(JSON.parse(jobs[0].input_json).repository).toBe("agent-bridge");
   });
 
-  it("uses configured default repo for /review when no repo argument is provided", () => {
-    const result = handleWorkerCommand("/review", { workerEnabled: true, db, defaultRepo: "content-crawler" });
+  it("uses configured default repo for /review when no repo argument is provided", async () => {
+    const result = await handleWorkerCommand("/review", { workerEnabled: true, db, defaultRepo: "content-crawler" });
     expect(result!.text).toContain("content-crawler");
     const jobs = db.listWorkJobs();
     expect(JSON.parse(jobs[0].input_json).repository).toBe("content-crawler");
   });
 
-  it("idempotently returns info if defect scan is already active", () => {
-    handleWorkerCommand("/review repo-a", { workerEnabled: true, db });
-    const result = handleWorkerCommand("/review repo-a", { workerEnabled: true, db });
+  it("idempotently returns info if defect scan is already active", async () => {
+    await handleWorkerCommand("/review repo-a", { workerEnabled: true, db });
+    const result = await handleWorkerCommand("/review repo-a", { workerEnabled: true, db });
     expect(result!.text).toContain("already in progress");
     expect(db.listWorkJobs().length).toBe(1);
   });
 
-  it("stores notify_chat_id in input_json when chatId is provided in context", () => {
-    handleWorkerCommand("/review", { workerEnabled: true, db, chatId: 99999, defaultRepo: "agent-bridge" });
+  it("stores notify_chat_id in input_json when chatId is provided in context", async () => {
+    await handleWorkerCommand("/review", { workerEnabled: true, db, chatId: 99999, defaultRepo: "agent-bridge" });
     const jobs = db.listWorkJobs();
     expect(jobs.length).toBe(1);
     const input = JSON.parse(jobs[0].input_json);
     expect(input.notify_chat_id).toBe(99999);
   });
 
-  it("omits notify_chat_id when no chatId is provided", () => {
-    handleWorkerCommand("/review", { workerEnabled: true, db, defaultRepo: "agent-bridge" });
+  it("omits notify_chat_id when no chatId is provided", async () => {
+    await handleWorkerCommand("/review", { workerEnabled: true, db, defaultRepo: "agent-bridge" });
     const jobs = db.listWorkJobs();
     expect(jobs.length).toBe(1);
     const input = JSON.parse(jobs[0].input_json);
     expect(input.notify_chat_id).toBeUndefined();
   });
 
-  it("asks for a repo when /review has no repo and no default repo is configured", () => {
+  it("asks for a repo when /review has no repo and no default repo is configured", async () => {
     const oldDefault = process.env.WORKER_DEFAULT_REPO;
     delete process.env.WORKER_DEFAULT_REPO;
     try {
-      const result = handleWorkerCommand("/review", { workerEnabled: true, db });
+      const result = await handleWorkerCommand("/review", { workerEnabled: true, db });
       expect(result!.text).toContain("Which repo");
       expect(db.listWorkJobs()).toHaveLength(0);
     } finally {
@@ -333,16 +349,16 @@ describe("handleWorkerCommand /feature", () => {
     expect(isWorkerCommand("/feature")).toBe(true);
   });
 
-  it("returns a message prompting for a brief when called with no args", () => {
-    const result = handleWorkerCommand("/feature", { workerEnabled: true, db });
+  it("returns a message prompting for a brief when called with no args", async () => {
+    const result = await handleWorkerCommand("/feature", { workerEnabled: true, db });
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("message");
     expect(result!.text.toLowerCase()).toMatch(/brief|describe|what feature/i);
   });
 
-  it("creates a feature_plan record on /feature <brief>", () => {
-    handleWorkerCommand("/feature add dark mode support", {
-      workerEnabled: true, db, chatId: 42, userId: "user-1",
+  it("creates a feature_plan record on /feature <brief> when defaultRepo is set", async () => {
+    await handleWorkerCommand("/feature add dark mode support", {
+      workerEnabled: true, db, chatId: 42, userId: "user-1", defaultRepo: "agent-bridge",
     });
     const plan = db.getActivePlanForChat("42");
     expect(plan).not.toBeNull();
@@ -350,30 +366,30 @@ describe("handleWorkerCommand /feature", () => {
     expect(plan!.status).toBe("drafting");
   });
 
-  it("stores userId from context on the feature plan", () => {
-    handleWorkerCommand("/feature improve logging", {
-      workerEnabled: true, db, chatId: 100, userId: "user-99",
+  it("stores userId from context on the feature plan", async () => {
+    await handleWorkerCommand("/feature improve logging", {
+      workerEnabled: true, db, chatId: 100, userId: "user-99", defaultRepo: "agent-bridge",
     });
     const plan = db.getActivePlanForChat("100");
     expect(plan!.user_id).toBe("user-99");
   });
 
-  it("returns an acknowledgement message with the brief", () => {
-    const result = handleWorkerCommand("/feature refactor auth module", {
-      workerEnabled: true, db, chatId: 7, userId: "u",
+  it("returns an acknowledgement message with the brief when defaultRepo is set", async () => {
+    const result = await handleWorkerCommand("/feature refactor auth module", {
+      workerEnabled: true, db, chatId: 7, userId: "u", defaultRepo: "agent-bridge",
     });
     expect(result!.text).toContain("refactor auth module");
   });
 
-  it("replaces an existing drafting plan when /feature is called again", () => {
-    handleWorkerCommand("/feature first idea", { workerEnabled: true, db, chatId: 55, userId: "u" });
-    handleWorkerCommand("/feature second idea", { workerEnabled: true, db, chatId: 55, userId: "u" });
+  it("replaces an existing drafting plan when /feature is called again", async () => {
+    await handleWorkerCommand("/feature first idea", { workerEnabled: true, db, chatId: 55, userId: "u", defaultRepo: "agent-bridge" });
+    await handleWorkerCommand("/feature second idea", { workerEnabled: true, db, chatId: 55, userId: "u", defaultRepo: "agent-bridge" });
     const plan = db.getActivePlanForChat("55");
     expect(plan!.brief).toBe("second idea");
   });
 
-  it("includes repository in feature_plan job input when defaultRepo is set", () => {
-    const result = handleWorkerCommand("/feature add caching layer", {
+  it("includes repository in feature_plan job input when defaultRepo is set", async () => {
+    const result = await handleWorkerCommand("/feature add caching layer", {
       workerEnabled: true, db, chatId: 42, userId: "u", defaultRepo: "agent-bridge",
     });
     const jobs = db.listWorkJobs();
@@ -384,29 +400,27 @@ describe("handleWorkerCommand /feature", () => {
     expect(result!.text).toContain("Repository: `agent-bridge`");
   });
 
-  it("omits repository from feature_plan job input when defaultRepo is not set", () => {
+  it("shows keyboard picker when /feature has no default repo configured", async () => {
     const oldDefault = process.env.WORKER_DEFAULT_REPO;
     delete process.env.WORKER_DEFAULT_REPO;
     try {
-      handleWorkerCommand("/feature add dark mode", {
+      const result = await handleWorkerCommand("/feature add dark mode", {
         workerEnabled: true, db, chatId: 43, userId: "u",
       });
-      const jobs = db.listWorkJobs();
-      const job = jobs.find((j: any) => j.task_type === "feature_plan");
-      expect(job).toBeDefined();
-      const input = JSON.parse(job!.input_json);
-      expect(input.repository).toBeUndefined();
+      // With no defaultRepo, repo picker keyboard is shown
+      expect(result!.kind).toBe("keyboard_message");
+      expect(db.listWorkJobs()).toHaveLength(0);
     } finally {
       if (oldDefault === undefined) delete process.env.WORKER_DEFAULT_REPO;
       else process.env.WORKER_DEFAULT_REPO = oldDefault;
     }
   });
 
-  it("falls back to WORKER_DEFAULT_REPO when defaultRepo is not passed", () => {
+  it("falls back to WORKER_DEFAULT_REPO when defaultRepo is not passed", async () => {
     const oldDefault = process.env.WORKER_DEFAULT_REPO;
     process.env.WORKER_DEFAULT_REPO = "agent-bridge";
     try {
-      handleWorkerCommand("/feature add queue audit", {
+      await handleWorkerCommand("/feature add queue audit", {
         workerEnabled: true, db, chatId: 45, userId: "u",
       });
       const jobs = db.listWorkJobs();
@@ -420,9 +434,9 @@ describe("handleWorkerCommand /feature", () => {
     }
   });
 
-  it("includes start_message in feature_plan job input", () => {
-    handleWorkerCommand("/feature add search", {
-      workerEnabled: true, db, chatId: 44, userId: "u",
+  it("includes start_message in feature_plan job input", async () => {
+    await handleWorkerCommand("/feature add search", {
+      workerEnabled: true, db, chatId: 44, userId: "u", defaultRepo: "agent-bridge",
     });
     const jobs = db.listWorkJobs();
     const job = jobs.find((j: any) => j.task_type === "feature_plan");
@@ -454,14 +468,14 @@ describe("handleWorkerCommand /approvals", () => {
     expect(buildWorkerCommands().some(c => c.command === "approvals")).toBe(true);
   });
 
-  it("reports when there are no pending approvals", () => {
-    const result = handleWorkerCommand("/approvals", { workerEnabled: true, db });
+  it("reports when there are no pending approvals", async () => {
+    const result = await handleWorkerCommand("/approvals", { workerEnabled: true, db });
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("message");
     expect(result!.text.toLowerCase()).toMatch(/no pending approvals/i);
   });
 
-  it("lists a pending merge_pr approval with merge/close buttons re-attached", () => {
+  it("lists a pending merge_pr approval with merge/close buttons re-attached", async () => {
     const item = db.createWorkItem({
       kind: "defect", source: "telegram", title: "Fix leak", created_by: "worker",
       repository: "owner/repo",
@@ -473,7 +487,7 @@ describe("handleWorkerCommand /approvals", () => {
       payload: { pr_url: "https://github.com/owner/repo/pull/12", pr_number: 12, repository: "owner/repo" },
     });
 
-    const result = handleWorkerCommand("/approvals", { workerEnabled: true, db }) as WorkerKeyboardMessageResult;
+    const result = await handleWorkerCommand("/approvals", { workerEnabled: true, db }) as WorkerKeyboardMessageResult;
     expect(result.kind).toBe("keyboard_message");
     expect(result.text).toContain("merge_pr");
     expect(result.text).toContain("https://github.com/owner/repo/pull/12");
@@ -483,7 +497,7 @@ describe("handleWorkerCommand /approvals", () => {
     expect(buttons).toContain(`wi:${item.id}:clspr`);
   });
 
-  it("lists other pending approvals with approve/reject buttons", () => {
+  it("lists other pending approvals with approve/reject buttons", async () => {
     const item = db.createWorkItem({
       kind: "ops", source: "telegram", title: "Restart svc", created_by: "worker",
     });
@@ -493,14 +507,14 @@ describe("handleWorkerCommand /approvals", () => {
       work_item_id: item.id,
     });
 
-    const result = handleWorkerCommand("/approvals", { workerEnabled: true, db }) as WorkerKeyboardMessageResult;
+    const result = await handleWorkerCommand("/approvals", { workerEnabled: true, db }) as WorkerKeyboardMessageResult;
     expect(result.kind).toBe("keyboard_message");
     const buttons = result.reply_markup.inline_keyboard.flat().map(b => b.callback_data);
     expect(buttons).toContain(`ap:${appr.id}:yes`);
     expect(buttons).toContain(`ap:${appr.id}:no`);
   });
 
-  it("does not list resolved approvals", () => {
+  it("does not list resolved approvals", async () => {
     const item = db.createWorkItem({
       kind: "defect", source: "telegram", title: "Done already", created_by: "worker",
     });
@@ -511,8 +525,65 @@ describe("handleWorkerCommand /approvals", () => {
     });
     db.resolveApproval(appr.id, "approved", "u1");
 
-    const result = handleWorkerCommand("/approvals", { workerEnabled: true, db });
+    const result = await handleWorkerCommand("/approvals", { workerEnabled: true, db });
     expect(result!.kind).toBe("message");
     expect(result!.text.toLowerCase()).toMatch(/no pending approvals/i);
+  });
+});
+
+// ── /refactor command ─────────────────────────────────────────────────────────
+
+describe("/refactor command", () => {
+  it("is recognised as a worker command", () => {
+    expect(isWorkerCommand("/refactor")).toBe(true);
+    expect(isWorkerCommand("/refactor agent-bridge")).toBe(true);
+  });
+
+  it("appears in buildWorkerCommands list", () => {
+    const cmds = buildWorkerCommands();
+    expect(cmds.some(c => c.command === "refactor")).toBe(true);
+  });
+
+  it("returns keyboard_message with repo picker when no repo provided", async () => {
+    const result = await handleWorkerCommand("/refactor", {
+      workerEnabled: true,
+      db: { createWorkJob: vi.fn(), listWorkJobs: vi.fn().mockReturnValue([]) } as any,
+      chatId: 123,
+    });
+    expect(result?.kind).toBe("keyboard_message");
+  });
+});
+
+describe("/review no-repo keyboard", () => {
+  it("returns keyboard_message when no repo and no default", async () => {
+    const db = openDb(":memory:");
+    try {
+      const result = await handleWorkerCommand("/review", {
+        workerEnabled: true,
+        db,
+        chatId: 123,
+      });
+      expect(result?.kind).toBe("keyboard_message");
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("/feature no-repo keyboard", () => {
+  it("returns keyboard_message and stores pending brief when no default repo", async () => {
+    const { setPendingRepoBrief } = await import("../src/featureBriefCapture.js");
+    const db = openDb(":memory:");
+    try {
+      const result = await handleWorkerCommand("/feature add dark mode", {
+        workerEnabled: true,
+        db,
+        chatId: 456,
+      });
+      expect(result?.kind).toBe("keyboard_message");
+      expect(setPendingRepoBrief).toHaveBeenCalledWith("456", "add dark mode");
+    } finally {
+      db.close();
+    }
   });
 });

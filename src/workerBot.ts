@@ -6,7 +6,8 @@
  */
 
 import type { BridgeDb } from "./db.js";
-import { setPendingFeatureBrief } from "./featureBriefCapture.js";
+import { setPendingFeatureBrief, setPendingRepoBrief } from "./featureBriefCapture.js";
+import { buildRepoKeyboard } from "./repoRegistry.js";
 
 const DEFAULT_CLI_CHAIN = ["codex", "claude", "antigravity"];
 const ACTIVE_WORK_ITEM_PREFIX = "active_work_item:";
@@ -33,7 +34,7 @@ export interface WorkerKeyboardMessageResult {
 
 export type WorkerCommandResult = WorkerMessageResult | WorkerKeyboardMessageResult;
 
-const WORKER_COMMANDS = new Set(["/jobs", "/issues", "/review", "/models", "/job", "/issue", "/feature", "/approvals"]);
+const WORKER_COMMANDS = new Set(["/jobs", "/issues", "/review", "/models", "/job", "/issue", "/feature", "/approvals", "/refactor"]);
 
 export function activeWorkItemSettingKey(chatId: number | string): string {
   return `${ACTIVE_WORK_ITEM_PREFIX}${chatId}`;
@@ -62,6 +63,7 @@ export function buildWorkerCommands(): Array<{ command: string; description: str
     { command: "review",  description: "Trigger a defect scan: /review [repo]" },
     { command: "feature", description: "Plan a new feature: /feature <brief description>" },
     { command: "approvals", description: "List pending approvals with their action buttons" },
+    { command: "refactor", description: "Analyse code quality: /refactor [repo]" },
     { command: "models",  description: "Show CLI execution chain" },
   ];
 }
@@ -77,13 +79,14 @@ export function isWorkerCommand(text: string): boolean {
   if (text.trim().toLowerCase().startsWith("/job ")) return true;
   if (text.trim().toLowerCase().startsWith("/issue ")) return true;
   if (text.trim().toLowerCase().startsWith("/feature ")) return true;
+  if (text.trim().toLowerCase().startsWith("/refactor ")) return true;
   return false;
 }
 
-export function handleWorkerCommand(
+export async function handleWorkerCommand(
   text: string,
   ctx: WorkerCommandContext,
-): WorkerCommandResult | null {
+): Promise<WorkerCommandResult | null> {
   const trimmed = text.trim();
   const cmd = normalizeCommand(trimmed);
   const db = ctx.db;
@@ -232,14 +235,29 @@ export function handleWorkerCommand(
     if (db && ctx.chatId != null) {
       const chatKey = String(ctx.chatId);
       const userId = ctx.userId ?? "unknown";
+      const defaultRepo = ctx.defaultRepo || process.env.WORKER_DEFAULT_REPO;
+      if (!defaultRepo) {
+        setPendingRepoBrief(chatKey, brief);
+        const keyboard = await buildRepoKeyboard("f");
+        if (keyboard) {
+          return {
+            kind: "keyboard_message",
+            text: `Which repo should I use for this feature?\n\n${brief}`,
+            reply_markup: keyboard,
+          };
+        }
+        return {
+          kind: "message",
+          text: "Which repo should I use? Configure `WORKER_DEFAULT_REPO` or use `/feature <brief>` after setting a repo.",
+        };
+      }
       const plan = db.createFeaturePlan({ chatId: chatKey, userId, brief });
       const jobInput: Record<string, unknown> = {
         plan_id: plan.id,
         notify_chat_id: ctx.chatId,
         start_message: `Analysing codebase and drafting plan for **${brief}**... This takes 1–3 minutes.`,
       };
-      const defaultRepo = ctx.defaultRepo || process.env.WORKER_DEFAULT_REPO;
-      if (defaultRepo) jobInput.repository = defaultRepo;
+      jobInput.repository = defaultRepo;
       db.createWorkJob({
         task_type: "feature_plan",
         idempotency_key: `feature_plan:${plan.id}`,
@@ -329,6 +347,14 @@ export function handleWorkerCommand(
       };
     }
     if (!targetRepo) {
+      const keyboard = await buildRepoKeyboard("r");
+      if (keyboard) {
+        return {
+          kind: "keyboard_message",
+          text: "Which repo should I scan for defects?",
+          reply_markup: keyboard,
+        };
+      }
       return {
         kind: "message",
         text: "Which repo should I review? Use `/review <owner/repo>` or configure `WORKER_DEFAULT_REPO`.",
@@ -359,6 +385,63 @@ export function handleWorkerCommand(
     return {
       kind: "message",
       text: `Defect scan queued for **${targetRepo}** (Job ID: ${newJob.id}). Use /jobs to check progress.`,
+    };
+  }
+
+  if (cmd === "/refactor") {
+    const parts = trimmed.split(/\s+/);
+    const repo = parts.slice(1).join(" ").trim() || null;
+    const targetRepo = repo || ctx.defaultRepo || process.env.WORKER_DEFAULT_REPO || null;
+    const repoNote = targetRepo ? ` for **${targetRepo}**` : "";
+
+    if (!ctx.workerEnabled) {
+      return {
+        kind: "message",
+        text: `Refactor analysis${repoNote} received — worker is not yet active (WORKER_ENABLED=false).`,
+      };
+    }
+    if (!db) {
+      return { kind: "message", text: `Refactor analysis queued${repoNote}. Use /jobs to check progress.` };
+    }
+    if (!targetRepo) {
+      const keyboard = await buildRepoKeyboard("rf");
+      if (keyboard) {
+        return {
+          kind: "keyboard_message",
+          text: "Which repo should I analyse for refactoring opportunities?",
+          reply_markup: keyboard,
+        };
+      }
+      return {
+        kind: "message",
+        text: "Which repo? Use `/refactor <owner/repo>` or configure `WORKER_DEFAULT_REPO`.",
+      };
+    }
+
+    const activeJobs = db.listWorkJobs().filter(
+      (j: any) => j.task_type === "refactor_scan" &&
+           j.idempotency_key.startsWith(`refactor:${targetRepo}:`) &&
+           (j.status === "pending" || j.status === "leased" || j.status === "running")
+    );
+    if (activeJobs.length > 0) {
+      return {
+        kind: "message",
+        text: `Refactor scan already in progress for **${targetRepo}** (Job ID: ${activeJobs[0].id}).`,
+      };
+    }
+
+    const input: Record<string, unknown> = { repository: targetRepo };
+    if (ctx.chatId != null) input.notify_chat_id = ctx.chatId;
+
+    const newJob = db.createWorkJob({
+      task_type: "refactor_scan",
+      idempotency_key: `refactor:${targetRepo}:${Date.now()}`,
+      input_json: input,
+    });
+
+    return {
+      kind: "message",
+      text: `Refactor scan started for **${targetRepo}** (Job #${newJob.id}). Use /jobs to track progress.`,
     };
   }
 

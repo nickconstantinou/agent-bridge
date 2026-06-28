@@ -68,18 +68,46 @@ const DEFAULT_LEASE_SECONDS = 300;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
 const MAX_REPAIR_CONTEXT_CHARS = 12_000;
 
+function getTddWorkItemId(
+  job: { work_item_id: number | null },
+  input: JobHandlerInput,
+): number | null {
+  return typeof input.work_item_id === "number" ? input.work_item_id : job.work_item_id;
+}
+
+function canEnqueueTddRepairJob(
+  job: { task_type: string; work_item_id: number | null },
+  input: JobHandlerInput,
+): boolean {
+  if (job.task_type !== "tdd_implementation") return false;
+  if (input.repair_of_job_id || input.repair_context || input.ci_fix) return false;
+  return typeof getTddWorkItemId(job, input) === "number";
+}
+
+function classifyTddOrchestrationFailure(message: string): "timeout" | "capacity" | "transient" | null {
+  if (/\b(?:hard|idle|cli|print)?\s*timeout\b|timed out|ETIMEDOUT/i.test(message)) return "timeout";
+  if (/capacity|RESOURCE_EXHAUSTED|rate limit|rate-limit|429|quota/i.test(message)) return "capacity";
+  if (/ECONNRESET|ECONNREFUSED|EPIPE|temporar(?:y|ily)|transient|unavailable|socket hang up|network/i.test(message)) {
+    return "transient";
+  }
+  return null;
+}
+
+function tddNeedsHumanSummary(jobId: number, reason: "timeout" | "capacity" | "transient"): string {
+  return `TDD implementation job #${jobId} needs human attention: orchestration ${reason}; auto-repair is not available.`;
+}
+
 function enqueueTddRepairJobIfNeeded(
   db: BridgeDb,
   job: { id: number; task_type: string; work_item_id: number | null; input_json: string },
   input: JobHandlerInput,
   message: string,
 ): { id: number } | null {
-  if (job.task_type !== "tdd_implementation") return null;
-  if (input.repair_of_job_id || input.repair_context || input.ci_fix) return null;
+  if (!canEnqueueTddRepairJob(job, input)) return null;
   const updated = db.getWorkJob(job.id);
   if (!updated || updated.status !== "failed") return null;
-  const workItemId = typeof input.work_item_id === "number" ? input.work_item_id : job.work_item_id;
-  if (typeof workItemId !== "number") return null;
+  const workItemId = getTddWorkItemId(job, input);
+  if (workItemId == null) return null;
 
   return db.createWorkJob({
     task_type: "tdd_implementation",
@@ -157,6 +185,13 @@ export async function executeNextJob(
     return { jobId: job.id, handlerResult: result };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    const tddOrchestrationFailure = classifyTddOrchestrationFailure(message);
+    if (tddOrchestrationFailure && job.task_type === "tdd_implementation" && !canEnqueueTddRepairJob(job, input)) {
+      const summary = tddNeedsHumanSummary(job.id, tddOrchestrationFailure);
+      db.failWorkJobPermanently(job.id, summary, workerId);
+      await notify(summary);
+      return { jobId: job.id };
+    }
     if (err instanceof PermanentJobFailureError) {
       db.failWorkJobPermanently(job.id, message, workerId);
     } else {

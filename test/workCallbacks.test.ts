@@ -54,9 +54,12 @@ describe("work callback builder", () => {
 describe("handleWorkerCallback (Slice 5)", () => {
   let db: any;
   let client: any;
+  let oldGithubUsername: string | undefined;
   const allowedUserIds = new Set(["42"]);
 
   beforeEach(() => {
+    oldGithubUsername = process.env.GITHUB_USERNAME;
+    process.env.GITHUB_USERNAME = "testuser";
     db = openDb(":memory:");
     client = {
       answerCallbackQuery: vi.fn().mockResolvedValue({}),
@@ -66,6 +69,8 @@ describe("handleWorkerCallback (Slice 5)", () => {
 
   afterEach(() => {
     db.close();
+    if (oldGithubUsername === undefined) delete process.env.GITHUB_USERNAME;
+    else process.env.GITHUB_USERNAME = oldGithubUsername;
   });
 
   it("rejects unauthorized users with answerCallbackQuery only", async () => {
@@ -302,6 +307,94 @@ describe("handleWorkerCallback (Slice 5)", () => {
     expect(db.getWorkItem(item.id)?.status).toBe("proposed");
     expect(client.answerCallbackQuery).toHaveBeenCalledWith(expect.objectContaining({
       text: expect.stringMatching(/repository/i),
+    }));
+  });
+
+  it("rs:<repo>:r creates a defect scan job for the selected GitHub repo", async () => {
+    const cbq = {
+      id: "cb-rs-r",
+      data: "rs:agent-bridge:r",
+      from: { id: 42 },
+      message: { message_id: 100, chat: { id: 10 } },
+    };
+
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+
+    const job = db.listWorkJobs()[0];
+    expect(job.task_type).toBe("defect_scan");
+    expect(JSON.parse(job.input_json).repository).toBe("testuser/agent-bridge");
+    expect(JSON.parse(job.input_json).notify_chat_id).toBe(10);
+    expect(client.editMessageText).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining("Defect scan queued"),
+    }));
+  });
+
+  it("rs:<repo>:rf creates a refactor scan job for the selected GitHub repo", async () => {
+    const cbq = {
+      id: "cb-rs-rf",
+      data: "rs:agent-bridge:rf",
+      from: { id: 42 },
+      message: { message_id: 100, chat: { id: 10 } },
+    };
+
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+
+    const job = db.listWorkJobs()[0];
+    expect(job.task_type).toBe("refactor_scan");
+    expect(JSON.parse(job.input_json).repository).toBe("testuser/agent-bridge");
+    expect(JSON.parse(job.input_json).notify_chat_id).toBe(10);
+  });
+
+  it("rs:<repo>:f consumes pending feature brief and creates a feature plan job", async () => {
+    const { setPendingRepoBrief } = await import("../src/featureBriefCapture.js");
+    setPendingRepoBrief("10", "add repo picker");
+    const cbq = {
+      id: "cb-rs-f",
+      data: "rs:content-crawler:f",
+      from: { id: 42 },
+      message: { message_id: 100, chat: { id: 10 } },
+    };
+
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+
+    const plan = db.getActivePlanForChat("10");
+    expect(plan!.brief).toBe("add repo picker");
+    const job = db.listWorkJobs()[0];
+    expect(job.task_type).toBe("feature_plan");
+    expect(JSON.parse(job.input_json).repository).toBe("testuser/content-crawler");
+    expect(JSON.parse(job.input_json).plan_id).toBe(plan!.id);
+  });
+
+  it("rs:<repo>:f without a pending brief answers with an error", async () => {
+    const cbq = {
+      id: "cb-rs-f-empty",
+      data: "rs:agent-bridge:f",
+      from: { id: 42 },
+      message: { message_id: 100, chat: { id: 10 } },
+    };
+
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+
+    expect(db.listWorkJobs()).toHaveLength(0);
+    expect(client.answerCallbackQuery).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringMatching(/No pending feature brief/i),
+    }));
+  });
+
+  it("rs:<repo>:r answers clearly when GITHUB_USERNAME is missing", async () => {
+    delete process.env.GITHUB_USERNAME;
+    const cbq = {
+      id: "cb-rs-no-owner",
+      data: "rs:agent-bridge:r",
+      from: { id: 42 },
+      message: { message_id: 100, chat: { id: 10 } },
+    };
+
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+
+    expect(db.listWorkJobs()).toHaveLength(0);
+    expect(client.answerCallbackQuery).toHaveBeenCalledWith(expect.objectContaining({
+      text: "GITHUB_USERNAME env var is not set",
     }));
   });
 });

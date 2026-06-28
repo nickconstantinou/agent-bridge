@@ -97,8 +97,8 @@ export function openDb(dbPath: string): BridgeDb {
     );
     CREATE TABLE IF NOT EXISTS work_items (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
-      kind        TEXT NOT NULL CHECK (kind IN ('defect','feature','maintenance','research','ops')),
-      source      TEXT NOT NULL CHECK (source IN ('telegram','health','defect_scan','schedule','github','manual')),
+      kind        TEXT NOT NULL CHECK (kind IN ('defect','feature','maintenance','research','ops','refactor')),
+      source      TEXT NOT NULL CHECK (source IN ('telegram','health','defect_scan','refactor_scan','schedule','github','manual')),
       repository  TEXT,
       title       TEXT NOT NULL,
       body        TEXT,
@@ -111,7 +111,7 @@ export function openDb(dbPath: string): BridgeDb {
     CREATE TABLE IF NOT EXISTS work_jobs (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
       work_item_id     INTEGER,
-      task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','orchestrated_task','pr_lifecycle','pr_watch','pr_refresh')),
+      task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','orchestrated_task','refactor_scan','pr_lifecycle','pr_watch','pr_refresh')),
       status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','leased','running','waiting_approval','completed','failed','cancelled')),
       bot              TEXT CHECK (bot IN ('codex','antigravity','claude')),
       lease_owner      TEXT,
@@ -204,6 +204,41 @@ export function openDb(dbPath: string): BridgeDb {
   try {
     raw.exec(`ALTER TABLE github_links ADD COLUMN proof_comment_sha TEXT`);
   } catch { /* column already exists */ }
+  try {
+    const workItemsSql = (raw.prepare(
+      `SELECT sql FROM sqlite_master WHERE type='table' AND name='work_items'`
+    ).get() as { sql: string } | undefined)?.sql ?? "";
+    const hasCurrentWorkItemTypes = workItemsSql.includes("'refactor'") && workItemsSql.includes("'refactor_scan'");
+    if (!hasCurrentWorkItemTypes) {
+      raw.pragma("foreign_keys = OFF");
+      raw.pragma("legacy_alter_table = ON");
+      try {
+        raw.exec(`
+          ALTER TABLE work_items RENAME TO work_items_migrate_tmp;
+          CREATE TABLE work_items (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind        TEXT NOT NULL CHECK (kind IN ('defect','feature','maintenance','research','ops','refactor')),
+            source      TEXT NOT NULL CHECK (source IN ('telegram','health','defect_scan','refactor_scan','schedule','github','manual')),
+            repository  TEXT,
+            title       TEXT NOT NULL,
+            body        TEXT,
+            status      TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','needs_approval','approved','in_progress','blocked','resolved','closed','rejected')),
+            priority    TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('low','normal','high','urgent')),
+            created_by  TEXT NOT NULL,
+            created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+          );
+          INSERT INTO work_items (id, kind, source, repository, title, body, status, priority, created_by, created_at, updated_at)
+          SELECT id, kind, source, repository, title, body, status, priority, created_by, created_at, updated_at
+          FROM work_items_migrate_tmp;
+          DROP TABLE work_items_migrate_tmp;
+        `);
+      } finally {
+        raw.pragma("legacy_alter_table = OFF");
+        raw.pragma("foreign_keys = ON");
+      }
+    }
+  } catch (err) { console.warn('[db] work_items refactor migration failed:', err); }
   // Migrate work_jobs task_type CHECK constraint to include feature_plan, pr_lifecycle,
   // pr_watch, pr_refresh, and orchestrated_task. SQLite cannot ALTER CHECK
   // constraints; use rename-recreate.
@@ -215,6 +250,7 @@ export function openDb(dbPath: string): BridgeDb {
       `SELECT sql FROM sqlite_master WHERE type='table' AND name='work_jobs'`
     ).get() as { sql: string } | undefined)?.sql ?? "";
     const hasCurrentTaskTypes = workJobsSql.includes("'orchestrated_task'")
+      && workJobsSql.includes("'refactor_scan'")
       && workJobsSql.includes("'pr_watch'")
       && workJobsSql.includes("'pr_refresh'");
     if (!hasCurrentTaskTypes) {
@@ -242,7 +278,7 @@ export function openDb(dbPath: string): BridgeDb {
           CREATE TABLE work_jobs (
             id               INTEGER PRIMARY KEY AUTOINCREMENT,
             work_item_id     INTEGER,
-            task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','orchestrated_task','pr_lifecycle','pr_watch','pr_refresh')),
+            task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','orchestrated_task','refactor_scan','pr_lifecycle','pr_watch','pr_refresh')),
             status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','leased','running','waiting_approval','completed','failed','cancelled')),
             bot              TEXT CHECK (bot IN ('codex','antigravity','claude')),
             lease_owner      TEXT,

@@ -394,6 +394,76 @@ describe("executeNextJob", () => {
     expect(repairJobs).toHaveLength(0);
   });
 
+  it("escalates a TDD repair hard timeout without raw logs or another repair job", async () => {
+    const item = db.createWorkItem({
+      kind: "feature",
+      source: "telegram",
+      title: "Add refactor scan",
+      created_by: "worker",
+      repository: "agent-bridge",
+    });
+    const job = db.createWorkJob({
+      task_type: "tdd_implementation",
+      idempotency_key: "tdd:self-repair:timeout",
+      work_item_id: item.id,
+      input_json: {
+        work_item_id: item.id,
+        repository: "agent-bridge",
+        repair_of_job_id: 1,
+      },
+      max_attempts: 3,
+    });
+    const rawLog = "CLI hard timeout after 900000ms\n" + "verbose log line\n".repeat(200);
+    const notify = vi.fn();
+
+    await executeNextJob({
+      db,
+      workerId: "test-worker",
+      handlers: { tdd_implementation: vi.fn().mockRejectedValue(new Error(rawLog)) },
+      notify,
+    });
+
+    const updated = db.getWorkJob(job.id)!;
+    expect(updated.status).toBe("failed");
+    expect(updated.error).toMatch(/needs human attention/i);
+    expect(updated.error.length).toBeLessThan(220);
+    expect(updated.error).not.toContain("verbose log line");
+
+    const repairJobs = db.listWorkJobs().filter(j => j.idempotency_key.startsWith("tdd_repair:"));
+    expect(repairJobs).toHaveLength(0);
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/needs human attention/i));
+    expect(notify.mock.calls[0][0]).not.toContain("verbose log line");
+  });
+
+  it("escalates a non-repairable TDD capacity failure without retrying", async () => {
+    const job = db.createWorkJob({
+      task_type: "tdd_implementation",
+      idempotency_key: "tdd:capacity:no-work-item",
+      input_json: {
+        repository: "agent-bridge",
+      },
+      max_attempts: 3,
+    });
+    const notify = vi.fn();
+
+    await executeNextJob({
+      db,
+      workerId: "test-worker",
+      handlers: { tdd_implementation: vi.fn().mockRejectedValue(new Error("No capacity available for model gemini-2.5-pro\nraw details")) },
+      notify,
+    });
+
+    const updated = db.getWorkJob(job.id)!;
+    expect(updated.status).toBe("failed");
+    expect(updated.attempt_count).toBe(0);
+    expect(updated.error).toMatch(/capacity/i);
+    expect(updated.error).toMatch(/needs human attention/i);
+    expect(updated.error).not.toContain("raw details");
+    expect(notify).toHaveBeenCalledOnce();
+    expect(notify.mock.calls[0][0]).not.toContain("raw details");
+  });
+
   it("does not claim a job with a valid non-expired lease", async () => {
     const job = db.createWorkJob({
       task_type: "defect_scan",

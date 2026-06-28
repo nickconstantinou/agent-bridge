@@ -26,4 +26,27 @@ describe("createRefactorScanHandler", () => {
       expect.any(String),
     );
   });
+
+  it("creates refactor work items from JSON line findings", async () => {
+    const runCli = vi.fn().mockResolvedValue(
+      `{"title":"Extract worker router","rationale":"workerBot is doing too much","files":["src/workerBot.ts"]}`,
+    );
+    const { openDb } = await import("../../src/db.js");
+    const db = openDb(":memory:");
+    try {
+      const handler = createRefactorScanHandler({
+        runCli,
+        resolveRepoPath: () => process.cwd(),
+      });
+      await handler({ repository: "owner/repo" }, { db, workerId: "w", phase: "initial", phaseData: {} });
+      const items = db.listWorkItems();
+      expect(items).toHaveLength(1);
+      expect(items[0].kind).toBe("refactor");
+      expect(items[0].source).toBe("refactor_scan");
+      expect(items[0].repository).toBe("owner/repo");
+      expect(items[0].priority).toBe("normal");
+    } finally {
+      db.close();
+    }
+  });
 });

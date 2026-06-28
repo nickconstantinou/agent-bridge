@@ -6,6 +6,7 @@
  */
 
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
+import { resolveGithubOwner } from "../repoRegistry.js";
 
 // Accepts an args array — no shell involved, no injection surface.
 type RunCommand = (binary: string, args: string[]) => Promise<string>;
@@ -28,7 +29,7 @@ export function createGithubIssueHandler(deps: GithubIssueHandlerDeps): JobHandl
   ): Promise<JobHandlerResult> {
     const workItemId = typeof input.work_item_id === "number" ? input.work_item_id : null;
     const rawRepository = typeof input.repository === "string" ? input.repository : null;
-    const repository = rawRepository && !rawRepository.includes("/") ? `nickconstantinou/${rawRepository}` : rawRepository;
+    const repository = rawRepository && !rawRepository.includes("/") ? `${resolveGithubOwner()}/${rawRepository}` : rawRepository;
 
     if (workItemId === null) throw new Error("input.work_item_id is required");
     if (!repository) throw new Error("input.repository is required");

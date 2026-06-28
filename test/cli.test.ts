@@ -349,6 +349,16 @@ describe("antigravity model mapping and settings override", () => {
     expect(result.text).toBe("Clean answer.");
   });
 
+  it("extracts response when preceding tool output contains braces", () => {
+    // Reproduces the reasoning-leak bug: tool-call outputs containing "}" before
+    // the response JSON cause strategy-3 (lastIndexOf) to span multiple objects
+    // → JSON.parse fails → raw blob returned to Telegram.
+    const inner = JSON.stringify({ reasoning: "done", response: "Fixed." });
+    const stdout = `Tool result: {status: "ok"}\n${inner}`;
+    const result = parseCliResult({ bot: "antigravity", stdout });
+    expect(result.text).toBe("Fixed.");
+  });
+
   it("falls back to *** delimiter when JSON parse fails", () => {
     // Reproduces the observed bug: Agy appended *** to the last STATUS line
     // instead of putting it on its own line, causing the fallback path to return

@@ -123,7 +123,10 @@ describe("handleWorkerCallback (Slice 5)", () => {
   });
 
   it("handles wi:id:appv by approving and creating exactly one job", async () => {
-    const item = db.createWorkItem({ kind: "defect", source: "defect_scan", title: "Leak", created_by: "worker" });
+    const item = db.createWorkItem({
+      kind: "defect", source: "defect_scan", title: "Leak", created_by: "worker",
+      repository: "owner/repo",
+    });
     const cbq = {
       id: "cb-123",
       data: `wi:${item.id}:appv`,
@@ -135,13 +138,13 @@ describe("handleWorkerCallback (Slice 5)", () => {
     await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
     expect(db.getWorkItem(item.id)!.status).toBe("approved");
     const jobs = db.listWorkJobs();
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0].task_type).toBe("tdd_implementation");
+    expect(jobs).toHaveLength(2);
+    expect(jobs.map(j => j.task_type)).toEqual(["open_github_issue", "tdd_implementation"]);
     expect(client.editMessageText).toHaveBeenCalled();
 
     // Second tap (idempotent check)
     await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
-    expect(db.listWorkJobs()).toHaveLength(1);
+    expect(db.listWorkJobs()).toHaveLength(2);
   });
 
   it("handles wi:id:clse by closing the work item", async () => {
@@ -272,7 +275,7 @@ describe("handleWorkerCallback (Slice 5)", () => {
     expect(ghJob!.id).toBeLessThan(tddJob!.id);
   });
 
-  it("does not queue open_github_issue when repository is not set", async () => {
+  it("does not approve or queue implementation when repository is not set", async () => {
     const item = db.createWorkItem({
       kind: "defect", source: "defect_scan",
       title: "Bug with no repo", created_by: "worker",
@@ -288,7 +291,13 @@ describe("handleWorkerCallback (Slice 5)", () => {
 
     const jobs = db.listWorkJobs();
     const ghJob = jobs.find(j => j.task_type === "open_github_issue");
+    const tddJob = jobs.find(j => j.task_type === "tdd_implementation");
     expect(ghJob).toBeUndefined();
+    expect(tddJob).toBeUndefined();
+    expect(db.getWorkItem(item.id)?.status).toBe("proposed");
+    expect(client.answerCallbackQuery).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringMatching(/repository/i),
+    }));
   });
 });
 

@@ -299,6 +299,24 @@ describe("handleWorkerCommand /feature", () => {
     expect(input.repository).toBeUndefined();
   });
 
+  it("falls back to WORKER_DEFAULT_REPO when defaultRepo is not passed", () => {
+    const oldDefault = process.env.WORKER_DEFAULT_REPO;
+    process.env.WORKER_DEFAULT_REPO = "agent-bridge";
+    try {
+      handleWorkerCommand("/feature add queue audit", {
+        workerEnabled: true, db, chatId: 45, userId: "u",
+      });
+      const jobs = db.listWorkJobs();
+      const job = jobs.find((j: any) => j.task_type === "feature_plan");
+      expect(job).toBeDefined();
+      const input = JSON.parse(job!.input_json);
+      expect(input.repository).toBe("agent-bridge");
+    } finally {
+      if (oldDefault === undefined) delete process.env.WORKER_DEFAULT_REPO;
+      else process.env.WORKER_DEFAULT_REPO = oldDefault;
+    }
+  });
+
   it("includes start_message in feature_plan job input", () => {
     handleWorkerCommand("/feature add search", {
       workerEnabled: true, db, chatId: 44, userId: "u",

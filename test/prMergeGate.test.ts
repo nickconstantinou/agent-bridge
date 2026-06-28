@@ -152,6 +152,8 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
     const resolved = db.raw.prepare("SELECT * FROM approvals WHERE id = ?").get(approval.id) as any;
     expect(resolved.status).toBe("approved");
     expect(db.getWorkItem(item.id)!.status).toBe("resolved");
+    const mergedLink = db.raw.prepare("SELECT pr_state FROM github_links WHERE work_item_id = ? AND pr_number = 3").get(item.id) as any;
+    expect(mergedLink.pr_state).toBe("merged");
   });
 
   it("marks draft PRs as ready before merging", async () => {

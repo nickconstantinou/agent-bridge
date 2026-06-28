@@ -217,6 +217,12 @@ export async function handlePrMergeCallback(
 
     db.resolveApproval(approval.id, "approved", ctx.userId ?? "user");
     db.updateWorkItemStatus(action.id, "resolved");
+    if (prNumber != null) {
+      const mergedLink = db.raw.prepare(
+        "SELECT id FROM github_links WHERE work_item_id = ? AND pr_number = ?"
+      ).get(action.id, prNumber) as { id: number } | undefined;
+      if (mergedLink) db.updatePrState(mergedLink.id, "merged");
+    }
 
     await answerCbq();
     await editMessage(`PR merged and branch deleted. Work item #${action.id} resolved.`);

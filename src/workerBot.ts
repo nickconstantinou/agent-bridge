@@ -216,7 +216,8 @@ export function handleWorkerCommand(
         notify_chat_id: ctx.chatId,
         start_message: `Analysing codebase and drafting plan for **${brief}**... This takes 1–3 minutes.`,
       };
-      if (ctx.defaultRepo) jobInput.repository = ctx.defaultRepo;
+      const defaultRepo = ctx.defaultRepo || process.env.WORKER_DEFAULT_REPO;
+      if (defaultRepo) jobInput.repository = defaultRepo;
       db.createWorkJob({
         task_type: "feature_plan",
         idempotency_key: `feature_plan:${plan.id}`,

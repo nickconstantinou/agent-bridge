@@ -14,6 +14,8 @@ import {
   hasPendingFeatureBrief,
   clearPendingFeatureBrief,
   setPendingFeatureBrief,
+  setPendingRepoBrief,
+  consumePendingRepoBrief,
 } from "../src/featureBriefCapture.js";
 
 function makeDb() {
@@ -99,5 +101,36 @@ describe("handleWorkerCommand — bare /feature sets pending brief", () => {
       workerEnabled: true, db, chatId: 300, userId: "u1",
     });
     expect(hasPendingFeatureBrief("300")).toBe(false);
+  });
+});
+
+describe("pendingRepoBrief", () => {
+  afterEach(() => {
+    // Clean up any pending repo briefs
+    consumePendingRepoBrief("123");
+    consumePendingRepoBrief("456");
+    consumePendingRepoBrief("789");
+    consumePendingRepoBrief("999");
+  });
+
+  it("stores and consumes a brief", () => {
+    setPendingRepoBrief("123", "add dark mode");
+    expect(consumePendingRepoBrief("123")).toBe("add dark mode");
+  });
+
+  it("consume returns null when nothing pending", () => {
+    expect(consumePendingRepoBrief("999")).toBeNull();
+  });
+
+  it("consume clears the brief", () => {
+    setPendingRepoBrief("456", "brief text");
+    consumePendingRepoBrief("456");
+    expect(consumePendingRepoBrief("456")).toBeNull();
+  });
+
+  it("overwrite replaces existing brief", () => {
+    setPendingRepoBrief("789", "first");
+    setPendingRepoBrief("789", "second");
+    expect(consumePendingRepoBrief("789")).toBe("second");
   });
 });

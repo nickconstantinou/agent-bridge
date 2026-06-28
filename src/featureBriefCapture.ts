@@ -29,3 +29,23 @@ export function captureFeatureBrief(chatKey: string, text: string): string | nul
   pendingBriefs.delete(chatKey);
   return text;
 }
+
+/**
+ * Store a pending repo-brief for deferred repo selection.
+ * Associates a chatKey with a brief text to be consumed later.
+ */
+const pendingRepoBriefs = new Map<string, string>();
+
+export function setPendingRepoBrief(chatKey: string, brief: string): void {
+  pendingRepoBriefs.set(chatKey, brief);
+}
+
+/**
+ * Consume and return the pending repo-brief for this chat.
+ * Returns null if nothing was pending. Clears the stored brief on retrieval.
+ */
+export function consumePendingRepoBrief(chatKey: string): string | null {
+  const brief = pendingRepoBriefs.get(chatKey) ?? null;
+  if (brief !== null) pendingRepoBriefs.delete(chatKey);
+  return brief;
+}

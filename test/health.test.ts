@@ -48,6 +48,9 @@ vi.mock("node:child_process", async (importOriginal) => {
       if (cmd.includes("npm view @openai/codex version") && !cmd.includes("versions")) {
         return "0.141.0";
       }
+      if (cmd.includes("agy --version")) {
+        return "1.0.10";
+      }
       return actual.execSync(cmd, options);
     }
   };

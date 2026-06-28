@@ -83,6 +83,7 @@ export function createPrWatchHandler(deps: PrWatchDeps): JobHandler {
     const now = Date.now();
     const lines: string[] = [];
     const newlyStale: GithubLink[] = [];
+    const prApprovalWorkItemIds = new Set<number>();
 
     for (const link of openPrs) {
       if (link.pr_state === "held") continue;
@@ -171,12 +172,16 @@ export function createPrWatchHandler(deps: PrWatchDeps): JobHandler {
             },
           });
         }
+        prApprovalWorkItemIds.add(link.work_item_id);
         lines.push(`#${link.pr_number} (${link.repository}): CI passing, ready to merge`);
       }
     }
 
     if (newlyStale.length > 0 && notifyStale) await notifyStale(newlyStale);
 
-    return { summary: lines.length > 0 ? lines.join("\n") : "All open PRs healthy." };
+    return {
+      summary: lines.length > 0 ? lines.join("\n") : "All open PRs healthy.",
+      pr_approval_work_item_ids: [...prApprovalWorkItemIds],
+    };
   };
 }

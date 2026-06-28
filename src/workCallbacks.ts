@@ -17,6 +17,7 @@ import { toTelegramEntitiesText } from "./render.js";
 import { activeWorkItemSettingKey, clearActiveWorkItem } from "./workerBot.js";
 import { consumePendingRepoBrief } from "./featureBriefCapture.js";
 import { parseRepoSelectCallback, resolveGithubOwner } from "./repoRegistry.js";
+import { buildPrApprovalPack, buildWorkItemApprovalPack, sendApprovalHtmlPack } from "./approvalHtml.js";
 
 /** Edit a message converting bold/code markdown markers to native Telegram entities. */
 function editWithEntities(
@@ -210,6 +211,15 @@ function resolveSelectedRepository(repo: string): string {
   return repo.includes("/") ? repo : `${resolveGithubOwner()}/${repo}`;
 }
 
+async function sendPackWithFallback(client: any, chatId: number | undefined, pack: ReturnType<typeof buildWorkItemApprovalPack> | null): Promise<void> {
+  if (chatId == null || !pack) return;
+  try {
+    await sendApprovalHtmlPack(client, chatId, pack);
+  } catch (err) {
+    console.warn("[worker-callbacks] approval pack send failed", err);
+  }
+}
+
 export async function handleWorkerCallback(
   cbq: any,
   db: any,
@@ -324,7 +334,8 @@ export async function handleWorkerCallback(
   if (!parsed) {
     const prAction = parsePrMergeCallback(cbq.data || "");
     if (prAction) {
-      const runGhCommand = createRunCommand({ loadGhToken: true });
+      const runGhCommand = extra?.runCommand ?? createRunCommand({ loadGhToken: true });
+      await sendPackWithFallback(client, chatId, buildPrApprovalPack(db, prAction.id));
 
       await handlePrMergeCallback(prAction, {
         db,
@@ -359,6 +370,7 @@ export async function handleWorkerCallback(
     }
     if (chatId != null) db.setSetting(activeWorkItemSettingKey(chatId), String(item.id));
     const { text, inline_keyboard } = getWorkItemDetailsText(item);
+    await sendPackWithFallback(client, chatId, buildWorkItemApprovalPack(db, item));
     await client.answerCallbackQuery({ callback_query_id: cbq.id });
     if (chatId && messageId) {
       await editWithEntities(client, {
@@ -381,6 +393,7 @@ export async function handleWorkerCallback(
       });
       return;
     }
+    await sendPackWithFallback(client, chatId, buildWorkItemApprovalPack(db, item));
     clearActiveWorkItem(db, chatId);
     db.updateWorkItemStatus(item.id, "approved");
     // Issue job first so the GitHub issue exists before implementation starts

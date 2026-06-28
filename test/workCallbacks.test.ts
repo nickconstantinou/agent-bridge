@@ -64,6 +64,7 @@ describe("handleWorkerCallback (Slice 5)", () => {
     client = {
       answerCallbackQuery: vi.fn().mockResolvedValue({}),
       editMessageText: vi.fn().mockResolvedValue({}),
+      sendDocumentBuffer: vi.fn().mockResolvedValue({ ok: true }),
     };
   });
 
@@ -106,6 +107,11 @@ describe("handleWorkerCallback (Slice 5)", () => {
         text: expect.stringContaining("Leak"),
       })
     );
+    expect(client.sendDocumentBuffer).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: 10,
+      filename: `work-item-${item.id}.html`,
+      mime_type: "text/html",
+    }));
   });
 
   it("edits messages with Telegram entities instead of literal markdown markers", async () => {
@@ -143,6 +149,10 @@ describe("handleWorkerCallback (Slice 5)", () => {
 
     // First tap
     await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+    expect(client.sendDocumentBuffer).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: 10,
+      filename: `work-item-${item.id}.html`,
+    }));
     expect(db.getWorkItem(item.id)!.status).toBe("approved");
     expect(db.getSetting("active_work_item:10")).toBeNull();
     const jobs = db.listWorkJobs();
@@ -153,6 +163,29 @@ describe("handleWorkerCallback (Slice 5)", () => {
     // Second tap (idempotent check)
     await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
     expect(db.listWorkJobs()).toHaveLength(2);
+  });
+
+  it("continues approval when the work item HTML pack upload fails", async () => {
+    client.sendDocumentBuffer.mockRejectedValueOnce(new Error("telegram down"));
+    const item = db.createWorkItem({
+      kind: "refactor",
+      source: "refactor_scan",
+      title: "Clean boundary",
+      created_by: "worker",
+      repository: "owner/repo",
+    });
+    const cbq = {
+      id: "cb-doc-fail",
+      data: `wi:${item.id}:appv`,
+      from: { id: 42 },
+      message: { message_id: 100, chat: { id: 10 } },
+    };
+
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+
+    expect(db.getWorkItem(item.id)!.status).toBe("approved");
+    expect(db.listWorkJobs().map(j => j.task_type)).toEqual(["open_github_issue", "tdd_implementation"]);
+    expect(client.editMessageText).toHaveBeenCalled();
   });
 
   it("handles wi:id:clse by closing the work item", async () => {
@@ -396,6 +429,60 @@ describe("handleWorkerCallback (Slice 5)", () => {
     expect(client.answerCallbackQuery).toHaveBeenCalledWith(expect.objectContaining({
       text: "GITHUB_USERNAME env var is not set",
     }));
+  });
+
+  it("sends a PR approval HTML pack before merge callback handling", async () => {
+    const item = db.createWorkItem({
+      kind: "defect",
+      source: "defect_scan",
+      title: "Merge candidate",
+      created_by: "worker",
+      repository: "owner/repo",
+    });
+    const link = db.linkGithubPr({
+      work_item_id: item.id,
+      repository: "owner/repo",
+      pr_number: 44,
+      branch_name: "agent/work-44",
+      commit_sha: "abc123",
+    });
+    db.updatePrState(link.id, "ready_to_merge");
+    db.createApproval({
+      approval_type: "merge_pr",
+      requested_by: "agent",
+      work_item_id: item.id,
+      payload: {
+        pr_number: 44,
+        pr_url: "https://github.com/owner/repo/pull/44",
+        repository: "owner/repo",
+        branch_name: "agent/work-44",
+        head_sha: "abc123",
+      },
+    });
+    const runCommand = vi.fn(async (_binary: string, args: string[]) => {
+      if (args.includes("view")) {
+        return JSON.stringify({
+          headRefOid: "abc123",
+          statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
+        });
+      }
+      return "";
+    });
+    const cbq = {
+      id: "cb-pr-pack",
+      data: `wi:${item.id}:mrgpr`,
+      from: { id: 42 },
+      message: { message_id: 100, chat: { id: 10 } },
+    };
+
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds, { runCommand });
+
+    expect(client.sendDocumentBuffer).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: 10,
+      filename: "pr-44.html",
+      mime_type: "text/html",
+    }));
+    expect(db.getWorkItem(item.id)!.status).toBe("resolved");
   });
 });
 

@@ -7,6 +7,7 @@
 
 import { executeNextJob, type JobHandler } from "./jobExecutor.js";
 import { buildPrMergeKeyboard } from "./prMergeGate.js";
+import { buildPrApprovalPack, buildWorkItemApprovalPack, type ApprovalHtmlPack } from "./approvalHtml.js";
 import type { BridgeDb } from "./db.js";
 
 export interface JobExecutorLoopDeps {
@@ -14,6 +15,7 @@ export interface JobExecutorLoopDeps {
   workerId: string;
   handlers: Partial<Record<string, JobHandler>>;
   sendMessage: (chatId: number, text: string, replyMarkup?: object) => Promise<void> | void;
+  sendApprovalPack?: (chatId: number, pack: ApprovalHtmlPack) => Promise<void> | void;
   intervalMs?: number;
 }
 
@@ -51,7 +53,7 @@ export function sanitizeWorkerNotification(message: string): string {
 }
 
 export function startJobExecutorLoop(deps: JobExecutorLoopDeps): JobExecutorStopFn {
-  const { db, workerId, handlers, sendMessage, intervalMs = 10_000 } = deps;
+  const { db, workerId, handlers, sendMessage, sendApprovalPack, intervalMs = 10_000 } = deps;
 
   // Serialize ticks: a long-running job must not be joined by concurrent
   // claims from later ticks in the same process.
@@ -86,7 +88,7 @@ export function startJobExecutorLoop(deps: JobExecutorLoopDeps): JobExecutorStop
         } catch { /* non-fatal */ }
 
         const notify = notifyChatId != null
-          ? (msg: string, result?: import("./jobExecutor.js").JobHandlerResult) => {
+          ? async (msg: string, result?: import("./jobExecutor.js").JobHandlerResult) => {
               const replyMarkup = result && typeof result.work_item_id === "number"
                 ? (() => {
                     // Attach merge keyboard when PR lifecycle job completes
@@ -96,6 +98,30 @@ export function startJobExecutorLoop(deps: JobExecutorLoopDeps): JobExecutorStop
                     return undefined;
                   })()
                 : undefined;
+              if (result && sendApprovalPack) {
+                const packs: ApprovalHtmlPack[] = [];
+                const itemIds = Array.isArray(result.work_item_ids)
+                  ? result.work_item_ids.filter((id): id is number => typeof id === "number")
+                  : typeof result.work_item_id === "number" ? [result.work_item_id] : [];
+                for (const id of itemIds) {
+                  const item = db.getWorkItem(id);
+                  if (item) packs.push(buildWorkItemApprovalPack(db, item));
+                }
+                const prItemIds = Array.isArray(result.pr_approval_work_item_ids)
+                  ? result.pr_approval_work_item_ids.filter((id): id is number => typeof id === "number")
+                  : [];
+                for (const id of prItemIds) {
+                  const pack = buildPrApprovalPack(db, id);
+                  if (pack) packs.push(pack);
+                }
+                for (const pack of packs) {
+                  try {
+                    await sendApprovalPack(notifyChatId!, pack);
+                  } catch (err) {
+                    console.warn("[job-executor-loop] approval pack send failed", err);
+                  }
+                }
+              }
               return sendMessage(notifyChatId!, sanitizeWorkerNotification(msg), replyMarkup);
             }
           : () => Promise.resolve();

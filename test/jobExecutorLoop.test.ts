@@ -103,6 +103,92 @@ describe("startJobExecutorLoop", () => {
     expect(text).toContain("Found 1 issue.");
   });
 
+  it("sends work item HTML approval packs for handler-created work items", async () => {
+    const item = db.createWorkItem({
+      kind: "refactor",
+      source: "refactor_scan",
+      repository: "owner/repo",
+      title: "Simplify module",
+      created_by: "worker",
+      body: "Implementation plan",
+    });
+    const handler = vi.fn().mockResolvedValue({
+      summary: "Refactor scan found 1 opportunity.",
+      work_item_ids: [item.id],
+    });
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const sendApprovalPack = vi.fn().mockResolvedValue(undefined);
+
+    db.createWorkJob({
+      task_type: "refactor_scan",
+      idempotency_key: "refactor:pack:1",
+      input_json: { repository: "owner/repo", notify_chat_id: 12345 },
+    });
+
+    const stop = startJobExecutorLoop({
+      db,
+      workerId: "test-worker",
+      handlers: { refactor_scan: handler },
+      sendMessage,
+      sendApprovalPack,
+      intervalMs: 1000,
+    });
+
+    await vi.runOnlyPendingTimersAsync();
+    stop();
+
+    expect(sendApprovalPack).toHaveBeenCalledWith(12345, expect.objectContaining({
+      filename: `work-item-${item.id}.html`,
+      html: expect.stringContaining("Simplify module"),
+    }));
+    expect(sendMessage).toHaveBeenCalledWith(12345, expect.stringContaining("Refactor scan"), undefined);
+  });
+
+  it("sends PR approval HTML packs when pr_watch reports ready approvals", async () => {
+    const item = db.createWorkItem({
+      kind: "defect",
+      source: "defect_scan",
+      repository: "owner/repo",
+      title: "Fix issue",
+      created_by: "worker",
+    });
+    db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 9, branch_name: "agent/work-9", commit_sha: "sha" });
+    db.createApproval({
+      approval_type: "merge_pr",
+      requested_by: "agent",
+      work_item_id: item.id,
+      payload: { pr_number: 9, pr_url: "https://github.com/owner/repo/pull/9", repository: "owner/repo" },
+    });
+    const handler = vi.fn().mockResolvedValue({
+      summary: "#9 ready to merge",
+      pr_approval_work_item_ids: [item.id],
+    });
+    const sendApprovalPack = vi.fn().mockResolvedValue(undefined);
+
+    db.createWorkJob({
+      task_type: "pr_watch",
+      idempotency_key: "pr-watch:pack:1",
+      input_json: { notify_chat_id: 999 },
+    });
+
+    const stop = startJobExecutorLoop({
+      db,
+      workerId: "test-worker",
+      handlers: { pr_watch: handler },
+      sendMessage: vi.fn().mockResolvedValue(undefined),
+      sendApprovalPack,
+      intervalMs: 1000,
+    });
+
+    await vi.runOnlyPendingTimersAsync();
+    stop();
+
+    expect(sendApprovalPack).toHaveBeenCalledWith(999, expect.objectContaining({
+      filename: "pr-9.html",
+      html: expect.stringContaining("PR Approval Pack"),
+    }));
+  });
+
   it("does not call sendMessage when no notify_chat_id is set", async () => {
     const handler = vi.fn().mockResolvedValue({ summary: "All clear." });
     const sendMessage = vi.fn();

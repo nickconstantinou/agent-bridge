@@ -86,7 +86,7 @@ export function createFeaturePlanHandler(deps: FeaturePlanDeps): JobHandler {
     const repository = typeof input.repository === "string" ? input.repository : undefined;
 
     // Create a proposed work_item so the user can approve/close via /issues
-    ctx.db.createWorkItem({
+    const item = ctx.db.createWorkItem({
       kind: "feature",
       source: "telegram",
       title: `Feature: ${plan.brief}`,
@@ -96,6 +96,6 @@ export function createFeaturePlanHandler(deps: FeaturePlanDeps): JobHandler {
     });
 
     const summary = `Feature plan ready: **${plan.brief}**\n\nUse /issues to review and approve.`;
-    return { summary, planText };
+    return { summary, planText, work_item_id: item.id, work_item_ids: [item.id] };
   };
 }

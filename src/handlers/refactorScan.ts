@@ -54,8 +54,9 @@ export function createRefactorScanHandler(deps: RefactorScanDeps): JobHandler {
     const output = await runCli(command, ["-p", prompt], cwd);
 
     const findings = parseFindings(output);
+    const workItemIds: number[] = [];
     for (const f of findings) {
-      ctx.db.createWorkItem({
+      const item = ctx.db.createWorkItem({
         kind: "refactor",
         source: "refactor_scan",
         title: f.title,
@@ -64,12 +65,14 @@ export function createRefactorScanHandler(deps: RefactorScanDeps): JobHandler {
         repository,
         priority: "normal",
       });
+      workItemIds.push(item.id);
     }
 
     return {
       summary: findings.length > 0
         ? `Refactor scan of **${repository}** found ${findings.length} opportunit${findings.length !== 1 ? "ies" : "y"}.`
         : `Refactor scan of **${repository}** found no refactoring opportunities.`,
+      work_item_ids: workItemIds,
     };
   };
 }

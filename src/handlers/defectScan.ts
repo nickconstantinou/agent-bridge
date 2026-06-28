@@ -224,6 +224,6 @@ export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
       ? `${summaryLine} — ${created} work item(s) ${autoTriage ? "auto-triaged." : "queued for review."}`
       : summaryLine;
 
-    return { summary, rawOutput, findings };
+    return { summary, rawOutput, findings, work_item_ids: createdItems.map(item => item.itemId) };
   };
 }

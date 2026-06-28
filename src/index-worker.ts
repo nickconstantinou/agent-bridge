@@ -49,6 +49,7 @@ import { createRunCommand } from "./runCommandAsync.js";
 import { prepareWorkspace, createWorkspaceCleanup, resolveLocalRepoPath } from "./workspace.js";
 import { resolveWorkerCliPolicy } from "./workerCliPolicy.js";
 import { workerEffortForTask } from "./effort.js";
+import { sendApprovalHtmlPack } from "./approvalHtml.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 
 dotenv.config({
@@ -294,6 +295,9 @@ const jobExecutor = startJobExecutorLoop({
     const body: any = { text };
     if (replyMarkup) body.reply_markup = replyMarkup;
     await sendTelegramMessage({ client, kind: "worker-bot", chatId, body });
+  },
+  sendApprovalPack: async (chatId, pack) => {
+    await sendApprovalHtmlPack(client, chatId, pack);
   },
   intervalMs: jobPollIntervalMs,
 });

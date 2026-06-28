@@ -313,10 +313,13 @@ export async function sendMessageWithProgress({
     }
 
     const finalText = result?.text || currentText || "";
+    const cliResult = result == null
+      ? null
+      : { text: result.text, sessionId: result.sessionId ?? null };
 
     if (isAborted?.()) {
       clearInterval(typingInterval);
-      return result;
+      return cliResult;
     }
 
     validateParity({
@@ -330,7 +333,7 @@ export async function sendMessageWithProgress({
     await deliverFinal(finalText);
 
     clearInterval(typingInterval);
-    return { ...result, onProgress: wrappedOnProgress };
+    return cliResult;
   } catch (err: any) {
     clearInterval(typingInterval);
     if (isCapacityExhaustedError(err instanceof Error ? err : new Error(String(err)))) {

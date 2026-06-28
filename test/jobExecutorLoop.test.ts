@@ -191,6 +191,50 @@ describe("startJobExecutorLoop", () => {
     expect(failureTexts).toHaveLength(1);
   });
 
+  it("suppresses noisy ANSI/test output in worker failure notifications", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const noisyError = [
+      "Verification failed after implementation:",
+      "",
+      "\u001b[90mstderr\u001b[39m",
+      "diff --git a/test/workerBot.test.ts b/test/workerBot.test.ts",
+      "@@ -1,3 +1,9 @@",
+      "+  it(\"recognises /refactor\", () => expect(isWorkerCommand(\"/refactor\")).toBe(true));",
+      "FAIL  test/workerBot.test.ts > worker /refactor command with DB",
+      "AssertionError: expected null not to be null",
+      "Test Files  2 failed (2)",
+      "Tests  9 failed | 154 passed (163)",
+    ].join("\n");
+
+    db.createWorkJob({
+      task_type: "defect_scan",
+      idempotency_key: "scan:noisy-failure:1",
+      input_json: { notify_chat_id: 321 },
+      max_attempts: 1,
+    });
+
+    const stop = startJobExecutorLoop({
+      db,
+      workerId: "test-worker",
+      handlers: { defect_scan: vi.fn(async () => { throw new Error(noisyError); }) },
+      sendMessage,
+      intervalMs: 1000,
+    });
+
+    await vi.runOnlyPendingTimersAsync();
+    stop();
+
+    expect(sendMessage).toHaveBeenCalledOnce();
+    const text = sendMessage.mock.calls[0][1] as string;
+    expect(text).toContain("Job #");
+    expect(text).toContain("Verification failed after implementation");
+    expect(text).toContain("Output suppressed");
+    expect(text).toContain("Test Files  2 failed (2)");
+    expect(text).not.toContain("\u001b[90m");
+    expect(text).not.toContain("diff --git");
+    expect(text).not.toContain("recognises /refactor");
+  });
+
   it("sends start_message before handler runs when set in input_json", async () => {
     const callOrder: string[] = [];
     const handler = vi.fn(async () => {

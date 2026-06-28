@@ -23,6 +23,33 @@ export interface JobExecutorStopFn {
   isIdle: () => boolean;
 }
 
+const ANSI_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]|\[[0-9;]{1,4}m/g;
+const NOISY_LINE_PATTERN = /^(diff --git|@@ |[+-]\s{0,2}it\(|[+-]\s{0,2}expect\(|[+-]\s{0,2}(describe|test)\(|\s*at\s+|\s*❯\s+)/;
+const MAX_WORKER_NOTIFICATION_CHARS = 1800;
+
+export function sanitizeWorkerNotification(message: string): string {
+  const clean = message.replace(ANSI_PATTERN, "").replace(/\r/g, "");
+  const lines = clean.split("\n");
+  const isNoisy = clean.length > MAX_WORKER_NOTIFICATION_CHARS
+    || lines.some(line => NOISY_LINE_PATTERN.test(line))
+    || /Test Files\s+\d+\s+failed|Tests\s+\d+\s+failed|FAIL\s+test\//.test(clean);
+
+  if (!isNoisy) return clean;
+
+  const headline = lines.find(line => line.trim().length > 0)?.trim() || "Worker job output suppressed";
+  const testFiles = lines.find(line => /Test Files\s+/.test(line))?.trim();
+  const tests = lines.find(line => /Tests\s+/.test(line))?.trim();
+  const failure = lines.find(line => /^FAIL\s+/.test(line))?.trim();
+  const details = [failure, testFiles, tests].filter(Boolean);
+
+  return [
+    headline,
+    ...details,
+    "",
+    "Output suppressed: verbose logs/test output stored in worker DB and service journal.",
+  ].join("\n").slice(0, MAX_WORKER_NOTIFICATION_CHARS);
+}
+
 export function startJobExecutorLoop(deps: JobExecutorLoopDeps): JobExecutorStopFn {
   const { db, workerId, handlers, sendMessage, intervalMs = 10_000 } = deps;
 
@@ -69,7 +96,7 @@ export function startJobExecutorLoop(deps: JobExecutorLoopDeps): JobExecutorStop
                     return undefined;
                   })()
                 : undefined;
-              return sendMessage(notifyChatId!, msg, replyMarkup);
+              return sendMessage(notifyChatId!, sanitizeWorkerNotification(msg), replyMarkup);
             }
           : () => Promise.resolve();
 
@@ -87,7 +114,7 @@ export function startJobExecutorLoop(deps: JobExecutorLoopDeps): JobExecutorStop
           onStart: async () => {
             // Sent only after a successful claim — a stuck job can never spam this
             if (notifyChatId != null && startMessage != null) {
-              await sendMessage(notifyChatId, startMessage);
+              await sendMessage(notifyChatId, sanitizeWorkerNotification(startMessage));
             }
           },
         });

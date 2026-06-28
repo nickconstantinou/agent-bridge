@@ -1584,4 +1584,205 @@ describe("BridgeEngine", () => {
       expect(capturedPrompt).toContain("hello after reset");
     });
   });
+
+  // ── Sync path parity with async path (effort + outputFormat) ─────────────────
+  //
+  // executePrompt (asyncEnabled=false) was missing both `effort` and
+  // `outputFormat` from its buildCliInvocation call, unlike executePromptAsync.
+  // These tests lock the expected parity so the regression cannot recur.
+
+  describe("sync path (asyncEnabled: false) CLI argument parity with async path", () => {
+    it("passes effort setting to CLI args for Claude bot (sync path)", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      // Store a non-default effort level so we can detect it in the CLI args.
+      db.setSetting("effort:claude", "high");
+
+      const capturedArgs: string[] = [];
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedArgs.push(...args);
+        return "response";
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(runCli).toHaveBeenCalledOnce();
+      // Claude effort maps to --effort <level> prepended by appendEffortArgs.
+      const effortIdx = capturedArgs.indexOf("--effort");
+      expect(effortIdx).not.toBe(-1);
+      expect(capturedArgs[effortIdx + 1]).toBe("high");
+    });
+
+    it("passes effort setting to CLI args for Codex bot (sync path)", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      db.setSetting("effort:codex", "high");
+
+      const capturedArgs: string[] = [];
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedArgs.push(...args);
+        return "";
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "codex",
+          botConfig: { command: "codex", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(runCli).toHaveBeenCalledOnce();
+      // Codex effort maps to -c model_reasoning_effort="<level>".
+      const configIdx = capturedArgs.indexOf("-c");
+      expect(configIdx).not.toBe(-1);
+      expect(capturedArgs[configIdx + 1]).toMatch(/model_reasoning_effort="high"/);
+    });
+
+    it("passes --output-format json to Claude bot in sync path", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      const capturedArgs: string[] = [];
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedArgs.push(...args);
+        return "";
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(runCli).toHaveBeenCalledOnce();
+      const outputFormatIdx = capturedArgs.indexOf("--output-format");
+      expect(outputFormatIdx).not.toBe(-1);
+      expect(capturedArgs[outputFormatIdx + 1]).toBe("json");
+    });
+
+    it("passes --json flag to Codex bot in sync path", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      const capturedArgs: string[] = [];
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedArgs.push(...args);
+        return "";
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "codex",
+          botConfig: { command: "codex", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(runCli).toHaveBeenCalledOnce();
+      // outputFormat="json" maps to --json for Codex.
+      expect(capturedArgs).toContain("--json");
+    });
+
+    it("does NOT pass --output-format to antigravity bot in sync path", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      const capturedArgs: string[] = [];
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedArgs.push(...args);
+        return "***\nAgy response";
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "antigravity",
+          botConfig: { command: "agy", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(runCli).toHaveBeenCalledOnce();
+      expect(capturedArgs).not.toContain("--output-format");
+    });
+
+    it("captures session ID from structured JSON output in sync Claude path", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      // Claude --output-format json outputs a JSON object with result and session_id.
+      const rawOutput = JSON.stringify({ result: "Here is my answer", session_id: "sync-session-xyz" });
+      const runCli = vi.fn().mockResolvedValue(rawOutput);
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      // Without outputFormat="json" the CLI outputs plain text and
+      // parseClaudeResult falls back to sessionId: null, breaking continuity.
+      expect(db.getSession("100", "claude")).toBe("sync-session-xyz");
+    });
+  });
 });

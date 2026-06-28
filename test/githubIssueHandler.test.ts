@@ -45,8 +45,11 @@ describe("createGithubIssueHandler", () => {
       { db, workerId: "test-worker" },
     );
 
-    expect(runCommand).toHaveBeenCalledOnce();
-    const [binary, args]: [string, string[]] = runCommand.mock.calls[0];
+    const createCall = runCommand.mock.calls.find(([, args]) =>
+      args[0] === "issue" && args[1] === "create"
+    );
+    expect(createCall).toBeDefined();
+    const [binary, args]: [string, string[]] = createCall!;
     expect(binary).toBe("gh");
     expect(args).toContain("issue");
     expect(args).toContain("create");
@@ -84,6 +87,32 @@ describe("createGithubIssueHandler", () => {
     expect(links).toHaveLength(1);
     expect(links[0].issue_number).toBe(99);
     expect(links[0].repository).toBe("owner/repo");
+  });
+
+  it("posts the HTML approval pack to the created GitHub issue", async () => {
+    const runCommand = vi.fn()
+      .mockResolvedValueOnce("https://github.com/owner/repo/issues/77")
+      .mockResolvedValueOnce("");
+    const handler = createGithubIssueHandler({ runCommand });
+
+    const item = db.createWorkItem({
+      kind: "feature", source: "telegram",
+      title: "Add <review pack>", body: "Plan <must be escaped>",
+      created_by: "worker",
+    });
+
+    await handler({ work_item_id: item.id, repository: "owner/repo" }, { db, workerId: "w" });
+
+    const commentCall = runCommand.mock.calls.find(([, args]) =>
+      args[0] === "issue" && args[1] === "comment"
+    );
+    expect(commentCall).toBeDefined();
+    expect(commentCall![1]).toEqual(expect.arrayContaining(["issue", "comment", "77", "--repo", "owner/repo", "--body"]));
+    const body = commentCall![1][commentCall![1].indexOf("--body") + 1];
+    expect(body).toContain("agent-bridge:approval-pack:v1");
+    expect(body).toContain("work-item-");
+    expect(body).toContain("&lt;review pack&gt;");
+    expect(body).not.toContain("<review pack>");
   });
 
   it("transitions the work_item status to 'in_progress' after issue creation", async () => {

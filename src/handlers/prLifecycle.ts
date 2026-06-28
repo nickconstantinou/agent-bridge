@@ -9,6 +9,7 @@
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
 import { resolveGithubOwner } from "../repoRegistry.js";
 import { PermanentJobFailureError } from "../jobExecutor.js";
+import { buildGithubApprovalPackComment, buildPrApprovalPack } from "../approvalHtml.js";
 
 type RunGit = (args: string[], cwd?: string) => string | Promise<string>;
 type RunCommand = (binary: string, args: string[]) => Promise<string>;
@@ -41,6 +42,26 @@ function buildProofCommentBody(headSha: string, verifyOutput: string): string {
     lines.push("", "**Verification output:**", "```", verifyOutput.trim(), "```");
   }
   return lines.join("\n");
+}
+
+async function postPrApprovalPackComment(
+  db: JobHandlerContext["db"],
+  runCommand: RunCommand,
+  workItemId: number,
+  repository: string,
+  prNumber: number,
+): Promise<void> {
+  const pack = buildPrApprovalPack(db, workItemId);
+  if (!pack) return;
+  try {
+    await runCommand("gh", [
+      "pr", "comment", String(prNumber),
+      "--repo", repository,
+      "--body", buildGithubApprovalPackComment(pack),
+    ]);
+  } catch (err) {
+    console.warn("[pr-lifecycle] approval pack comment failed", err);
+  }
 }
 
 function markPrCiPendingAndQueueWatch(
@@ -151,6 +172,7 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
           await runCommand("gh", ["pr", "comment", String(existingLink.pr_number), "--repo", repository, "--body", commentBody]);
           ctx.db.setProofCommentSha(existingLink.id, headSha);
         } catch {}
+        await postPrApprovalPackComment(ctx.db, runCommand, workItemId, repository, existingLink.pr_number);
       }
 
       ctx.db.updateWorkItemStatus(workItemId, "blocked");
@@ -228,6 +250,7 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
         await runCommand("gh", ["pr", "comment", String(prNumber), "--repo", repository, "--body", commentBody]);
         ctx.db.setProofCommentSha(newLink.id, headSha);
       } catch {}
+      await postPrApprovalPackComment(ctx.db, runCommand, workItemId, repository, prNumber);
     }
 
     // Transition item to blocked — awaiting CI watch and then human merge gate

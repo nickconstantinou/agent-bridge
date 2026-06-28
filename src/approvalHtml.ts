@@ -11,6 +11,8 @@ export interface ApprovalHtmlPack {
   html: string;
 }
 
+export const APPROVAL_PACK_COMMENT_MARKER = "<!-- agent-bridge:approval-pack:v1 -->";
+const MAX_GITHUB_COMMENT_CHARS = 60_000;
 const MAX_PRE_CHARS = 18_000;
 
 export function escapeHtml(value: unknown): string {
@@ -233,3 +235,20 @@ export async function sendApprovalHtmlPack(client: any, chatId: number, pack: Ap
   return true;
 }
 
+export function buildGithubApprovalPackComment(pack: ApprovalHtmlPack): string {
+  const body = [
+    APPROVAL_PACK_COMMENT_MARKER,
+    `## ${pack.caption}`,
+    "",
+    `File: \`${pack.filename}\``,
+    "",
+    "```html",
+    pack.html,
+    "```",
+  ].join("\n");
+
+  if (body.length <= MAX_GITHUB_COMMENT_CHARS) return body;
+  const footer = "\n```\n\n[truncated: full pack was sent to Telegram]\n";
+  const head = body.slice(0, MAX_GITHUB_COMMENT_CHARS - footer.length);
+  return `${head}${footer}`;
+}

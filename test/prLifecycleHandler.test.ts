@@ -587,6 +587,35 @@ describe("createPrLifecycleHandler — proof comment", () => {
     expect(commentCall).toBeDefined();
   });
 
+  it("posts the HTML approval pack to the opened PR", async () => {
+    const stubs = makeStubs();
+    stubs.runCommand.mockResolvedValue("https://github.com/owner/repo/pull/71");
+    const item = db.createWorkItem({
+      kind: "refactor", source: "refactor_scan",
+      title: "Extract <module>", body: "Refactor plan <details>",
+      created_by: "worker",
+      repository: "owner/repo",
+    });
+
+    await createPrLifecycleHandler(stubs)(
+      { work_item_id: item.id, branch_name: `agent/work-${item.id}`, repository: "owner/repo" },
+      { db, workerId: "w" },
+    );
+
+    const commentCalls = stubs.runCommand.mock.calls.filter(([, args]: [string, string[]]) =>
+      args[0] === "pr" && args[1] === "comment"
+    );
+    const packCall = commentCalls.find(([, args]: [string, string[]]) =>
+      args.includes("--body") && args[args.indexOf("--body") + 1].includes("agent-bridge:approval-pack:v1")
+    );
+    expect(packCall).toBeDefined();
+    expect(packCall![1]).toEqual(expect.arrayContaining(["pr", "comment", "71", "--repo", "owner/repo", "--body"]));
+    const body = packCall![1][packCall![1].indexOf("--body") + 1];
+    expect(body).toContain("pr-71.html");
+    expect(body).toContain("&lt;module&gt;");
+    expect(body).not.toContain("<module>");
+  });
+
   it("includes verify_output in the proof comment body", async () => {
     const stubs = makeStubs();
     stubs.runCommand
@@ -632,8 +661,15 @@ describe("createPrLifecycleHandler — proof comment", () => {
 
     const firstCommentCalls = stubs.runCommand.mock.calls.filter(([bin, args]: [string, string[]]) =>
       bin === "gh" && args.includes("comment")
-    ).length;
-    expect(firstCommentCalls).toBe(1);
+    );
+    const firstProofComments = firstCommentCalls.filter(([, args]: [string, string[]]) =>
+      args[args.indexOf("--body") + 1].includes("agent-proof")
+    );
+    const firstPackComments = firstCommentCalls.filter(([, args]: [string, string[]]) =>
+      args[args.indexOf("--body") + 1].includes("agent-bridge:approval-pack:v1")
+    );
+    expect(firstProofComments).toHaveLength(1);
+    expect(firstPackComments).toHaveLength(1);
 
     // Second call: same branch → existingLink, same head SHA → skip comment
     stubs.runCommand.mockClear();

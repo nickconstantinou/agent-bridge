@@ -9,7 +9,7 @@
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
 import { resolveGithubOwner } from "../repoRegistry.js";
 import { PermanentJobFailureError } from "../jobExecutor.js";
-import { buildGithubApprovalPackComment, buildPrApprovalPack } from "../approvalHtml.js";
+import { buildGithubPrComment, buildPrApprovalPack } from "../approvalHtml.js";
 
 type RunGit = (args: string[], cwd?: string) => string | Promise<string>;
 type RunCommand = (binary: string, args: string[]) => Promise<string>;
@@ -51,13 +51,12 @@ async function postPrApprovalPackComment(
   repository: string,
   prNumber: number,
 ): Promise<void> {
-  const pack = buildPrApprovalPack(db, workItemId);
-  if (!pack) return;
+  if (!buildPrApprovalPack(db, workItemId)) return;
   try {
     await runCommand("gh", [
       "pr", "comment", String(prNumber),
       "--repo", repository,
-      "--body", buildGithubApprovalPackComment(pack),
+      "--body", buildGithubPrComment(db, workItemId),
     ]);
   } catch (err) {
     console.warn("[pr-lifecycle] approval pack comment failed", err);

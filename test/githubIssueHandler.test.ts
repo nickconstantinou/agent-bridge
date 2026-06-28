@@ -89,7 +89,7 @@ describe("createGithubIssueHandler", () => {
     expect(links[0].repository).toBe("owner/repo");
   });
 
-  it("posts the HTML approval pack to the created GitHub issue", async () => {
+  it("posts a Markdown approval pack comment to the created GitHub issue", async () => {
     const runCommand = vi.fn()
       .mockResolvedValueOnce("https://github.com/owner/repo/issues/77")
       .mockResolvedValueOnce("");
@@ -97,7 +97,7 @@ describe("createGithubIssueHandler", () => {
 
     const item = db.createWorkItem({
       kind: "feature", source: "telegram",
-      title: "Add <review pack>", body: "Plan <must be escaped>",
+      title: "Add review pack", body: "Implementation plan text",
       created_by: "worker",
     });
 
@@ -110,9 +110,10 @@ describe("createGithubIssueHandler", () => {
     expect(commentCall![1]).toEqual(expect.arrayContaining(["issue", "comment", "77", "--repo", "owner/repo", "--body"]));
     const body = commentCall![1][commentCall![1].indexOf("--body") + 1];
     expect(body).toContain("agent-bridge:approval-pack:v1");
-    expect(body).toContain("work-item-");
-    expect(body).toContain("&lt;review pack&gt;");
-    expect(body).not.toContain("<review pack>");
+    expect(body).toContain("Add review pack");
+    expect(body).toContain("Implementation Plan");
+    expect(body).toContain("Implementation plan text");
+    expect(body).not.toContain("<!doctype html>");
   });
 
   it("transitions the work_item status to 'in_progress' after issue creation", async () => {

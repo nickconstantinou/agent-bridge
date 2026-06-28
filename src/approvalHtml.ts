@@ -235,20 +235,105 @@ export async function sendApprovalHtmlPack(client: any, chatId: number, pack: Ap
   return true;
 }
 
-export function buildGithubApprovalPackComment(pack: ApprovalHtmlPack): string {
-  const body = [
-    APPROVAL_PACK_COMMENT_MARKER,
-    `## ${pack.caption}`,
-    "",
-    `File: \`${pack.filename}\``,
-    "",
-    "```html",
-    pack.html,
-    "```",
-  ].join("\n");
+function mdTable(rows: Array<[string, string]>): string {
+  return `| Field | Value |\n|---|---|\n${rows.map(([k, v]) => `| ${k} | ${v || "—"} |`).join("\n")}`;
+}
 
-  if (body.length <= MAX_GITHUB_COMMENT_CHARS) return body;
-  const footer = "\n```\n\n[truncated: full pack was sent to Telegram]\n";
-  const head = body.slice(0, MAX_GITHUB_COMMENT_CHARS - footer.length);
-  return `${head}${footer}`;
+function mdTruncate(text: string, max = MAX_GITHUB_COMMENT_CHARS): string {
+  return text.length > max ? `${text.slice(0, max - 40)}\n\n[truncated — full pack sent to Telegram]` : text;
+}
+
+function planSectionLabel(item: WorkItem): string {
+  if (item.kind === "feature") return "Implementation Plan";
+  if (item.source === "defect_scan") return "Defect Findings";
+  if (item.source === "refactor_scan") return "Refactor Findings";
+  if (item.source === "github") return "Issue Description";
+  return "Plan / Context";
+}
+
+export function buildGithubWorkItemComment(db: BridgeDb, item: WorkItem): string {
+  const jobs = getRows<WorkJob>(db, "SELECT * FROM work_jobs WHERE work_item_id = ? ORDER BY id DESC LIMIT 10", item.id);
+  const links = getRows<GithubLink>(db, "SELECT * FROM github_links WHERE work_item_id = ? ORDER BY id ASC", item.id);
+  const label = itemLabel(item);
+
+  const meta = mdTable([
+    ["Kind", item.kind],
+    ["Source", item.source],
+    ["Repository", item.repository ?? ""],
+    ["Status", item.status],
+    ["Priority", item.priority ?? "normal"],
+  ]);
+
+  const planLabel = planSectionLabel(item);
+  const planBody = item.body?.trim() ? `### ${planLabel}\n\n${item.body.trim()}` : "";
+
+  const jobRows = jobs.map(j => `| ${j.id} | ${j.task_type} | ${j.status} | ${j.bot ?? "—"} |`).join("\n");
+  const jobsSection = jobs.length > 0
+    ? `### Linked Jobs\n\n| ID | Type | Status | Bot |\n|---|---|---|---|\n${jobRows}`
+    : "";
+
+  const linkRows = links.map(l => `| ${l.repository} | ${l.issue_number ?? "—"} | ${l.pr_number ?? "—"} | ${l.branch_name ?? "—"} |`).join("\n");
+  const linksSection = links.length > 0
+    ? `### GitHub Links\n\n| Repo | Issue | PR | Branch |\n|---|---|---|---|\n${linkRows}`
+    : "";
+
+  const parts = [
+    APPROVAL_PACK_COMMENT_MARKER,
+    `## ${label} #${item.id}: ${item.title}`,
+    "",
+    meta,
+    "",
+    planBody,
+    "",
+    jobsSection,
+    "",
+    linksSection,
+    "",
+    "---",
+    "*Pending approval via Telegram.*",
+  ].filter(Boolean).join("\n");
+
+  return mdTruncate(parts);
+}
+
+export function buildGithubPrComment(db: BridgeDb, workItemId: number): string {
+  const item = db.getWorkItem(workItemId);
+  if (!item) return `${APPROVAL_PACK_COMMENT_MARKER}\n\n*Work item #${workItemId} not found.*`;
+
+  const approval = db.raw.prepare(
+    "SELECT * FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr' AND status = 'pending' ORDER BY id DESC LIMIT 1",
+  ).get(workItemId) as Approval | undefined;
+  const link = db.raw.prepare(
+    "SELECT * FROM github_links WHERE work_item_id = ? AND pr_number IS NOT NULL ORDER BY id DESC LIMIT 1",
+  ).get(workItemId) as GithubLink | undefined;
+  const payload = parseJson(approval?.payload_json) as Record<string, unknown> | null;
+
+  const meta = mdTable([
+    ["Work item", `#${item.id}`],
+    ["Kind", item.kind],
+    ["Repository", link?.repository ?? item.repository ?? ""],
+    ["PR number", String(link?.pr_number ?? payload?.pr_number ?? "")],
+    ["PR URL", String(payload?.pr_url ?? "")],
+    ["Branch", String(link?.branch_name ?? payload?.branch_name ?? "")],
+    ["Head SHA", String(payload?.head_sha ?? link?.commit_sha ?? "")],
+  ]);
+
+  const parts = [
+    APPROVAL_PACK_COMMENT_MARKER,
+    `## PR Approval — Work Item #${item.id}: ${item.title}`,
+    "",
+    meta,
+    "",
+    item.body?.trim() ? `### Implementation Plan\n\n${item.body.trim()}` : "",
+    "",
+    "---",
+    "*Merge or close via Telegram bot.*",
+  ].filter(Boolean).join("\n");
+
+  return mdTruncate(parts);
+}
+
+/** @deprecated Use buildGithubWorkItemComment or buildGithubPrComment instead. */
+export function buildGithubApprovalPackComment(pack: ApprovalHtmlPack): string {
+  return `${APPROVAL_PACK_COMMENT_MARKER}\n\n## ${pack.caption}\n\n*Full approval pack sent to Telegram.*`;
 }

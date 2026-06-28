@@ -7,7 +7,7 @@
 
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
 import { resolveGithubOwner } from "../repoRegistry.js";
-import { buildGithubApprovalPackComment, buildWorkItemApprovalPack } from "../approvalHtml.js";
+import { buildGithubWorkItemComment } from "../approvalHtml.js";
 
 // Accepts an args array — no shell involved, no injection surface.
 type RunCommand = (binary: string, args: string[]) => Promise<string>;
@@ -59,9 +59,9 @@ export function createGithubIssueHandler(deps: GithubIssueHandlerDeps): JobHandl
 
     const issueNumber = parseIssueNumber(url);
     if (issueNumber !== null) {
+      const freshItem = ctx.db.getWorkItem(workItemId) ?? item;
       ctx.db.linkGithubIssue({ work_item_id: workItemId, repository, issue_number: issueNumber });
-      const pack = buildWorkItemApprovalPack(ctx.db, ctx.db.getWorkItem(workItemId) ?? item);
-      const comment = buildGithubApprovalPackComment(pack);
+      const comment = buildGithubWorkItemComment(ctx.db, freshItem);
       try {
         await runCommand("gh", ["issue", "comment", String(issueNumber), "--repo", repository, "--body", comment]);
       } catch (err) {

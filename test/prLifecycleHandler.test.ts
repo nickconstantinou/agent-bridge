@@ -587,12 +587,12 @@ describe("createPrLifecycleHandler — proof comment", () => {
     expect(commentCall).toBeDefined();
   });
 
-  it("posts the HTML approval pack to the opened PR", async () => {
+  it("posts a Markdown approval pack comment to the opened PR", async () => {
     const stubs = makeStubs();
     stubs.runCommand.mockResolvedValue("https://github.com/owner/repo/pull/71");
     const item = db.createWorkItem({
       kind: "refactor", source: "refactor_scan",
-      title: "Extract <module>", body: "Refactor plan <details>",
+      title: "Extract module", body: "Refactor plan details",
       created_by: "worker",
       repository: "owner/repo",
     });
@@ -611,9 +611,10 @@ describe("createPrLifecycleHandler — proof comment", () => {
     expect(packCall).toBeDefined();
     expect(packCall![1]).toEqual(expect.arrayContaining(["pr", "comment", "71", "--repo", "owner/repo", "--body"]));
     const body = packCall![1][packCall![1].indexOf("--body") + 1];
-    expect(body).toContain("pr-71.html");
-    expect(body).toContain("&lt;module&gt;");
-    expect(body).not.toContain("<module>");
+    expect(body).toContain("agent-bridge:approval-pack:v1");
+    expect(body).toContain("Extract module");
+    expect(body).toContain("Refactor plan details");
+    expect(body).not.toContain("<!doctype html>");
   });
 
   it("includes verify_output in the proof comment body", async () => {

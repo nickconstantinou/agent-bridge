@@ -68,6 +68,26 @@ The failing tests have already been committed. Your task:
 Do not modify test files. Do not commit — just stage the production files.`;
 }
 
+function buildCiFixPrompt(title: string, body: string | null, ciSummary: string, ciLog: string): string {
+  return `You are repairing a failing CI check on an existing agent PR branch.
+
+Title: ${title}
+${body ? `Details: ${body}\n` : ""}
+CI failure summary:
+${ciSummary || "(no summary provided)"}
+
+Failed CI log excerpt:
+${ciLog || "(no log provided)"}
+
+Your task:
+1. Diagnose the failing CI check from the log.
+2. Make the smallest code or test update required to make CI pass.
+3. Run the relevant tests locally, then the full verification command if practical.
+4. Stage all modified files with: git add <files>
+
+Do not open or merge a PR. Do not commit — just stage the fix.`;
+}
+
 export function createTddImplementationHandler(deps: TddImplementationDeps): JobHandler {
   const { runCli, runGit, runTests, command = "claude", cliExtraArgs = [], prepareWorkspace, cleanupWorkspace } = deps;
 
@@ -114,6 +134,42 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
         await Promise.resolve(runGit(["checkout", branchName], repoPath)).catch(async () => {
           await Promise.resolve(runGit(["checkout", "-b", branchName, `origin/${branchName}`], repoPath));
         });
+        const ciSummary = typeof input.ci_failure_summary === "string" ? input.ci_failure_summary : "";
+        const ciLog = typeof input.ci_failure_log === "string" ? input.ci_failure_log : "";
+        const ciPrompt = buildCiFixPrompt(item.title, item.body, ciSummary, ciLog);
+        await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, ciPrompt], repoPath);
+
+        await runGit(["add", "-A"], repoPath);
+        const staged = await readStaged();
+        if (staged.length === 0) {
+          throw new Error("CI fix staged no files");
+        }
+
+        const verifyRun = await runTests(repoPath);
+        if (!verifyRun.ok) {
+          throw new Error(`Verification failed after CI fix:\n${verifyRun.output}`);
+        }
+
+        await runGit(["commit", "-m", `fix: repair CI for ${item.title}`], repoPath);
+        await runGit(["push", "origin", branchName], repoPath);
+        const headSha = (await runGit(["rev-parse", "HEAD"], repoPath)).trim();
+
+        ctx.db.updateWorkItemStatus(workItemId, "in_progress");
+        const repository = typeof input.repository === "string" ? input.repository : item.repository;
+        if (repository) {
+          const link = ctx.db.raw
+            .prepare("SELECT id FROM github_links WHERE repository = ? AND branch_name = ?")
+            .get(repository, branchName) as { id: number } | undefined;
+          if (link) ctx.db.updatePrState(link.id, "draft");
+        }
+        ctx.db.createWorkJob({
+          task_type: "pr_watch",
+          idempotency_key: `pr_watch:ci_fix:${workItemId}:${headSha}`,
+          max_attempts: 1,
+        });
+
+        const summary = `CI fix pushed on **${branchName}** (${headSha.slice(0, 7)}); PR watch queued.`;
+        return { summary, branchName, verifyOutput: verifyRun.output, headSha };
       } else {
         await runGit(["checkout", "-b", branchName], repoPath);
       }

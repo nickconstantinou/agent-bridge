@@ -111,7 +111,7 @@ export function openDb(dbPath: string): BridgeDb {
     CREATE TABLE IF NOT EXISTS work_jobs (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
       work_item_id     INTEGER,
-      task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','orchestrated_task','pr_lifecycle')),
+      task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','orchestrated_task','pr_lifecycle','pr_watch','pr_refresh')),
       status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','leased','running','waiting_approval','completed','failed','cancelled')),
       bot              TEXT CHECK (bot IN ('codex','antigravity','claude')),
       lease_owner      TEXT,
@@ -211,9 +211,12 @@ export function openDb(dbPath: string): BridgeDb {
   // auto-rewriting FK references in other tables (e.g. approvals.job_id) during the
   // rename, which would otherwise cause the DROP TABLE to fail.
   try {
-    const hasCurrentTaskTypes = (raw.prepare(
+    const workJobsSql = (raw.prepare(
       `SELECT sql FROM sqlite_master WHERE type='table' AND name='work_jobs'`
-    ).get() as { sql: string } | undefined)?.sql?.includes("'orchestrated_task'");
+    ).get() as { sql: string } | undefined)?.sql ?? "";
+    const hasCurrentTaskTypes = workJobsSql.includes("'orchestrated_task'")
+      && workJobsSql.includes("'pr_watch'")
+      && workJobsSql.includes("'pr_refresh'");
     if (!hasCurrentTaskTypes) {
       const existingColumns = (raw.prepare(`PRAGMA table_info(work_jobs)`).all() as Array<{ name: string }>)
         .map(c => c.name);

@@ -13,6 +13,10 @@ function makeDb() {
 
 function makeRunCommand(responses: Record<string, string> = {}) {
   return vi.fn().mockImplementation((_binary: string, args: string[]) => {
+    if (args[0] === "run" && args[1] === "view") {
+      const runId = args[2];
+      return Promise.resolve(responses[`run:${runId}`] ?? "failed log output");
+    }
     const prNum = args[args.indexOf("view") + 1];
     const key = String(prNum);
     if (key in responses) return Promise.resolve(responses[key]);
@@ -30,10 +34,11 @@ function prViewPayload(opts: {
   failing?: boolean;
   passing?: boolean;
   updatedAt?: string;
+  detailsUrl?: string;
 } = {}) {
-  const { headRefOid = "abc123", failing = false, passing = false, updatedAt = new Date().toISOString() } = opts;
+  const { headRefOid = "abc123", failing = false, passing = false, updatedAt = new Date().toISOString(), detailsUrl } = opts;
   const rollup = failing
-    ? [{ __typename: "CheckRun", conclusion: "FAILURE", name: "ci/test" }]
+    ? [{ __typename: "CheckRun", conclusion: "FAILURE", name: "ci/test", detailsUrl }]
     : passing
     ? [{ __typename: "CheckRun", conclusion: "SUCCESS", name: "ci/test" }]
     : [];
@@ -110,6 +115,50 @@ describe("createPrWatchHandler", () => {
     ).all(`ci_fix:owner/repo:8:sha111`) as any[];
     expect(jobs).toHaveLength(1);
     expect(jobs[0].task_type).toBe("tdd_implementation");
+  });
+
+  it("passes failed GitHub Actions logs into the CI fix job", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 18, branch_name: "agent/work-18" });
+
+    const detailsUrl = "https://github.com/owner/repo/actions/runs/123456789/job/987654321";
+    const runCommand = makeRunCommand({
+      "18": prViewPayload({ failing: true, headRefOid: "sha-log", detailsUrl }),
+      "run:123456789": "npm test failed\nexpected true to be false",
+    });
+    await createPrWatchHandler({ runCommand })({}, { db, workerId: "w" });
+
+    expect(runCommand).toHaveBeenCalledWith("gh", [
+      "run", "view", "123456789",
+      "--repo", "owner/repo",
+      "--log-failed",
+    ]);
+    const job = db.raw.prepare("SELECT * FROM work_jobs WHERE idempotency_key = ?").get("ci_fix:owner/repo:18:sha-log") as any;
+    const input = JSON.parse(job.input_json);
+    expect(input.ci_failure_log).toContain("expected true to be false");
+    expect(input.ci_failure_summary).toContain("ci/test");
+  });
+
+  it("marks PR ci_failed_needs_human when the one fix job for the head already failed", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 19, branch_name: "agent/work-19" });
+    const key = "ci_fix:owner/repo:19:sha-repeat";
+    const job = db.createWorkJob({
+      task_type: "tdd_implementation",
+      idempotency_key: key,
+      work_item_id: item.id,
+      input_json: { ci_fix: true },
+    });
+    db.raw.prepare("UPDATE work_jobs SET status='failed', error='could not fix' WHERE id=?").run(job.id);
+
+    const runCommand = makeRunCommand({ "19": prViewPayload({ failing: true, headRefOid: "sha-repeat" }) });
+    const result = await createPrWatchHandler({ runCommand })({}, { db, workerId: "w" });
+
+    const updated = db.raw.prepare("SELECT pr_state FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(updated.pr_state).toBe("ci_failed_needs_human");
+    expect(result.summary).toMatch(/needs human/i);
+    const jobs = db.raw.prepare("SELECT * FROM work_jobs WHERE idempotency_key = ?").all(key) as any[];
+    expect(jobs).toHaveLength(1);
   });
 
   it("does not enqueue a duplicate fix job for the same head SHA", async () => {

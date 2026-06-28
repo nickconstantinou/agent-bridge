@@ -23,7 +23,7 @@ interface PrWatchDeps {
 
 interface GhPrView {
   headRefOid: string;
-  statusCheckRollup: Array<{ __typename: string; conclusion: string; name: string }>;
+  statusCheckRollup: Array<{ __typename: string; conclusion: string; name: string; detailsUrl?: string }>;
   mergeable: string;
   updatedAt: string;
 }
@@ -34,6 +34,38 @@ function isRollupFailing(rollup: GhPrView["statusCheckRollup"]): boolean {
 
 function isRollupPassing(rollup: GhPrView["statusCheckRollup"]): boolean {
   return rollup.length > 0 && rollup.every(c => c.conclusion === "SUCCESS");
+}
+
+function failedChecks(rollup: GhPrView["statusCheckRollup"]): GhPrView["statusCheckRollup"] {
+  return rollup.filter(c => c.conclusion === "FAILURE" || c.conclusion === "TIMED_OUT");
+}
+
+function extractActionsRunId(detailsUrl: string | undefined): string | null {
+  const match = detailsUrl?.match(/\/actions\/runs\/(\d+)/);
+  return match ? match[1] : null;
+}
+
+async function collectFailureLog(
+  runCommand: RunCommand,
+  repository: string,
+  rollup: GhPrView["statusCheckRollup"],
+): Promise<string> {
+  const logs: string[] = [];
+  for (const check of failedChecks(rollup)) {
+    const runId = extractActionsRunId(check.detailsUrl);
+    if (!runId) continue;
+    try {
+      const output = await runCommand("gh", [
+        "run", "view", runId,
+        "--repo", repository,
+        "--log-failed",
+      ]);
+      if (output.trim()) logs.push(`## ${check.name}\n${output.trim()}`);
+    } catch {
+      // Log capture is diagnostic only; CI failure handling still proceeds.
+    }
+  }
+  return logs.join("\n\n").slice(-12000);
 }
 
 export function createPrWatchHandler(deps: PrWatchDeps): JobHandler {
@@ -73,9 +105,22 @@ export function createPrWatchHandler(deps: PrWatchDeps): JobHandler {
       }
 
       if (isRollupFailing(statusCheckRollup)) {
-        ctx.db.updatePrState(link.id, "ci_failed");
         const fixKey = `ci_fix:${link.repository}:${link.pr_number}:${headRefOid}`;
-        ctx.db.createWorkJob({
+        const existingFix = ctx.db.raw
+          .prepare("SELECT * FROM work_jobs WHERE idempotency_key = ?")
+          .get(fixKey) as { status: string; error?: string | null } | undefined;
+
+        if (existingFix && (existingFix.status === "failed" || existingFix.status === "completed")) {
+          ctx.db.updatePrState(link.id, "ci_failed_needs_human");
+          lines.push(`#${link.pr_number} (${link.repository}): CI still failing after auto-fix attempt; needs human review`);
+          continue;
+        }
+
+        ctx.db.updatePrState(link.id, "ci_failed");
+        const failures = failedChecks(statusCheckRollup);
+        const ciFailureSummary = failures.map(c => `${c.name}: ${c.conclusion}`).join("\n");
+        const ciFailureLog = await collectFailureLog(runCommand, link.repository, statusCheckRollup);
+        const fixJob = ctx.db.createWorkJob({
           task_type: "tdd_implementation",
           idempotency_key: fixKey,
           work_item_id: link.work_item_id,
@@ -84,10 +129,17 @@ export function createPrWatchHandler(deps: PrWatchDeps): JobHandler {
             repository: link.repository,
             branch_name: link.branch_name,
             ci_fix: true,
+            ci_failure_summary: ciFailureSummary,
+            ...(ciFailureLog ? { ci_failure_log: ciFailureLog } : {}),
           },
           max_attempts: 1,
         });
-        lines.push(`#${link.pr_number} (${link.repository}): CI failing, fix job enqueued`);
+        if (fixJob.status === "failed" || fixJob.status === "completed") {
+          ctx.db.updatePrState(link.id, "ci_failed_needs_human");
+          lines.push(`#${link.pr_number} (${link.repository}): CI still failing after auto-fix attempt; needs human review`);
+        } else {
+          lines.push(`#${link.pr_number} (${link.repository}): CI failing, fix job #${fixJob.id} enqueued`);
+        }
       } else if (isRollupPassing(statusCheckRollup)) {
         ctx.db.updatePrState(link.id, "ready_to_merge");
 

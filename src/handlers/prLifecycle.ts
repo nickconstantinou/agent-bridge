@@ -42,6 +42,30 @@ function buildProofCommentBody(headSha: string, verifyOutput: string): string {
   return lines.join("\n");
 }
 
+async function reconcileOpenPrStates(
+  db: JobHandlerContext["db"],
+  runCommand: RunCommand,
+  repository: string,
+): Promise<void> {
+  const openPrs = db.listOpenAgentPrs(repository);
+  for (const link of openPrs) {
+    if (link.pr_number == null) continue;
+    try {
+      const output = await runCommand("gh", [
+        "pr", "view", String(link.pr_number),
+        "--repo", repository,
+        "--json", "state",
+      ]);
+      const state = String((JSON.parse(output) as { state?: string }).state || "").toLowerCase();
+      if (state === "closed" || state === "merged") {
+        db.updatePrState(link.id, state);
+      }
+    } catch {
+      // Reconciliation is best-effort; leave local state intact on gh failures.
+    }
+  }
+}
+
 export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
   const { runGit, runCommand, cleanupWorkspace, maxOpenPrs = 3, maxDailyPrs = 3 } = deps;
 
@@ -148,6 +172,7 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
     }
 
     // ── PR caps — only applies to new PR creation ────────────────────────────
+    await reconcileOpenPrStates(ctx.db, runCommand, repository);
     const openPrs = ctx.db.listOpenAgentPrs(repository);
     if (openPrs.length >= maxOpenPrs) {
       const list = openPrs.map(l => `#${l.pr_number}`).join(", ");

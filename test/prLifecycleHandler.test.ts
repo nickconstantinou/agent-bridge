@@ -366,6 +366,35 @@ describe("createPrLifecycleHandler — PR caps", () => {
     ).rejects.toThrow(PermanentJobFailureError);
   });
 
+  it("reconciles closed or merged GitHub PRs before enforcing open PR cap", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Cap test", created_by: "worker" });
+    const a = db.createWorkItem({ kind: "defect", source: "telegram", title: "A", created_by: "worker" });
+    const b = db.createWorkItem({ kind: "defect", source: "telegram", title: "B", created_by: "worker" });
+    seedOpenLink(a.id, 10);
+    seedOpenLink(b.id, 11);
+
+    const stubs = makeStubs();
+    stubs.runCommand = vi.fn().mockImplementation((_binary: string, args: string[]) => {
+      if (args[0] === "pr" && args[1] === "view" && args[2] === "10") return Promise.resolve(JSON.stringify({ state: "CLOSED" }));
+      if (args[0] === "pr" && args[1] === "view" && args[2] === "11") return Promise.resolve(JSON.stringify({ state: "MERGED" }));
+      if (args[0] === "pr" && args[1] === "create") return Promise.resolve("https://github.com/owner/repo/pull/12");
+      return Promise.resolve("");
+    });
+
+    await expect(
+      createPrLifecycleHandler({ ...stubs, maxOpenPrs: 1 })(
+        { work_item_id: item.id, branch_name: `agent/work-${item.id}`, repository: "owner/repo" },
+        { db, workerId: "w" },
+      )
+    ).resolves.toBeDefined();
+
+    const states = db.raw.prepare("SELECT pr_number, pr_state FROM github_links WHERE pr_number IN (10, 11)").all() as any[];
+    expect(states).toEqual(expect.arrayContaining([
+      expect.objectContaining({ pr_number: 10, pr_state: "closed" }),
+      expect.objectContaining({ pr_number: 11, pr_state: "merged" }),
+    ]));
+  });
+
   it("error message lists the blocking open PRs", async () => {
     const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Cap test", created_by: "worker" });
     const a = db.createWorkItem({ kind: "defect", source: "telegram", title: "A", created_by: "worker" });

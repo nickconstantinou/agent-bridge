@@ -102,6 +102,7 @@ describe("createTddImplementationHandler", () => {
 
   it("checks out existing branch if ci_fix is true", async () => {
     const stubs = makeStubs();
+    stubs.runTests = vi.fn().mockResolvedValue({ ok: true, output: "Tests passed." });
     const item = db.createWorkItem({
       kind: "defect", source: "telegram",
       title: "Fix timeout bug", created_by: "worker",
@@ -123,6 +124,43 @@ describe("createTddImplementationHandler", () => {
     );
     expect(checkoutCall).toBeDefined();
     expect(checkoutCall![0][1]).toBe(`agent/work-${item.id}`);
+  });
+
+  it("uses CI failure logs for ci_fix and skips the normal red-test pass", async () => {
+    const stubs = makeStubs();
+    stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
+      if (args[0] === "diff" && args.includes("--cached")) return "src/fix.ts\n";
+      if (args[0] === "rev-parse") return "newheadsha\n";
+      return "";
+    });
+    stubs.runTests = vi.fn().mockResolvedValue({ ok: true, output: "Tests passed." });
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Fix timeout bug", repository: "owner/repo", created_by: "worker",
+    });
+
+    await createTddImplementationHandler(stubs)(
+      {
+        work_item_id: item.id,
+        repository_path: "/tmp/repo",
+        ci_fix: true,
+        ci_failure_log: "src/foo.test.ts failed with expected 1 got 2",
+        ci_failure_summary: "Test & Typecheck failed",
+      },
+      { db, workerId: "w" },
+    );
+
+    expect(stubs.runCli).toHaveBeenCalledTimes(1);
+    const prompt = stubs.runCli.mock.calls[0][1].at(-1) as string;
+    expect(prompt).toContain("Test & Typecheck failed");
+    expect(prompt).toContain("expected 1 got 2");
+    expect(prompt).not.toMatch(/Step 1 of 2|Write failing tests only/);
+    expect(stubs.runTests).toHaveBeenCalledTimes(1);
+    expect(stubs.runGit).toHaveBeenCalledWith(["push", "origin", `agent/work-${item.id}`], "/tmp/repo");
+
+    const watchJob = db.raw.prepare("SELECT * FROM work_jobs WHERE task_type='pr_watch'").get() as any;
+    expect(watchJob).toBeDefined();
+    expect(watchJob.idempotency_key).toContain("newheadsha");
   });
 
   it("calls runCli twice — once for red tests, once for implementation", async () => {

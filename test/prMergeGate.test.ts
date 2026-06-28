@@ -90,6 +90,7 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
       branch_name: "agent/work-1",
       commit_sha: "abc123"
     });
+    db.updatePrState(link.id, "ready_to_merge");
     const approval = db.createApproval({
       approval_type: "merge_pr",
       requested_by: "agent",
@@ -103,9 +104,34 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
     return { item, approval, link };
   }
 
+  it("blocks merge when local PR state has not been marked ready_to_merge by pr_watch", async () => {
+    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+    const { item, approval, link } = makeApprovedItem({ head_sha: "abc123" });
+    db.updatePrState(link.id, "ci_pending");
+
+    const runCommand = makeGhStub({
+      headRefOid: "abc123",
+      statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
+    });
+    const answerCbq = vi.fn().mockResolvedValue(undefined);
+    const editMessage = vi.fn().mockResolvedValue(undefined);
+
+    await handlePrMergeCallback(
+      { type: "wi_mrgpr", id: item.id },
+      { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
+    );
+
+    const mergeCall = runCommand.mock.calls.find(([, args]) => args.includes("merge"));
+    expect(mergeCall).toBeUndefined();
+    expect(editMessage).toHaveBeenCalledWith(expect.stringMatching(/pr_watch|ready_to_merge|CI watch/i), expect.anything());
+    const row = db.raw.prepare("SELECT * FROM approvals WHERE id = ?").get(approval.id) as any;
+    expect(row.status).toBe("pending");
+  });
+
   it("resolves the merge_pr approval and merges when head SHA matches and checks pass", async () => {
     const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
-    const { item, approval } = makeApprovedItem({ head_sha: "abc123" });
+    const { item, approval, link } = makeApprovedItem({ head_sha: "abc123" });
+    db.updatePrState(link.id, "ready_to_merge");
 
     const runCommand = makeGhStub({
       headRefOid: "abc123",
@@ -130,7 +156,8 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
 
   it("marks draft PRs as ready before merging", async () => {
     const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
-    const { item, approval } = makeApprovedItem({ head_sha: "abc123" });
+    const { item, approval, link } = makeApprovedItem({ head_sha: "abc123" });
+    db.updatePrState(link.id, "ready_to_merge");
 
     const runCommand = vi.fn(async (_binary: string, args: string[]) => {
       if (args.includes("view")) {

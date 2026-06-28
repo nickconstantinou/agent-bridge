@@ -42,6 +42,27 @@ function buildProofCommentBody(headSha: string, verifyOutput: string): string {
   return lines.join("\n");
 }
 
+function markPrCiPendingAndQueueWatch(
+  db: JobHandlerContext["db"],
+  linkId: number,
+  prNumber: number | null,
+  headSha: string,
+): void {
+  db.raw.prepare(
+    `UPDATE github_links
+     SET pr_state = 'ci_pending', commit_sha = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  ).run(headSha, linkId);
+
+  if (prNumber != null && headSha) {
+    db.createWorkJob({
+      task_type: "pr_watch",
+      idempotency_key: `pr_watch:pr:${prNumber}:${headSha}`,
+      max_attempts: 1,
+    });
+  }
+}
+
 async function reconcileOpenPrStates(
   db: JobHandlerContext["db"],
   runCommand: RunCommand,
@@ -121,38 +142,7 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
 
     if (existingLink) {
       const existingPrUrl = `https://github.com/${repository}/pull/${existingLink.pr_number}`;
-
-      // Refresh head_sha in any pending merge_pr approval for this work item
-      const pendingApproval = ctx.db.raw
-        .prepare(
-          "SELECT id, payload_json FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr' AND status = 'pending'"
-        )
-        .get(workItemId) as { id: number; payload_json: string } | undefined;
-
-      if (pendingApproval) {
-        const payload = JSON.parse(pendingApproval.payload_json);
-        payload.head_sha = headSha;
-        ctx.db.raw
-          .prepare("UPDATE approvals SET payload_json = ? WHERE id = ?")
-          .run(JSON.stringify(payload), pendingApproval.id);
-      } else {
-        // Create missing merge_pr approval record so user is not stuck on retry/refresh
-        ctx.db.createApproval({
-          approval_type: "merge_pr",
-          requested_by: "agent",
-          work_item_id: workItemId,
-          payload: {
-            pr_url: existingPrUrl,
-            pr_number: existingLink.pr_number,
-            branch_name: branchName,
-            repository,
-            ...(headSha ? { head_sha: headSha } : {}),
-            ...(commit_subjects ? { commit_subjects } : {}),
-            ...(files_summary ? { files_summary } : {}),
-            ...(verify_tail ? { verify_tail } : {}),
-          },
-        });
-      }
+      markPrCiPendingAndQueueWatch(ctx.db, existingLink.id, existingLink.pr_number, headSha);
 
       // Post a new proof comment only if the head SHA has changed (idempotent)
       if (existingLink.proof_comment_sha !== headSha && existingLink.pr_number !== null) {
@@ -167,7 +157,7 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
       ctx.db.updateWorkItemStatus(workItemId, "blocked");
       if (workspaceDir && cleanupWorkspace) cleanupWorkspace(workspaceDir);
 
-      const summary = `Existing PR refreshed with latest head (${headSha.slice(0, 7)}): ${existingPrUrl}\n\nUse /approvals to merge or close.`;
+      const summary = `Existing PR refreshed with latest head (${headSha.slice(0, 7)}): ${existingPrUrl}\n\nCI watch queued; merge approval will be created after GitHub checks pass.`;
       return { summary, prUrl: existingPrUrl };
     }
 
@@ -232,7 +222,9 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
         repository,
         pr_number: prNumber,
         branch_name: branchName,
+        commit_sha: headSha,
       });
+      markPrCiPendingAndQueueWatch(ctx.db, newLink.id, prNumber, headSha);
       const verifyText = typeof input.verify_output === "string" ? input.verify_output.slice(-500) : "";
       const commentBody = buildProofCommentBody(headSha, verifyText);
       try {
@@ -241,30 +233,13 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
       } catch {}
     }
 
-    // Create merge_pr approval record
-    ctx.db.createApproval({
-      approval_type: "merge_pr",
-      requested_by: "agent",
-      work_item_id: workItemId,
-      payload: {
-        pr_url: prUrl,
-        pr_number: prNumber,
-        branch_name: branchName,
-        repository,
-        ...(headSha ? { head_sha: headSha } : {}),
-        ...(commit_subjects ? { commit_subjects } : {}),
-        ...(files_summary ? { files_summary } : {}),
-        ...(verify_tail ? { verify_tail } : {}),
-      },
-    });
-
-    // Transition item to blocked — awaiting human merge gate
+    // Transition item to blocked — awaiting CI watch and then human merge gate
     ctx.db.updateWorkItemStatus(workItemId, "blocked");
 
     // Branch is on the remote — the per-job workspace has served its purpose
     if (workspaceDir && cleanupWorkspace) cleanupWorkspace(workspaceDir);
 
-    const summary = `Draft PR opened: ${prUrl}\n\nUse the inline keyboard or /approvals to merge or close.`;
+    const summary = `Draft PR opened: ${prUrl}\n\nCI watch queued; merge approval will be created after GitHub checks pass.`;
     return { summary, prUrl };
   };
 }

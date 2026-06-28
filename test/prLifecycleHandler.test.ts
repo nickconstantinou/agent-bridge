@@ -160,7 +160,7 @@ describe("createPrLifecycleHandler", () => {
     expect(db.getWorkItem(item.id)!.status).toBe("blocked");
   });
 
-  it("creates a merge_pr approval record", async () => {
+  it("does not create a merge_pr approval before GitHub CI passes", async () => {
     const stubs = makeStubs();
     stubs.runCommand.mockResolvedValue("https://github.com/owner/repo/pull/3");
 
@@ -177,11 +177,10 @@ describe("createPrLifecycleHandler", () => {
     const approvals = db.raw.prepare(
       "SELECT * FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr'"
     ).all(item.id) as any[];
-    expect(approvals).toHaveLength(1);
-    expect(approvals[0].status).toBe("pending");
+    expect(approvals).toHaveLength(0);
   });
 
-  it("captures the branch head SHA in the merge_pr approval payload", async () => {
+  it("marks the PR ci_pending and queues a head-specific pr_watch job", async () => {
     const stubs = makeStubs();
     stubs.runGit.mockImplementation((args: string[]) => {
       if (args[0] === "rev-parse") return "abc123def456\n";
@@ -199,10 +198,16 @@ describe("createPrLifecycleHandler", () => {
       { db, workerId: "w" },
     );
 
-    const approval = db.raw.prepare(
-      "SELECT * FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr'"
+    const link = db.raw.prepare(
+      "SELECT * FROM github_links WHERE work_item_id = ? AND pr_number = 9"
     ).get(item.id) as any;
-    expect(JSON.parse(approval.payload_json).head_sha).toBe("abc123def456");
+    expect(link.pr_state).toBe("ci_pending");
+    expect(link.commit_sha).toBe("abc123def456");
+
+    const watchJob = db.raw.prepare(
+      "SELECT * FROM work_jobs WHERE task_type = 'pr_watch' AND idempotency_key = ?"
+    ).get("pr_watch:pr:9:abc123def456") as any;
+    expect(watchJob).toBeDefined();
   });
 
   it("cleans up the workspace after the PR is opened", async () => {
@@ -272,12 +277,6 @@ describe("createPrLifecycleHandler — idempotent retries", () => {
       work_item_id: item.id, repository: "owner/repo",
       pr_number: 3, branch_name: `agent/work-${item.id}`,
     });
-    // Pending approval from the first attempt
-    db.createApproval({
-      approval_type: "merge_pr", requested_by: "agent", work_item_id: item.id,
-      payload: { pr_number: 3, repository: "owner/repo", head_sha: "oldsha111" },
-    });
-
     const result = await createPrLifecycleHandler(stubs)(
       {
         work_item_id: item.id, branch_name: `agent/work-${item.id}`,
@@ -292,12 +291,14 @@ describe("createPrLifecycleHandler — idempotent retries", () => {
     // Branch still pushed
     const pushCall = stubs.runGit.mock.calls.find(([args]: [string[]]) => args[0] === "push");
     expect(pushCall).toBeDefined();
-    // Approval head_sha refreshed to the new head
-    const appr = db.raw.prepare(
+    // No merge approval is created/refreshed until pr_watch observes green CI
+    const approvals = db.raw.prepare(
       "SELECT payload_json FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr' AND status = 'pending'"
     ).all(item.id) as any[];
-    expect(appr).toHaveLength(1); // no duplicate approvals
-    expect(JSON.parse(appr[0].payload_json).head_sha).toBe("newsha999");
+    expect(approvals).toHaveLength(0);
+    const link = db.raw.prepare("SELECT * FROM github_links WHERE work_item_id = ?").get(item.id) as any;
+    expect(link.pr_state).toBe("ci_pending");
+    expect(link.commit_sha).toBe("newsha999");
     expect(result.summary).toMatch(/refreshed|updated|existing/i);
   });
 
@@ -323,11 +324,11 @@ describe("createPrLifecycleHandler — idempotent retries", () => {
       "SELECT * FROM github_links WHERE repository = 'owner/repo' AND pr_number = 7"
     ).get() as any;
     expect(link).toBeDefined();
-    // Approval exists and job completes rather than failing
+    // Merge approval is deferred until CI passes
     const appr = db.raw.prepare(
       "SELECT * FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr' AND status = 'pending'"
     ).all(item.id) as any[];
-    expect(appr).toHaveLength(1);
+    expect(appr).toHaveLength(0);
     expect(result.summary).toContain("pull/7");
   });
 });
@@ -418,9 +419,6 @@ describe("createPrLifecycleHandler — PR caps", () => {
     seedOpenLink(b.id, 11);
     // existing link for THIS branch — puts us on the update path
     db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 7, branch_name: `agent/work-${item.id}` });
-    db.createApproval({ approval_type: "merge_pr", requested_by: "agent", work_item_id: item.id,
-      payload: { pr_number: 7, head_sha: "old" } });
-
     const stubs = { ...makeStubs(), maxOpenPrs: 2 };
     stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
       if (args[0] === "rev-parse") return "newsha\n";
@@ -479,7 +477,7 @@ describe("createPrLifecycleHandler — decision brief", () => {
   beforeEach(() => { ({ db, dbPath } = makeDb()); });
   afterEach(() => { db.close(); try { rmSync(dbPath); } catch {} });
 
-  it("stores commit subjects in the merge approval payload", async () => {
+  it("reads commit subjects for the proof comment/decision context without creating a merge approval", async () => {
     const stubs = makeStubs();
     stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
       if (args[0] === "rev-parse") return "abc123\n";
@@ -497,13 +495,12 @@ describe("createPrLifecycleHandler — decision brief", () => {
 
     const appr = db.raw.prepare(
       "SELECT payload_json FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr'"
-    ).get(item.id) as any;
-    const payload = JSON.parse(appr.payload_json);
-    expect(payload.commit_subjects).toEqual(["fix: green impl", "test: red test"]);
+    ).all(item.id) as any[];
+    expect(appr).toHaveLength(0);
     expect(stubs.runGit).toHaveBeenCalledWith(["log", "--format=%s", "origin/main..HEAD"], undefined);
   });
 
-  it("stores files_summary from the branch diff in the approval payload", async () => {
+  it("reads files_summary from the branch diff without creating a merge approval", async () => {
     const stubs = makeStubs();
     stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
       if (args[0] === "rev-parse") return "abc123\n";
@@ -520,13 +517,12 @@ describe("createPrLifecycleHandler — decision brief", () => {
 
     const appr = db.raw.prepare(
       "SELECT payload_json FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr'"
-    ).get(item.id) as any;
-    const payload = JSON.parse(appr.payload_json);
-    expect(payload.files_summary).toContain("src/foo.ts");
+    ).all(item.id) as any[];
+    expect(appr).toHaveLength(0);
     expect(stubs.runGit).toHaveBeenCalledWith(["diff", "--stat", "origin/main..HEAD"], undefined);
   });
 
-  it("stores verify_tail from input in the approval payload", async () => {
+  it("defers verify_tail approval payload until CI passes", async () => {
     const stubs = makeStubs();
     stubs.runCommand.mockResolvedValue("https://github.com/owner/repo/pull/52");
 
@@ -541,9 +537,8 @@ describe("createPrLifecycleHandler — decision brief", () => {
 
     const appr = db.raw.prepare(
       "SELECT payload_json FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr'"
-    ).get(item.id) as any;
-    const payload = JSON.parse(appr.payload_json);
-    expect(payload.verify_tail).toContain("42 passed");
+    ).all(item.id) as any[];
+    expect(appr).toHaveLength(0);
   });
 
   it("falls back gracefully when git log/diff fail", async () => {
@@ -654,7 +649,7 @@ describe("createPrLifecycleHandler — proof comment", () => {
     expect(secondCommentCalls).toBe(0);
   });
 
-  it("creates a missing merge_pr approval on idempotent retry if none exists", async () => {
+  it("does not create a missing merge_pr approval on idempotent retry before CI passes", async () => {
     const stubs = makeStubs();
     stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
       if (args[0] === "rev-parse") return "fixedsha\n";
@@ -685,11 +680,10 @@ describe("createPrLifecycleHandler — proof comment", () => {
       { db, workerId: "w" },
     );
 
-    // Assert: it should have created the approval record!
+    // Assert: approval remains deferred to pr_watch.
     const finalApprovals = db.raw.prepare(
       "SELECT * FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr'"
     ).all(item.id) as any[];
-    expect(finalApprovals).toHaveLength(1);
-    expect(finalApprovals[0].status).toBe("pending");
+    expect(finalApprovals).toHaveLength(0);
   });
 });

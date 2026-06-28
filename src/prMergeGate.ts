@@ -123,6 +123,20 @@ export async function handlePrMergeCallback(
   const repoFlag = repo ? ["--repo", repo] : [];
 
   if (action.type === "wi_mrgpr") {
+    if (prNumber != null) {
+      const link = db.raw.prepare(
+        "SELECT pr_state FROM github_links WHERE work_item_id = ? AND pr_number = ?"
+      ).get(action.id, prNumber) as { pr_state: string } | undefined;
+      if (!link || link.pr_state !== "ready_to_merge") {
+        await answerCbq();
+        await editMessage(
+          `Merge blocked: PR has not been marked ready_to_merge by pr_watch. Wait for CI watch to pass and refresh the merge approval.`,
+          buildPrMergeKeyboard(action.id),
+        );
+        return;
+      }
+    }
+
     // Verify head SHA and CI state before merging — never merge blind
     const keyboard = buildPrMergeKeyboard(action.id);
     let view: PrViewState;

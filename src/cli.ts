@@ -636,6 +636,20 @@ function tryParseAntigravityJson(text: string): string | null {
     }
   }
 
+  // 4. Line-by-line reverse scan: handles output where tool-call results containing
+  // "}" appear before the final JSON response, causing strategy 3 to span multiple
+  // objects. Compact JSON is always on a single line; scan from the bottom up.
+  for (const line of text.split(/\r?\n/).reverse()) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("{") || !trimmed.includes('"response"')) continue;
+    try {
+      const obj = JSON.parse(trimmed);
+      if (obj && typeof obj.response === "string" && obj.response.trim()) {
+        return obj.response.trim();
+      }
+    } catch {}
+  }
+
   return null;
 }
 

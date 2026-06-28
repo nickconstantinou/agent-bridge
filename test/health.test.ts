@@ -382,57 +382,77 @@ describe("SelfPlugin", () => {
 
 describe("ServerPlugin", () => {
   it("reports stats successfully", async () => {
+    const oldMockExists = (globalThis as any).__mockExistsSync;
+    const oldMockExec = (globalThis as any).__mockExecSync;
+    (globalThis as any).__mockExistsSync = (path: string) => {
+      if (path === "/usr/lib/update-notifier/apt-check") return false;
+      if (path === "/var/run/reboot-required") return false;
+      return oldMockExists?.(path);
+    };
+    (globalThis as any).__mockExecSync = (cmd: string) => {
+      if (cmd.includes("ps -eo pid,pcpu,comm")) return "PID %CPU COMMAND\n1 0.1 node";
+      if (cmd.includes("ps -eo state")) return "STAT\nS\nS\n";
+      if (cmd.includes("systemctl is-active ufw")) return "active";
+      if (cmd.includes("systemctl list-units --state=failed")) return "";
+      return oldMockExec?.(cmd);
+    };
+
     const { ServerPlugin } = await import("../src/health/plugins/server.js");
-    const plugin = new ServerPlugin();
-    const report = await plugin.check();
-    expect(report.pluginName).toBe("server");
-    expect(["green", "amber", "red"]).toContain(report.status);
-    
-    const cpuCheck = report.checks.find(c => c.name === "cpu-load");
-    expect(cpuCheck).toBeDefined();
-    expect(["green", "amber", "red"]).toContain(cpuCheck?.status);
-    expect(typeof cpuCheck?.value).toBe("number");
+    try {
+      const plugin = new ServerPlugin();
+      const report = await plugin.check();
+      expect(report.pluginName).toBe("server");
+      expect(["green", "amber", "red"]).toContain(report.status);
+      
+      const cpuCheck = report.checks.find(c => c.name === "cpu-load");
+      expect(cpuCheck).toBeDefined();
+      expect(["green", "amber", "red"]).toContain(cpuCheck?.status);
+      expect(typeof cpuCheck?.value).toBe("number");
 
-    const memCheck = report.checks.find(c => c.name === "memory-usage");
-    expect(memCheck).toBeDefined();
-    expect(["green", "amber", "red"]).toContain(memCheck?.status);
-    expect(typeof memCheck?.value).toBe("number");
+      const memCheck = report.checks.find(c => c.name === "memory-usage");
+      expect(memCheck).toBeDefined();
+      expect(["green", "amber", "red"]).toContain(memCheck?.status);
+      expect(typeof memCheck?.value).toBe("number");
 
-    const swapCheck = report.checks.find(c => c.name === "swap-usage");
-    expect(swapCheck).toBeDefined();
-    expect(["green", "amber", "red"]).toContain(swapCheck?.status);
+      const swapCheck = report.checks.find(c => c.name === "swap-usage");
+      expect(swapCheck).toBeDefined();
+      expect(["green", "amber", "red"]).toContain(swapCheck?.status);
 
-    const zombieCheck = report.checks.find(c => c.name === "zombies");
-    expect(zombieCheck).toBeDefined();
-    expect(["green", "amber", "red"]).toContain(zombieCheck?.status);
-    expect(typeof zombieCheck?.value).toBe("number");
+      const zombieCheck = report.checks.find(c => c.name === "zombies");
+      expect(zombieCheck).toBeDefined();
+      expect(["green", "amber", "red"]).toContain(zombieCheck?.status);
+      expect(typeof zombieCheck?.value).toBe("number");
 
-    const uptimeCheck = report.checks.find(c => c.name === "uptime");
-    expect(uptimeCheck).toBeDefined();
-    expect(uptimeCheck?.status).toBe("green");
-    expect(typeof uptimeCheck?.value).toBe("number");
+      const uptimeCheck = report.checks.find(c => c.name === "uptime");
+      expect(uptimeCheck).toBeDefined();
+      expect(uptimeCheck?.status).toBe("green");
+      expect(typeof uptimeCheck?.value).toBe("number");
 
-    const firewallCheck = report.checks.find(c => c.name === "firewall");
-    expect(firewallCheck).toBeDefined();
-    expect(["green", "amber"]).toContain(firewallCheck?.status);
+      const firewallCheck = report.checks.find(c => c.name === "firewall");
+      expect(firewallCheck).toBeDefined();
+      expect(["green", "amber"]).toContain(firewallCheck?.status);
 
-    const sshKeyCheck = report.checks.find(c => c.name === "ssh-key-perms");
-    expect(sshKeyCheck).toBeDefined();
-    expect(["green", "amber", "red"]).toContain(sshKeyCheck?.status);
+      const sshKeyCheck = report.checks.find(c => c.name === "ssh-key-perms");
+      expect(sshKeyCheck).toBeDefined();
+      expect(["green", "amber", "red"]).toContain(sshKeyCheck?.status);
 
-    const envFileCheck = report.checks.find(c => c.name === "env-file-perms");
-    expect(envFileCheck).toBeDefined();
-    expect(["green", "amber"]).toContain(envFileCheck?.status);
+      const envFileCheck = report.checks.find(c => c.name === "env-file-perms");
+      expect(envFileCheck).toBeDefined();
+      expect(["green", "amber"]).toContain(envFileCheck?.status);
 
-    const diskCheck = report.checks.find(c => c.name === "disk-space");
-    expect(diskCheck).toBeDefined();
-    expect(["green", "amber", "red"]).toContain(diskCheck?.status);
-    expect(typeof diskCheck?.value).toBe("number");
-    expect((diskCheck?.value as number) > 0).toBe(true);
+      const diskCheck = report.checks.find(c => c.name === "disk-space");
+      expect(diskCheck).toBeDefined();
+      expect(["green", "amber", "red"]).toContain(diskCheck?.status);
+      expect(typeof diskCheck?.value).toBe("number");
+      expect((diskCheck?.value as number) > 0).toBe(true);
 
-    const failedSvcCheck = report.checks.find(c => c.name === "failed-services");
-    expect(failedSvcCheck).toBeDefined();
-    expect(["green", "amber", "red"]).toContain(failedSvcCheck?.status);
+      const failedSvcCheck = report.checks.find(c => c.name === "failed-services");
+      expect(failedSvcCheck).toBeDefined();
+      expect(["green", "amber", "red"]).toContain(failedSvcCheck?.status);
+    } finally {
+      (globalThis as any).__mockExistsSync = oldMockExists;
+      (globalThis as any).__mockExecSync = oldMockExec;
+    }
   });
 
   it("supports configurable CPU load thresholds", async () => {

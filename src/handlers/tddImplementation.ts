@@ -20,7 +20,7 @@ interface TddImplementationDeps {
   /** Extra CLI flags inserted before the prompt (e.g. permission mode). */
   cliExtraArgs?: string[];
   /** Clone the repository into a disposable per-job directory. */
-  prepareWorkspace?: (repository: string, workItemId: number) => Promise<string>;
+  prepareWorkspace?: (repository: string, workItemId: number, opts?: { reuseExisting?: boolean }) => Promise<string>;
   /** Remove a workspace directory (no-op outside the workspace base). */
   cleanupWorkspace?: (dir: string) => void;
 }
@@ -88,8 +88,26 @@ Your task:
 Do not open or merge a PR. Do not commit — just stage the fix.`;
 }
 
+function buildRepairPrompt(title: string, body: string | null, priorError: string): string {
+  return `You are repairing a failed autonomous TDD implementation attempt.
+
+Title: ${title}
+${body ? `Details: ${body}\n` : ""}
+Previous failure:
+${priorError || "(no failure context provided)"}
+
+Your task:
+1. Diagnose the prior failure before changing files.
+2. Reuse the existing worktree state if present.
+3. Make the smallest correction needed so verification passes.
+4. Run the relevant focused test first, then the full suite if practical.
+5. Stage all modified files with: git add <files>
+
+Do not open or merge a PR. Do not commit — just stage the repair.`;
+}
+
 export function createTddImplementationHandler(deps: TddImplementationDeps): JobHandler {
-  const { runCli, runGit, runTests, command = "claude", cliExtraArgs = [], prepareWorkspace, cleanupWorkspace } = deps;
+  const { runCli, runGit, runTests, command = "claude", cliExtraArgs = [], prepareWorkspace } = deps;
 
   return async function tddImplementationHandler(
     input: JobHandlerInput,
@@ -108,7 +126,9 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
     if (typeof input.repository_path === "string") {
       repoPath = input.repository_path;
     } else if (item.repository && prepareWorkspace) {
-      workspaceDir = await prepareWorkspace(item.repository, workItemId);
+      workspaceDir = await prepareWorkspace(item.repository, workItemId, {
+        reuseExisting: Boolean(input.repair_of_job_id || input.repair_context),
+      });
       repoPath = workspaceDir;
     } else {
       throw new Error(
@@ -170,6 +190,47 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
 
         const summary = `CI fix pushed on **${branchName}** (${headSha.slice(0, 7)}); PR watch queued.`;
         return { summary, branchName, verifyOutput: verifyRun.output, headSha };
+      } else if (input.repair_of_job_id || input.repair_context) {
+        const branchName = `agent/work-${workItemId}`;
+        await Promise.resolve(runGit(["checkout", branchName], repoPath)).catch(async () => {
+          await Promise.resolve(runGit(["checkout", "-b", branchName], repoPath));
+        });
+        const priorError = typeof input.repair_context === "string" ? input.repair_context : "";
+        const repairPrompt = buildRepairPrompt(item.title, item.body, priorError);
+        await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, repairPrompt], repoPath);
+
+        await runGit(["add", "-A"], repoPath);
+        const staged = await readStaged();
+        if (staged.length === 0) {
+          throw new Error("Repair pass staged no files");
+        }
+
+        const verifyRun = await runTests(repoPath);
+        if (!verifyRun.ok) {
+          throw new Error(`Verification failed after repair:\n${verifyRun.output}`);
+        }
+
+        await runGit(["commit", "-m", `fix: repair ${item.title}`], repoPath);
+        ctx.db.updateWorkItemStatus(workItemId, "in_progress");
+        if (item.repository) {
+          ctx.db.createWorkJob({
+            task_type: "pr_lifecycle",
+            idempotency_key: `pr_lifecycle:${workItemId}:repair:${Date.now()}`,
+            work_item_id: workItemId,
+            input_json: {
+              work_item_id: workItemId,
+              branch_name: branchName,
+              repository: item.repository,
+              repository_path: repoPath,
+              ...(workspaceDir ? { workspace_dir: workspaceDir } : {}),
+              verify_output: verifyRun.output,
+              ...(typeof input.notify_chat_id === "number" ? { notify_chat_id: input.notify_chat_id } : {}),
+            },
+          });
+        }
+
+        const summary = `Repair complete on **${branchName}**`;
+        return { summary, branchName, verifyOutput: verifyRun.output };
       } else {
         await runGit(["checkout", "-b", branchName], repoPath);
       }
@@ -241,8 +302,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
       const summary = `TDD implementation complete on **${branchName}**`;
       return { summary, branchName, verifyOutput: greenRun.output };
     } catch (err) {
-      // Failed jobs must not leave a half-finished workspace for the retry
-      if (workspaceDir && cleanupWorkspace) cleanupWorkspace(workspaceDir);
+      // Preserve failed workspaces for repair jobs; cleanup happens after PR merge/close.
       throw err;
     }
   };

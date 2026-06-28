@@ -179,11 +179,19 @@ const runWorkerCommand = createRunCommand({ loadGhToken: true });
 // mutating it in place. Cleanup only ever deletes inside the workspace base.
 const cleanupWorkspace = createWorkspaceCleanup();
 
+function buildWorkerTestEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const next = { ...env };
+  delete next.WORKER_DEFAULT_REPO;
+  delete next.WORKER_ENABLED;
+  delete next.WORKER_NOTIFY_CHAT_ID;
+  return next;
+}
+
 // Test runner returning pass/fail rather than throwing — the TDD handler
 // needs a red run to fail and a green run to pass.
 const runTests = async (cwd: string): Promise<{ ok: boolean; output: string }> => {
   try {
-    const output = await runWorkerCommand("npm", ["test"], { cwd });
+    const output = await runWorkerCommand("npm", ["test"], { cwd, env: buildWorkerTestEnv() });
     return { ok: true, output };
   } catch (err) {
     return { ok: false, output: err instanceof Error ? err.message : String(err) };
@@ -211,9 +219,10 @@ const jobExecutor = startJobExecutorLoop({
       cliExtraArgs: ["--permission-mode", "acceptEdits"],
       runGit: (args, cwd) => runWorkerCommand("git", args, { cwd }),
       runTests,
-      prepareWorkspace: (repository, workItemId) => prepareWorkspace({
+      prepareWorkspace: (repository, workItemId, opts) => prepareWorkspace({
         repository,
         workItemId,
+        reuseExisting: opts?.reuseExisting,
         // --include=dev: the service runs with NODE_ENV=production, which would
         // otherwise omit devDependencies — and the test runner lives there
         installDeps: (dir) => runWorkerCommand("npm", ["ci", "--no-audit", "--no-fund", "--include=dev"], { cwd: dir }).then(() => undefined),
@@ -230,9 +239,10 @@ const jobExecutor = startJobExecutorLoop({
       cliExtraArgs: ["--permission-mode", "acceptEdits"],
       runGit: (args, cwd) => runWorkerCommand("git", args, { cwd }),
       runTests,
-      prepareWorkspace: (repository, workItemId) => prepareWorkspace({
+      prepareWorkspace: (repository, workItemId, opts) => prepareWorkspace({
         repository,
         workItemId,
+        reuseExisting: opts?.reuseExisting,
         installDeps: (dir) => runWorkerCommand("npm", ["ci", "--no-audit", "--no-fund", "--include=dev"], { cwd: dir }).then(() => undefined),
       }),
       cleanupWorkspace,

@@ -15,7 +15,7 @@ type RunCommand = (binary: string, args: string[]) => Promise<string>;
 interface PrLifecycleDeps {
   runGit: RunGit;
   runCommand: RunCommand;
-  /** Remove a per-job workspace once the branch is safely on the remote. */
+  /** Deprecated: workspace cleanup happens after PR merge/close, not on PR open. */
   cleanupWorkspace?: (dir: string) => void;
   /** Maximum simultaneous open agent PRs per repository (default 3). */
   maxOpenPrs?: number;
@@ -88,7 +88,7 @@ async function reconcileOpenPrStates(
 }
 
 export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
-  const { runGit, runCommand, cleanupWorkspace, maxOpenPrs = 3, maxDailyPrs = 3 } = deps;
+  const { runGit, runCommand, maxOpenPrs = 3, maxDailyPrs = 3 } = deps;
 
   return async function prLifecycleHandler(
     input: JobHandlerInput,
@@ -112,8 +112,6 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
 
     // Capture the head SHA so the merge gate can detect a moved head later
     const headSha = (await runGit(["rev-parse", "HEAD"], repoPath)).trim();
-
-    const workspaceDir = typeof input.workspace_dir === "string" ? input.workspace_dir : null;
 
     // ── Owner decision brief ──────────────────────────────────────────────────
     let commit_subjects: string[] | undefined;
@@ -155,8 +153,6 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
       }
 
       ctx.db.updateWorkItemStatus(workItemId, "blocked");
-      if (workspaceDir && cleanupWorkspace) cleanupWorkspace(workspaceDir);
-
       const summary = `Existing PR refreshed with latest head (${headSha.slice(0, 7)}): ${existingPrUrl}\n\nCI watch queued; merge approval will be created after GitHub checks pass.`;
       return { summary, prUrl: existingPrUrl };
     }
@@ -235,9 +231,6 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
 
     // Transition item to blocked — awaiting CI watch and then human merge gate
     ctx.db.updateWorkItemStatus(workItemId, "blocked");
-
-    // Branch is on the remote — the per-job workspace has served its purpose
-    if (workspaceDir && cleanupWorkspace) cleanupWorkspace(workspaceDir);
 
     const summary = `Draft PR opened: ${prUrl}\n\nCI watch queued; merge approval will be created after GitHub checks pass.`;
     return { summary, prUrl };

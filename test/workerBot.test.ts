@@ -170,12 +170,13 @@ describe("worker commands with DB (Slice 4)", () => {
   });
 
   it("lists proposed issues on /issues", () => {
-    db.createWorkItem({ kind: "defect", source: "defect_scan", title: "A bug", created_by: "worker" });
+    db.createWorkItem({ kind: "defect", source: "defect_scan", title: "A bug", created_by: "worker", repository: "agent-bridge" });
     const result = handleWorkerCommand("/issues", { workerEnabled: true, db });
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("keyboard_message");
     expect(result!.text).toContain("Proposed Work Items");
     expect(result!.text).toContain("A bug");
+    expect(result!.text).toContain("repo: `agent-bridge`");
     expect((result as any).reply_markup.inline_keyboard.flat().length).toBe(3); // view, approve, close buttons
   });
 
@@ -190,13 +191,21 @@ describe("worker commands with DB (Slice 4)", () => {
   });
 
   it("creates a defect scan job on /review", () => {
-    const result = handleWorkerCommand("/review", { workerEnabled: true, db });
+    const result = handleWorkerCommand("/review", { workerEnabled: true, db, defaultRepo: "agent-bridge" });
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("message");
     expect(result!.text).toContain("Defect scan queued");
     const jobs = db.listWorkJobs();
     expect(jobs.length).toBe(1);
     expect(jobs[0].task_type).toBe("defect_scan");
+    expect(JSON.parse(jobs[0].input_json).repository).toBe("agent-bridge");
+  });
+
+  it("uses configured default repo for /review when no repo argument is provided", () => {
+    const result = handleWorkerCommand("/review", { workerEnabled: true, db, defaultRepo: "content-crawler" });
+    expect(result!.text).toContain("content-crawler");
+    const jobs = db.listWorkJobs();
+    expect(JSON.parse(jobs[0].input_json).repository).toBe("content-crawler");
   });
 
   it("idempotently returns info if defect scan is already active", () => {
@@ -207,7 +216,7 @@ describe("worker commands with DB (Slice 4)", () => {
   });
 
   it("stores notify_chat_id in input_json when chatId is provided in context", () => {
-    handleWorkerCommand("/review", { workerEnabled: true, db, chatId: 99999 });
+    handleWorkerCommand("/review", { workerEnabled: true, db, chatId: 99999, defaultRepo: "agent-bridge" });
     const jobs = db.listWorkJobs();
     expect(jobs.length).toBe(1);
     const input = JSON.parse(jobs[0].input_json);
@@ -215,11 +224,24 @@ describe("worker commands with DB (Slice 4)", () => {
   });
 
   it("omits notify_chat_id when no chatId is provided", () => {
-    handleWorkerCommand("/review", { workerEnabled: true, db });
+    handleWorkerCommand("/review", { workerEnabled: true, db, defaultRepo: "agent-bridge" });
     const jobs = db.listWorkJobs();
     expect(jobs.length).toBe(1);
     const input = JSON.parse(jobs[0].input_json);
     expect(input.notify_chat_id).toBeUndefined();
+  });
+
+  it("asks for a repo when /review has no repo and no default repo is configured", () => {
+    const oldDefault = process.env.WORKER_DEFAULT_REPO;
+    delete process.env.WORKER_DEFAULT_REPO;
+    try {
+      const result = handleWorkerCommand("/review", { workerEnabled: true, db });
+      expect(result!.text).toContain("Which repo");
+      expect(db.listWorkJobs()).toHaveLength(0);
+    } finally {
+      if (oldDefault === undefined) delete process.env.WORKER_DEFAULT_REPO;
+      else process.env.WORKER_DEFAULT_REPO = oldDefault;
+    }
   });
 });
 
@@ -351,7 +373,7 @@ describe("handleWorkerCommand /feature", () => {
   });
 
   it("includes repository in feature_plan job input when defaultRepo is set", () => {
-    handleWorkerCommand("/feature add caching layer", {
+    const result = handleWorkerCommand("/feature add caching layer", {
       workerEnabled: true, db, chatId: 42, userId: "u", defaultRepo: "agent-bridge",
     });
     const jobs = db.listWorkJobs();
@@ -359,17 +381,25 @@ describe("handleWorkerCommand /feature", () => {
     expect(job).toBeDefined();
     const input = JSON.parse(job!.input_json);
     expect(input.repository).toBe("agent-bridge");
+    expect(result!.text).toContain("Repository: `agent-bridge`");
   });
 
   it("omits repository from feature_plan job input when defaultRepo is not set", () => {
-    handleWorkerCommand("/feature add dark mode", {
-      workerEnabled: true, db, chatId: 43, userId: "u",
-    });
-    const jobs = db.listWorkJobs();
-    const job = jobs.find((j: any) => j.task_type === "feature_plan");
-    expect(job).toBeDefined();
-    const input = JSON.parse(job!.input_json);
-    expect(input.repository).toBeUndefined();
+    const oldDefault = process.env.WORKER_DEFAULT_REPO;
+    delete process.env.WORKER_DEFAULT_REPO;
+    try {
+      handleWorkerCommand("/feature add dark mode", {
+        workerEnabled: true, db, chatId: 43, userId: "u",
+      });
+      const jobs = db.listWorkJobs();
+      const job = jobs.find((j: any) => j.task_type === "feature_plan");
+      expect(job).toBeDefined();
+      const input = JSON.parse(job!.input_json);
+      expect(input.repository).toBeUndefined();
+    } finally {
+      if (oldDefault === undefined) delete process.env.WORKER_DEFAULT_REPO;
+      else process.env.WORKER_DEFAULT_REPO = oldDefault;
+    }
   });
 
   it("falls back to WORKER_DEFAULT_REPO when defaultRepo is not passed", () => {

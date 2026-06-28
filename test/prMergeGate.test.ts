@@ -115,10 +115,11 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
     });
     const answerCbq = vi.fn().mockResolvedValue(undefined);
     const editMessage = vi.fn().mockResolvedValue(undefined);
+    const cleanupWorkspace = vi.fn();
 
     await handlePrMergeCallback(
       { type: "wi_mrgpr", id: item.id },
-      { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
+      { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1", cleanupWorkspace }
     );
 
     const mergeCall = runCommand.mock.calls.find(([, args]) => args.includes("merge"));
@@ -139,10 +140,11 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
     });
     const answerCbq = vi.fn().mockResolvedValue(undefined);
     const editMessage = vi.fn().mockResolvedValue(undefined);
+    const cleanupWorkspace = vi.fn();
 
     await handlePrMergeCallback(
       { type: "wi_mrgpr", id: item.id },
-      { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
+      { db, runCommand, answerCbq, editMessage, cleanupWorkspace, chatId: 100, messageId: 200, userId: "u1" }
     );
 
     const mergeCall = runCommand.mock.calls.find(([, args]) => args.includes("merge"));
@@ -154,6 +156,7 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
     expect(db.getWorkItem(item.id)!.status).toBe("resolved");
     const mergedLink = db.raw.prepare("SELECT pr_state FROM github_links WHERE work_item_id = ? AND pr_number = 3").get(item.id) as any;
     expect(mergedLink.pr_state).toBe("merged");
+    expect(cleanupWorkspace).toHaveBeenCalledWith(expect.stringContaining(`work-${item.id}`));
   });
 
   it("marks draft PRs as ready before merging", async () => {
@@ -403,16 +406,18 @@ describe("handlePrMergeCallback — wi_clspr", () => {
     const runCommand = vi.fn().mockResolvedValue("");
     const answerCbq = vi.fn().mockResolvedValue(undefined);
     const editMessage = vi.fn().mockResolvedValue(undefined);
+    const cleanupWorkspace = vi.fn();
 
     await handlePrMergeCallback(
       { type: "wi_clspr", id: item.id },
-      { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
+      { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1", cleanupWorkspace }
     );
 
     const [binary, args]: [string, string[]] = runCommand.mock.calls[0];
     expect(binary).toBe("gh");
     expect(args).toContain("close");
     expect(db.getWorkItem(item.id)!.status).toBe("closed");
+    expect(cleanupWorkspace).toHaveBeenCalledWith(expect.stringContaining(`work-${item.id}`));
   });
 
   it("answers the callback with an error message when gh pr close fails with a non-idempotent error", async () => {

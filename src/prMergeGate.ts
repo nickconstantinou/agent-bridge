@@ -6,6 +6,8 @@
  */
 
 import type { BridgeDb, GithubLink } from "./db.js";
+import { createWorkspaceCleanup, defaultWorkspaceBaseDir } from "./workspace.js";
+import { join } from "node:path";
 
 export type PrMergeCallbackAction =
   | { type: "wi_mrgpr"; id: number }
@@ -43,6 +45,7 @@ interface PrMergeCallbackCtx {
   chatId?: number;
   messageId?: number;
   userId?: string;
+  cleanupWorkspace?: (dir: string) => void;
 }
 
 /** Conclusions/states that mean a check did not succeed. */
@@ -95,6 +98,11 @@ function enqueueMergeFixJob(
     },
     max_attempts: 1,
   });
+}
+
+function cleanupWorkItemWorkspace(ctx: PrMergeCallbackCtx, workItemId: number): void {
+  const cleanup = ctx.cleanupWorkspace ?? createWorkspaceCleanup();
+  cleanup(join(defaultWorkspaceBaseDir(), `work-${workItemId}`));
 }
 
 export async function handlePrMergeCallback(
@@ -223,6 +231,7 @@ export async function handlePrMergeCallback(
       ).get(action.id, prNumber) as { id: number } | undefined;
       if (mergedLink) db.updatePrState(mergedLink.id, "merged");
     }
+    cleanupWorkItemWorkspace(ctx, action.id);
 
     await answerCbq();
     await editMessage(`PR merged and branch deleted. Work item #${action.id} resolved.`);
@@ -269,6 +278,7 @@ export async function handlePrMergeCallback(
 
       db.resolveApproval(approval.id, "rejected", ctx.userId ?? "user");
       db.updateWorkItemStatus(action.id, "closed");
+      cleanupWorkItemWorkspace(ctx, action.id);
 
       await answerCbq();
       await editMessage(`PR closed. Work item #${action.id} closed.`);

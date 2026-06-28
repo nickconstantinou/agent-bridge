@@ -66,6 +66,34 @@ export interface ExecuteNextJobResult {
 
 const DEFAULT_LEASE_SECONDS = 300;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 60_000;
+const MAX_REPAIR_CONTEXT_CHARS = 12_000;
+
+function enqueueTddRepairJobIfNeeded(
+  db: BridgeDb,
+  job: { id: number; task_type: string; work_item_id: number | null; input_json: string },
+  input: JobHandlerInput,
+  message: string,
+): { id: number } | null {
+  if (job.task_type !== "tdd_implementation") return null;
+  if (input.repair_of_job_id || input.repair_context || input.ci_fix) return null;
+  const updated = db.getWorkJob(job.id);
+  if (!updated || updated.status !== "failed") return null;
+  const workItemId = typeof input.work_item_id === "number" ? input.work_item_id : job.work_item_id;
+  if (typeof workItemId !== "number") return null;
+
+  return db.createWorkJob({
+    task_type: "tdd_implementation",
+    idempotency_key: `tdd_repair:${job.id}`,
+    work_item_id: workItemId,
+    input_json: {
+      ...input,
+      work_item_id: workItemId,
+      repair_of_job_id: job.id,
+      repair_context: message.slice(-MAX_REPAIR_CONTEXT_CHARS),
+    },
+    max_attempts: 1,
+  });
+}
 
 export async function executeNextJob(
   deps: ExecuteNextJobDeps,
@@ -135,6 +163,10 @@ export async function executeNextJob(
       db.failWorkJob(job.id, message, workerId);
     }
     await notify(`Job #${job.id} failed: ${message}`);
+    if (!(err instanceof PermanentJobFailureError)) {
+      const repair = enqueueTddRepairJobIfNeeded(db, job, input, message);
+      if (repair) await notify(`Repair job #${repair.id} queued for failed job #${job.id}.`);
+    }
     return { jobId: job.id };
   } finally {
     clearInterval(heartbeat);

@@ -19,7 +19,7 @@ export interface RunCommandOptions {
 export type RunCommand = (
   binary: string,
   args: string[],
-  opts?: { cwd?: string },
+  opts?: { cwd?: string; env?: NodeJS.ProcessEnv },
 ) => Promise<string>;
 
 export function createRunCommand(options: RunCommandOptions = {}): RunCommand {
@@ -27,7 +27,7 @@ export function createRunCommand(options: RunCommandOptions = {}): RunCommand {
 
   return (binary, args, opts = {}) =>
     new Promise<string>((resolve, reject) => {
-      const env = { ...process.env };
+      const env = opts.env ? { ...opts.env } : { ...process.env };
       if (loadGhToken) {
         const tokenPath = process.env.GITHUB_TOKEN_FILE || `${process.env.HOME}/.secrets/GITHUB_TOKEN.TXT`;
         try { env.GH_TOKEN = readFileSync(tokenPath, "utf8").trim(); } catch { /* git ops still work without it */ }

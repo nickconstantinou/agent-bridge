@@ -210,7 +210,7 @@ describe("createPrLifecycleHandler", () => {
     expect(watchJob).toBeDefined();
   });
 
-  it("cleans up the workspace after the PR is opened", async () => {
+  it("keeps the workspace after the PR is opened until merge or close", async () => {
     const stubs = makeStubs();
     const cleanupWorkspace = vi.fn();
     const item = db.createWorkItem({
@@ -226,7 +226,7 @@ describe("createPrLifecycleHandler", () => {
       { db, workerId: "w" },
     );
 
-    expect(cleanupWorkspace).toHaveBeenCalledWith("/ws/work-1");
+    expect(cleanupWorkspace).not.toHaveBeenCalled();
   });
 
   it("leaves the workspace in place when the push fails", async () => {

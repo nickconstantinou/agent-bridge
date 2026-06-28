@@ -46,6 +46,8 @@ export interface PrepareWorkspaceOptions {
   baseDir?: string;
   /** Install project dependencies in the clone (called when package.json exists). */
   installDeps?: (dir: string) => Promise<void> | void;
+  /** Reuse an existing git workspace instead of replacing it. */
+  reuseExisting?: boolean;
 }
 
 /**
@@ -61,6 +63,10 @@ export async function prepareWorkspace(opts: PrepareWorkspaceOptions): Promise<s
   }
 
   const dir = join(baseDir, `work-${workItemId}`);
+  if (opts.reuseExisting && existsSync(join(dir, ".git"))) {
+    return dir;
+  }
+
   rmSync(dir, { recursive: true, force: true });
 
   await gitAsync(["clone", "-q", source, dir]);

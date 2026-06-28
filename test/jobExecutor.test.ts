@@ -322,6 +322,78 @@ describe("executeNextJob", () => {
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("Network unreachable"));
   });
 
+  it("enqueues one repair job when a TDD implementation exhausts attempts", async () => {
+    const item = db.createWorkItem({
+      kind: "feature",
+      source: "telegram",
+      title: "Add refactor scan",
+      created_by: "worker",
+      repository: "agent-bridge",
+    });
+    const job = db.createWorkJob({
+      task_type: "tdd_implementation",
+      idempotency_key: "tdd:self-repair:1",
+      work_item_id: item.id,
+      input_json: {
+        work_item_id: item.id,
+        repository: "agent-bridge",
+        notify_chat_id: 123,
+      },
+      max_attempts: 1,
+    });
+
+    const handler = vi.fn().mockRejectedValue(new Error("expected agent-bridge to be undefined"));
+    const notify = vi.fn();
+
+    await executeNextJob({
+      db,
+      workerId: "test-worker",
+      handlers: { tdd_implementation: handler },
+      notify,
+    });
+
+    expect(db.getWorkJob(job.id)!.status).toBe("failed");
+    const repair = db.listWorkJobs().find(j => j.id !== job.id && j.task_type === "tdd_implementation");
+    expect(repair).toBeDefined();
+    expect(repair!.idempotency_key).toBe(`tdd_repair:${job.id}`);
+    const input = JSON.parse(repair!.input_json);
+    expect(input.repair_of_job_id).toBe(job.id);
+    expect(input.repair_context).toContain("expected agent-bridge");
+    expect(input.notify_chat_id).toBe(123);
+    expect(notify).toHaveBeenCalledWith(expect.stringMatching(/Repair job #\d+ queued/));
+  });
+
+  it("does not enqueue another repair job when a repair job fails", async () => {
+    const item = db.createWorkItem({
+      kind: "feature",
+      source: "telegram",
+      title: "Add refactor scan",
+      created_by: "worker",
+      repository: "agent-bridge",
+    });
+    db.createWorkJob({
+      task_type: "tdd_implementation",
+      idempotency_key: "tdd:self-repair:already",
+      work_item_id: item.id,
+      input_json: {
+        work_item_id: item.id,
+        repository: "agent-bridge",
+        repair_of_job_id: 1,
+      },
+      max_attempts: 1,
+    });
+
+    await executeNextJob({
+      db,
+      workerId: "test-worker",
+      handlers: { tdd_implementation: vi.fn().mockRejectedValue(new Error("still failing")) },
+      notify: vi.fn(),
+    });
+
+    const repairJobs = db.listWorkJobs().filter(j => j.idempotency_key.startsWith("tdd_repair:"));
+    expect(repairJobs).toHaveLength(0);
+  });
+
   it("does not claim a job with a valid non-expired lease", async () => {
     const job = db.createWorkJob({
       task_type: "defect_scan",

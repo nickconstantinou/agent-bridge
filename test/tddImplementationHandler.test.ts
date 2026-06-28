@@ -381,7 +381,7 @@ describe("createTddImplementationHandler", () => {
       { db, workerId: "w" },
     );
 
-    expect(prepareWorkspace).toHaveBeenCalledWith("owner/repo", item.id);
+    expect(prepareWorkspace).toHaveBeenCalledWith("owner/repo", item.id, { reuseExisting: false });
     // All git work must happen inside the workspace
     for (const call of stubs.runGit.mock.calls) {
       expect(call[1]).toBe("/ws/work-1");
@@ -394,7 +394,7 @@ describe("createTddImplementationHandler", () => {
     expect(input.workspace_dir).toBe("/ws/work-1");
   });
 
-  it("cleans up the workspace when the job fails", async () => {
+  it("preserves the workspace when the job fails so repair jobs have context", async () => {
     const stubs = makeStubs();
     stubs.runTests = vi.fn().mockResolvedValue({ ok: true, output: "green" }); // red gate trips
     const prepareWorkspace = vi.fn().mockResolvedValue("/ws/work-2");
@@ -412,7 +412,37 @@ describe("createTddImplementationHandler", () => {
       )
     ).rejects.toThrow();
 
-    expect(cleanupWorkspace).toHaveBeenCalledWith("/ws/work-2");
+    expect(cleanupWorkspace).not.toHaveBeenCalled();
+  });
+
+  it("reuses an existing workspace and prior failure context for repair jobs", async () => {
+    const stubs = makeStubs();
+    stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
+      if (args[0] === "diff" && args.includes("--cached")) return "src/fix.ts\n";
+      return "";
+    });
+    stubs.runTests = vi.fn().mockResolvedValue({ ok: true, output: "Tests passed." });
+    const prepareWorkspace = vi.fn().mockResolvedValue("/ws/work-3");
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Bug", created_by: "worker",
+      repository: "owner/repo",
+    });
+
+    await createTddImplementationHandler({ ...stubs, prepareWorkspace })(
+      {
+        work_item_id: item.id,
+        repair_of_job_id: 123,
+        repair_context: "expected agent-bridge to be undefined",
+      },
+      { db, workerId: "w" },
+    );
+
+    expect(prepareWorkspace).toHaveBeenCalledWith("owner/repo", item.id, { reuseExisting: true });
+    const prompt = stubs.runCli.mock.calls[0][1].at(-1) as string;
+    expect(prompt).toContain("repairing a failed autonomous TDD");
+    expect(prompt).toContain("expected agent-bridge to be undefined");
+    expect(stubs.runTests).toHaveBeenCalledTimes(1);
   });
 
   it("throws when neither repository_path nor item repository is available", async () => {

@@ -57,4 +57,12 @@ describe("createRunCommand", () => {
     const out = await run("pwd", [], { cwd: tmpdir() });
     expect(out).toBe(tmpdir());
   });
+
+  it("supports per-command env overrides", async () => {
+    const run = createRunCommand();
+    const out = await run("node", ["-e", "console.log(process.env.WORKER_DEFAULT_REPO || '')"], {
+      env: { ...process.env, WORKER_DEFAULT_REPO: "" },
+    });
+    expect(out).toBe("");
+  });
 });

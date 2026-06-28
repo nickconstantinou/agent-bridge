@@ -20,7 +20,7 @@ interface OrchestratedTaskDeps {
   command?: string;
   commands?: Partial<Record<CliKind, string>>;
   cliExtraArgs?: string[];
-  prepareWorkspace?: (repository: string, workItemId: number) => Promise<string>;
+  prepareWorkspace?: (repository: string, workItemId: number, opts?: { reuseExisting?: boolean }) => Promise<string>;
   cleanupWorkspace?: (dir: string) => void;
 }
 

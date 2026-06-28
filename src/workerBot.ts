@@ -164,7 +164,7 @@ export function handleWorkerCommand(
     const inline_keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
     for (const item of proposed) {
       const displayTitle = item.title.length > 50 ? item.title.slice(0, 47) + "..." : item.title;
-      textOut += `• **#${item.id}** | ${displayTitle} | status: \`${item.status}\`\n`;
+      textOut += `• **#${item.id}** | ${displayTitle} | repo: \`${item.repository ?? "none"}\` | status: \`${item.status}\`\n`;
       inline_keyboard.push([
         { text: `🔍 View #${item.id}`, callback_data: `wi:${item.id}:view` },
         { text: `✅ Approve #${item.id}`, callback_data: `wi:${item.id}:appv` },
@@ -245,9 +245,10 @@ export function handleWorkerCommand(
         idempotency_key: `feature_plan:${plan.id}`,
         input_json: jobInput,
       });
+      const repoNote = defaultRepo ? `\nRepository: \`${defaultRepo}\`` : "\nRepository: `none` — set one before approval.";
       return {
         kind: "message",
-        text: `Feature plan started: **${brief}**\n\nAnalysing the codebase and drafting an implementation plan. Use /issues to view the result when it's ready.`,
+        text: `Feature plan started: **${brief}**${repoNote}\n\nAnalysing the codebase and drafting an implementation plan. Use /issues to view the result when it's ready.`,
       };
     }
 
@@ -312,8 +313,8 @@ export function handleWorkerCommand(
   if (cmd === "/review") {
     const parts = trimmed.split(/\s+/);
     const repo = parts.slice(1).join(" ").trim() || null;
-    const targetRepo = repo || "agent-bridge";
-    const repoNote = repo ? ` for **${repo}**` : "";
+    const targetRepo = repo || ctx.defaultRepo || process.env.WORKER_DEFAULT_REPO || null;
+    const repoNote = targetRepo ? ` for **${targetRepo}**` : "";
 
     if (!ctx.workerEnabled) {
       return {
@@ -325,6 +326,12 @@ export function handleWorkerCommand(
       return {
         kind: "message",
         text: `Defect scan queued${repoNote}. Use /jobs to check progress.`,
+      };
+    }
+    if (!targetRepo) {
+      return {
+        kind: "message",
+        text: "Which repo should I review? Use `/review <owner/repo>` or configure `WORKER_DEFAULT_REPO`.",
       };
     }
 

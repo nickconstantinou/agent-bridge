@@ -95,6 +95,23 @@ describe("prepareWorkspace", () => {
     expect(existsSync(join(dir, "README.md"))).toBe(true);
   });
 
+  it("reuses an existing git workspace when requested", async () => {
+    makeSourceRepo(root, "agent-bridge");
+    const first = await prepareWorkspace({ repository: "agent-bridge", workItemId: 12, repoRoot: root, baseDir });
+    writeFileSync(join(first, "repair-context.txt"), "keep me");
+
+    const second = await prepareWorkspace({
+      repository: "agent-bridge",
+      workItemId: 12,
+      repoRoot: root,
+      baseDir,
+      reuseExisting: true,
+    });
+
+    expect(second).toBe(first);
+    expect(existsSync(join(second, "repair-context.txt"))).toBe(true);
+  });
+
   it("sets a local git identity in the clone so commits work without global config", async () => {
     makeSourceRepo(root, "agent-bridge");
     const dir = await prepareWorkspace({ repository: "agent-bridge", workItemId: 11, repoRoot: root, baseDir });

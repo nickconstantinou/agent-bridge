@@ -606,10 +606,10 @@ export class BridgeDb {
     this.raw
       .prepare(
         `UPDATE bridge_runs
-         SET status = 'cancelled', ended_at = ?
+         SET status = 'cancelled', ended_at = ?, error = ?
          WHERE run_id = ?`
       )
-      .run(endedAt, runId);
+      .run(endedAt, reason, runId);
   }
 
   insertEvent(runId: string, seq: number, type: string, timestamp: string, payload: any): void {

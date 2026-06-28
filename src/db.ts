@@ -666,6 +666,12 @@ export class BridgeDb {
     ).run(status, id);
   }
 
+  updateWorkItemBody(id: number, body: string): void {
+    this.raw.prepare(
+      `UPDATE work_items SET body = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(body, id);
+  }
+
   // ── Work jobs ────────────────────────────────────────────────────────────
 
   createWorkJob(input: {

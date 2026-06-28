@@ -93,6 +93,7 @@ describe("handleWorkerCallback (Slice 5)", () => {
     };
     await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
     expect(client.answerCallbackQuery).toHaveBeenCalledWith({ callback_query_id: "cb-123" });
+    expect(db.getSetting("active_work_item:10")).toBe(String(item.id));
     expect(client.editMessageText).toHaveBeenCalledWith(
       expect.objectContaining({
         chat_id: 10,
@@ -133,10 +134,12 @@ describe("handleWorkerCallback (Slice 5)", () => {
       from: { id: 42 },
       message: { message_id: 100, chat: { id: 10 } },
     };
+    db.setSetting("active_work_item:10", String(item.id));
 
     // First tap
     await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
     expect(db.getWorkItem(item.id)!.status).toBe("approved");
+    expect(db.getSetting("active_work_item:10")).toBeNull();
     const jobs = db.listWorkJobs();
     expect(jobs).toHaveLength(2);
     expect(jobs.map(j => j.task_type)).toEqual(["open_github_issue", "tdd_implementation"]);
@@ -155,8 +158,10 @@ describe("handleWorkerCallback (Slice 5)", () => {
       from: { id: 42 },
       message: { message_id: 100, chat: { id: 10 } },
     };
+    db.setSetting("active_work_item:10", String(item.id));
     await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
     expect(db.getWorkItem(item.id)!.status).toBe("closed");
+    expect(db.getSetting("active_work_item:10")).toBeNull();
     expect(client.editMessageText).toHaveBeenCalled();
   });
 

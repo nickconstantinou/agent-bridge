@@ -9,6 +9,7 @@ import type { BridgeDb } from "./db.js";
 import { setPendingFeatureBrief } from "./featureBriefCapture.js";
 
 const DEFAULT_CLI_CHAIN = ["codex", "claude", "antigravity"];
+const ACTIVE_WORK_ITEM_PREFIX = "active_work_item:";
 
 export interface WorkerCommandContext {
   workerEnabled: boolean;
@@ -33,6 +34,26 @@ export interface WorkerKeyboardMessageResult {
 export type WorkerCommandResult = WorkerMessageResult | WorkerKeyboardMessageResult;
 
 const WORKER_COMMANDS = new Set(["/jobs", "/issues", "/review", "/models", "/job", "/issue", "/feature", "/approvals"]);
+
+export function activeWorkItemSettingKey(chatId: number | string): string {
+  return `${ACTIVE_WORK_ITEM_PREFIX}${chatId}`;
+}
+
+function setActiveWorkItem(db: BridgeDb | undefined, chatId: number | undefined, workItemId: number): void {
+  if (!db || chatId == null) return;
+  db.setSetting(activeWorkItemSettingKey(chatId), String(workItemId));
+}
+
+export function clearActiveWorkItem(db: BridgeDb | undefined, chatId: number | undefined): void {
+  if (!db || chatId == null) return;
+  db.setSetting(activeWorkItemSettingKey(chatId), null);
+}
+
+function buildAmendedBody(existingBody: string | null, amendment: string, userId?: string): string {
+  const prefix = existingBody?.trim() ? `${existingBody.trim()}\n\n` : "";
+  const user = userId ? ` by ${userId}` : "";
+  return `${prefix}Operator amendment${user}:\n${amendment.trim()}`;
+}
 
 export function buildWorkerCommands(): Array<{ command: string; description: string }> {
   return [
@@ -169,6 +190,7 @@ export function handleWorkerCommand(
     if (!item) {
       return { kind: "message", text: `Work item ${id} not found.` };
     }
+    setActiveWorkItem(db, ctx.chatId, item.id);
     let textOut = `📦 **Work Item Details**\n\n`;
     textOut += `**Work Item ID**: ${item.id}\n`;
     textOut += `**Type**: \`${item.kind}\`\n`;
@@ -334,4 +356,58 @@ export function handleWorkerCommand(
   }
 
   return null;
+}
+
+export function handleWorkerConversationText(
+  text: string,
+  ctx: WorkerCommandContext,
+): WorkerCommandResult | null {
+  const trimmed = text.trim();
+  if (!trimmed || !ctx.db || ctx.chatId == null) return null;
+
+  const activeId = ctx.db.getSetting(activeWorkItemSettingKey(ctx.chatId));
+  if (!activeId) return null;
+
+  const id = Number(activeId);
+  if (!Number.isInteger(id) || id <= 0) {
+    clearActiveWorkItem(ctx.db, ctx.chatId);
+    return null;
+  }
+
+  const item = ctx.db.getWorkItem(id);
+  if (!item) {
+    clearActiveWorkItem(ctx.db, ctx.chatId);
+    return { kind: "message", text: `Active work item #${id} no longer exists. Context cleared.` };
+  }
+
+  const editableStatuses = new Set(["proposed", "needs_approval", "waiting_approval"]);
+  if (!editableStatuses.has(item.status)) {
+    clearActiveWorkItem(ctx.db, ctx.chatId);
+    return {
+      kind: "message",
+      text: `Item #${item.id} is already ${item.status}. Use an explicit revise/requeue action instead of casual follow-up edits.`,
+    };
+  }
+
+  const nextBody = buildAmendedBody(item.body, trimmed, ctx.userId);
+  ctx.db.updateWorkItemBody(item.id, nextBody);
+  const updated = ctx.db.getWorkItem(item.id)!;
+
+  return {
+    kind: "keyboard_message",
+    text: [
+      `Updated item #${updated.id}.`,
+      "",
+      `Title: ${updated.title}`,
+      `Status: ${updated.status}`,
+      "",
+      "Approve when ready, or send another message to amend it again.",
+    ].join("\n"),
+    reply_markup: {
+      inline_keyboard: [[
+        { text: "✅ Approve", callback_data: `wi:${updated.id}:appv` },
+        { text: "❌ Close/Reject", callback_data: `wi:${updated.id}:clse` },
+      ]],
+    },
+  };
 }

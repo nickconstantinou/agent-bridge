@@ -18,7 +18,7 @@ import {
 import { TelegramClient } from "./telegram.js";
 import { BridgeEngine } from "./engine.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
-import { handleWorkerCommand, isWorkerCommand, buildWorkerCommands } from "./workerBot.js";
+import { handleWorkerCommand, handleWorkerConversationText, isWorkerCommand, buildWorkerCommands } from "./workerBot.js";
 import { WorkerFallbackChain } from "./workerFallback.js";
 import { runCliWithFallback } from "./workerDispatch.js";
 import { handleWorkerCallback } from "./workCallbacks.js";
@@ -394,13 +394,29 @@ for (;;) {
         // Check if this plain message is a pending feature brief
         const capturedBrief = captureFeatureBrief(chatKey, rawText);
         if (capturedBrief) {
-          const briefResult = handleWorkerCommand(`/feature ${capturedBrief}`, { workerEnabled, cliChain, db, chatId, userId });
+          const briefResult = handleWorkerCommand(`/feature ${capturedBrief}`, { workerEnabled, cliChain, db, chatId, userId, defaultRepo: process.env.WORKER_DEFAULT_REPO });
           if (briefResult) {
             const body = briefResult.kind === "keyboard_message"
               ? { text: briefResult.text, reply_markup: briefResult.reply_markup }
               : { text: briefResult.text };
             await sendTelegramMessage({ client, kind: "worker-bot", chatId, body });
           }
+          continue;
+        }
+
+        const workflowResult = handleWorkerConversationText(rawText, {
+          workerEnabled,
+          cliChain,
+          db,
+          chatId,
+          userId,
+          defaultRepo: process.env.WORKER_DEFAULT_REPO,
+        });
+        if (workflowResult) {
+          const body = workflowResult.kind === "keyboard_message"
+            ? { text: workflowResult.text, reply_markup: workflowResult.reply_markup }
+            : { text: workflowResult.text };
+          await sendTelegramMessage({ client, kind: "worker-bot", chatId, body });
           continue;
         }
 

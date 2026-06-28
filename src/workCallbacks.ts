@@ -14,6 +14,7 @@
 import { parsePrMergeCallback, handlePrMergeCallback } from "./prMergeGate.js";
 import { createRunCommand } from "./runCommandAsync.js";
 import { toTelegramEntitiesText } from "./render.js";
+import { activeWorkItemSettingKey, clearActiveWorkItem } from "./workerBot.js";
 
 /** Edit a message converting bold/code markdown markers to native Telegram entities. */
 function editWithEntities(
@@ -260,6 +261,7 @@ export async function handleWorkerCallback(
       await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "Work item not found." });
       return;
     }
+    if (chatId != null) db.setSetting(activeWorkItemSettingKey(chatId), String(item.id));
     const { text, inline_keyboard } = getWorkItemDetailsText(item);
     await client.answerCallbackQuery({ callback_query_id: cbq.id });
     if (chatId && messageId) {
@@ -283,6 +285,7 @@ export async function handleWorkerCallback(
       });
       return;
     }
+    clearActiveWorkItem(db, chatId);
     db.updateWorkItemStatus(item.id, "approved");
     // Issue job first so the GitHub issue exists before implementation starts
     db.createWorkJob({
@@ -324,6 +327,7 @@ export async function handleWorkerCallback(
       await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "Work item not found." });
       return;
     }
+    clearActiveWorkItem(db, chatId);
     db.updateWorkItemStatus(item.id, "closed");
     await client.answerCallbackQuery({ callback_query_id: cbq.id });
     if (chatId && messageId) {

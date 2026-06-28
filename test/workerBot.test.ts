@@ -5,6 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   handleWorkerCommand,
+  handleWorkerConversationText,
   isWorkerCommand,
   buildWorkerCommands,
   type WorkerCommandResult,
@@ -180,11 +181,12 @@ describe("worker commands with DB (Slice 4)", () => {
 
   it("shows issue details on /issue <id>", () => {
     const item = db.createWorkItem({ kind: "defect", source: "defect_scan", title: "A bug", created_by: "worker" });
-    const result = handleWorkerCommand(`/issue ${item.id}`, { workerEnabled: true, db });
+    const result = handleWorkerCommand(`/issue ${item.id}`, { workerEnabled: true, db, chatId: 123 });
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("keyboard_message");
     expect(result!.text).toContain(`**Work Item ID**: ${item.id}`);
     expect(result!.text).toContain("A bug");
+    expect(db.getSetting("active_work_item:123")).toBe(String(item.id));
   });
 
   it("creates a defect scan job on /review", () => {
@@ -218,6 +220,77 @@ describe("worker commands with DB (Slice 4)", () => {
     expect(jobs.length).toBe(1);
     const input = JSON.parse(jobs[0].input_json);
     expect(input.notify_chat_id).toBeUndefined();
+  });
+});
+
+describe("worker conversation context", () => {
+  let db: any;
+
+  beforeEach(() => {
+    db = openDb(":memory:");
+  });
+
+  afterEach(() => db.close());
+
+  it("amends the active work item from plain follow-up text", () => {
+    const item = db.createWorkItem({
+      kind: "feature",
+      source: "telegram",
+      title: "Add approval context",
+      body: "Initial scope.",
+      created_by: "worker",
+      repository: "agent-bridge",
+    });
+    db.setSetting("active_work_item:77", String(item.id));
+
+    const result = handleWorkerConversationText("Also make replies update the pending item.", {
+      workerEnabled: true,
+      db,
+      chatId: 77,
+      userId: "42",
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.kind).toBe("keyboard_message");
+    expect(result!.text).toContain(`Updated item #${item.id}`);
+    const updated = db.getWorkItem(item.id)!;
+    expect(updated.body).toContain("Initial scope.");
+    expect(updated.body).toContain("Also make replies update the pending item.");
+    expect(db.getSetting("active_work_item:77")).toBe(String(item.id));
+  });
+
+  it("blocks plain-text amendments after the active item is approved", () => {
+    const item = db.createWorkItem({
+      kind: "feature",
+      source: "telegram",
+      title: "Already approved",
+      created_by: "worker",
+      repository: "agent-bridge",
+    });
+    db.updateWorkItemStatus(item.id, "approved");
+    db.setSetting("active_work_item:88", String(item.id));
+
+    const result = handleWorkerConversationText("Change the scope after approval.", {
+      workerEnabled: true,
+      db,
+      chatId: 88,
+      userId: "42",
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.kind).toBe("message");
+    expect(result!.text).toMatch(/already approved|revise|requeue/i);
+    expect(db.getSetting("active_work_item:88")).toBeNull();
+  });
+
+  it("returns null when no active workflow context exists", () => {
+    const result = handleWorkerConversationText("ordinary chat", {
+      workerEnabled: true,
+      db,
+      chatId: 99,
+      userId: "42",
+    });
+    expect(result).toBeNull();
   });
 });
 

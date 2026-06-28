@@ -330,6 +330,64 @@ export async function handleWorkerCallback(
     return;
   }
 
+  // gi:<reponame>:<issuenum> — import a GitHub issue and create a work item
+  if ((cbq.data || "").startsWith("gi:")) {
+    const parts = (cbq.data || "").split(":");
+    if (parts.length === 3) {
+      const repoShort = parts[1];
+      const issueNum = Number(parts[2]);
+      if (repoShort && issueNum > 0) {
+        let owner = "";
+        try { owner = resolveGithubOwner(); } catch { /* fallback: no prefix */ }
+        const fullRepo = owner ? `${owner}/${repoShort}` : repoShort;
+        const runGhCommand = extra?.runCommand ?? createRunCommand({ loadGhToken: true });
+        let issueData: { number: number; title: string; body: string; labels: Array<{ name: string }> };
+        try {
+          const raw = await runGhCommand("gh", [
+            "issue", "view", String(issueNum), "--repo", fullRepo,
+            "--json", "number,title,body,labels",
+          ]);
+          issueData = JSON.parse(raw);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `Failed: ${msg.slice(0, 200)}` });
+          return;
+        }
+        const labelNames = (issueData.labels ?? []).map((l: { name: string }) => l.name.toLowerCase());
+        const kind = labelNames.some(l => l.includes("bug") || l.includes("defect")) ? "defect"
+          : labelNames.some(l => l.includes("refactor")) ? "refactor"
+          : "feature";
+        const item = db.createWorkItem({
+          kind,
+          source: "github",
+          title: issueData.title,
+          body: issueData.body ?? "",
+          created_by: userId,
+          repository: fullRepo,
+          priority: "normal",
+        });
+        db.linkGithubIssue({ work_item_id: item.id, repository: fullRepo, issue_number: issueNum });
+        await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `Imported #${issueNum} as work item #${item.id}` });
+        if (chatId && messageId) {
+          await editWithEntities(client, {
+            chat_id: chatId,
+            message_id: messageId,
+            text: `Imported **#${issueNum} ${issueData.title}** as work item #${item.id}.\nRepository: \`${fullRepo}\`\n\nApprove to start implementation.`,
+            reply_markup: {
+              inline_keyboard: [[
+                { text: "✅ Approve", callback_data: `wi:${item.id}:appv` },
+                { text: "❌ Close/Reject", callback_data: `wi:${item.id}:clse` },
+              ]],
+            },
+          });
+        }
+        return;
+      }
+    }
+    await client.answerCallbackQuery({ callback_query_id: cbq.id });
+    return;
+  }
+
   // Check for merge-gate callbacks before falling through
   if (!parsed) {
     const prAction = parsePrMergeCallback(cbq.data || "");
@@ -396,17 +454,22 @@ export async function handleWorkerCallback(
     await sendPackWithFallback(client, chatId, buildWorkItemApprovalPack(db, item));
     clearActiveWorkItem(db, chatId);
     db.updateWorkItemStatus(item.id, "approved");
-    // Issue job first so the GitHub issue exists before implementation starts
-    db.createWorkJob({
-      task_type: "open_github_issue",
-      idempotency_key: `gh_issue:${item.id}`,
-      work_item_id: item.id,
-      input_json: {
+    // Skip open_github_issue when the issue was imported from GitHub (already exists)
+    const hasLinkedIssue = (db.raw.prepare(
+      `SELECT 1 FROM github_links WHERE work_item_id = ? AND issue_number IS NOT NULL LIMIT 1`,
+    ).get(item.id) as { 1: number } | undefined) != null;
+    if (!hasLinkedIssue) {
+      db.createWorkJob({
+        task_type: "open_github_issue",
+        idempotency_key: `gh_issue:${item.id}`,
         work_item_id: item.id,
-        repository: item.repository,
-        ...(chatId != null ? { notify_chat_id: chatId } : {}),
-      },
-    });
+        input_json: {
+          work_item_id: item.id,
+          repository: item.repository,
+          ...(chatId != null ? { notify_chat_id: chatId } : {}),
+        },
+      });
+    }
     db.createWorkJob({
       task_type: "tdd_implementation",
       idempotency_key: `tdd:${item.id}`,

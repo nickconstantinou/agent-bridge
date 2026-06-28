@@ -431,6 +431,82 @@ describe("handleWorkerCallback (Slice 5)", () => {
     }));
   });
 
+  describe("gi: — GitHub issue import callbacks", () => {
+    it("gi:<repo>:<num> imports issue and creates a work item", async () => {
+      const issuePayload = JSON.stringify({
+        number: 42,
+        title: "Fix login bug",
+        body: "Steps to reproduce...",
+        labels: [{ name: "bug" }],
+      });
+      const runCommand = vi.fn().mockResolvedValue(issuePayload);
+      const cbq = {
+        id: "cb-gi-1",
+        data: "gi:agent-bridge:42",
+        from: { id: 42 },
+        message: { message_id: 200, chat: { id: 10 } },
+      };
+
+      await handleWorkerCallback(cbq as any, db, client, allowedUserIds, { runCommand });
+
+      const items = db.listWorkItems();
+      expect(items).toHaveLength(1);
+      expect(items[0].kind).toBe("defect");
+      expect(items[0].title).toBe("Fix login bug");
+      expect(runCommand).toHaveBeenCalledWith("gh", expect.arrayContaining(["issue", "view", "42", "--repo", "testuser/agent-bridge"]));
+      expect(client.answerCallbackQuery).toHaveBeenCalledWith(expect.objectContaining({
+        text: expect.stringContaining("Imported #42"),
+      }));
+      expect(client.editMessageText).toHaveBeenCalledWith(expect.objectContaining({
+        text: expect.stringContaining("Fix login bug"),
+      }));
+    });
+
+    it("gi:<repo>:<num> skips open_github_issue when approved", async () => {
+      const issuePayload = JSON.stringify({
+        number: 7,
+        title: "Refactor auth module",
+        body: "It is messy.",
+        labels: [{ name: "refactor" }],
+      });
+      const runCommand = vi.fn().mockResolvedValue(issuePayload);
+      const importCbq = {
+        id: "cb-gi-import",
+        data: "gi:agent-bridge:7",
+        from: { id: 42 },
+        message: { message_id: 201, chat: { id: 10 } },
+      };
+      await handleWorkerCallback(importCbq as any, db, client, allowedUserIds, { runCommand });
+
+      const item = db.listWorkItems()[0];
+      const approveCbq = {
+        id: "cb-gi-appv",
+        data: `wi:${item.id}:appv`,
+        from: { id: 42 },
+        message: { message_id: 202, chat: { id: 10 } },
+      };
+      await handleWorkerCallback(approveCbq as any, db, client, allowedUserIds);
+
+      const jobs = db.listWorkJobs();
+      const taskTypes = jobs.map(j => j.task_type);
+      expect(taskTypes).not.toContain("open_github_issue");
+    });
+
+    it("gi: with malformed callback is ignored gracefully", async () => {
+      const cbq = {
+        id: "cb-gi-bad",
+        data: "gi:only-two-parts",
+        from: { id: 42 },
+        message: { message_id: 203, chat: { id: 10 } },
+      };
+
+      await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+
+      expect(db.listWorkItems()).toHaveLength(0);
+      expect(client.answerCallbackQuery).toHaveBeenCalled();
+    });
+  });
+
   it("sends a PR approval HTML pack before merge callback handling", async () => {
     const item = db.createWorkItem({
       kind: "defect",

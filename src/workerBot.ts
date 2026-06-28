@@ -7,7 +7,8 @@
 
 import type { BridgeDb } from "./db.js";
 import { setPendingFeatureBrief, setPendingRepoBrief } from "./featureBriefCapture.js";
-import { buildRepoKeyboard } from "./repoRegistry.js";
+import { buildRepoKeyboard, resolveGithubOwner } from "./repoRegistry.js";
+import { createRunCommand } from "./runCommandAsync.js";
 
 const DEFAULT_CLI_CHAIN = ["codex", "claude", "antigravity"];
 const ACTIVE_WORK_ITEM_PREFIX = "active_work_item:";
@@ -34,7 +35,7 @@ export interface WorkerKeyboardMessageResult {
 
 export type WorkerCommandResult = WorkerMessageResult | WorkerKeyboardMessageResult;
 
-const WORKER_COMMANDS = new Set(["/jobs", "/issues", "/review", "/models", "/job", "/issue", "/feature", "/approvals", "/refactor"]);
+const WORKER_COMMANDS = new Set(["/jobs", "/issues", "/review", "/models", "/job", "/issue", "/feature", "/approvals", "/refactor", "/github-issues", "/import-issue"]);
 
 export function activeWorkItemSettingKey(chatId: number | string): string {
   return `${ACTIVE_WORK_ITEM_PREFIX}${chatId}`;
@@ -64,6 +65,8 @@ export function buildWorkerCommands(): Array<{ command: string; description: str
     { command: "feature", description: "Plan a new feature: /feature <brief description>" },
     { command: "approvals", description: "List pending approvals with their action buttons" },
     { command: "refactor", description: "Analyse code quality: /refactor [repo]" },
+    { command: "github_issues", description: "List open GitHub issues: /github-issues [repo]" },
+    { command: "import_issue", description: "Import GitHub issue: /import-issue repo#123" },
     { command: "models",  description: "Show CLI execution chain" },
   ];
 }
@@ -80,6 +83,8 @@ export function isWorkerCommand(text: string): boolean {
   if (text.trim().toLowerCase().startsWith("/issue ")) return true;
   if (text.trim().toLowerCase().startsWith("/feature ")) return true;
   if (text.trim().toLowerCase().startsWith("/refactor ")) return true;
+  if (text.trim().toLowerCase().startsWith("/github-issues ")) return true;
+  if (text.trim().toLowerCase().startsWith("/import-issue ")) return true;
   return false;
 }
 
@@ -442,6 +447,122 @@ export async function handleWorkerCommand(
     return {
       kind: "message",
       text: `Refactor scan started for **${targetRepo}** (Job #${newJob.id}). Use /jobs to track progress.`,
+    };
+  }
+
+  if (cmd === "/github-issues") {
+    const parts = trimmed.split(/\s+/);
+    const repoArg = parts.slice(1).join(" ").trim() || null;
+    const targetRepo = repoArg || ctx.defaultRepo || process.env.WORKER_DEFAULT_REPO || null;
+
+    if (!targetRepo) {
+      const keyboard = await buildRepoKeyboard("gi");
+      if (keyboard) {
+        return {
+          kind: "keyboard_message",
+          text: "Which repo's issues should I list?",
+          reply_markup: keyboard,
+        };
+      }
+      return { kind: "message", text: "Specify a repo: `/github-issues <owner/repo>`" };
+    }
+
+    let owner: string;
+    try { owner = resolveGithubOwner(); } catch { owner = ""; }
+    const fullRepo = targetRepo.includes("/") ? targetRepo : (owner ? `${owner}/${targetRepo}` : targetRepo);
+
+    let issueList: Array<{ number: number; title: string }> = [];
+    try {
+      const runGh = createRunCommand({ loadGhToken: true });
+      const raw = await runGh("gh", [
+        "issue", "list", "--repo", fullRepo,
+        "--state", "open", "--limit", "20",
+        "--json", "number,title",
+      ]);
+      issueList = JSON.parse(raw) as Array<{ number: number; title: string }>;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { kind: "message", text: `Failed to list issues for **${fullRepo}**: ${msg.slice(0, 300)}` };
+    }
+
+    if (issueList.length === 0) {
+      return { kind: "message", text: `No open issues found in **${fullRepo}**.` };
+    }
+
+    const repoShort = fullRepo.split("/").pop()!;
+    const inline_keyboard = issueList.map(i => {
+      const label = `#${i.number} ${i.title}`.slice(0, 60);
+      const cbData = `gi:${repoShort}:${i.number}`;
+      return cbData.length <= 64 ? [{ text: label, callback_data: cbData }] : [];
+    }).filter(row => row.length > 0);
+
+    return {
+      kind: "keyboard_message",
+      text: `Open issues in **${fullRepo}** — tap one to import:`,
+      reply_markup: { inline_keyboard },
+    };
+  }
+
+  if (cmd === "/import-issue") {
+    // Accept: /import-issue repo#123  OR  /import-issue owner/repo#123  OR  /import-issue repo 123
+    const arg = trimmed.slice("/import-issue".length).trim();
+    let repoName = "";
+    let issueNum = 0;
+    const hashMatch = arg.match(/^(.+?)#(\d+)$/);
+    const spaceMatch = arg.match(/^(.+?)\s+(\d+)$/);
+    if (hashMatch) { repoName = hashMatch[1].trim(); issueNum = Number(hashMatch[2]); }
+    else if (spaceMatch) { repoName = spaceMatch[1].trim(); issueNum = Number(spaceMatch[2]); }
+
+    if (!repoName || !issueNum) {
+      return { kind: "message", text: "Usage: `/import-issue owner/repo#123` or `/import-issue repo 123`" };
+    }
+
+    let owner: string;
+    try { owner = resolveGithubOwner(); } catch { owner = ""; }
+    const fullRepo = repoName.includes("/") ? repoName : (owner ? `${owner}/${repoName}` : repoName);
+
+    if (!db) return { kind: "message", text: "Database not available." };
+
+    let issueData: { number: number; title: string; body: string; labels: Array<{ name: string }> };
+    try {
+      const runGh = createRunCommand({ loadGhToken: true });
+      const raw = await runGh("gh", [
+        "issue", "view", String(issueNum), "--repo", fullRepo,
+        "--json", "number,title,body,labels",
+      ]);
+      issueData = JSON.parse(raw);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { kind: "message", text: `Failed to fetch issue #${issueNum} from **${fullRepo}**: ${msg.slice(0, 300)}` };
+    }
+
+    const labelNames = issueData.labels?.map((l: { name: string }) => l.name.toLowerCase()) ?? [];
+    const kind = labelNames.some(l => l.includes("bug") || l.includes("defect")) ? "defect"
+      : labelNames.some(l => l.includes("refactor")) ? "refactor"
+      : "feature";
+
+    const item = db.createWorkItem({
+      kind,
+      source: "github",
+      title: issueData.title,
+      body: issueData.body ?? "",
+      created_by: ctx.userId ?? "operator",
+      repository: fullRepo,
+      priority: "normal",
+    });
+
+    db.linkGithubIssue({ work_item_id: item.id, repository: fullRepo, issue_number: issueNum });
+
+    const repoNote = `\nRepository: \`${fullRepo}\` (Issue #${issueNum})`;
+    return {
+      kind: "keyboard_message",
+      text: `Imported **#${issueNum} ${issueData.title}** as work item #${item.id}.${repoNote}\n\nReview and approve to start implementation.`,
+      reply_markup: {
+        inline_keyboard: [[
+          { text: "✅ Approve", callback_data: `wi:${item.id}:appv` },
+          { text: "❌ Close/Reject", callback_data: `wi:${item.id}:clse` },
+        ]],
+      },
     };
   }
 

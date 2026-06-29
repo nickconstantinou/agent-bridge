@@ -643,7 +643,7 @@ export class BridgeEngine {
   private _applyMemorySidecars(chatKey: string, resultText: string): string {
     const extracted = extractProjectMemorySidecars(resultText);
     for (const candidate of extracted.candidates) {
-      storeProjectMemoryCandidate(this.db.raw, candidate, {
+      storeProjectMemoryCandidate(this.db, candidate, {
         chatKey,
         cliKind: this.kind,
         repoPath: process.cwd(),
@@ -691,7 +691,7 @@ export class BridgeEngine {
           });
       const parsed = parseCliResult({ bot: executionKind, stdout: raw });
       for (const candidate of parsePostTurnMemoryCandidates(parsed.text || raw)) {
-        storeProjectMemoryCandidate(this.db.raw, candidate, {
+        storeProjectMemoryCandidate(this.db, candidate, {
           chatKey,
           cliKind: this.kind,
           repoPath: process.cwd(),

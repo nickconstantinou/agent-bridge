@@ -1195,6 +1195,19 @@ export class BridgeDb {
     );
   }
 
+  findMemoryByText(text: string): { id: string } | null {
+    return (this.raw.prepare(
+      `SELECT id FROM project_memories WHERE lower(text) = lower(?) LIMIT 1`,
+    ).get(text) as { id: string } | undefined) ?? null;
+  }
+
+  getLatestConvTurnId(chatKey: string): number | null {
+    const row = this.raw.prepare(
+      `SELECT id FROM conversation_turns WHERE chat_key = ? ORDER BY id DESC LIMIT 1`,
+    ).get(chatKey) as { id: number } | undefined;
+    return row?.id ?? null;
+  }
+
   searchMemories(query: string, limit = 5): Array<{ id: string; type: string; text: string; score: number; snippet: string }> {
     if (!query.trim()) return [];
     const ftsQuery = buildMemoryFtsQuery(query);

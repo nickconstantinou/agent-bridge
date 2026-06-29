@@ -460,6 +460,7 @@ describe("ServerPlugin", () => {
     // Set custom multipliers/thresholds that force it to be flagged (even if load is 0)
     process.env.HEALTH_CPU_LOAD_AMBER_MULTIPLIER = "-1.0";
     process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER = "-0.5";
+    process.env.HEALTH_HEAVY_LANE_DB_PATH = "/tmp/agent-bridge-test-missing-heavy-lane.db";
     const oldMockExists = (globalThis as any).__mockExistsSync;
     const oldMockExec = (globalThis as any).__mockExecSync;
     const execCalls: Array<{ cmd: string; options: any }> = [];
@@ -490,6 +491,7 @@ describe("ServerPlugin", () => {
     } finally {
       delete process.env.HEALTH_CPU_LOAD_AMBER_MULTIPLIER;
       delete process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER;
+      delete process.env.HEALTH_HEAVY_LANE_DB_PATH;
       (globalThis as any).__mockExistsSync = oldMockExists;
       (globalThis as any).__mockExecSync = oldMockExec;
     }

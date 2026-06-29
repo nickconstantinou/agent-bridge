@@ -390,6 +390,7 @@ _write_discord_defaults() {
       echo "CODEX_COMMAND=${CODEX_COMMAND:-codex}"
       echo "CLAUDE_COMMAND=${CLAUDE_COMMAND:-claude}"
       echo "ANTIGRAVITY_COMMAND=${ANTIGRAVITY_COMMAND:-agy}"
+      echo "BRIDGE_EXECUTION_MODE=${BRIDGE_EXECUTION_MODE:-trusted}"
     fi
     true
   } | sudo tee "${dest}" > /dev/null

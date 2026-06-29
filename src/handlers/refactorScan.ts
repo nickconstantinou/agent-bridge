@@ -145,7 +145,11 @@ export function createRefactorScanHandler(deps: RefactorScanDeps): JobHandler {
     const repoPath = resolveRepoPath(repository);
     const cwd = repoPath ?? process.cwd();
 
-    const prompt = buildPrompt(repository);
+    const fallbackPrompt = buildPrompt(repository);
+    const dbTemplate = ctx.db.getPrompt("refactor_scan:scan", "");
+    const prompt = dbTemplate
+      ? dbTemplate.replace(/{repository}/g, repository).replace(/\${repository}/g, repository)
+      : fallbackPrompt;
     const output = await runCli(command, ["-p", prompt], cwd);
 
     const findings = parseFindings(output);
@@ -160,7 +164,18 @@ export function createRefactorScanHandler(deps: RefactorScanDeps): JobHandler {
       // Plan generation pass
       let planText = "";
       try {
-        planText = await runCli(command, ["-p", buildPlanPrompt(f, repository)], cwd);
+        const fallbackPlanPrompt = buildPlanPrompt(f, repository);
+        const dbPlanTemplate = ctx.db.getPrompt("refactor_scan:plan", "");
+        const planPrompt = dbPlanTemplate
+          ? dbPlanTemplate
+              .replace(/{repository}/g, repository)
+              .replace(/{title}/g, f.title)
+              .replace(/{rationale}/g, f.rationale ?? "see repository")
+              .replace(/{files}/g, f.files?.join(", ") ?? "unspecified")
+              .replace(/{impact_score}/g, String(f.impact_score ?? "?"))
+              .replace(/{effort_score}/g, String(f.effort_score ?? "?"))
+          : fallbackPlanPrompt;
+        planText = await runCli(command, ["-p", planPrompt], cwd);
       } catch (err) {
         console.warn("[refactor-scan] plan generation failed for:", f.title, err);
         planText = `Rationale: ${f.rationale ?? "see repository"}\nFiles: ${f.files?.join(", ") ?? "unspecified"}`;

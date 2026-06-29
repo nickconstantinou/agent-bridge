@@ -274,4 +274,51 @@ describe("createPrWatchHandler — stale digest", () => {
 
     expect(notifyStale).not.toHaveBeenCalled();
   });
+
+  it("queues a pre-merge defect scan and marks review_pending when enabled", async () => {
+    process.env.PR_DEFECT_SCAN_ENABLED = "true";
+    try {
+      const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+      const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 30, branch_name: "agent/work-30" });
+
+      const runCommand = makeRunCommand({ "30": prViewPayload({ passing: true, headRefOid: "greensha" }) });
+      await createPrWatchHandler({ runCommand })({}, { db, workerId: "w" });
+
+      const updated = db.raw.prepare("SELECT pr_state FROM github_links WHERE id = ?").get(link.id) as any;
+      expect(updated.pr_state).toBe("review_pending");
+
+      const jobs = db.raw.prepare("SELECT * FROM work_jobs WHERE task_type = 'defect_scan'").all() as any[];
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0].idempotency_key).toBe("ci_defect_scan:owner/repo:30:greensha");
+      expect(JSON.parse(jobs[0].input_json).pr_mode).toBe(true);
+    } finally {
+      delete process.env.PR_DEFECT_SCAN_ENABLED;
+    }
+  });
+
+  it("advances to ready_to_merge once pre-merge defect scan completes successfully", async () => {
+    process.env.PR_DEFECT_SCAN_ENABLED = "true";
+    try {
+      const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+      const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 31, branch_name: "agent/work-31" });
+
+      // First run: queues scan job
+      const runCommand = makeRunCommand({ "31": prViewPayload({ passing: true, headRefOid: "greensha" }) });
+      await createPrWatchHandler({ runCommand })({}, { db, workerId: "w" });
+
+      // Mark the scan job as completed
+      db.raw.prepare("UPDATE work_jobs SET status = 'completed' WHERE task_type = 'defect_scan'").run();
+
+      // Second run: progresses to ready_to_merge and creates approval
+      await createPrWatchHandler({ runCommand })({}, { db, workerId: "w" });
+
+      const updated = db.raw.prepare("SELECT pr_state FROM github_links WHERE id = ?").get(link.id) as any;
+      expect(updated.pr_state).toBe("ready_to_merge");
+
+      const approvals = db.raw.prepare("SELECT * FROM approvals WHERE work_item_id = ?").all(item.id) as any[];
+      expect(approvals).toHaveLength(1);
+    } finally {
+      delete process.env.PR_DEFECT_SCAN_ENABLED;
+    }
+  });
 });

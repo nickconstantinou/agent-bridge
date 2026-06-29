@@ -76,7 +76,11 @@ export function createFeaturePlanHandler(deps: FeaturePlanDeps): JobHandler {
     const plan = ctx.db.getFeaturePlan(planId);
     if (!plan) throw new Error(`Feature plan ${planId} not found`);
 
-    const prompt = buildPrompt(plan.brief);
+    const fallbackPrompt = buildPrompt(plan.brief);
+    const dbTemplate = ctx.db.getPrompt("feature_plan", "");
+    const prompt = dbTemplate
+      ? dbTemplate.replace(/{brief}/g, plan.brief).replace(/\${brief}/g, plan.brief)
+      : fallbackPrompt;
     const planText = await runCli(command, ["--print", "--output-format", "text", prompt]);
 
     // Persist the generated plan into scope_json

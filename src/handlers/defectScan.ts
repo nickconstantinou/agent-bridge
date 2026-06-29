@@ -24,6 +24,8 @@ interface DefectScanDeps {
   runCommand?: RunCommand;
   /** Max findings to plan and push. Defaults to 3. */
   topN?: number;
+  prepareWorkspace?: (repository: string, workItemId: number) => Promise<string>;
+  cleanupWorkspace?: (dir: string) => void;
 }
 
 interface DefectFinding {
@@ -226,7 +228,7 @@ function parseTriageDecisions(output: string): TriageDecision[] {
 }
 
 export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
-  const { runCli, command = "claude", resolveRepoPath, autoTriage = false, runCommand, topN = TOP_N_FINDINGS } = deps;
+  const { runCli, command = "claude", resolveRepoPath, autoTriage = false, runCommand, topN = TOP_N_FINDINGS, prepareWorkspace, cleanupWorkspace } = deps;
 
   return async function defectScanHandler(
     input: JobHandlerInput,
@@ -235,136 +237,202 @@ export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
     const repository = typeof input.repository === "string" ? input.repository : "unknown";
 
     let scanCwd: string | undefined;
-    if (resolveRepoPath) {
-      const resolved = resolveRepoPath(repository);
-      if (!resolved) {
-        throw new Error(`No local checkout found for repository '${repository}' — cannot scan`);
-      }
-      scanCwd = resolved;
-    }
+    let didPrepareWorkspace = false;
 
-    const prompt = buildPrompt(repository);
-    const rawOutput = await runCli(command, ["--print", "--output-format", "text", prompt], scanCwd);
-
-    const findings = parseFindings(rawOutput);
-    const summaryLine = extractSummaryLine(rawOutput);
-
-    // Filter to actionable findings, rank by value score (impact/effort), take top N
-    const actionableFindings = findings
-      .filter(f => f.confidence === "high" || f.confidence === "medium")
-      .sort((a, b) => valueScore(b) - valueScore(a))
-      .slice(0, topN);
-
-    const createdItems: Array<{ itemId: number; finding: DefectFinding }> = [];
-
-    for (const f of actionableFindings) {
-      // Plan generation pass
-      let planText = "";
-      try {
-        planText = await runCli(command, ["--print", "--output-format", "text", buildPlanPrompt(f, repository)], scanCwd);
-      } catch (err) {
-        console.warn("[defect-scan] plan generation failed for:", f.title, err);
-        planText = `Evidence: ${f.evidence ?? "see repository"}\nImpact: ${f.impact ?? "unknown"}\nConfidence: ${f.confidence ?? "unknown"}`;
-      }
-
-      const body = [
-        f.evidence ? `Evidence: ${f.evidence}` : null,
-        f.impact ? `Impact: ${f.impact}` : null,
-        f.impact_score != null ? `ImpactScore: ${f.impact_score}/10` : null,
-        f.effort_score != null ? `EffortScore: ${f.effort_score}/10` : null,
-        `Confidence: ${f.confidence}`,
-        `Source: defect_scan of ${repository}`,
-        "",
-        planText.slice(0, 4000),
-      ].filter(s => s !== null).join("\n");
-
-      const item = ctx.db.createWorkItem({
-        kind: "defect",
-        source: "defect_scan",
-        repository,
-        title: f.title,
-        body,
-        created_by: "worker",
-      });
-
-      // Create GitHub issue inline with full plan
-      if (runCommand) {
-        try {
-          const issueBody = buildIssueBody(f, planText, repository);
-          const issueUrl = await runCommand("gh", [
-            "issue", "create",
-            "--repo", repository,
-            "--title", f.title,
-            "--body", issueBody.slice(0, 65000),
-            "--label", "bug,agent-proposed",
-          ]);
-          const issueNumber = parseIssueNumber(issueUrl);
-          if (issueNumber !== null) {
-            ctx.db.linkGithubIssue({ work_item_id: item.id, repository, issue_number: issueNumber });
-          }
-        } catch (err) {
-          console.warn("[defect-scan] GitHub issue creation failed for:", f.title, err);
+    try {
+      if (input.branch_name && input.work_item_id && prepareWorkspace) {
+        scanCwd = await prepareWorkspace(repository, Number(input.work_item_id));
+        didPrepareWorkspace = true;
+        if (runCommand) {
+          await runCommand("git", ["checkout", String(input.branch_name)]).catch(() => {});
         }
+      } else if (resolveRepoPath) {
+        const resolved = resolveRepoPath(repository);
+        if (!resolved) {
+          throw new Error(`No local checkout found for repository '${repository}' — cannot scan`);
+        }
+        scanCwd = resolved;
       }
 
-      createdItems.push({ itemId: item.id, finding: f });
-    }
+      let prPromptAddendum = "";
+      if (input.pr_mode && runCommand) {
+        try {
+          const diffFiles = await runCommand("git", ["diff", "--name-only", "origin/main...HEAD"]);
+          if (diffFiles.trim()) {
+            prPromptAddendum = `\n\nThis is a pull request scan. Focus your analysis on these changed files:\n${diffFiles.trim()}`;
+          }
+        } catch {}
+      }
 
-    // Auto-triage: optional second pass to approve/reject findings
-    if (autoTriage && createdItems.length > 0) {
-      const triagePrompt = buildTriagePrompt(repository, actionableFindings);
-      const triageOutput = await runCli(command, ["--print", "--output-format", "text", triagePrompt], scanCwd);
-      const decisions = parseTriageDecisions(triageOutput);
-      const notifyChatId = typeof input.notify_chat_id === "number" ? input.notify_chat_id : undefined;
+      const fallbackPrompt = buildPrompt(repository);
+      const dbTemplate = ctx.db.getPrompt("defect_scan:scan", "");
+      const prompt = (dbTemplate
+        ? dbTemplate.replace(/{repository}/g, repository).replace(/\${repository}/g, repository)
+        : fallbackPrompt) + prPromptAddendum;
+      const rawOutput = await runCli(command, ["--print", "--output-format", "text", prompt], scanCwd);
 
-      for (const decision of decisions) {
-        const entry = createdItems[decision.index];
-        if (!entry) continue;
+      const findings = parseFindings(rawOutput);
+      const summaryLine = extractSummaryLine(rawOutput);
 
-        if (decision.decision === "APPROVE") {
-          ctx.db.updateWorkItemStatus(entry.itemId, "approved");
-          // Only queue open_github_issue if not already linked
-          const hasLinkedIssue = (ctx.db.raw.prepare(
-            `SELECT 1 FROM github_links WHERE work_item_id = ? AND issue_number IS NOT NULL LIMIT 1`,
-          ).get(entry.itemId) as { 1: number } | undefined) != null;
+      // Filter to actionable findings, rank by value score (impact/effort), take top N
+      const actionableFindings = findings
+        .filter(f => f.confidence === "high" || f.confidence === "medium")
+        .sort((a, b) => valueScore(b) - valueScore(a))
+        .slice(0, topN);
 
-          if (!hasLinkedIssue && repository) {
+      if (input.pr_mode) {
+        if (input.pr_number && runCommand) {
+          const commentBody = actionableFindings.length > 0
+            ? `### ⚠️ pre-merge defect scan findings\n\n${actionableFindings.map((f, i) => `${i + 1}. **${f.title}** (Impact: ${f.impact}, Confidence: ${f.confidence})\n   Evidence: ${f.evidence}`).join("\n\n")}`
+            : `### ✅ pre-merge defect scan findings\n\nNo issues found.`;
+          
+          await runCommand("gh", [
+            "pr", "comment", String(input.pr_number),
+            "--repo", repository,
+            "--body", commentBody,
+          ]).catch(err => console.warn("[defect-scan] failed to post PR comment", err));
+        }
+
+        if (actionableFindings.length > 0) {
+          throw new Error(`Defect scan failed: found ${actionableFindings.length} potential issues.`);
+        }
+        return { summary: "Pre-merge defect scan completed: no issues found." };
+      }
+
+      const createdItems: Array<{ itemId: number; finding: DefectFinding }> = [];
+
+      for (const f of actionableFindings) {
+        // Plan generation pass
+        let planText = "";
+        try {
+          const fallbackPlanPrompt = buildPlanPrompt(f, repository);
+          const dbPlanTemplate = ctx.db.getPrompt("defect_scan:plan", "");
+          const planPrompt = dbPlanTemplate
+            ? dbPlanTemplate
+                .replace(/{repository}/g, repository)
+                .replace(/{title}/g, f.title)
+                .replace(/{evidence}/g, f.evidence ?? "see repository")
+                .replace(/{impact}/g, f.impact ?? "unknown")
+                .replace(/{impact_score}/g, String(f.impact_score ?? "?"))
+                .replace(/{effort_score}/g, String(f.effort_score ?? "?"))
+            : fallbackPlanPrompt;
+          planText = await runCli(command, ["--print", "--output-format", "text", planPrompt], scanCwd);
+        } catch (err) {
+          console.warn("[defect-scan] plan generation failed for:", f.title, err);
+          planText = `Evidence: ${f.evidence ?? "see repository"}\nImpact: ${f.impact ?? "unknown"}\nConfidence: ${f.confidence ?? "unknown"}`;
+        }
+
+        const body = [
+          f.evidence ? `Evidence: ${f.evidence}` : null,
+          f.impact ? `Impact: ${f.impact}` : null,
+          f.impact_score != null ? `ImpactScore: ${f.impact_score}/10` : null,
+          f.effort_score != null ? `EffortScore: ${f.effort_score}/10` : null,
+          `Confidence: ${f.confidence}`,
+          `Source: defect_scan of ${repository}`,
+          "",
+          planText.slice(0, 4000),
+        ].filter(s => s !== null).join("\n");
+
+        const item = ctx.db.createWorkItem({
+          kind: "defect",
+          source: "defect_scan",
+          repository,
+          title: f.title,
+          body,
+          created_by: "worker",
+        });
+
+        // Create GitHub issue inline with full plan
+        if (runCommand) {
+          try {
+            const issueBody = buildIssueBody(f, planText, repository);
+            const issueUrl = await runCommand("gh", [
+              "issue", "create",
+              "--repo", repository,
+              "--title", f.title,
+              "--body", issueBody.slice(0, 65000),
+              "--label", "bug,agent-proposed",
+            ]);
+            const issueNumber = parseIssueNumber(issueUrl);
+            if (issueNumber !== null) {
+              ctx.db.linkGithubIssue({ work_item_id: item.id, repository, issue_number: issueNumber });
+            }
+          } catch (err) {
+            console.warn("[defect-scan] GitHub issue creation failed for:", f.title, err);
+          }
+        }
+
+        createdItems.push({ itemId: item.id, finding: f });
+      }
+
+      // Auto-triage: optional second pass to approve/reject findings
+      if (autoTriage && createdItems.length > 0) {
+        const fallbackTriagePrompt = buildTriagePrompt(repository, actionableFindings);
+        const dbTriageTemplate = ctx.db.getPrompt("defect_scan:triage", "");
+        const triagePrompt = dbTriageTemplate
+          ? dbTriageTemplate
+              .replace(/{repository}/g, repository)
+              .replace(/{findings}/g, actionableFindings.map((f, i) =>
+                `${i + 1}. Title: ${f.title}\n   Evidence: ${f.evidence ?? "none"}\n   Impact: ${f.impact ?? "unknown"}\n   Confidence: ${f.confidence ?? "unknown"}`
+              ).join("\n\n"))
+          : fallbackTriagePrompt;
+        const triageOutput = await runCli(command, ["--print", "--output-format", "text", triagePrompt], scanCwd);
+        const decisions = parseTriageDecisions(triageOutput);
+        const notifyChatId = typeof input.notify_chat_id === "number" ? input.notify_chat_id : undefined;
+
+        for (const decision of decisions) {
+          const entry = createdItems[decision.index];
+          if (!entry) continue;
+
+          if (decision.decision === "APPROVE") {
+            ctx.db.updateWorkItemStatus(entry.itemId, "approved");
+            // Only queue open_github_issue if not already linked
+            const hasLinkedIssue = (ctx.db.raw.prepare(
+              `SELECT 1 FROM github_links WHERE work_item_id = ? AND issue_number IS NOT NULL LIMIT 1`,
+            ).get(entry.itemId) as { 1: number } | undefined) != null;
+
+            if (!hasLinkedIssue && repository) {
+              ctx.db.createWorkJob({
+                task_type: "open_github_issue",
+                idempotency_key: `gh_issue:${entry.itemId}`,
+                work_item_id: entry.itemId,
+                input_json: {
+                  work_item_id: entry.itemId,
+                  repository,
+                  ...(notifyChatId != null ? { notify_chat_id: notifyChatId } : {}),
+                },
+              });
+            }
             ctx.db.createWorkJob({
-              task_type: "open_github_issue",
-              idempotency_key: `gh_issue:${entry.itemId}`,
+              task_type: "tdd_implementation",
+              idempotency_key: `tdd:${entry.itemId}`,
               work_item_id: entry.itemId,
               input_json: {
                 work_item_id: entry.itemId,
-                repository,
+                ...(repository ? { repository } : {}),
                 ...(notifyChatId != null ? { notify_chat_id: notifyChatId } : {}),
               },
             });
+          } else {
+            ctx.db.updateWorkItemStatus(entry.itemId, "closed");
           }
-          ctx.db.createWorkJob({
-            task_type: "tdd_implementation",
-            idempotency_key: `tdd:${entry.itemId}`,
-            work_item_id: entry.itemId,
-            input_json: {
-              work_item_id: entry.itemId,
-              ...(repository ? { repository } : {}),
-              ...(notifyChatId != null ? { notify_chat_id: notifyChatId } : {}),
-            },
-          });
-        } else {
-          ctx.db.updateWorkItemStatus(entry.itemId, "closed");
         }
       }
+
+      const created = createdItems.length;
+      const topScores = actionableFindings
+        .map(f => `${f.title} (value: ${valueScore(f).toFixed(1)})`)
+        .join(", ");
+
+      const summary = created > 0
+        ? `${summaryLine} — top ${created} ranked: ${topScores}`
+        : summaryLine;
+
+      return { summary, rawOutput, findings, work_item_ids: createdItems.map(item => item.itemId) };
+    } finally {
+      if (didPrepareWorkspace && scanCwd && cleanupWorkspace) {
+        cleanupWorkspace(scanCwd);
+      }
     }
-
-    const created = createdItems.length;
-    const topScores = actionableFindings
-      .map(f => `${f.title} (value: ${valueScore(f).toFixed(1)})`)
-      .join(", ");
-
-    const summary = created > 0
-      ? `${summaryLine} — top ${created} ranked: ${topScores}`
-      : summaryLine;
-
-    return { summary, rawOutput, findings, work_item_ids: createdItems.map(item => item.itemId) };
   };
 }

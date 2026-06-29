@@ -181,7 +181,15 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
         });
         const ciSummary = typeof input.ci_failure_summary === "string" ? input.ci_failure_summary : "";
         const ciLog = typeof input.ci_failure_log === "string" ? input.ci_failure_log : "";
-        const ciPrompt = buildCiFixPrompt(item.title, workContext, ciSummary, ciLog);
+        const fallbackCiPrompt = buildCiFixPrompt(item.title, workContext, ciSummary, ciLog);
+        const dbCiTemplate = ctx.db.getPrompt("tdd_implementation:ci_fix", "");
+        const ciPrompt = dbCiTemplate
+          ? dbCiTemplate
+              .replace(/{title}/g, item.title)
+              .replace(/{body}/g, workContext ?? "")
+              .replace(/{ciSummary}/g, ciSummary)
+              .replace(/{ciLog}/g, ciLog)
+          : fallbackCiPrompt;
         await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, ciPrompt], repoPath);
 
         await runGit(["add", "-A"], repoPath);
@@ -222,7 +230,14 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
           await Promise.resolve(runGit(["checkout", "-b", branchName], repoPath));
         });
         const priorError = typeof input.repair_context === "string" ? input.repair_context : "";
-        const repairPrompt = buildRepairPrompt(item.title, workContext, priorError);
+        const fallbackRepairPrompt = buildRepairPrompt(item.title, workContext, priorError);
+        const dbRepairTemplate = ctx.db.getPrompt("tdd_implementation:repair", "");
+        const repairPrompt = dbRepairTemplate
+          ? dbRepairTemplate
+              .replace(/{title}/g, item.title)
+              .replace(/{body}/g, workContext ?? "")
+              .replace(/{priorError}/g, priorError)
+          : fallbackRepairPrompt;
         await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, repairPrompt], repoPath);
 
         await runGit(["add", "-A"], repoPath);
@@ -263,7 +278,13 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
       }
 
       // ── Red: write failing tests ────────────────────────────────────────────
-      const redPrompt = buildRedTestPrompt(item.title, workContext);
+      const fallbackRedPrompt = buildRedTestPrompt(item.title, workContext);
+      const dbRedTemplate = ctx.db.getPrompt("tdd_implementation:red_test", "");
+      const redPrompt = dbRedTemplate
+        ? dbRedTemplate
+            .replace(/{title}/g, item.title)
+            .replace(/{body}/g, workContext ?? "")
+        : fallbackRedPrompt;
       await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, redPrompt], repoPath);
 
       await runGit(["add", "-A"], repoPath);
@@ -287,7 +308,13 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
       );
 
       // ── Green: implement the fix ────────────────────────────────────────────
-      const greenPrompt = buildGreenImplementationPrompt(item.title, workContext);
+      const fallbackGreenPrompt = buildGreenImplementationPrompt(item.title, workContext);
+      const dbGreenTemplate = ctx.db.getPrompt("tdd_implementation:green_implementation", "");
+      const greenPrompt = dbGreenTemplate
+        ? dbGreenTemplate
+            .replace(/{title}/g, item.title)
+            .replace(/{body}/g, workContext ?? "")
+        : fallbackGreenPrompt;
       await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, greenPrompt], repoPath);
 
       await runGit(["add", "-A"], repoPath);

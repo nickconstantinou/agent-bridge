@@ -143,6 +143,46 @@ export function createPrWatchHandler(deps: PrWatchDeps): JobHandler {
           lines.push(`#${link.pr_number} (${link.repository}): CI failing, fix job #${fixJob.id} enqueued`);
         }
       } else if (isRollupPassing(statusCheckRollup)) {
+        const enablePrDefectScan = process.env.PR_DEFECT_SCAN_ENABLED === "true";
+        if (enablePrDefectScan) {
+          const scanKey = `ci_defect_scan:${link.repository}:${link.pr_number}:${headRefOid}`;
+          const existingScan = ctx.db.raw
+            .prepare("SELECT status FROM work_jobs WHERE idempotency_key = ?")
+            .get(scanKey) as { status: string } | undefined;
+
+          if (!existingScan) {
+            ctx.db.createWorkJob({
+              task_type: "defect_scan",
+              idempotency_key: scanKey,
+              work_item_id: link.work_item_id,
+              input_json: {
+                repository: link.repository,
+                branch_name: link.branch_name,
+                pr_mode: true,
+                pr_number: link.pr_number,
+                head_sha: headRefOid,
+                work_item_id: link.work_item_id,
+              },
+              max_attempts: 1,
+            });
+            ctx.db.updatePrState(link.id, "review_pending");
+            lines.push(`#${link.pr_number} (${link.repository}): CI passing, queued pre-merge defect scan`);
+            continue;
+          }
+
+          if (existingScan.status === "pending" || existingScan.status === "leased" || existingScan.status === "running") {
+            ctx.db.updatePrState(link.id, "review_pending");
+            lines.push(`#${link.pr_number} (${link.repository}): pre-merge defect scan in progress`);
+            continue;
+          }
+
+          if (existingScan.status === "failed") {
+            ctx.db.updatePrState(link.id, "review_failed");
+            lines.push(`#${link.pr_number} (${link.repository}): pre-merge defect scan failed`);
+            continue;
+          }
+        }
+
         ctx.db.updatePrState(link.id, "ready_to_merge");
 
         // Ensure exactly one pending merge approval with the current head SHA

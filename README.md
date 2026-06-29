@@ -199,7 +199,9 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `WORKER_SCRIBE_CLI_COMMAND` | Worker | `DEFECT_SCAN_CLI_COMMAND` or first `WORKER_SCRIBE_CLI_CHAIN` entry | Primary CLI command for read-only/prose jobs |
 | `BRIDGE_ASYNC_ENABLED` | All | `true` | Enable streaming (disable for sync/plain mode) |
 | `BRIDGE_EXECUTION_MODE` | All | `safe` | `safe` or `trusted` (bypasses CLI approval prompts) |
+| `PR_DEFECT_SCAN_ENABLED` | Worker | `false` | Enable pre-merge defect scanning when CI checks pass |
 | `BRIDGE_PROJECT_DIR` | All | current working directory | Repo path (used as default CLI working dir and DB location) |
+
 | `BRIDGE_ROOT_DIR` | All | `$HOME` | Fallback working dir when no `*_PROJECT_DIR` is set |
 
 Effort levels are standardized as `low`, `medium`, `high`, `xhigh`, and `max`;
@@ -298,6 +300,7 @@ pass the same validation, dedupe, and secret checks as `--memory-add-json`.
 - `risk-based-test-strategy` — choose test depth based on blast radius and regression risk
 - `red-green-refactor-tdd` — use red-green-refactor TDD for features, bug fixes, behavior changes, and refactoring
 - `release-readiness-review` — check release, rollback, observability, docs, and post-release validation readiness
+- `git-sandbox` — isolate work using git worktrees and feature branches, creating Draft PRs and validating changes before merging
 
 Skills are stored once under:
 

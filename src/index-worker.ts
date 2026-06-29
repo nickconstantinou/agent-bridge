@@ -211,6 +211,12 @@ const jobExecutor = startJobExecutorLoop({
       resolveRepoPath: (repository) => resolveLocalRepoPath(repository),
       autoTriage: true,
       runCommand: (binary, args) => runWorkerCommand(binary, args),
+      prepareWorkspace: (repository, workItemId) => prepareWorkspace({
+        repository,
+        workItemId,
+        installDeps: (dir) => runWorkerCommand("npm", ["ci", "--no-audit", "--no-fund", "--include=dev"], { cwd: dir }).then(() => undefined),
+      }),
+      cleanupWorkspace,
     }),
     feature_plan: createFeaturePlanHandler({
       runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), scribeCliChain, { timeoutMs: 20 * 60 * 1000, effort: workerEffortForTask("feature_plan") }),

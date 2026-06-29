@@ -17,6 +17,7 @@ describe("createRefactorScanHandler", () => {
     const mockDb = {
       createWorkItem: vi.fn().mockReturnValue({ id: 1 }),
       raw: { prepare: vi.fn().mockReturnValue({ run: vi.fn() }) },
+      getPrompt: vi.fn().mockImplementation((name, fallback) => fallback),
     };
     const handler = createRefactorScanHandler({ runCli });
     await handler({ repository: "test-repo" }, { db: mockDb } as any);

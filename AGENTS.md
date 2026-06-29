@@ -33,6 +33,12 @@ When executing or reviewing a plan, every phase that adds new behaviour must inc
 
 ---
 
+# Worktree and Branch Isolation
+
+For substantial changes or complex features, use the `git-sandbox` skill to isolate execution environments. Do not modify the main workspace directly if worktree isolation is requested.
+
+---
+
 # Persistent memory
 
 Bridge-spawned agents receive `AGENT_BRIDGE_CONTEXT_COMMAND` when shared

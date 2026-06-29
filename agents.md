@@ -61,8 +61,11 @@ Do not bypass this adapter or pass lossy `Number(snowflake)` values directly
 into the engine. That breaks authorization, session isolation, and reply
 routing for large Discord IDs.
 
-## Path Portability Rule
+## Sandbox Workspaces
 
+Use the `git-sandbox` skill to isolate substantial or complex changes. For large-scale refactoring or multi-commit implementations, create a git worktree sandbox rather than developing directly inside active, running process directories.
+
+## Path Portability Rule
 All future path-related changes must be machine agnostic. Prefer explicit environment variables first, then repo-relative or process-cwd defaults. Do not hardcode user names, home directories, deployment host paths, or local workspace layouts into source, tests, docs, or generated service defaults. Examples should use placeholders such as `/path/to/agent-bridge` unless they are describing an actual required Linux convention like `/etc/default`.
 
 ## Shared Memory

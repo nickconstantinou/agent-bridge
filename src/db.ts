@@ -182,6 +182,12 @@ export function openDb(dbPath: string): BridgeDb {
       updated_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(work_item_id) REFERENCES work_items(id)
     );
+    CREATE TABLE IF NOT EXISTS prompts (
+      name        TEXT    PRIMARY KEY,
+      prompt_text TEXT    NOT NULL,
+      created_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
   `);
   try {
     raw.exec(`ALTER TABLE bridge_state ADD COLUMN claude_session_id TEXT`);
@@ -976,6 +982,21 @@ export class BridgeDb {
 
   getMemoryCount(): number {
     return this.memories.getMemoryCount();
+  }
+
+  getPrompt(name: string, fallback: string): string {
+    const row = this.raw.prepare("SELECT prompt_text FROM prompts WHERE name = ?").get(name) as { prompt_text: string } | undefined;
+    return row ? row.prompt_text : fallback;
+  }
+
+  setPrompt(name: string, promptText: string): void {
+    this.raw.prepare(
+      `INSERT INTO prompts (name, prompt_text)
+       VALUES (?, ?)
+       ON CONFLICT(name) DO UPDATE SET
+         prompt_text = excluded.prompt_text,
+         updated_at = CURRENT_TIMESTAMP`
+    ).run(name, promptText);
   }
 
   close(): void {

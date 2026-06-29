@@ -114,6 +114,8 @@ Set in the worker's env file (`.env.worker` or the systemd default file):
 | `WORKER_GIT_EMAIL` | `agent-bridge-worker@users.noreply.github.com` | Git author email used in workspace commits |
 | `DB_PATH` | `.data/bridge.sqlite` | SQLite database path |
 | `BRIDGE_EXECUTION_MODE` | `safe` | Execution mode (`safe` or `trusted`) |
+| `PR_DEFECT_SCAN_ENABLED` | `false` | Enable pre-merge defect scanning when CI checks pass |
+
 
 Code-writing jobs (`tdd_implementation`, `orchestrated_task`) use the code
 chain and never fall back to Agy. Scribe/read-only jobs (`defect_scan`,
@@ -173,3 +175,47 @@ The remaining roadmap is maintainer queue triage: turning external issue/PR
 queues into the same policy-gated worker flow. Plan:
 `docs/autonomous-agent-bridge-research.md` → "Phase 9.5 — Maintainer Queue
 Triage".
+
+## Git Worktree Sandboxing
+
+For substantial or complex changes, the worker can use the `git-sandbox` skill to isolate its execution environment. This avoids writing changes directly into the main workspace. The sandbox workflow:
+1. Creates a feature branch and isolates the workspace using `git worktree`.
+2. Commits tests first (TDD mode) to verify failure.
+3. Implements the fix, verifies all checks pass, and commits the implementation.
+4. Opens a Draft Pull Request using the GitHub CLI (`gh pr create --draft`).
+5. Cleans up the local worktree after merge or close.
+
+## Prompt Customization Templates
+
+The worker supports dynamic database-backed prompt customization templates. If a template exists in the SQLite `prompts` table, the worker loads it instead of the hardcoded default prompt.
+
+### DB Schema
+The templates are stored in the `prompts` table:
+```sql
+CREATE TABLE prompts (
+  name        TEXT    PRIMARY KEY,
+  prompt_text TEXT    NOT NULL,
+  created_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+### Overridable Prompt Names and Placeholders
+
+| Prompt Name | Handled In | Purpose | Placeholders |
+|---|---|---|---|
+| `defect_scan:triage` | `defectScan.ts` | Triaging scan findings | `{repository}`, `{findings}` |
+| `feature_plan` | `featurePlan.ts` | Feature plan generation | `{brief}` (or `${brief}`) |
+| `refactor_scan:scan` | `refactorScan.ts` | Running refactoring scan | `{repository}` (or `${repository}`) |
+| `refactor_scan:plan` | `refactorScan.ts` | TDD plan for refactor finding | `{repository}`, `{title}`, `{rationale}`, `{files}`, `{impact_score}`, `{effort_score}` |
+| `tdd_implementation:ci_fix` | `tddImplementation.ts` | Fixing failing CI checks | `{title}`, `{body}`, `{ciSummary}`, `{ciLog}` |
+| `tdd_implementation:repair` | `tddImplementation.ts` | Fixing implementation compile/run errors | `{title}`, `{body}`, `{priorError}` |
+| `tdd_implementation:red_test` | `tddImplementation.ts` | Writing failing TDD tests | `{title}`, `{body}` |
+| `tdd_implementation:green_implementation` | `tddImplementation.ts` | Implementing the fix | `{title}`, `{body}` |
+
+### Setting a Template Customization
+You can inject a customized prompt directly into the SQLite DB:
+```bash
+sqlite3 .data/bridge.sqlite "INSERT OR REPLACE INTO prompts (name, prompt_text) VALUES ('feature_plan', 'My custom feature plan template: {brief}');"
+```
+

@@ -20,9 +20,10 @@
 import dotenv from "dotenv";
 import { getBridgeProjectDir, openDb, shutdownCliProcesses } from "./bridge.js";
 import { DiscordClient, type DiscordUpdate } from "./discord.js";
+import { discordMessageToTelegramUpdate, numericId } from "./discordAdapter.js";
 import { BridgeEngine } from "./engine.js";
 import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
-import type { TelegramUpdate, TelegramMessage } from "./types.js";
+import type { TelegramUpdate } from "./types.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env.discord",
@@ -73,7 +74,7 @@ const client = new DiscordClient({
       );
       return;
     }
-    const telegramLike = discordUpdateToTelegramLike(update, allowedUserIds);
+    const telegramLike = discordMessageToTelegramUpdate(update, allowedUserIds);
     if (telegramLike) {
       engine.handleUpdate(telegramLike).catch((err) =>
         console.error("[discord] handleUpdate error", err),
@@ -118,49 +119,6 @@ client.connect();
 
 // Keep the process alive — gateway events drive execution
 await new Promise(() => {});
-
-// ── Adapters ──────────────────────────────────────────────────────────────────
-
-/**
- * Converts a Discord MESSAGE_CREATE payload into a TelegramUpdate-compatible shape
- * so BridgeEngine.handleUpdate() can process it without modification.
- *
- * Discord message fields → Telegram equivalents:
- *   channel_id → chat.id (numeric hash so engine can use it as chatKey)
- *   author.id  → from.id
- *   content    → text
- *   thread_id  → message_thread_id (threads are separate channels in Discord)
- */
-function discordUpdateToTelegramLike(
-  update: DiscordUpdate,
-  allowedUserIds: Set<string>,
-): TelegramUpdate | null {
-  if (update.type !== "MESSAGE_CREATE") return null;
-
-  const d = update.data;
-  const authorId = String(d.author?.id ?? "");
-  if (!allowedUserIds.has(authorId)) return null;
-
-  // Ignore bot messages
-  if (d.author?.bot) return null;
-
-  const channelId = numericId(d.channel_id ?? "0");
-  const userId = numericId(authorId);
-
-  const message: TelegramMessage = {
-    message_id: numericId(d.id ?? "0"),
-    chat: { id: channelId, type: d.guild_id ? "supergroup" : "private" },
-    from: { id: userId, first_name: d.author?.username ?? "Discord User" },
-    text: d.content ?? "",
-  };
-
-  // Thread channels: use thread_id as message_thread_id for per-thread session isolation
-  if (d.thread) {
-    message.message_thread_id = numericId(d.channel_id ?? "0");
-  }
-
-  return { update_id: numericId(d.id ?? "0"), message };
-}
 
 /**
  * Handles a Discord INTERACTION_CREATE (slash command).
@@ -209,10 +167,4 @@ async function handleInteraction(d: any): Promise<void> {
   };
 
   await engine.handleUpdate(update);
-}
-
-/** Converts a Discord snowflake string into a safe JavaScript integer using modulo. */
-function numericId(snowflake: string): number {
-  const n = BigInt(snowflake || "0");
-  return Number(n % BigInt(Number.MAX_SAFE_INTEGER));
 }

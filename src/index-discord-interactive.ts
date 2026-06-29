@@ -21,10 +21,14 @@
 import dotenv from "dotenv";
 import { getBridgeProjectDir, openDb, shutdownCliProcesses, parseModelPreference } from "./bridge.js";
 import { DiscordClient, type DiscordUpdate } from "./discord.js";
+import {
+  DiscordTelegramPlatformAdapter,
+  discordMessageToTelegramUpdate,
+  numericId,
+} from "./discordAdapter.js";
 import { BridgeEngine } from "./engine.js";
 import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
 import { WorkerFallbackChain } from "./workerFallback.js";
-import type { MessagingPlatform } from "./platform.js";
 import {
   getUserCliPreference,
   setUserCliPreference,
@@ -33,7 +37,7 @@ import {
   dispatchInteractiveWithFallback,
   type CliKind,
 } from "./interactiveBot.js";
-import type { BridgeConfig, BotKind, TelegramUpdate, TelegramMessage } from "./types.js";
+import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env.discord-interactive",
@@ -91,65 +95,6 @@ const cliChain = (process.env.INTERACTIVE_CLI_CHAIN || "codex,claude,antigravity
 const fallbackChain = new WorkerFallbackChain(cliChain, db);
 const exhaustedChats = new Set<string>();
 const contextPreambles = new Map<string, string>();
-const snowflakeAliases = new Map<string, string>();
-
-class DiscordEngineClient implements MessagingPlatform {
-  constructor(
-    private readonly inner: DiscordClient,
-    private readonly aliases: Map<string, string>,
-  ) {}
-
-  getUpdates(): Promise<any> {
-    throw new Error("Discord gateway is push-based; getUpdates is not supported");
-  }
-
-  sendMessage(body: any): Promise<any> {
-    return this.inner.sendMessage(this.rewriteBody(body));
-  }
-
-  editMessageText(body: any): Promise<any> {
-    return this.inner.editMessageText(this.rewriteBody(body));
-  }
-
-  sendChatAction(body: any): Promise<any> {
-    return this.inner.sendChatAction(this.rewriteBody(body));
-  }
-
-  answerCallbackQuery(body: any): Promise<any> {
-    return this.inner.answerCallbackQuery(body);
-  }
-
-  setMyCommands(body: any): Promise<any> {
-    return this.inner.setMyCommands(body);
-  }
-
-  sendDocument(chatId: number, filePath: string, caption?: string): Promise<void> {
-    return this.inner.sendDocument(this.resolveSnowflake(chatId), filePath, caption);
-  }
-
-  sendPhoto(chatId: number, filePath: string, caption?: string): Promise<void> {
-    return this.inner.sendPhoto(this.resolveSnowflake(chatId), filePath, caption);
-  }
-
-  getFilePath(fileId: string): Promise<string> {
-    return this.inner.getFilePath(fileId);
-  }
-
-  downloadFile(filePath: string, destPath: string): Promise<void> {
-    return this.inner.downloadFile(filePath, destPath);
-  }
-
-  private rewriteBody(body: any): any {
-    const chatId = body?.chat_id ?? body?.channel_id;
-    if (chatId == null) return body;
-    const snowflake = this.resolveSnowflake(chatId);
-    return { ...body, chat_id: snowflake, channel_id: snowflake };
-  }
-
-  private resolveSnowflake(id: number | string): string {
-    return this.aliases.get(String(id)) ?? String(id);
-  }
-}
 
 // ── DiscordClient ─────────────────────────────────────────────────────────────
 
@@ -176,7 +121,7 @@ const client = new DiscordClient({
   },
   onError: (err) => console.error("[discord-interactive] gateway error", err),
 });
-const engineClient = new DiscordEngineClient(client, snowflakeAliases);
+const engineClient = new DiscordTelegramPlatformAdapter(client);
 
 // ── Engines ───────────────────────────────────────────────────────────────────
 
@@ -314,20 +259,18 @@ async function handleMessage(d: any): Promise<void> {
   const channelId = String(d.channel_id ?? "");
   const chatKey = channelId; // Discord: channel IS the conversation unit
 
-  const chatId = rememberSnowflakeAlias(channelId);
-  const userId = rememberSnowflakeAlias(authorId);
+  const chatId = engineClient.rememberSnowflakeAlias(channelId);
+  const userId = engineClient.rememberSnowflakeAlias(authorId);
 
   if (content) fallbackChain.addTurn(chatKey, "user", content);
 
-  const update: TelegramUpdate = {
-    update_id: numericId(d.id ?? "0"),
-    message: {
-      message_id: numericId(d.id ?? "0"),
-      chat: { id: chatId, type: d.guild_id ? "supergroup" : "private" },
-      from: { id: userId, first_name: d.author?.username ?? "User" },
-      text: content,
-    } satisfies TelegramMessage,
-  };
+  const update = discordMessageToTelegramUpdate(
+    { type: "MESSAGE_CREATE", data: { ...d, content } },
+    allowedUserIds,
+  );
+  if (!update?.message) return;
+  update.message.chat.id = chatId;
+  update.message.from = { id: userId, first_name: d.author?.username ?? "User" };
 
   await dispatchInteractiveWithFallback(update, chatKey, {
     engines,
@@ -419,8 +362,8 @@ async function handleInteraction(d: any): Promise<void> {
     }).catch((err) => console.warn("[discord-interactive] slash ACK failed", err));
 
     const promptText = d.data?.options?.[0]?.value as string | undefined ?? commandName;
-    const chatId = rememberSnowflakeAlias(channelId);
-    const numUserId = rememberSnowflakeAlias(userId);
+    const chatId = engineClient.rememberSnowflakeAlias(channelId);
+    const numUserId = engineClient.rememberSnowflakeAlias(userId);
     const chatKey = channelId;
 
     const update: TelegramUpdate = {
@@ -430,7 +373,7 @@ async function handleInteraction(d: any): Promise<void> {
         chat: { id: chatId, type: d.guild_id ? "supergroup" : "private" },
         from: { id: numUserId, first_name: d.member?.user?.username ?? d.user?.username ?? "User" },
         text: `/${promptText}`,
-      } satisfies TelegramMessage,
+      },
     };
 
     await engines[getUserCliPreference(db, chatKey)].handleUpdate(update);
@@ -454,16 +397,3 @@ console.log("[discord-interactive] connecting gateway...");
 client.connect();
 
 await new Promise(() => {}); // keep process alive — gateway drives everything
-
-// ── Utilities ─────────────────────────────────────────────────────────────────
-
-function rememberSnowflakeAlias(snowflake: string): number {
-  const alias = numericId(snowflake);
-  snowflakeAliases.set(String(alias), snowflake);
-  return alias;
-}
-
-function numericId(snowflake: string): number {
-  const n = BigInt(snowflake || "0");
-  return Number(n % BigInt(Number.MAX_SAFE_INTEGER));
-}

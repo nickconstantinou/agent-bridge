@@ -94,6 +94,7 @@ export function createFeaturePlanHandler(deps: FeaturePlanDeps): JobHandler {
       created_by: plan.user_id,
       repository,
     });
+    ctx.db.setWorkItemPlan(item.id, planText, { source: "feature_plan" });
 
     const summary = `Feature plan ready: **${plan.brief}**\n\nUse /issues to review and approve.`;
     return { summary, planText, work_item_id: item.id, work_item_ids: [item.id] };

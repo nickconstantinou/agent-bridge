@@ -173,6 +173,15 @@ export function openDb(dbPath: string): BridgeDb {
       created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS work_item_plans (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      work_item_id INTEGER NOT NULL UNIQUE,
+      plan_text    TEXT NOT NULL,
+      quality_json TEXT NOT NULL DEFAULT '{}',
+      created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(work_item_id) REFERENCES work_items(id)
+    );
   `);
   try {
     raw.exec(`ALTER TABLE bridge_state ADD COLUMN claude_session_id TEXT`);
@@ -759,6 +768,24 @@ export class BridgeDb {
     ).run(JSON.stringify(scope), id);
   }
 
+  setWorkItemPlan(workItemId: number, planText: string, quality: object = {}): WorkItemPlan {
+    return this.raw.prepare(
+      `INSERT INTO work_item_plans (work_item_id, plan_text, quality_json)
+       VALUES (?, ?, ?)
+       ON CONFLICT(work_item_id) DO UPDATE SET
+         plan_text = excluded.plan_text,
+         quality_json = excluded.quality_json,
+         updated_at = CURRENT_TIMESTAMP
+       RETURNING *`
+    ).get(workItemId, planText, JSON.stringify(quality)) as WorkItemPlan;
+  }
+
+  getWorkItemPlan(workItemId: number): WorkItemPlan | null {
+    return (this.raw.prepare(
+      `SELECT * FROM work_item_plans WHERE work_item_id = ? LIMIT 1`
+    ).get(workItemId) as WorkItemPlan | undefined) ?? null;
+  }
+
   cleanupOrphanedRuns(onOrphan: (run: { run_id: string; chat_id: string; bot: string }) => void | Promise<void>): void {
     this.runs.cleanupOrphanedRuns(onOrphan);
   }
@@ -1026,6 +1053,15 @@ export interface FeaturePlan {
   status: string;
   brief: string;
   scope_json: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkItemPlan {
+  id: number;
+  work_item_id: number;
+  plan_text: string;
+  quality_json: string;
   created_at: string;
   updated_at: string;
 }

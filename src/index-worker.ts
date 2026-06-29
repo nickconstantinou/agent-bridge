@@ -43,6 +43,7 @@ import { createPrLifecycleHandler } from "./handlers/prLifecycle.js";
 import { createPrWatchHandler } from "./handlers/prWatch.js";
 import { createPrRefreshHandler } from "./handlers/prRefresh.js";
 import { createRefactorScanHandler } from "./handlers/refactorScan.js";
+import { createImplementationPlanHandler } from "./handlers/implementationPlan.js";
 import { captureFeatureBrief, hasPendingCustomRepo, clearPendingCustomRepo } from "./featureBriefCapture.js";
 import { runCli } from "./cli.js";
 import { createRunCommand } from "./runCommandAsync.js";
@@ -217,6 +218,12 @@ const jobExecutor = startJobExecutorLoop({
     refactor_scan: createRefactorScanHandler({
       runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), scribeCliChain, { timeoutMs: 10 * 60 * 1000, effort: workerEffortForTask("defect_scan") }),
       command: scribeCommand,
+      resolveRepoPath: (repository) => resolveLocalRepoPath(repository),
+    }),
+    implementation_plan: createImplementationPlanHandler({
+      runCli: (cmd, args, cwd) => runCliWithFallback(cmd, args, cwd ?? process.cwd(), scribeCliChain, { timeoutMs: 10 * 60 * 1000, effort: workerEffortForTask("feature_plan") }),
+      command: scribeCommand,
+      runCommand: (cmd, args) => runWorkerCommand(cmd, args),
       resolveRepoPath: (repository) => resolveLocalRepoPath(repository),
     }),
     tdd_implementation: createTddImplementationHandler({

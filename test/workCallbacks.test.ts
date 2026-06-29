@@ -56,6 +56,29 @@ describe("handleWorkerCallback (Slice 5)", () => {
   let client: any;
   let oldGithubUsername: string | undefined;
   const allowedUserIds = new Set(["42"]);
+  const validPlan = `## Problem Summary
+Fix the work item.
+
+## Target Files
+- src/workCallbacks.ts
+- test/workCallbacks.test.ts
+
+## Architectural Intent
+Keep approval gating explicit.
+
+## Test Plan
+Add a failing assertion in test/workCallbacks.test.ts.
+
+## Implementation Phases
+1. Red test.
+2. Green implementation.
+
+## Acceptance Criteria
+- Approval queues implementation.
+
+## Verification Commands
+npm run typecheck
+npm test`;
 
   beforeEach(() => {
     oldGithubUsername = process.env.GITHUB_USERNAME;
@@ -114,6 +137,33 @@ describe("handleWorkerCallback (Slice 5)", () => {
     }));
   });
 
+  it("queues implementation planning instead of approving when plan is missing", async () => {
+    const item = db.createWorkItem({
+      kind: "feature",
+      source: "github",
+      title: "Imported feature",
+      body: "Raw issue only",
+      repository: "owner/repo",
+      created_by: "user",
+    });
+    const cbq = {
+      id: "cb-plan-first",
+      data: `wi:${item.id}:appv`,
+      from: { id: 42 },
+      message: { message_id: 100, chat: { id: 10 } },
+    };
+
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+
+    const jobs = db.listWorkJobs();
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].task_type).toBe("implementation_plan");
+    expect(db.getWorkItem(item.id)!.status).toBe("proposed");
+    expect(client.answerCallbackQuery).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining("Implementation plan queued"),
+    }));
+  });
+
   it("edits messages with Telegram entities instead of literal markdown markers", async () => {
     const item = db.createWorkItem({ kind: "defect", source: "defect_scan", title: "Leak", created_by: "worker" });
     const cbq = {
@@ -139,6 +189,7 @@ describe("handleWorkerCallback (Slice 5)", () => {
       kind: "defect", source: "defect_scan", title: "Leak", created_by: "worker",
       repository: "owner/repo",
     });
+    db.setWorkItemPlan(item.id, validPlan, { valid: true });
     const cbq = {
       id: "cb-123",
       data: `wi:${item.id}:appv`,
@@ -174,6 +225,7 @@ describe("handleWorkerCallback (Slice 5)", () => {
       created_by: "worker",
       repository: "owner/repo",
     });
+    db.setWorkItemPlan(item.id, validPlan, { valid: true });
     const cbq = {
       id: "cb-doc-fail",
       data: `wi:${item.id}:appv`,
@@ -253,6 +305,7 @@ describe("handleWorkerCallback (Slice 5)", () => {
       title: "Race condition", created_by: "worker",
       repository: "owner/repo",
     });
+    db.setWorkItemPlan(item.id, validPlan, { valid: true });
     const cbq = {
       id: "cb-gh",
       data: `wi:${item.id}:appv`,
@@ -276,6 +329,7 @@ describe("handleWorkerCallback (Slice 5)", () => {
       title: "Leaked handle", created_by: "worker",
       repository: "owner/repo",
     });
+    db.setWorkItemPlan(item.id, validPlan, { valid: true });
     const cbq = {
       id: "cb-input",
       data: `wi:${item.id}:appv`,
@@ -299,6 +353,7 @@ describe("handleWorkerCallback (Slice 5)", () => {
       title: "Race condition", created_by: "worker",
       repository: "owner/repo",
     });
+    db.setWorkItemPlan(item.id, validPlan, { valid: true });
     const cbq = {
       id: "cb-order",
       data: `wi:${item.id}:appv`,

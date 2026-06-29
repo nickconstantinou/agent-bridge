@@ -12,12 +12,14 @@
  */
 
 import { parsePrMergeCallback, handlePrMergeCallback } from "./prMergeGate.js";
+import type { BridgeDb, WorkJob } from "./db.js";
 import { createRunCommand } from "./runCommandAsync.js";
 import { toTelegramEntitiesText } from "./render.js";
 import { activeWorkItemSettingKey, clearActiveWorkItem } from "./workerBot.js";
 import { consumePendingRepoBrief, setPendingCustomRepo } from "./featureBriefCapture.js";
 import { parseRepoSelectCallback, resolveGithubOwner } from "./repoRegistry.js";
 import { buildPrApprovalPack, buildWorkItemApprovalPack, sendApprovalHtmlPack } from "./approvalHtml.js";
+import { validateImplementationPlan } from "./implementationPlanQuality.js";
 
 /** Edit a message converting bold/code markdown markers to native Telegram entities. */
 function editWithEntities(
@@ -218,6 +220,25 @@ async function sendPackWithFallback(client: any, chatId: number | undefined, pac
   } catch (err) {
     console.warn("[worker-callbacks] approval pack send failed", err);
   }
+}
+
+function ensureImplementationPlanQueued(db: BridgeDb, itemId: number, chatId: number | undefined): boolean {
+  const existing = db.listWorkJobs().find((j: WorkJob) => {
+    if (j.work_item_id !== itemId || j.task_type !== "implementation_plan") return false;
+    return j.status === "pending" || j.status === "leased" || j.status === "running";
+  });
+  if (existing) return false;
+  db.createWorkJob({
+    task_type: "implementation_plan",
+    idempotency_key: `implementation_plan:${itemId}`,
+    work_item_id: itemId,
+    input_json: {
+      work_item_id: itemId,
+      ...(chatId != null ? { notify_chat_id: chatId } : {}),
+    },
+    max_attempts: 1,
+  });
+  return true;
 }
 
 export async function handleWorkerCallback(
@@ -509,6 +530,23 @@ export async function handleWorkerCallback(
         callback_query_id: cbq.id,
         text: "Cannot approve: work item has no repository.",
       });
+      return;
+    }
+    const storedPlan = db.getWorkItemPlan(item.id);
+    const planQuality = validateImplementationPlan(storedPlan?.plan_text);
+    if (!planQuality.valid) {
+      ensureImplementationPlanQueued(db, item.id, chatId);
+      await client.answerCallbackQuery({
+        callback_query_id: cbq.id,
+        text: "Implementation plan queued. Review the approval pack when it is ready.",
+      });
+      if (chatId && messageId) {
+        await editWithEntities(client, {
+          chat_id: chatId,
+          message_id: messageId,
+          text: `Implementation plan queued for work item #${item.id}.\n\nApproval is blocked until the plan passes the quality gate.`,
+        });
+      }
       return;
     }
     await sendPackWithFallback(client, chatId, buildWorkItemApprovalPack(db, item));

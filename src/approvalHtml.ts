@@ -115,6 +115,7 @@ export function buildWorkItemApprovalPack(db: BridgeDb, item: WorkItem): Approva
   const jobs = getRows<WorkJob>(db, "SELECT * FROM work_jobs WHERE work_item_id = ? ORDER BY id ASC", item.id);
   const approvals = getRows<Approval>(db, "SELECT * FROM approvals WHERE work_item_id = ? ORDER BY id ASC", item.id);
   const links = getRows<GithubLink>(db, "SELECT * FROM github_links WHERE work_item_id = ? ORDER BY id ASC", item.id);
+  const plan = db.getWorkItemPlan(item.id)?.plan_text ?? null;
   const label = itemLabel(item);
 
   const metadata = `<table>${[
@@ -162,7 +163,7 @@ export function buildWorkItemApprovalPack(db: BridgeDb, item: WorkItem): Approva
     [
       section("Summary", metadata),
       section("Title", `<p>${escapeHtml(item.title)}</p>`),
-      section(item.kind === "feature" ? "Implementation Plan" : "Work Item Body", pre(item.body)),
+      section(plan ? "Implementation Plan" : item.kind === "feature" ? "Implementation Plan" : "Work Item Body", pre(plan ?? item.body)),
       section("Linked Jobs", jobsBody),
       section("Approvals", approvalsBody),
       section("GitHub", linksBody),
@@ -179,6 +180,7 @@ export function buildWorkItemApprovalPack(db: BridgeDb, item: WorkItem): Approva
 export function buildPrApprovalPack(db: BridgeDb, workItemId: number): ApprovalHtmlPack | null {
   const item = db.getWorkItem(workItemId);
   if (!item) return null;
+  const plan = db.getWorkItemPlan(workItemId)?.plan_text ?? null;
   const approval = db.raw.prepare(
     "SELECT * FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr' AND status = 'pending' ORDER BY id DESC LIMIT 1",
   ).get(workItemId) as Approval | undefined;
@@ -211,7 +213,7 @@ export function buildPrApprovalPack(db: BridgeDb, workItemId: number): ApprovalH
         row("Status", item.status),
         row("Priority", item.priority),
       ].join("")}</table>`),
-      section("Work Item Body", pre(item.body)),
+      section(plan ? "Implementation Plan" : "Work Item Body", pre(plan ?? item.body)),
       section("Approval Payload", pre(payload)),
     ].join("\n"),
   );
@@ -254,6 +256,7 @@ function planSectionLabel(item: WorkItem): string {
 export function buildGithubWorkItemComment(db: BridgeDb, item: WorkItem): string {
   const jobs = getRows<WorkJob>(db, "SELECT * FROM work_jobs WHERE work_item_id = ? ORDER BY id DESC LIMIT 10", item.id);
   const links = getRows<GithubLink>(db, "SELECT * FROM github_links WHERE work_item_id = ? ORDER BY id ASC", item.id);
+  const storedPlan = db.getWorkItemPlan(item.id)?.plan_text?.trim() ?? "";
   const label = itemLabel(item);
 
   const meta = mdTable([
@@ -265,7 +268,8 @@ export function buildGithubWorkItemComment(db: BridgeDb, item: WorkItem): string
   ]);
 
   const planLabel = planSectionLabel(item);
-  const planBody = item.body?.trim() ? `### ${planLabel}\n\n${item.body.trim()}` : "";
+  const sourceText = storedPlan || item.body?.trim() || "";
+  const planBody = sourceText ? `### ${storedPlan ? "Implementation Plan" : planLabel}\n\n${sourceText}` : "";
 
   const jobRows = jobs.map(j => `| ${j.id} | ${j.task_type} | ${j.status} | ${j.bot ?? "—"} |`).join("\n");
   const jobsSection = jobs.length > 0
@@ -299,6 +303,7 @@ export function buildGithubWorkItemComment(db: BridgeDb, item: WorkItem): string
 export function buildGithubPrComment(db: BridgeDb, workItemId: number): string {
   const item = db.getWorkItem(workItemId);
   if (!item) return `${APPROVAL_PACK_COMMENT_MARKER}\n\n*Work item #${workItemId} not found.*`;
+  const plan = db.getWorkItemPlan(workItemId)?.plan_text?.trim() ?? "";
 
   const approval = db.raw.prepare(
     "SELECT * FROM approvals WHERE work_item_id = ? AND approval_type = 'merge_pr' AND status = 'pending' ORDER BY id DESC LIMIT 1",
@@ -324,7 +329,7 @@ export function buildGithubPrComment(db: BridgeDb, workItemId: number): string {
     "",
     meta,
     "",
-    item.body?.trim() ? `### Implementation Plan\n\n${item.body.trim()}` : "",
+    (plan || item.body?.trim()) ? `### Implementation Plan\n\n${plan || item.body!.trim()}` : "",
     "",
     "---",
     "*Merge or close via Telegram bot.*",

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
-import { buildPrApprovalPack, buildWorkItemApprovalPack, escapeHtml } from "../src/approvalHtml.js";
+import { buildGithubWorkItemComment, buildPrApprovalPack, buildWorkItemApprovalPack, escapeHtml } from "../src/approvalHtml.js";
 
 describe("approvalHtml", () => {
   it("escapes raw values", () => {
@@ -28,6 +28,31 @@ describe("approvalHtml", () => {
       expect(pack.html).toContain("Add &lt;danger&gt;");
       expect(pack.html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
       expect(pack.html).not.toContain("<script>alert(1)</script>");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("prefers stored implementation plan over raw work item body", () => {
+    const db = openDb(":memory:");
+    try {
+      const item = db.createWorkItem({
+        kind: "defect",
+        source: "github",
+        repository: "owner/repo",
+        title: "Fix imported issue",
+        body: "Original issue report only",
+        created_by: "user",
+      });
+      db.setWorkItemPlan(item.id, "## Problem Summary\nDetailed plan\n\n## Target Files\n- src/a.ts\n\n## Architectural Intent\nUse boundary\n\n## Test Plan\nTest path\n\n## Implementation Phases\n1. Red\n\n## Acceptance Criteria\n- Done\n\n## Verification Commands\nnpm test", { valid: true });
+
+      const pack = buildWorkItemApprovalPack(db, item);
+      const comment = buildGithubWorkItemComment(db, item);
+
+      expect(pack.html).toContain("Detailed plan");
+      expect(pack.html).not.toContain("Original issue report only");
+      expect(comment).toContain("Detailed plan");
+      expect(comment).not.toContain("Original issue report only");
     } finally {
       db.close();
     }
@@ -65,4 +90,3 @@ describe("approvalHtml", () => {
     }
   });
 });
-

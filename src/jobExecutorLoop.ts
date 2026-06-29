@@ -126,8 +126,8 @@ export function startJobExecutorLoop(deps: JobExecutorLoopDeps): JobExecutorStop
             }
           : () => Promise.resolve();
 
-        // Long-running tasks (feature_plan, tdd_implementation) need a longer lease
-        const LONG_RUNNING_TASKS = new Set(["feature_plan", "tdd_implementation"]);
+        // Long-running tasks need a longer lease
+        const LONG_RUNNING_TASKS = new Set(["feature_plan", "implementation_plan", "tdd_implementation"]);
         const leaseSeconds = LONG_RUNNING_TASKS.has(candidate.task_type) ? 1800 : 300;
 
         await executeNextJob({

@@ -31,15 +31,16 @@ function parsePrNumber(url: string): number | null {
 }
 
 function buildProofCommentBody(headSha: string, verifyOutput: string): string {
+  const trimmed = verifyOutput.trim();
+  const hasFail = trimmed && /fail|error/i.test(trimmed);
   const lines: string[] = [
     `<!-- agent-proof sha:${headSha} -->`,
-    `**Agent proof — head \`${headSha.slice(0, 7)}\`**`,
+    `**Agent proof — head \`${headSha.slice(0, 7)}\`** ${hasFail ? "⚠️ failures detected" : "✅ tests passed"}`,
     "",
-    "Automated TDD implementation. All tests passed before this PR was opened.",
-    "Human merge approval required before squash-merge.",
+    "Automated TDD implementation. Human merge approval required before squash-merge.",
   ];
-  if (verifyOutput.trim()) {
-    lines.push("", "**Verification output:**", "```", verifyOutput.trim(), "```");
+  if (trimmed) {
+    lines.push("", hasFail ? "**Verification output (failures detected):**" : "**Verification output:**", "```", trimmed, "```");
   }
   return lines.join("\n");
 }
@@ -199,14 +200,53 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
 
     // Open draft PR
     const prTitle = `[agent] ${item.title}`;
-    const prBody = [
-      `Work item #${workItemId}`,
-      "",
-      item.body ?? "",
-      "",
-      "---",
-      "_Opened automatically by the agent bridge. Human merge approval required._",
-    ].join("\n").trim();
+
+    // Linked GitHub issue, if any
+    const issueLink = ctx.db.raw.prepare(
+      `SELECT repository, issue_number FROM github_links WHERE work_item_id = ? AND issue_number IS NOT NULL LIMIT 1`
+    ).get(workItemId) as { repository: string; issue_number: number } | undefined;
+
+    const prBodyParts: string[] = [];
+    prBodyParts.push(`## Summary`);
+    prBodyParts.push(`Automated TDD implementation — work item **#${workItemId}**.`);
+    if (issueLink) {
+      prBodyParts.push(`Closes https://github.com/${issueLink.repository}/issues/${issueLink.issue_number}`);
+    }
+    prBodyParts.push("");
+
+    if (commit_subjects?.length) {
+      prBodyParts.push("## Commits");
+      commit_subjects.forEach(s => prBodyParts.push(`- ${s}`));
+      prBodyParts.push("");
+    }
+
+    if (files_summary) {
+      prBodyParts.push("## Files changed");
+      prBodyParts.push("```");
+      prBodyParts.push(files_summary.trim().slice(0, 1500));
+      prBodyParts.push("```");
+      prBodyParts.push("");
+    }
+
+    if (item.body) {
+      prBodyParts.push("## Implementation plan");
+      prBodyParts.push(item.body.slice(0, 3000));
+      prBodyParts.push("");
+    }
+
+    if (verify_tail) {
+      const failed = /fail|error/i.test(verify_tail);
+      prBodyParts.push(`## Verification ${failed ? "⚠️ (see failures below)" : "✅"}`);
+      prBodyParts.push("```");
+      prBodyParts.push(verify_tail.trim());
+      prBodyParts.push("```");
+      prBodyParts.push("");
+    }
+
+    prBodyParts.push("---");
+    prBodyParts.push("_Opened automatically by the agent bridge. Human merge approval required._");
+
+    const prBody = prBodyParts.join("\n").trim();
 
     const prArgs = [
       "pr", "create",

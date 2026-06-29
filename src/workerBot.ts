@@ -378,7 +378,15 @@ export async function handleWorkerCommand(
       textOut += `• **#${appr.id}** | \`${appr.approval_type}\``;
       if (appr.work_item_id != null) textOut += ` | work item #${appr.work_item_id}`;
       textOut += `\n  Requested: ${appr.requested_at}\n`;
-      if (payload.pr_url) textOut += `  ${payload.pr_url}\n`;
+      if (payload.pr_url) textOut += `  PR: ${payload.pr_url}\n`;
+      if (appr.work_item_id != null) {
+        const issueLink = db.raw.prepare(
+          `SELECT repository, issue_number FROM github_links WHERE work_item_id = ? AND issue_number IS NOT NULL LIMIT 1`
+        ).get(appr.work_item_id) as { repository: string; issue_number: number } | undefined;
+        if (issueLink) {
+          textOut += `  Issue: https://github.com/${issueLink.repository}/issues/${issueLink.issue_number}\n`;
+        }
+      }
 
       if (appr.approval_type === "merge_pr" && appr.work_item_id != null) {
         inline_keyboard.push([

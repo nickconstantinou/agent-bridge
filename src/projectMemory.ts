@@ -5,9 +5,9 @@
  * NEIGHBORS: src/contextCommand.ts, src/engine.ts, src/db.ts
  */
 
-import Database from "better-sqlite3";
 import { createHash } from "node:crypto";
 import { cwd } from "node:process";
+import type { BridgeDb } from "./db.js";
 
 export type ProjectMemoryCandidate = {
   type?: unknown;
@@ -26,6 +26,8 @@ export type ProjectMemoryStoreResult =
   | { status: "stored"; id: string }
   | { status: "duplicate"; id: string }
   | { status: "rejected"; reason: string };
+
+type ProjectMemoryDb = Pick<BridgeDb, "findMemoryByText" | "getLatestConvTurnId" | "addMemory">;
 
 const ALLOWED_MEMORY_TYPES = new Set(["decision", "bug", "bugfix", "bug_fix", "convention", "todo", "note"]);
 const ALLOWED_MEMORY_SCOPES = new Set(["project", "chat", "global"]);
@@ -53,7 +55,7 @@ function memoryId(type: string, scope: string, text: string): string {
 }
 
 export function storeProjectMemoryCandidate(
-  db: Database.Database,
+  db: ProjectMemoryDb,
   rawCandidate: ProjectMemoryCandidate,
   provenance: ProjectMemoryProvenance,
 ): ProjectMemoryStoreResult {
@@ -71,36 +73,27 @@ export function storeProjectMemoryCandidate(
   if (looksSecretLike(text)) return { status: "rejected", reason: "secret-looking text" };
   if (looksTransient(text)) return { status: "rejected", reason: "transient text" };
 
-  const duplicate = db.prepare(
-    `SELECT id FROM project_memories WHERE lower(text) = lower(?) LIMIT 1`,
-  ).get(text) as { id: string } | undefined;
+  const duplicate = db.findMemoryByText(text);
   if (duplicate) return { status: "duplicate", id: duplicate.id };
 
-  const latestTurn = db.prepare(
-    `SELECT id FROM conversation_turns WHERE chat_key = ? ORDER BY id DESC LIMIT 1`,
-  ).get(provenance.chatKey) as { id: number } | undefined;
+  const latestTurnId = db.getLatestConvTurnId(provenance.chatKey);
   const id = memoryId(type, scope, text);
-  db.prepare(`
-    INSERT INTO project_memories (
-      id, type, scope, text, source_chat_key, source_cli, source_turn_id, source_repo_path, confidence
-    )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
+  db.addMemory({
     id,
     type,
     scope,
     text,
-    provenance.chatKey,
-    provenance.cliKind?.trim() || null,
-    latestTurn?.id ?? null,
-    provenance.repoPath?.trim() || cwd(),
+    source_chat_key: provenance.chatKey,
+    source_cli: provenance.cliKind?.trim() || undefined,
+    source_turn_id: latestTurnId ?? undefined,
+    source_repo_path: provenance.repoPath?.trim() || cwd(),
     confidence,
-  );
+  });
   return { status: "stored", id };
 }
 
 export function storeProjectMemoryCandidateJson(
-  db: Database.Database,
+  db: ProjectMemoryDb,
   rawJson: string,
   provenance: ProjectMemoryProvenance,
 ): ProjectMemoryStoreResult {

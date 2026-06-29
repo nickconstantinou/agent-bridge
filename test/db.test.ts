@@ -969,6 +969,31 @@ describe("BridgeDb project memories", () => {
     expect(results[0].text).toContain("fallback");
   });
 
+  it("findMemoryByText detects existing memories case-insensitively", () => {
+    db.addMemory({
+      id: "mem_existing",
+      type: "decision",
+      scope: "project",
+      text: "Database abstraction owns project memory duplicate checks.",
+    });
+
+    expect((db as any).findMemoryByText("database abstraction owns project memory duplicate checks.")).toEqual({
+      id: "mem_existing",
+    });
+  });
+
+  it("getLatestConvTurnId returns the latest turn for a chat key", () => {
+    db.addConvTurn("chat:memory", "user", "first turn", "codex");
+    db.addConvTurn("chat:memory", "assistant", "second turn", "codex");
+    db.addConvTurn("chat:other", "assistant", "other chat turn", "codex");
+
+    const latest = db.raw.prepare(
+      "SELECT MAX(id) AS id FROM conversation_turns WHERE chat_key = ?",
+    ).get("chat:memory") as { id: number };
+
+    expect((db as any).getLatestConvTurnId("chat:memory")).toBe(latest.id);
+  });
+
   it("searchMemories returns empty when no relevant match", () => {
     db.addMemory({ id: "mem_test2", type: "decision", scope: "project", text: "compact summarises conversation history" });
     const results = db.searchMemories("xylophone");

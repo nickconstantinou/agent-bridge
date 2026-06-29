@@ -6,7 +6,7 @@
  */
 
 import Database from "better-sqlite3";
-import { buildMemoryFtsQuery } from "./db.js";
+import { BridgeDb, buildMemoryFtsQuery } from "./db.js";
 import { formatProjectMemoryStoreResult, storeProjectMemoryCandidateJson } from "./projectMemory.js";
 
 type EnvLike = Record<string, string | undefined>;
@@ -81,7 +81,7 @@ function searchMemories(db: Database.Database, query: string): string {
 
 function addMemoryJson(db: Database.Database, rawJson: string, env: EnvLike): string {
   const chatKey = requireEnv(env, "AGENT_BRIDGE_CHAT_KEY");
-  const result = storeProjectMemoryCandidateJson(db, rawJson, {
+  const result = storeProjectMemoryCandidateJson(new BridgeDb(db), rawJson, {
     chatKey,
     cliKind: env.AGENT_BRIDGE_CLI_KIND,
     repoPath: env.AGENT_BRIDGE_REPO_PATH,

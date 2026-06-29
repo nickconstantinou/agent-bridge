@@ -11,6 +11,7 @@ import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult }
 type RunCli = (command: string, args: string[], cwd?: string) => Promise<string>;
 type RunGit = (args: string[], cwd: string) => string | Promise<string>;
 type RunTests = (cwd: string) => { ok: boolean; output: string } | Promise<{ ok: boolean; output: string }>;
+const TEST_ONLY_SOURCE_PATTERN = "from ['\\\"]vitest|import\\(['\\\"]vitest|VITEST_WORKER_ID|delete process\\.env\\.WORKER_DEFAULT_REPO";
 
 interface TddImplementationDeps {
   runCli: RunCli;
@@ -63,7 +64,14 @@ The failing tests have already been committed. Your task:
 1. Read the committed test files to understand what must pass.
 2. Implement the minimal production code change to make those tests green.
 3. Run the full test suite and confirm it passes.
-4. Stage all modified production files with: git add <files>
+4. Confirm the implementation satisfies the architectural intent in the work item, not just the test assertions.
+5. For architecture/refactor work, ensure the production path uses the new boundary/abstraction and include a before/after ownership check in your reasoning.
+6. Stage all modified production files with: git add <files>
+
+Architectural acceptance criteria:
+- The production path must use the intended abstraction/boundary, not merely add unused classes or helpers.
+- Test-only imports, test environment cleanup, or Vitest hooks must not be added to production source under src/.
+- If the request is a refactor, verify the before/after ownership changed in the production code.
 
 Do not modify test files. Do not commit — just stage the production files.`;
 }
@@ -82,8 +90,9 @@ ${ciLog || "(no log provided)"}
 Your task:
 1. Diagnose the failing CI check from the log.
 2. Make the smallest code or test update required to make CI pass.
-3. Run the relevant tests locally, then the full verification command if practical.
-4. Stage all modified files with: git add <files>
+3. Preserve architectural intent: production code must use intended abstractions, and test-only hooks/imports must stay out of src/.
+4. Run the relevant tests locally, then the full verification command if practical.
+5. Stage all modified files with: git add <files>
 
 Do not open or merge a PR. Do not commit — just stage the fix.`;
 }
@@ -100,10 +109,24 @@ Your task:
 1. Diagnose the prior failure before changing files.
 2. Reuse the existing worktree state if present.
 3. Make the smallest correction needed so verification passes.
-4. Run the relevant focused test first, then the full suite if practical.
-5. Stage all modified files with: git add <files>
+4. Preserve architectural intent: production paths must use intended abstractions, not just satisfy narrow tests.
+5. Keep test-only imports/env cleanup out of src/.
+6. Run the relevant focused test first, then the full suite if practical.
+7. Stage all modified files with: git add <files>
 
 Do not open or merge a PR. Do not commit — just stage the repair.`;
+}
+
+async function assertNoTestOnlyCodeInProduction(runGit: RunGit, repoPath: string): Promise<void> {
+  try {
+    const matches = await runGit(["grep", "-nE", TEST_ONLY_SOURCE_PATTERN, "--", "src"], repoPath);
+    if (matches.trim()) {
+      throw new Error(`test-only code leaked into production source:\n${matches.trim()}`);
+    }
+  } catch (err) {
+    if (err instanceof Error && /test-only code leaked/.test(err.message)) throw err;
+    // git grep exits non-zero when there are no matches; that is the desired state.
+  }
 }
 
 export function createTddImplementationHandler(deps: TddImplementationDeps): JobHandler {
@@ -169,6 +192,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
         if (!verifyRun.ok) {
           throw new Error(`Verification failed after CI fix:\n${verifyRun.output}`);
         }
+        await assertNoTestOnlyCodeInProduction(runGit, repoPath);
 
         await runGit(["commit", "-m", `fix: repair CI for ${item.title}`], repoPath);
         await runGit(["push", "origin", branchName], repoPath);
@@ -209,6 +233,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
         if (!verifyRun.ok) {
           throw new Error(`Verification failed after repair:\n${verifyRun.output}`);
         }
+        await assertNoTestOnlyCodeInProduction(runGit, repoPath);
 
         await runGit(["commit", "-m", `fix: repair ${item.title}`], repoPath);
         ctx.db.updateWorkItemStatus(workItemId, "in_progress");
@@ -274,6 +299,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
       if (!greenRun.ok) {
         throw new Error(`Verification failed after implementation:\n${greenRun.output}`);
       }
+      await assertNoTestOnlyCodeInProduction(runGit, repoPath);
 
       await runGit(
         ["commit", "-m", `fix: ${item.title}`],

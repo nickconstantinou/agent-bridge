@@ -57,4 +57,17 @@ export class MemoryRepository {
   getMemoryCount(): number {
     return (this.db.prepare("SELECT COUNT(*) AS n FROM project_memories").get() as { n: number }).n;
   }
+
+  findMemoryByText(text: string): { id: string } | null {
+    return (this.db.prepare(
+      `SELECT id FROM project_memories WHERE lower(text) = lower(?) LIMIT 1`,
+    ).get(text) as { id: string } | undefined) ?? null;
+  }
+
+  getLatestConvTurnId(chatKey: string): number | null {
+    const row = this.db.prepare(
+      `SELECT id FROM conversation_turns WHERE chat_key = ? ORDER BY id DESC LIMIT 1`,
+    ).get(chatKey) as { id: number } | undefined;
+    return row?.id ?? null;
+  }
 }

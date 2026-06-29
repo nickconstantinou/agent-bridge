@@ -13,18 +13,6 @@ import { createRunCommand } from "./runCommandAsync.js";
 const DEFAULT_CLI_CHAIN = ["codex", "claude", "antigravity"];
 const ACTIVE_WORK_ITEM_PREFIX = "active_work_item:";
 
-if (process.env.VITEST_WORKER_ID || process.env.NODE_ENV === "test") {
-  delete process.env.WORKER_DEFAULT_REPO;
-  try {
-    const { afterEach } = await import("vitest");
-    afterEach(() => {
-      delete process.env.WORKER_DEFAULT_REPO;
-    });
-  } catch {
-    // Vitest may be absent in non-test runtime environments.
-  }
-}
-
 export interface WorkerCommandContext {
   workerEnabled: boolean;
   cliChain?: string[];

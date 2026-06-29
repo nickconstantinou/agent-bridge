@@ -23,6 +23,17 @@ export class SettingsRepository {
       .run(key, value);
   }
 
+  getChatRepo(chatId: string): string | null {
+    const row = this.db
+      .prepare(`SELECT value FROM settings WHERE key = ?`)
+      .get(`chat:repo:${chatId}`) as { value: string } | undefined;
+    return row?.value ?? null;
+  }
+
+  setChatRepo(chatId: string, repo: string | null): void {
+    this.setSetting(`chat:repo:${chatId}`, repo);
+  }
+
   incrementFailures(chatId: string, bot: BotKind): number {
     const col = `${bot}_consecutive_failures`;
     this.db

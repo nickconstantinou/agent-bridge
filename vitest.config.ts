@@ -5,6 +5,7 @@ import { resolve, dirname } from "node:path";
 export default defineConfig({
   test: {
     env: { BRIDGE_SKIP_MEMORY_IMPORT: "1" },
+    setupFiles: ["./test/setupEnv.ts"],
   },
   plugins: [
     {

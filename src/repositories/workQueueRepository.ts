@@ -34,6 +34,18 @@ export class WorkQueueRepository {
     return this.db.prepare(`SELECT * FROM work_items ORDER BY id ASC`).all() as WorkItem[];
   }
 
+  updateWorkItemStatus(id: number, status: string): void {
+    this.db.prepare(
+      `UPDATE work_items SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(status, id);
+  }
+
+  updateWorkItemBody(id: number, body: string): void {
+    this.db.prepare(
+      `UPDATE work_items SET body = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(body, id);
+  }
+
   // ── Work jobs ───────────────────────────────────────────────────────────
 
   createWorkJob(input: {
@@ -56,6 +68,13 @@ export class WorkQueueRepository {
 
   getWorkJob(id: number): WorkJob | null {
     return (this.db.prepare(`SELECT * FROM work_jobs WHERE id = ?`).get(id) as WorkJob | undefined) ?? null;
+  }
+
+  listWorkJobs(filter: { status?: string } = {}): WorkJob[] {
+    if (filter.status) {
+      return this.db.prepare(`SELECT * FROM work_jobs WHERE status = ? ORDER BY id ASC`).all(filter.status) as WorkJob[];
+    }
+    return this.db.prepare(`SELECT * FROM work_jobs ORDER BY id ASC`).all() as WorkJob[];
   }
 
   claimNextWorkJob(workerId: string, now: string, leaseSeconds: number, jobId?: number): WorkJob | null {
@@ -91,6 +110,21 @@ export class WorkQueueRepository {
     ).run(jobId, workerId);
   }
 
+  heartbeatWorkJob(jobId: number, workerId: string, now: string, leaseSeconds?: number): void {
+    if (leaseSeconds != null) {
+      const expiresAt = new Date(new Date(now).getTime() + leaseSeconds * 1000).toISOString();
+      this.db.prepare(
+        `UPDATE work_jobs SET heartbeat_at = ?, lease_expires_at = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND lease_owner = ?`
+      ).run(now, expiresAt, jobId, workerId);
+      return;
+    }
+    this.db.prepare(
+      `UPDATE work_jobs SET heartbeat_at = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND lease_owner = ?`
+    ).run(now, jobId, workerId);
+  }
+
   completeWorkJob(jobId: number, result: object, workerId: string): void {
     this.db.prepare(
       `UPDATE work_jobs
@@ -117,6 +151,17 @@ export class WorkQueueRepository {
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ? AND lease_owner = ? AND status != 'cancelled'`
     ).run(error, jobId, workerId);
+  }
+
+  continueWorkJob(jobId: number, phase: string, phaseData: object, workerId: string): void {
+    this.db.prepare(
+      `UPDATE work_jobs
+       SET status = 'pending', phase = ?, phase_data_json = ?,
+           attempt_count = attempt_count + 1,
+           lease_owner = NULL, lease_expires_at = NULL,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND lease_owner = ? AND status != 'cancelled'`
+    ).run(phase, JSON.stringify(phaseData), jobId, workerId);
   }
 
   cancelWorkJob(jobId: number, _reason: string): void {
@@ -199,5 +244,35 @@ export class WorkQueueRepository {
          AND pr_state NOT IN ('merged','closed')
        ORDER BY id ASC`
     ).all(repository) as GithubLink[];
+  }
+
+  listAllOpenAgentPrs(): GithubLink[] {
+    return this.db.prepare(
+      `SELECT * FROM github_links
+       WHERE pr_number IS NOT NULL
+         AND pr_state NOT IN ('merged','closed')
+       ORDER BY id ASC`
+    ).all() as GithubLink[];
+  }
+
+  touchPrActivity(linkId: number, ts: string): void {
+    this.db.prepare(
+      `UPDATE github_links SET last_activity_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(ts, linkId);
+  }
+
+  setProofCommentSha(linkId: number, sha: string): void {
+    this.db.prepare(
+      `UPDATE github_links SET proof_comment_sha = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(sha, linkId);
+  }
+
+  countDailyAgentPrs(repository: string): number {
+    const row = this.db.prepare(
+      `SELECT COUNT(*) AS n FROM github_links
+       WHERE repository = ? AND pr_number IS NOT NULL
+         AND DATE(created_at) = DATE('now')`
+    ).get(repository) as { n: number };
+    return row.n;
   }
 }

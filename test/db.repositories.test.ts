@@ -10,7 +10,7 @@
  * classes are implemented.
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import Database from "better-sqlite3";
 import { openDb } from "../src/db.js";
 
@@ -100,6 +100,66 @@ describe("SessionRepository", () => {
     repo.setSession("chat1", "codex", null);
     const ts = (raw.prepare("SELECT codex_session_created_at AS t FROM bridge_state WHERE chat_id = ?").get("chat1") as any)?.t;
     expect(ts).toBeNull();
+  });
+});
+
+describe("BridgeDb repository wiring", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("delegates session operations through SessionRepository", () => {
+    const getSpy = vi.spyOn(SessionRepository.prototype, "getSession");
+    const setSpy = vi.spyOn(SessionRepository.prototype, "setSession");
+    const bridge = openDb(":memory:");
+
+    try {
+      bridge.setSession("chat1", "codex", "session-1");
+      expect(bridge.getSession("chat1", "codex")).toBe("session-1");
+      expect(setSpy).toHaveBeenCalledWith("chat1", "codex", "session-1");
+      expect(getSpy).toHaveBeenCalledWith("chat1", "codex");
+    } finally {
+      bridge.close();
+    }
+  });
+
+  it("delegates work queue operations through WorkQueueRepository", () => {
+    const createSpy = vi.spyOn(WorkQueueRepository.prototype, "createWorkItem");
+    const getSpy = vi.spyOn(WorkQueueRepository.prototype, "getWorkItem");
+    const bridge = openDb(":memory:");
+
+    try {
+      const item = bridge.createWorkItem({
+        kind: "defect",
+        source: "telegram",
+        title: "Repository wiring",
+        created_by: "worker",
+      });
+      expect(bridge.getWorkItem(item.id)?.title).toBe("Repository wiring");
+      expect(createSpy).toHaveBeenCalled();
+      expect(getSpy).toHaveBeenCalledWith(item.id);
+    } finally {
+      bridge.close();
+    }
+  });
+
+  it("delegates project memory operations through MemoryRepository", () => {
+    const addSpy = vi.spyOn(MemoryRepository.prototype, "addMemory");
+    const searchSpy = vi.spyOn(MemoryRepository.prototype, "searchMemories");
+    const bridge = openDb(":memory:");
+
+    try {
+      bridge.addMemory({
+        id: "mem_repo_wiring",
+        type: "decision",
+        text: "Repository wiring owns project memory storage.",
+      });
+      expect(bridge.searchMemories("repository wiring").length).toBeGreaterThan(0);
+      expect(addSpy).toHaveBeenCalled();
+      expect(searchSpy).toHaveBeenCalledWith("repository wiring", 5);
+    } finally {
+      bridge.close();
+    }
   });
 });
 

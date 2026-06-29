@@ -9,6 +9,12 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { LockRepository } from "./repositories/lockRepository.js";
+import { MemoryRepository } from "./repositories/memoryRepository.js";
+import { RunRepository } from "./repositories/runRepository.js";
+import { SessionRepository } from "./repositories/sessionRepository.js";
+import { SettingsRepository } from "./repositories/settingsRepository.js";
+import { WorkQueueRepository } from "./repositories/workQueueRepository.js";
 
 // Sentinel row keys stored in bridge_state for non-chat state
 const pollingKey = (bot: string) => `$polling:${bot}`;
@@ -461,147 +467,83 @@ export function openDb(dbPath: string): BridgeDb {
 
 export class BridgeDb {
   readonly raw: Database.Database;
+  private readonly sessions: SessionRepository;
+  private readonly locks: LockRepository;
+  private readonly settings: SettingsRepository;
+  private readonly runs: RunRepository;
+  private readonly workQueue: WorkQueueRepository;
+  private readonly memories: MemoryRepository;
 
   constructor(raw: Database.Database) {
     this.raw = raw;
+    this.sessions = new SessionRepository(raw);
+    this.locks = new LockRepository(raw);
+    this.settings = new SettingsRepository(raw);
+    this.runs = new RunRepository(raw);
+    this.workQueue = new WorkQueueRepository(raw);
+    this.memories = new MemoryRepository(raw);
   }
 
   // ── Session management ───────────────────────────────────────────────────
 
   getSession(chatId: string, bot: "codex" | "antigravity" | "claude"): string | null {
-    if (bot !== "codex" && bot !== "antigravity" && bot !== "claude") throw new Error(`Invalid bot kind: ${bot}`);
-    const col = `${bot}_session_id`;
-    const row = this.raw
-      .prepare(`SELECT ${col} AS sid FROM bridge_state WHERE chat_id = ?`)
-      .get(chatId) as { sid: string | null } | undefined;
-    return row?.sid ?? null;
+    return this.sessions.getSession(chatId, bot);
   }
 
   setSession(chatId: string, bot: "codex" | "antigravity" | "claude", sessionId: string | null): void {
-    if (bot !== "codex" && bot !== "antigravity" && bot !== "claude") throw new Error(`Invalid bot kind: ${bot}`);
-    const col = `${bot}_session_id`;
-    const tsCol = `${bot}_session_created_at`;
-    // Record when a new session is first stored; clear timestamp when session is cleared
-    const ts = sessionId !== null ? new Date().toISOString() : null;
-    this.raw
-      .prepare(
-        `INSERT INTO bridge_state (chat_id, ${col}, ${tsCol}) VALUES (?, ?, ?)
-         ON CONFLICT (chat_id) DO UPDATE SET ${col} = excluded.${col}, ${tsCol} = CASE
-           WHEN excluded.${col} IS NULL THEN NULL
-           WHEN ${col} IS NULL OR ${col} != excluded.${col} THEN excluded.${tsCol}
-           ELSE ${tsCol}
-         END`
-      )
-      .run(chatId, sessionId, ts);
+    this.sessions.setSession(chatId, bot, sessionId);
   }
 
   // ── Per-chat execution lock ──────────────────────────────────────────────
 
   tryLock(chatId: string): boolean {
-    // Ensure the row exists before updating
-    this.raw
-      .prepare(`INSERT INTO bridge_state (chat_id) VALUES (?) ON CONFLICT (chat_id) DO NOTHING`)
-      .run(chatId);
-    // Atomically claim the lock only when it is free
-    const { changes } = this.raw
-      .prepare(
-        `UPDATE bridge_state SET active_execution_lock = 1
-         WHERE chat_id = ? AND active_execution_lock = 0`
-      )
-      .run(chatId);
-    return changes === 1;
+    return this.locks.tryLock(chatId);
   }
 
   unlock(chatId: string): void {
-    this.raw
-      .prepare(`UPDATE bridge_state SET active_execution_lock = 0 WHERE chat_id = ?`)
-      .run(chatId);
+    this.locks.unlock(chatId);
   }
 
   // ── Global polling offset (per bot kind) ────────────────────────────────
 
   getLastUpdateId(bot: "codex" | "antigravity" | "claude"): number {
-    const row = this.raw
-      .prepare(`SELECT last_update_id FROM bridge_state WHERE chat_id = ?`)
-      .get(pollingKey(bot)) as { last_update_id: number } | undefined;
-    return row?.last_update_id ?? 0;
+    return this.settings.getLastUpdateId(bot);
   }
 
   setLastUpdateId(bot: "codex" | "antigravity" | "claude", updateId: number): void {
-    this.raw
-      .prepare(
-        `INSERT INTO bridge_state (chat_id, last_update_id) VALUES (?, ?)
-         ON CONFLICT (chat_id) DO UPDATE SET
-           last_update_id = MAX(last_update_id, excluded.last_update_id)`
-      )
-      .run(pollingKey(bot), updateId);
+    this.settings.setLastUpdateId(bot, updateId);
   }
 
   // ── Model-override settings ──────────────────────────────────────────────
 
   getSetting(key: string): string | null {
-    const row = this.raw
-      .prepare(`SELECT value FROM settings WHERE key = ?`)
-      .get(key) as { value: string | null } | undefined;
-    return row?.value ?? null;
+    return this.settings.getSetting(key);
   }
 
   // ── Session failure circuit breaker ─────────────────────────────────────
 
   incrementFailures(chatId: string, bot: "codex" | "antigravity" | "claude"): number {
-    const col = `${bot}_consecutive_failures`;
-    this.raw
-      .prepare(
-        `INSERT INTO bridge_state (chat_id, ${col}) VALUES (?, 1)
-         ON CONFLICT (chat_id) DO UPDATE SET ${col} = ${col} + 1`
-      )
-      .run(chatId);
-    const row = this.raw
-      .prepare(`SELECT ${col} AS n FROM bridge_state WHERE chat_id = ?`)
-      .get(chatId) as { n: number } | undefined;
-    return row?.n ?? 1;
+    return this.settings.incrementFailures(chatId, bot);
   }
 
   resetFailures(chatId: string, bot: "codex" | "antigravity" | "claude"): void {
-    const col = `${bot}_consecutive_failures`;
-    this.raw
-      .prepare(`UPDATE bridge_state SET ${col} = 0 WHERE chat_id = ?`)
-      .run(chatId);
+    this.settings.resetFailures(chatId, bot);
   }
 
   getMaxConsecutiveFailures(): { bot: string; count: number }[] {
-    const row = this.raw
-      .prepare(
-        `SELECT MAX(codex_consecutive_failures) AS codex,
-                MAX(claude_consecutive_failures) AS claude,
-                MAX(antigravity_consecutive_failures) AS antigravity
-         FROM bridge_state`
-      )
-      .get() as { codex: number; claude: number; antigravity: number } | undefined;
-    if (!row) return [];
-    const results: { bot: string; count: number }[] = [];
-    if (row.codex > 0) results.push({ bot: "codex", count: row.codex });
-    if (row.claude > 0) results.push({ bot: "claude", count: row.claude });
-    if (row.antigravity > 0) results.push({ bot: "antigravity", count: row.antigravity });
-    return results;
+    return this.settings.getMaxConsecutiveFailures();
   }
 
   setSetting(key: string, value: string | null): void {
-    this.raw
-      .prepare(
-        `INSERT INTO settings (key, value) VALUES (?, ?)
-         ON CONFLICT (key) DO UPDATE SET value = excluded.value`
-      )
-      .run(key, value);
+    this.settings.setSetting(key, value);
   }
 
   getChatRepo(chatId: string): string | null {
-    const row = this.raw.prepare(`SELECT value FROM settings WHERE key = ?`).get(`chat:repo:${chatId}`) as { value: string } | undefined;
-    return row?.value ?? null;
+    return this.settings.getChatRepo(chatId);
   }
 
   setChatRepo(chatId: string, repo: string | null): void {
-    this.setSetting(`chat:repo:${chatId}`, repo);
+    this.settings.setChatRepo(chatId, repo);
   }
 
   insertRun(
@@ -609,69 +551,31 @@ export class BridgeDb {
     chatId: string,
     bot: string,
   ): void {
-    const startedAt = new Date().toISOString();
-    this.raw
-      .prepare(
-        `INSERT INTO bridge_runs (run_id, chat_id, bot, status, started_at)
-         VALUES (?, ?, ?, 'running', ?)`
-      )
-      .run(runId, chatId, bot, startedAt);
+    this.runs.insertRun(runId, chatId, bot);
   }
 
   getRun(runId: string): any {
-    return this.raw
-      .prepare(`SELECT * FROM bridge_runs WHERE run_id = ?`)
-      .get(runId);
+    return this.runs.getRun(runId);
   }
 
   updateRunCompleted(runId: string, text: string, sessionId: string | null): void {
-    const endedAt = new Date().toISOString();
-    this.raw
-      .prepare(
-        `UPDATE bridge_runs
-         SET status = 'done', ended_at = ?, final_text_preview = ?, session_id = ?
-         WHERE run_id = ?`
-      )
-      .run(endedAt, text, sessionId, runId);
+    this.runs.updateRunCompleted(runId, text, sessionId);
   }
 
   updateRunFailed(runId: string, error: string): void {
-    const endedAt = new Date().toISOString();
-    this.raw
-      .prepare(
-        `UPDATE bridge_runs
-         SET status = 'failed', ended_at = ?, error = ?
-         WHERE run_id = ?`
-      )
-      .run(endedAt, error, runId);
+    this.runs.updateRunFailed(runId, error);
   }
 
   updateRunCancelled(runId: string, reason: string): void {
-    const endedAt = new Date().toISOString();
-    this.raw
-      .prepare(
-        `UPDATE bridge_runs
-         SET status = 'cancelled', ended_at = ?, error = ?
-         WHERE run_id = ?`
-      )
-      .run(endedAt, reason, runId);
+    this.runs.updateRunCancelled(runId, reason);
   }
 
   insertEvent(runId: string, seq: number, type: string, timestamp: string, payload: any): void {
-    const id = `${runId}:${seq}`;
-    const payloadJson = JSON.stringify(payload);
-    this.raw
-      .prepare(
-        `INSERT INTO bridge_events (id, run_id, seq, type, timestamp, payload_json)
-         VALUES (?, ?, ?, ?, ?, ?)`
-      )
-      .run(id, runId, seq, type, timestamp, payloadJson);
+    this.runs.insertEvent(runId, seq, type, timestamp, payload);
   }
 
   getEventsForRun(runId: string): any[] {
-    return this.raw
-      .prepare(`SELECT * FROM bridge_events WHERE run_id = ? ORDER BY seq ASC`)
-      .all(runId);
+    return this.runs.getEventsForRun(runId);
   }
 
   // ── Work items ───────────────────────────────────────────────────────────
@@ -685,36 +589,23 @@ export class BridgeDb {
     body?: string;
     priority?: string;
   }): WorkItem {
-    const { kind, source, title, created_by, repository = null, body = null, priority = "normal" } = input;
-    const stmt = this.raw.prepare(
-      `INSERT INTO work_items (kind, source, title, created_by, repository, body, priority)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       RETURNING *`
-    );
-    return stmt.get(kind, source, title, created_by, repository, body, priority) as WorkItem;
+    return this.workQueue.createWorkItem(input);
   }
 
   getWorkItem(id: number): WorkItem | null {
-    return (this.raw.prepare(`SELECT * FROM work_items WHERE id = ?`).get(id) as WorkItem | undefined) ?? null;
+    return this.workQueue.getWorkItem(id);
   }
 
   listWorkItems(filter: { status?: string } = {}): WorkItem[] {
-    if (filter.status) {
-      return this.raw.prepare(`SELECT * FROM work_items WHERE status = ? ORDER BY id ASC`).all(filter.status) as WorkItem[];
-    }
-    return this.raw.prepare(`SELECT * FROM work_items ORDER BY id ASC`).all() as WorkItem[];
+    return this.workQueue.listWorkItems(filter);
   }
 
   updateWorkItemStatus(id: number, status: string): void {
-    this.raw.prepare(
-      `UPDATE work_items SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    ).run(status, id);
+    this.workQueue.updateWorkItemStatus(id, status);
   }
 
   updateWorkItemBody(id: number, body: string): void {
-    this.raw.prepare(
-      `UPDATE work_items SET body = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    ).run(body, id);
+    this.workQueue.updateWorkItemBody(id, body);
   }
 
   // ── Work jobs ────────────────────────────────────────────────────────────
@@ -727,133 +618,54 @@ export class BridgeDb {
     input_json?: object;
     max_attempts?: number;
   }): WorkJob {
-    const { task_type, idempotency_key, work_item_id = null, bot = null, input_json = {}, max_attempts = 2 } = input;
-    // Return existing job if idempotency key already exists
-    const existing = this.raw.prepare(`SELECT * FROM work_jobs WHERE idempotency_key = ?`).get(idempotency_key) as WorkJob | undefined;
-    if (existing) return existing;
-    const stmt = this.raw.prepare(
-      `INSERT INTO work_jobs (task_type, idempotency_key, work_item_id, bot, input_json, max_attempts)
-       VALUES (?, ?, ?, ?, ?, ?)
-       RETURNING *`
-    );
-    return stmt.get(task_type, idempotency_key, work_item_id, bot, JSON.stringify(input_json), max_attempts) as WorkJob;
+    return this.workQueue.createWorkJob(input);
   }
 
   getWorkJob(id: number): WorkJob | null {
-    return (this.raw.prepare(`SELECT * FROM work_jobs WHERE id = ?`).get(id) as WorkJob | undefined) ?? null;
+    return this.workQueue.getWorkJob(id);
   }
 
   listWorkJobs(filter: { status?: string } = {}): WorkJob[] {
-    if (filter.status) {
-      return this.raw.prepare(`SELECT * FROM work_jobs WHERE status = ? ORDER BY id ASC`).all(filter.status) as WorkJob[];
-    }
-    return this.raw.prepare(`SELECT * FROM work_jobs ORDER BY id ASC`).all() as WorkJob[];
+    return this.workQueue.listWorkJobs(filter);
   }
 
   // ── Job lease lifecycle ──────────────────────────────────────────────────
 
   claimNextWorkJob(workerId: string, now: string, leaseSeconds: number, jobId?: number): WorkJob | null {
-    const expiresAt = new Date(new Date(now).getTime() + leaseSeconds * 1000).toISOString();
-    const job = jobId != null
-      ? this.raw.prepare(
-          `SELECT * FROM work_jobs
-           WHERE id = ?
-             AND (status = 'pending' OR (status IN ('leased','running') AND lease_expires_at < ?))`
-        ).get(jobId, now) as WorkJob | undefined
-      : this.raw.prepare(
-          `SELECT * FROM work_jobs
-           WHERE status = 'pending'
-              OR (status IN ('leased','running') AND lease_expires_at < ?)
-           ORDER BY created_at ASC, id ASC
-           LIMIT 1`
-        ).get(now) as WorkJob | undefined;
-    if (!job) return null;
-    const { changes } = this.raw.prepare(
-      `UPDATE work_jobs
-       SET status = 'leased', lease_owner = ?, lease_expires_at = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ?
-         AND (status = 'pending' OR (status IN ('leased','running') AND lease_expires_at < ?))`
-    ).run(workerId, expiresAt, job.id, now);
-    if (changes === 0) return null;
-    return this.raw.prepare(`SELECT * FROM work_jobs WHERE id = ?`).get(job.id) as WorkJob;
+    return this.workQueue.claimNextWorkJob(workerId, now, leaseSeconds, jobId);
   }
 
   markWorkJobRunning(jobId: number, workerId: string): void {
-    this.raw.prepare(
-      `UPDATE work_jobs SET status = 'running', updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND lease_owner = ?`
-    ).run(jobId, workerId);
+    this.workQueue.markWorkJobRunning(jobId, workerId);
   }
 
   heartbeatWorkJob(jobId: number, workerId: string, now: string, leaseSeconds?: number): void {
-    if (leaseSeconds != null) {
-      const expiresAt = new Date(new Date(now).getTime() + leaseSeconds * 1000).toISOString();
-      this.raw.prepare(
-        `UPDATE work_jobs SET heartbeat_at = ?, lease_expires_at = ?, updated_at = CURRENT_TIMESTAMP
-         WHERE id = ? AND lease_owner = ?`
-      ).run(now, expiresAt, jobId, workerId);
-      return;
-    }
-    this.raw.prepare(
-      `UPDATE work_jobs SET heartbeat_at = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND lease_owner = ?`
-    ).run(now, jobId, workerId);
+    this.workQueue.heartbeatWorkJob(jobId, workerId, now, leaseSeconds);
   }
 
   completeWorkJob(jobId: number, result: object, workerId: string): void {
-    this.raw.prepare(
-      `UPDATE work_jobs
-       SET status = 'completed', lease_owner = NULL, lease_expires_at = NULL,
-           result_json = ?, error = NULL, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND lease_owner = ? AND status != 'cancelled'`
-    ).run(JSON.stringify(result), jobId, workerId);
+    this.workQueue.completeWorkJob(jobId, result, workerId);
   }
 
   failWorkJob(jobId: number, error: string, workerId: string): void {
-    this.raw.prepare(
-      `UPDATE work_jobs
-       SET attempt_count = attempt_count + 1,
-           status = CASE WHEN attempt_count + 1 < max_attempts THEN 'pending' ELSE 'failed' END,
-           error = ?, lease_owner = NULL, lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND lease_owner = ? AND status != 'cancelled'`
-    ).run(error, jobId, workerId);
+    this.workQueue.failWorkJob(jobId, error, workerId);
   }
 
   failWorkJobPermanently(jobId: number, error: string, workerId: string): void {
-    this.raw.prepare(
-      `UPDATE work_jobs
-       SET status = 'failed', error = ?, lease_owner = NULL, lease_expires_at = NULL,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND lease_owner = ? AND status != 'cancelled'`
-    ).run(error, jobId, workerId);
+    this.workQueue.failWorkJobPermanently(jobId, error, workerId);
   }
 
   /** Re-queue a job as pending with an updated phase and phaseData checkpoint. */
   continueWorkJob(jobId: number, phase: string, phaseData: object, workerId: string): void {
-    this.raw.prepare(
-      `UPDATE work_jobs
-       SET status = 'pending', phase = ?, phase_data_json = ?,
-           attempt_count = attempt_count + 1,
-           lease_owner = NULL, lease_expires_at = NULL,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND lease_owner = ? AND status != 'cancelled'`
-    ).run(phase, JSON.stringify(phaseData), jobId, workerId);
+    this.workQueue.continueWorkJob(jobId, phase, phaseData, workerId);
   }
 
   recoverExpiredWorkJobs(now: string): number {
-    const { changes } = this.raw.prepare(
-      `UPDATE work_jobs
-       SET status = CASE WHEN attempt_count < max_attempts THEN 'pending' ELSE 'failed' END,
-           lease_owner = NULL, lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
-       WHERE status IN ('leased','running') AND lease_expires_at < ?`
-    ).run(now);
-    return changes;
+    return this.workQueue.recoverExpiredWorkJobs(now);
   }
 
   cancelWorkJob(jobId: number, _reason: string): void {
-    this.raw.prepare(
-      `UPDATE work_jobs SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    ).run(jobId);
+    this.workQueue.cancelWorkJob(jobId, _reason);
   }
 
   // ── Approvals ────────────────────────────────────────────────────────────
@@ -866,93 +678,45 @@ export class BridgeDb {
     expires_at?: string | null;
     payload?: object;
   }): Approval {
-    const { approval_type, requested_by, work_item_id = null, job_id = null, expires_at = null, payload = {} } = input;
-    const stmt = this.raw.prepare(
-      `INSERT INTO approvals (approval_type, requested_by, work_item_id, job_id, expires_at, payload_json)
-       VALUES (?, ?, ?, ?, ?, ?)
-       RETURNING *`
-    );
-    return stmt.get(approval_type, requested_by, work_item_id, job_id, expires_at, JSON.stringify(payload)) as Approval;
+    return this.workQueue.createApproval(input);
   }
 
   resolveApproval(id: number, decision: "approved" | "rejected", decidedBy: string, now: string = new Date().toISOString()): Approval {
-    // First mark any pending approvals that have passed expires_at as expired
-    this.raw.prepare(
-      `UPDATE approvals SET status = 'expired'
-       WHERE id = ? AND status = 'pending' AND expires_at IS NOT NULL AND expires_at <= ?`
-    ).run(id, now);
-    // Only update if still pending and not expired — first decision sticks
-    this.raw.prepare(
-      `UPDATE approvals
-       SET status = ?, decided_by = ?, decided_at = ?
-       WHERE id = ? AND status = 'pending'`
-    ).run(decision, decidedBy, now, id);
-    return this.raw.prepare(`SELECT * FROM approvals WHERE id = ?`).get(id) as Approval;
+    return this.workQueue.resolveApproval(id, decision, decidedBy, now);
   }
 
   // ── GitHub links ─────────────────────────────────────────────────────────
 
   linkGithubIssue(input: { work_item_id: number; repository: string; issue_number: number }): GithubLink {
-    const { work_item_id, repository, issue_number } = input;
-    return this.raw.prepare(
-      `INSERT INTO github_links (work_item_id, repository, issue_number)
-       VALUES (?, ?, ?)
-       RETURNING *`
-    ).get(work_item_id, repository, issue_number) as GithubLink;
+    return this.workQueue.linkGithubIssue(input);
   }
 
   linkGithubPr(input: { work_item_id: number; repository: string; pr_number: number; branch_name?: string; commit_sha?: string }): GithubLink {
-    const { work_item_id, repository, pr_number, branch_name = null, commit_sha = null } = input;
-    return this.raw.prepare(
-      `INSERT INTO github_links (work_item_id, repository, pr_number, branch_name, commit_sha)
-       VALUES (?, ?, ?, ?, ?)
-       RETURNING *`
-    ).get(work_item_id, repository, pr_number, branch_name, commit_sha) as GithubLink;
+    return this.workQueue.linkGithubPr(input);
   }
 
   updatePrState(linkId: number, state: string): void {
-    this.raw.prepare(
-      `UPDATE github_links SET pr_state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    ).run(state, linkId);
+    this.workQueue.updatePrState(linkId, state);
   }
 
   listOpenAgentPrs(repository: string): GithubLink[] {
-    return this.raw.prepare(
-      `SELECT * FROM github_links
-       WHERE repository = ? AND pr_number IS NOT NULL
-         AND pr_state NOT IN ('merged','closed')
-       ORDER BY id ASC`
-    ).all(repository) as GithubLink[];
+    return this.workQueue.listOpenAgentPrs(repository);
   }
 
   listAllOpenAgentPrs(): GithubLink[] {
-    return this.raw.prepare(
-      `SELECT * FROM github_links
-       WHERE pr_number IS NOT NULL
-         AND pr_state NOT IN ('merged','closed')
-       ORDER BY id ASC`
-    ).all() as GithubLink[];
+    return this.workQueue.listAllOpenAgentPrs();
   }
 
   touchPrActivity(linkId: number, ts: string): void {
-    this.raw.prepare(
-      `UPDATE github_links SET last_activity_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    ).run(ts, linkId);
+    this.workQueue.touchPrActivity(linkId, ts);
   }
 
   setProofCommentSha(linkId: number, sha: string): void {
-    this.raw.prepare(
-      `UPDATE github_links SET proof_comment_sha = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-    ).run(sha, linkId);
+    this.workQueue.setProofCommentSha(linkId, sha);
   }
 
   countDailyAgentPrs(repository: string): number {
-    const row = this.raw.prepare(
-      `SELECT COUNT(*) AS n FROM github_links
-       WHERE repository = ? AND pr_number IS NOT NULL
-         AND DATE(created_at) = DATE('now')`
-    ).get(repository) as { n: number };
-    return row.n;
+    return this.workQueue.countDailyAgentPrs(repository);
   }
 
   // ── Feature plans ────────────────────────────────────────────────────────
@@ -992,26 +756,7 @@ export class BridgeDb {
   }
 
   cleanupOrphanedRuns(onOrphan: (run: { run_id: string; chat_id: string; bot: string }) => void | Promise<void>): void {
-    const endedAt = new Date().toISOString();
-    const orphans = this.raw
-      .prepare(`SELECT run_id, chat_id, bot FROM bridge_runs WHERE status = 'running'`)
-      .all() as Array<{ run_id: string; chat_id: string; bot: string }>;
-
-    for (const run of orphans) {
-      this.raw
-        .prepare(
-          `UPDATE bridge_runs
-           SET status = 'failed', ended_at = ?, error = 'Process interrupted by bridge restart'
-           WHERE run_id = ?`
-        )
-        .run(endedAt, run.run_id);
-      
-      try {
-        onOrphan(run);
-      } catch (err) {
-        console.error(`Failed to handle orphaned run ${run.run_id}`, err);
-      }
-    }
+    this.runs.cleanupOrphanedRuns(onOrphan);
   }
 
   // ── Conversation turns ──────────────────────────────────────────────────
@@ -1179,60 +924,23 @@ export class BridgeDb {
   // ── Project memory ────────────────────────────────────────────────────────
 
   addMemory(mem: { id: string; type: string; scope?: string; text: string; source_chat_key?: string; source_cli?: string; source_turn_id?: number; source_repo_path?: string; confidence?: number }): void {
-    this.raw.prepare(`
-      INSERT OR REPLACE INTO project_memories (id, type, scope, text, source_chat_key, source_cli, source_turn_id, source_repo_path, confidence)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      mem.id,
-      mem.type,
-      mem.scope ?? "project",
-      mem.text,
-      mem.source_chat_key ?? null,
-      mem.source_cli ?? null,
-      mem.source_turn_id ?? null,
-      mem.source_repo_path ?? null,
-      mem.confidence ?? 1.0,
-    );
+    this.memories.addMemory(mem);
   }
 
   findMemoryByText(text: string): { id: string } | null {
-    return (this.raw.prepare(
-      `SELECT id FROM project_memories WHERE lower(text) = lower(?) LIMIT 1`,
-    ).get(text) as { id: string } | undefined) ?? null;
+    return this.memories.findMemoryByText(text);
   }
 
   getLatestConvTurnId(chatKey: string): number | null {
-    const row = this.raw.prepare(
-      `SELECT id FROM conversation_turns WHERE chat_key = ? ORDER BY id DESC LIMIT 1`,
-    ).get(chatKey) as { id: number } | undefined;
-    return row?.id ?? null;
+    return this.memories.getLatestConvTurnId(chatKey);
   }
 
   searchMemories(query: string, limit = 5): Array<{ id: string; type: string; text: string; score: number; snippet: string }> {
-    if (!query.trim()) return [];
-    const ftsQuery = buildMemoryFtsQuery(query);
-    if (!ftsQuery) return [];
-    try {
-      return this.raw.prepare(`
-        SELECT
-          pm.id,
-          pm.type,
-          pm.text,
-          rank AS score,
-          snippet(project_memories_fts, 1, '', '', '...', 12) AS snippet
-        FROM project_memories_fts fts
-        JOIN project_memories pm ON pm.rowid = fts.rowid
-        WHERE project_memories_fts MATCH ?
-        ORDER BY rank
-        LIMIT ?
-      `).all(ftsQuery, limit) as Array<{ id: string; type: string; text: string; score: number; snippet: string }>;
-    } catch {
-      return [];
-    }
+    return this.memories.searchMemories(query, limit);
   }
 
   getMemoryCount(): number {
-    return (this.raw.prepare("SELECT COUNT(*) AS n FROM project_memories").get() as { n: number }).n;
+    return this.memories.getMemoryCount();
   }
 
   close(): void {

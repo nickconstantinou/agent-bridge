@@ -229,6 +229,51 @@ describe("createTddImplementationHandler", () => {
     expect(greenPrompt.toLowerCase()).toMatch(/implement|make.*pass|green/i);
   });
 
+  it("green prompt requires architectural intent acceptance, not only green tests", async () => {
+    const stubs = makeStubs();
+    const item = db.createWorkItem({
+      kind: "refactor",
+      source: "refactor_scan",
+      title: "Extract database repositories",
+      body: "BridgeDb should delegate session and work queue behavior to repository classes.",
+      created_by: "worker",
+    });
+
+    await createTddImplementationHandler(stubs)(
+      { work_item_id: item.id, repository_path: "/tmp/repo" },
+      { db, workerId: "w" },
+    );
+
+    const greenPrompt: string = stubs.runCli.mock.calls[1][1].at(-1);
+    expect(greenPrompt).toContain("Architectural acceptance criteria");
+    expect(greenPrompt).toContain("production path");
+    expect(greenPrompt).toContain("before/after ownership");
+  });
+
+  it("rejects production test harness imports or test env cleanup in src", async () => {
+    const stubs = makeStubs();
+    stubs.runGit = vi.fn().mockImplementation((args: string[]) => {
+      if (args[0] === "diff" && args.includes("--cached")) {
+        return stubs.runGit.mock.calls.filter(([a]: [string[]]) => a[0] === "diff").length === 1
+          ? "test/fix.test.ts\n"
+          : "src/workerBot.ts\n";
+      }
+      if (args[0] === "grep") return "src/workerBot.ts:16:import('vitest')\nsrc/workerBot.ts:17:VITEST_WORKER_ID\n";
+      return "";
+    });
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram",
+      title: "Fix test env pollution", created_by: "worker",
+    });
+
+    await expect(
+      createTddImplementationHandler(stubs)(
+        { work_item_id: item.id, repository_path: "/tmp/repo" },
+        { db, workerId: "w" },
+      )
+    ).rejects.toThrow(/test-only code leaked into production source|vitest|VITEST_WORKER_ID/i);
+  });
+
   it("makes two git commits — one for tests, one for implementation", async () => {
     const stubs = makeStubs();
     const item = db.createWorkItem({

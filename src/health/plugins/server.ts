@@ -41,7 +41,7 @@ export class ServerPlugin implements HealthPlugin {
     let topProcessesMsg = "";
     if (loadStatus !== "green" && os.platform() === "linux") {
       try {
-        const topOutput = execSync("ps -eo pid,pcpu,comm --sort=-pcpu | head -n 4", { stdio: ["ignore", "pipe", "ignore"] }).toString().trim();
+        const topOutput = execSync("ps -eo pid,pcpu,comm --sort=-pcpu | head -n 4", { stdio: ["ignore", "pipe", "ignore"], timeout: 1000 }).toString().trim();
         topProcessesMsg = `\nTop CPU processes:\n${topOutput}`;
       } catch {
         // ignore

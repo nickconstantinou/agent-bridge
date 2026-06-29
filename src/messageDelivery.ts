@@ -28,37 +28,6 @@ function extractStatusProgress(text: string): string {
     .trim();
 }
 
-function extractCodexProgressText(chunk: string): string {
-  const lines = chunk.split("\n").map((line) => line.trim()).filter(Boolean);
-  const parts: string[] = [];
-
-  for (const line of lines) {
-    if (!line.startsWith("{")) {
-      parts.push(line);
-      continue;
-    }
-
-    try {
-      const event = JSON.parse(line);
-      if (event.type === "response.output_text.delta" && typeof event.delta === "string") {
-        parts.push(event.delta);
-      } else if (
-        (event.type === "item.completed" || event.type === "item.updated") &&
-        event.item?.type === "agent_message" &&
-        typeof event.item.text === "string"
-      ) {
-        parts.push(event.item.text);
-      } else if (event.type === "response.completed" && typeof event.output_text === "string") {
-        parts.push(event.output_text);
-      }
-    } catch {
-      parts.push(line);
-    }
-  }
-
-  return parts.join("\n").trim();
-}
-
 export async function sendTelegramMessage({
   client,
   kind,

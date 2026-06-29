@@ -460,6 +460,22 @@ describe("ServerPlugin", () => {
     // Set custom multipliers/thresholds that force it to be flagged (even if load is 0)
     process.env.HEALTH_CPU_LOAD_AMBER_MULTIPLIER = "-1.0";
     process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER = "-0.5";
+    const oldMockExists = (globalThis as any).__mockExistsSync;
+    const oldMockExec = (globalThis as any).__mockExecSync;
+    const execCalls: Array<{ cmd: string; options: any }> = [];
+    (globalThis as any).__mockExistsSync = (path: string) => {
+      if (path === "/usr/lib/update-notifier/apt-check") return false;
+      if (path === "/var/run/reboot-required") return false;
+      return oldMockExists?.(path);
+    };
+    (globalThis as any).__mockExecSync = (cmd: string, options: any) => {
+      execCalls.push({ cmd, options });
+      if (cmd.includes("ps -eo pid,pcpu,comm")) return "PID %CPU COMMAND\n1 0.1 node";
+      if (cmd.includes("ps -eo state")) return "STAT\nS\nS\n";
+      if (cmd.includes("systemctl is-active ufw")) return "active";
+      if (cmd.includes("systemctl list-units --state=failed")) return "";
+      return oldMockExec?.(cmd, options);
+    };
 
     try {
       const plugin = new ServerPlugin();
@@ -469,9 +485,13 @@ describe("ServerPlugin", () => {
       if (cpuCheck?.status !== "green" && process.platform === "linux") {
         expect(cpuCheck?.message).toContain("Top CPU processes");
       }
+      const topProcessCall = execCalls.find(call => call.cmd.includes("ps -eo pid,pcpu,comm"));
+      expect(topProcessCall?.options.timeout).toBeGreaterThan(0);
     } finally {
       delete process.env.HEALTH_CPU_LOAD_AMBER_MULTIPLIER;
       delete process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER;
+      (globalThis as any).__mockExistsSync = oldMockExists;
+      (globalThis as any).__mockExecSync = oldMockExec;
     }
   });
 

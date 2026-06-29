@@ -24,7 +24,6 @@ Interactive requests stream responses back to the chat. Background worker jobs r
 | `agent-bridge-interactive.service` | `src/index-interactive.ts` | Telegram | One bot with `/cli`, per-chat CLI preference, and CLI-to-CLI fallback |
 | `agent-bridge-worker-bot.service` | `src/index-worker.ts` | Telegram | Autonomous worker queue, GitHub issue/PR lifecycle, merge gate |
 | `agent-bridge-health.service` | `src/index-health.ts` | Telegram | Scheduled health reports and optional CLI suggestions |
-| `agent-bridge-discord.service` | `src/index-discord.ts` | Discord | Dedicated Discord CLI bridge |
 | `agent-bridge-discord-interactive.service` | `src/index-discord-interactive.ts` | Discord | Discord bot with switchable CLI routing |
 
 ## Features
@@ -84,7 +83,6 @@ cp .env.antigravity.example .env.antigravity
 cp .env.claude.example .env.claude
 cp .env.interactive.example .env.interactive
 cp .env.worker.example .env.worker
-cp .env.discord.example .env.discord
 cp .env.discord-interactive.example .env.discord-interactive
 ```
 
@@ -108,7 +106,6 @@ BRIDGE_ENV_FILE=.env.antigravity ./node_modules/.bin/tsx src/index.ts
 BRIDGE_ENV_FILE=.env.claude ./node_modules/.bin/tsx src/index.ts
 BRIDGE_ENV_FILE=.env.interactive ./node_modules/.bin/tsx src/index-interactive.ts
 BRIDGE_ENV_FILE=.env.worker ./node_modules/.bin/tsx src/index-worker.ts
-BRIDGE_ENV_FILE=.env.discord ./node_modules/.bin/tsx src/index-discord.ts
 BRIDGE_ENV_FILE=.env.discord-interactive ./node_modules/.bin/tsx src/index-discord-interactive.ts
 ```
 
@@ -545,7 +542,6 @@ sudo install -D -m 0644 systemd/agent-bridge-claude.service /etc/systemd/system/
 sudo install -D -m 0644 systemd/agent-bridge-interactive.service /etc/systemd/system/agent-bridge-interactive.service
 sudo install -D -m 0644 systemd/agent-bridge-worker-bot.service /etc/systemd/system/agent-bridge-worker-bot.service
 sudo install -D -m 0644 systemd/agent-bridge-health.service /etc/systemd/system/agent-bridge-health.service
-sudo install -D -m 0644 systemd/agent-bridge-discord.service /etc/systemd/system/agent-bridge-discord.service
 sudo install -D -m 0644 systemd/agent-bridge-discord-interactive.service /etc/systemd/system/agent-bridge-discord-interactive.service
 sudo sed -i 's/User=BRIDGE_USER/User='"$USER"'/g' /etc/systemd/system/agent-bridge-*.service
 sudo systemctl daemon-reload

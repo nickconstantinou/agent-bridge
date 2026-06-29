@@ -390,7 +390,7 @@ docs/
 Systemd units live in `systemd/`. Dedicated Telegram CLI bots share
 `tsx src/index.ts`; the unified interactive bot uses `src/index-interactive.ts`;
 the worker bot uses `src/index-worker.ts`; health uses `src/index-health.ts`;
-Discord uses `src/index-discord.ts` and `src/index-discord-interactive.ts`.
+Discord uses `src/index-discord-interactive.ts`.
 Each service loads its own `/etc/default/agent-bridge-*` file and `NODE_BIN`
 must point at Node 24+.
 

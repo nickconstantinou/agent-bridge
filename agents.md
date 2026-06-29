@@ -35,7 +35,6 @@ Each runtime surface is an **independent systemd service** sharing the same Type
 | `agent-bridge-interactive.service` | `.env.shared` | `/etc/default/agent-bridge-interactive` | `.data/interactive.sqlite` |
 | `agent-bridge-worker-bot.service` | `.env.shared` | `/etc/default/agent-bridge-worker-bot` | `.data/worker.sqlite` |
 | `agent-bridge-health.service` | `.env.shared` | `/etc/default/agent-bridge-health` | service DB / monitored DBs |
-| `agent-bridge-discord.service` | `.env.shared` | `/etc/default/agent-bridge-discord` | `.data/discord.sqlite` |
 | `agent-bridge-discord-interactive.service` | `.env.shared` | `/etc/default/agent-bridge-discord-interactive` | `.data/discord-interactive.sqlite` |
 
 Shared env holds settings that apply to all services: allowed user IDs, execution mode, bridge paths, health monitoring config, and shared memory paths. Service-specific files hold tokens, CLI command/model preferences, platform credentials, DB path, and worker feature flags. See `.env.shared.example` and `.env.*.example` for the full reference.

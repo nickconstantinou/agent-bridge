@@ -16,7 +16,6 @@ units=(
   agent-bridge-claude.service
   agent-bridge-codex.service
   agent-bridge-discord-interactive.service
-  agent-bridge-discord.service
   agent-bridge-health.service
   agent-bridge-interactive.service
   agent-bridge-worker-bot.service

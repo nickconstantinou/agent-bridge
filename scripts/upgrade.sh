@@ -107,7 +107,6 @@ if [[ "${1:-}" == "--update" ]]; then
     agent-bridge-codex
     agent-bridge-antigravity
     agent-bridge-interactive
-    agent-bridge-discord
     agent-bridge-discord-interactive
   )
   for svc in "${UPDATE_SERVICES[@]}"; do
@@ -228,13 +227,6 @@ if [[ -f "${CLAUDE_DEFAULTS}" ]]; then
   install_unit agent-bridge-claude
   ensure_node_default "${CLAUDE_DEFAULTS}"
   UNITS_TO_ENABLE="${UNITS_TO_ENABLE} agent-bridge-claude"
-fi
-
-DISCORD_DEFAULTS="/etc/default/agent-bridge-discord"
-if [[ -f "${DISCORD_DEFAULTS}" ]]; then
-  install_unit agent-bridge-discord
-  ensure_node_default "${DISCORD_DEFAULTS}"
-  UNITS_TO_ENABLE="${UNITS_TO_ENABLE} agent-bridge-discord"
 fi
 
 DISCORD_INT_DEFAULTS="/etc/default/agent-bridge-discord-interactive"

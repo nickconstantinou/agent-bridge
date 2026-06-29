@@ -133,7 +133,6 @@ seed_from_env_file "${REPO_DIR}/.env.shared"
 seed_from_env_file "${REPO_DIR}/.env.codex"
 seed_from_env_file "${REPO_DIR}/.env.antigravity"
 seed_from_env_file "${REPO_DIR}/.env.claude"
-seed_from_env_file "${REPO_DIR}/.env.discord"
 seed_from_env_file "${REPO_DIR}/.env.discord-interactive"
 
 prompt() {
@@ -297,7 +296,6 @@ if [[ -n "${TELEGRAM_BOT_TOKEN_CLAUDE:-}" ]]; then
   write_env_file "${REPO_DIR}/.env.claude.example"    "${REPO_DIR}/.env.claude"
 fi
 if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
-  write_env_file "${REPO_DIR}/.env.discord.example"    "${REPO_DIR}/.env.discord"
   write_env_file "${REPO_DIR}/.env.discord-interactive.example" "${REPO_DIR}/.env.discord-interactive"
 fi
 
@@ -422,11 +420,9 @@ if [[ -n "${TELEGRAM_BOT_TOKEN_WORKER:-}" ]]; then
 fi
 
 if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
-  _write_discord_defaults discord
   _write_discord_defaults discord-interactive
-  install_unit agent-bridge-discord
   install_unit agent-bridge-discord-interactive
-  UNITS_TO_ENABLE="${UNITS_TO_ENABLE} agent-bridge-discord agent-bridge-discord-interactive"
+  UNITS_TO_ENABLE="${UNITS_TO_ENABLE} agent-bridge-discord-interactive"
 fi
 
 sudo systemctl daemon-reload

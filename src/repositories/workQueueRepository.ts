@@ -112,7 +112,7 @@ export class WorkQueueRepository {
   markWorkJobRunning(jobId: number, workerId: string): void {
     this.db.prepare(
       `UPDATE work_jobs SET status = 'running', updated_at = CURRENT_TIMESTAMP
-       WHERE id = ? AND lease_owner = ?`
+       WHERE id = ? AND lease_owner = ? AND status = 'leased'`
     ).run(jobId, workerId);
   }
 
@@ -172,7 +172,9 @@ export class WorkQueueRepository {
 
   cancelWorkJob(jobId: number, _reason: string): void {
     this.db.prepare(
-      `UPDATE work_jobs SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+      `UPDATE work_jobs
+       SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND status NOT IN ('completed','failed','cancelled')`
     ).run(jobId);
   }
 

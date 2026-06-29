@@ -654,9 +654,7 @@ export class BridgeDb {
     return this.workQueue.claimNextWorkJob(workerId, now, leaseSeconds, jobId);
   }
 
-  markWorkJobRunning(jobId: number, workerId: string): void {
     this.workQueue.markWorkJobRunning(jobId, workerId);
-  }
 
   heartbeatWorkJob(jobId: number, workerId: string, now: string, leaseSeconds?: number): void {
     this.workQueue.heartbeatWorkJob(jobId, workerId, now, leaseSeconds);
@@ -683,9 +681,7 @@ export class BridgeDb {
     return this.workQueue.recoverExpiredWorkJobs(now);
   }
 
-  cancelWorkJob(jobId: number, _reason: string): void {
     this.workQueue.cancelWorkJob(jobId, _reason);
-  }
 
   // ── Approvals ────────────────────────────────────────────────────────────
 

@@ -42,6 +42,10 @@ describe("work callback builder", () => {
     expect(buildWorkCallback({ type: "job_cncl", id: 12 })).toBe("job:12:cncl");
     expect(buildWorkCallback({ type: "ap_yes", id: 34 })).toBe("ap:34:yes");
     expect(buildWorkCallback({ type: "ap_no", id: 56 })).toBe("ap:56:no");
+    expect(buildWorkCallback({ type: "pr_hold", id: 78 })).toBe("pr:78:hold");
+    expect(buildWorkCallback({ type: "pr_rels", id: 79 })).toBe("pr:79:rels");
+    expect(buildWorkCallback({ type: "pr_rfsh", id: 80 })).toBe("pr:80:rfsh");
+    expect(buildWorkCallback({ type: "pr_clse", id: 81 })).toBe("pr:81:clse");
   });
 
   it("throws or returns under 64 bytes", () => {
@@ -662,6 +666,50 @@ npm test`;
       mime_type: "text/html",
     }));
     expect(db.getWorkItem(item.id)!.status).toBe("resolved");
+  });
+
+  it("cancels pending jobs linked to the work item on wi:id:clse", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "defect_scan", title: "Pending Cancel", created_by: "worker" });
+    const job = db.createWorkJob({ task_type: "tdd_implementation", idempotency_key: "tdd:cancel-test", work_item_id: item.id });
+    const cbq = {
+      id: "cb-clse-cancel",
+      data: `wi:${item.id}:clse`,
+      from: { id: 42 },
+      message: { message_id: 100, chat: { id: 10 } },
+    };
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+    expect(db.getWorkItem(item.id)!.status).toBe("closed");
+    expect(db.getWorkJob(job.id)!.status).toBe("cancelled");
+  });
+
+  it("cancels leased jobs linked to the work item on wi:id:clse", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "defect_scan", title: "Leased Cancel", created_by: "worker" });
+    const job = db.createWorkJob({ task_type: "tdd_implementation", idempotency_key: "tdd:cancel-leased", work_item_id: item.id });
+    db.claimNextWorkJob("worker-1", new Date().toISOString(), 60, job.id);
+    const cbq = {
+      id: "cb-clse-leased",
+      data: `wi:${item.id}:clse`,
+      from: { id: 42 },
+      message: { message_id: 100, chat: { id: 10 } },
+    };
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+    expect(db.getWorkItem(item.id)!.status).toBe("closed");
+    expect(db.getWorkJob(job.id)!.status).toBe("cancelled");
+  });
+
+  it("cancels running jobs linked to the work item on wi:id:clse", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "defect_scan", title: "Running Cancel", created_by: "worker" });
+    const job = db.createWorkJob({ task_type: "tdd_implementation", idempotency_key: "tdd:cancel-running", work_item_id: item.id });
+    db.raw.prepare(`UPDATE work_jobs SET status = 'running' WHERE id = ?`).run(job.id);
+    const cbq = {
+      id: "cb-clse-running",
+      data: `wi:${item.id}:clse`,
+      from: { id: 42 },
+      message: { message_id: 100, chat: { id: 10 } },
+    };
+    await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
+    expect(db.getWorkItem(item.id)!.status).toBe("closed");
+    expect(db.getWorkJob(job.id)!.status).toBe("cancelled");
   });
 });
 

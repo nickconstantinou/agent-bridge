@@ -53,6 +53,39 @@ describe("DiscordClient", () => {
       expect(JSON.parse(init.body).content).toBe("hello");
     });
 
+    it("converts Telegram HTML formatting before posting to Discord", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ id: "msg-1" }),
+      });
+      const client = new DiscordClient(baseOpts, fetchMock);
+      await client.sendMessage({
+        chat_id: "999",
+        text: '<b>Blocker:</b>\n<pre language="text">bwrap: loopback: Failed RTM_NEWADDR</pre>\nUse <code>/repo</code>',
+      });
+      const [, init] = fetchMock.mock.calls[0];
+      expect(JSON.parse(init.body).content).toBe(
+        "**Blocker:**\n```text\nbwrap: loopback: Failed RTM_NEWADDR\n```\nUse `/repo`",
+      );
+    });
+
+    it("converts Telegram HTML formatting before editing Discord messages", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ id: "msg-1" }),
+      });
+      const client = new DiscordClient(baseOpts, fetchMock);
+      await client.editMessageText({
+        chat_id: "999",
+        message_id: "123",
+        text: "<b>Done</b> with <code>npm test</code>",
+      });
+      const [, init] = fetchMock.mock.calls[0];
+      expect(JSON.parse(init.body).content).toBe("**Done** with `npm test`");
+    });
+
     it("sends multiple requests for text over the limit", async () => {
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,

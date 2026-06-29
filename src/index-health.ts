@@ -21,6 +21,7 @@ import { openDb } from "./db.js";
 import { BridgeEngine } from "./engine.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
 import { shutdownCliProcesses } from "./bridge.js";
+import { autoUpdateClis } from "./health/autoRemediate.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
 import type { BotKind } from "./types.js";
@@ -134,6 +135,12 @@ const scheduler = new HealthScheduler({
   },
   onRawReport: async (report) => {
     await healthBot.handleReport(report);
+    const _repoRoot = process.env.BRIDGE_PROJECT_DIR
+      ?? new URL("../../", import.meta.url).pathname.replace(/\/$/, "");
+    await autoUpdateClis(report, {
+      upgradeScript: `${_repoRoot}/scripts/upgrade.sh`,
+      sendNotification: sendText,
+    });
   },
 });
 

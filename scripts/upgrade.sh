@@ -129,6 +129,45 @@ if [[ "${1:-}" == "--update" ]]; then
   exit 0
 fi
 
+# ── --clis-only mode: upgrade npm CLIs only, print what changed ───────────────
+if [[ "${1:-}" == "--clis-only" ]]; then
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "npm not found" >&2
+    exit 1
+  fi
+
+  npm_pkg_version() {
+    npm list -g "${1}" --depth=0 2>/dev/null \
+      | grep "${1}@" \
+      | head -1 \
+      | sed 's/.*@//' \
+      | tr -d '[:space:]'
+  }
+
+  CLIS=("@anthropic-ai/claude-code" "@openai/codex")
+  declare -A before_versions
+  for pkg in "${CLIS[@]}"; do
+    before_versions["${pkg}"]="$(npm_pkg_version "${pkg}")"
+  done
+
+  npm install -g "${CLIS[@]}" 2>/dev/null || true
+
+  updated_any=0
+  for pkg in "${CLIS[@]}"; do
+    after="$(npm_pkg_version "${pkg}")"
+    before="${before_versions[${pkg}]:-}"
+    if [[ -n "${after}" && "${after}" != "${before}" ]]; then
+      echo "updated: ${pkg} ${before}→${after}"
+      updated_any=1
+    fi
+  done
+
+  if [[ "${updated_any}" == "0" ]]; then
+    echo "no-op: CLIs already up to date"
+  fi
+  exit 0
+fi
+
 run_as_target_user() {
   if [[ "${USER}" == "${TARGET_USER}" ]]; then
     "$@"

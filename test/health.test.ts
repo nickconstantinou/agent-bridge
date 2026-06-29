@@ -1629,3 +1629,129 @@ describe("SelfPlugin — PR lifecycle gauges", () => {
     }
   });
 });
+
+// ── ServerPlugin — heavy lane CPU suppression ────────────────────────────────
+
+describe("ServerPlugin — heavy lane CPU suppression", () => {
+  it("cpu-load is green when heavy lane has processing rows, even under high load", async () => {
+    const { ServerPlugin } = await import("../src/health/plugins/server.js");
+    process.env.HEALTH_CPU_LOAD_AMBER_MULTIPLIER = "-1.0";
+    process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER = "-0.5";
+
+    const dbPath = join(tmpdir(), `heavy-lane-active-${Date.now()}.sqlite`);
+    const BetterSqlite3 = (await import("better-sqlite3")).default;
+    const db = new BetterSqlite3(dbPath);
+    db.exec(`CREATE TABLE queue_items (id INTEGER PRIMARY KEY, status TEXT NOT NULL, lane TEXT)`);
+    db.prepare("INSERT INTO queue_items (status, lane) VALUES ('processing', 'heavy')").run();
+    db.close();
+
+    process.env.HEALTH_HEAVY_LANE_DB_PATH = dbPath;
+    const oldMockExists = (globalThis as any).__mockExistsSync;
+    const oldMockExec = (globalThis as any).__mockExecSync;
+    (globalThis as any).__mockExistsSync = (path: string) => {
+      if (path === "/usr/lib/update-notifier/apt-check") return false;
+      if (path === "/var/run/reboot-required") return false;
+      return oldMockExists?.(path);
+    };
+    (globalThis as any).__mockExecSync = (cmd: string) => {
+      if (cmd.includes("ps -eo state")) return "STAT\nS\n";
+      if (cmd.includes("systemctl is-active ufw")) return "active";
+      if (cmd.includes("systemctl list-units --state=failed")) return "";
+      return oldMockExec?.(cmd);
+    };
+
+    try {
+      const plugin = new ServerPlugin();
+      const report = await plugin.check();
+      const cpuCheck = report.checks.find(c => c.name === "cpu-load");
+      expect(cpuCheck?.status).toBe("green");
+      expect(cpuCheck?.message).toContain("heavy lane active");
+    } finally {
+      delete process.env.HEALTH_CPU_LOAD_AMBER_MULTIPLIER;
+      delete process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER;
+      delete process.env.HEALTH_HEAVY_LANE_DB_PATH;
+      (globalThis as any).__mockExistsSync = oldMockExists;
+      (globalThis as any).__mockExecSync = oldMockExec;
+      try { rmSync(dbPath); } catch {}
+    }
+  });
+
+  it("cpu-load uses normal thresholds when heavy lane DB does not exist", async () => {
+    const { ServerPlugin } = await import("../src/health/plugins/server.js");
+    process.env.HEALTH_CPU_LOAD_AMBER_MULTIPLIER = "-1.0";
+    process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER = "-0.5";
+    process.env.HEALTH_HEAVY_LANE_DB_PATH = "/tmp/no-such-heavy-lane-db-xyz.sqlite";
+
+    const oldMockExists = (globalThis as any).__mockExistsSync;
+    const oldMockExec = (globalThis as any).__mockExecSync;
+    (globalThis as any).__mockExistsSync = (path: string) => {
+      if (path === "/usr/lib/update-notifier/apt-check") return false;
+      if (path === "/var/run/reboot-required") return false;
+      if (path === "/tmp/no-such-heavy-lane-db-xyz.sqlite") return false;
+      return oldMockExists?.(path);
+    };
+    (globalThis as any).__mockExecSync = (cmd: string) => {
+      if (cmd.includes("ps -eo pid,pcpu,comm")) return "PID %CPU COMMAND\n1 0.1 node";
+      if (cmd.includes("ps -eo state")) return "STAT\nS\n";
+      if (cmd.includes("systemctl is-active ufw")) return "active";
+      if (cmd.includes("systemctl list-units --state=failed")) return "";
+      return oldMockExec?.(cmd);
+    };
+
+    try {
+      const plugin = new ServerPlugin();
+      const report = await plugin.check();
+      const cpuCheck = report.checks.find(c => c.name === "cpu-load");
+      expect(["amber", "red"]).toContain(cpuCheck?.status);
+    } finally {
+      delete process.env.HEALTH_CPU_LOAD_AMBER_MULTIPLIER;
+      delete process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER;
+      delete process.env.HEALTH_HEAVY_LANE_DB_PATH;
+      (globalThis as any).__mockExistsSync = oldMockExists;
+      (globalThis as any).__mockExecSync = oldMockExec;
+    }
+  });
+
+  it("cpu-load uses normal thresholds when heavy lane has no processing rows", async () => {
+    const { ServerPlugin } = await import("../src/health/plugins/server.js");
+    process.env.HEALTH_CPU_LOAD_AMBER_MULTIPLIER = "-1.0";
+    process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER = "-0.5";
+
+    const dbPath = join(tmpdir(), `heavy-lane-empty-${Date.now()}.sqlite`);
+    const BetterSqlite3 = (await import("better-sqlite3")).default;
+    const db = new BetterSqlite3(dbPath);
+    db.exec(`CREATE TABLE queue_items (id INTEGER PRIMARY KEY, status TEXT NOT NULL, lane TEXT)`);
+    db.prepare("INSERT INTO queue_items (status, lane) VALUES ('queued', 'heavy')").run();
+    db.close();
+
+    process.env.HEALTH_HEAVY_LANE_DB_PATH = dbPath;
+    const oldMockExists = (globalThis as any).__mockExistsSync;
+    const oldMockExec = (globalThis as any).__mockExecSync;
+    (globalThis as any).__mockExistsSync = (path: string) => {
+      if (path === "/usr/lib/update-notifier/apt-check") return false;
+      if (path === "/var/run/reboot-required") return false;
+      return oldMockExists?.(path);
+    };
+    (globalThis as any).__mockExecSync = (cmd: string) => {
+      if (cmd.includes("ps -eo pid,pcpu,comm")) return "PID %CPU COMMAND\n1 0.1 node";
+      if (cmd.includes("ps -eo state")) return "STAT\nS\n";
+      if (cmd.includes("systemctl is-active ufw")) return "active";
+      if (cmd.includes("systemctl list-units --state=failed")) return "";
+      return oldMockExec?.(cmd);
+    };
+
+    try {
+      const plugin = new ServerPlugin();
+      const report = await plugin.check();
+      const cpuCheck = report.checks.find(c => c.name === "cpu-load");
+      expect(["amber", "red"]).toContain(cpuCheck?.status);
+    } finally {
+      delete process.env.HEALTH_CPU_LOAD_AMBER_MULTIPLIER;
+      delete process.env.HEALTH_CPU_LOAD_RED_MULTIPLIER;
+      delete process.env.HEALTH_HEAVY_LANE_DB_PATH;
+      (globalThis as any).__mockExistsSync = oldMockExists;
+      (globalThis as any).__mockExecSync = oldMockExec;
+      try { rmSync(dbPath); } catch {}
+    }
+  });
+});

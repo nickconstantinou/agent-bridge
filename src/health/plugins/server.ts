@@ -2,6 +2,7 @@ import os from "node:os";
 import { existsSync, readFileSync, readdirSync, statSync, statfsSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
+import Database from "better-sqlite3";
 import type { HealthPlugin, HealthReport, CheckResult } from "../types.js";
 
 export class ServerPlugin implements HealthPlugin {
@@ -37,7 +38,28 @@ export class ServerPlugin implements HealthPlugin {
     } else if (load1m >= amberThreshold) {
       loadStatus = "amber";
     }
-    
+
+    // Suppress CPU alert when the heavy lane worker is intentionally using resources
+    let heavyLaneActive = false;
+    if (loadStatus !== "green") {
+      const heavyLaneDbPath = process.env.HEALTH_HEAVY_LANE_DB_PATH
+        ?? join(os.homedir(), "runtime", "content-crawler", "state", "content-queue.db");
+      if (existsSync(heavyLaneDbPath)) {
+        try {
+          const queueDb = new Database(heavyLaneDbPath, { readonly: true });
+          try {
+            const row = queueDb.prepare(
+              "SELECT COUNT(*) as n FROM queue_items WHERE status='processing' AND lane='heavy'"
+            ).get() as { n: number };
+            heavyLaneActive = row.n > 0;
+          } finally {
+            queueDb.close();
+          }
+        } catch { /* non-fatal — queue DB may be locked or schema differs */ }
+      }
+      if (heavyLaneActive) loadStatus = "green";
+    }
+
     let topProcessesMsg = "";
     if (loadStatus !== "green" && os.platform() === "linux") {
       try {
@@ -50,10 +72,11 @@ export class ServerPlugin implements HealthPlugin {
 
     const load5m = loadAvg[1] ?? 0;
     const load15m = loadAvg[2] ?? 0;
+    const heavyLaneNote = heavyLaneActive ? " (heavy lane active — load expected)" : "";
     checks.push({
       name: "cpu-load",
       status: loadStatus,
-      message: `1m: ${load1m.toFixed(2)}  5m: ${load5m.toFixed(2)}  15m: ${load15m.toFixed(2)} (${cpus} CPUs)${topProcessesMsg}`,
+      message: `1m: ${load1m.toFixed(2)}  5m: ${load5m.toFixed(2)}  15m: ${load15m.toFixed(2)} (${cpus} CPUs)${topProcessesMsg}${heavyLaneNote}`,
       value: Number(load1m.toFixed(2)),
     });
 

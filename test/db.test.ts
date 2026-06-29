@@ -514,6 +514,14 @@ describe("updateWorkItemStatus", () => {
     db.updateWorkItemStatus(item.id, "approved");
     expect(db.getWorkItem(item.id)!.status).toBe("approved");
   });
+
+  it("updates title and body from canonical source", () => {
+    const item = db.createWorkItem({ kind: "feature", source: "github", title: "Old", body: "old", created_by: "user:1" });
+    db.updateWorkItemTitleAndBody(item.id, "New", "new body");
+    const updated = db.getWorkItem(item.id)!;
+    expect(updated.title).toBe("New");
+    expect(updated.body).toBe("new body");
+  });
 });
 
 describe("createWorkJob", () => {

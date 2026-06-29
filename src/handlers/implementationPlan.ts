@@ -9,6 +9,7 @@ import { buildGithubWorkItemComment } from "../approvalHtml.js";
 import { validateImplementationPlan } from "../implementationPlanQuality.js";
 import { createRunCommand } from "../runCommandAsync.js";
 import { resolveLocalRepoPath } from "../workspace.js";
+import type { WorkItem } from "../db.js";
 
 type RunCli = (command: string, args: string[], cwd?: string) => Promise<string>;
 type RunCommand = (binary: string, args: string[]) => Promise<string>;
@@ -65,6 +66,31 @@ Explicit non-goals.
 Do not implement code. Do not restate the issue without a concrete plan.`;
 }
 
+async function refreshFromLinkedGithubIssue(
+  item: WorkItem,
+  ctx: JobHandlerContext,
+  runCommand: RunCommand,
+): Promise<WorkItem> {
+  const link = ctx.db.raw.prepare(
+    `SELECT * FROM github_links WHERE work_item_id = ? AND issue_number IS NOT NULL ORDER BY id ASC LIMIT 1`,
+  ).get(item.id) as { repository: string; issue_number: number } | undefined;
+  if (!link) return item;
+
+  const raw = await runCommand("gh", [
+    "issue", "view", String(link.issue_number),
+    "--repo", link.repository,
+    "--json", "title,body,state",
+  ]);
+  const parsed = JSON.parse(raw) as { title?: string; body?: string | null; state?: string };
+  if (parsed.state && parsed.state.toUpperCase() === "CLOSED") {
+    throw new PermanentJobFailureError(`Linked GitHub issue #${link.issue_number} in ${link.repository} is closed`);
+  }
+  const title = typeof parsed.title === "string" && parsed.title.trim() ? parsed.title : item.title;
+  const body = typeof parsed.body === "string" ? parsed.body : item.body;
+  ctx.db.updateWorkItemTitleAndBody(item.id, title, body);
+  return ctx.db.getWorkItem(item.id) ?? { ...item, title, body };
+}
+
 export function createImplementationPlanHandler(deps: ImplementationPlanDeps): JobHandler {
   const {
     runCli,
@@ -82,28 +108,29 @@ export function createImplementationPlanHandler(deps: ImplementationPlanDeps): J
 
     const item = ctx.db.getWorkItem(workItemId);
     if (!item) throw new Error(`Work item ${workItemId} not found`);
+    const canonicalItem = await refreshFromLinkedGithubIssue(item, ctx, runCommand);
 
-    const cwd = item.repository ? resolveRepoPath(item.repository) ?? process.cwd() : process.cwd();
-    const planText = await runCli(command, ["--print", "--output-format", "text", buildPrompt(item)], cwd);
+    const cwd = canonicalItem.repository ? resolveRepoPath(canonicalItem.repository) ?? process.cwd() : process.cwd();
+    const planText = await runCli(command, ["--print", "--output-format", "text", buildPrompt(canonicalItem)], cwd);
     const quality = validateImplementationPlan(planText);
     if (!quality.valid) {
       throw new PermanentJobFailureError(`Implementation plan failed quality gate: ${quality.missing.join(", ")}`);
     }
 
-    ctx.db.setWorkItemPlan(item.id, planText, quality);
+    ctx.db.setWorkItemPlan(canonicalItem.id, planText, quality);
 
     const link = ctx.db.raw.prepare(
       `SELECT * FROM github_links WHERE work_item_id = ? AND issue_number IS NOT NULL ORDER BY id ASC LIMIT 1`,
-    ).get(item.id) as { repository: string; issue_number: number } | undefined;
+    ).get(canonicalItem.id) as { repository: string; issue_number: number } | undefined;
     if (link) {
-      const comment = buildGithubWorkItemComment(ctx.db, ctx.db.getWorkItem(item.id) ?? item);
+      const comment = buildGithubWorkItemComment(ctx.db, ctx.db.getWorkItem(canonicalItem.id) ?? canonicalItem);
       await runCommand("gh", ["issue", "comment", String(link.issue_number), "--repo", link.repository, "--body", comment]);
     }
 
     return {
-      summary: `Implementation plan ready for work item #${item.id}. Review the approval pack before approving.`,
-      work_item_id: item.id,
-      work_item_ids: [item.id],
+      summary: `Implementation plan ready for work item #${canonicalItem.id}. Review the approval pack before approving.`,
+      work_item_id: canonicalItem.id,
+      work_item_ids: [canonicalItem.id],
       plan_quality: quality,
     };
   };

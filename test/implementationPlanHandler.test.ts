@@ -56,4 +56,44 @@ describe("implementation plan handler", () => {
       db.close();
     }
   });
+
+  it("refreshes linked GitHub issue content before generating the plan", async () => {
+    const db = openDb(":memory:");
+    try {
+      const item = db.createWorkItem({
+        kind: "feature",
+        source: "github",
+        repository: "owner/repo",
+        title: "Stale title",
+        body: "Stale body",
+        created_by: "user",
+      });
+      db.linkGithubIssue({ work_item_id: item.id, repository: "owner/repo", issue_number: 42 });
+      const runCommand = vi.fn(async (_binary: string, args: string[]) => {
+        if (args.includes("view")) {
+          return JSON.stringify({ title: "Fresh GitHub title", body: "Fresh GitHub body" });
+        }
+        return "";
+      });
+      const runCli = vi.fn().mockResolvedValue(strongPlan);
+      const handler = createImplementationPlanHandler({ runCli, runCommand });
+
+      await handler({ work_item_id: item.id }, { db, workerId: "worker", phase: "initial", phaseData: {} });
+
+      const prompt = runCli.mock.calls[0][1].at(-1) as string;
+      expect(prompt).toContain("Fresh GitHub title");
+      expect(prompt).toContain("Fresh GitHub body");
+      expect(prompt).not.toContain("Stale body");
+      const updated = db.getWorkItem(item.id)!;
+      expect(updated.title).toBe("Fresh GitHub title");
+      expect(updated.body).toBe("Fresh GitHub body");
+      expect(runCommand).toHaveBeenCalledWith("gh", [
+        "issue", "view", "42",
+        "--repo", "owner/repo",
+        "--json", "title,body,state",
+      ]);
+    } finally {
+      db.close();
+    }
+  });
 });

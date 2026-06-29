@@ -617,6 +617,10 @@ export class BridgeDb {
     this.workQueue.updateWorkItemBody(id, body);
   }
 
+  updateWorkItemTitleAndBody(id: number, title: string, body: string | null): void {
+    this.workQueue.updateWorkItemTitleAndBody(id, title, body);
+  }
+
   // ── Work jobs ────────────────────────────────────────────────────────────
 
   createWorkJob(input: {

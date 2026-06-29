@@ -46,6 +46,12 @@ export class WorkQueueRepository {
     ).run(body, id);
   }
 
+  updateWorkItemTitleAndBody(id: number, title: string, body: string | null): void {
+    this.db.prepare(
+      `UPDATE work_items SET title = ?, body = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+    ).run(title, body, id);
+  }
+
   // ── Work jobs ───────────────────────────────────────────────────────────
 
   createWorkJob(input: {

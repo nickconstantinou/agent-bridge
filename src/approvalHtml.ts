@@ -225,10 +225,11 @@ export function buildPrApprovalPack(db: BridgeDb, workItemId: number): ApprovalH
   };
 }
 
-export async function sendApprovalHtmlPack(client: any, chatId: number, pack: ApprovalHtmlPack): Promise<boolean> {
+export async function sendApprovalHtmlPack(client: any, chatId: number, pack: ApprovalHtmlPack, messageThreadId?: number): Promise<boolean> {
   if (typeof client.sendDocumentBuffer !== "function") return false;
   await client.sendDocumentBuffer({
     chat_id: chatId,
+    ...(messageThreadId != null ? { message_thread_id: messageThreadId } : {}),
     filename: pack.filename,
     bytes: Buffer.from(pack.html, "utf8"),
     mime_type: "text/html",

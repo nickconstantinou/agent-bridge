@@ -122,7 +122,7 @@ describe("startJobExecutorLoop", () => {
     db.createWorkJob({
       task_type: "refactor_scan",
       idempotency_key: "refactor:pack:1",
-      input_json: { repository: "owner/repo", notify_chat_id: 12345 },
+      input_json: { repository: "owner/repo", notify_chat_id: 12345, notify_thread_id: 77 },
     });
 
     const stop = startJobExecutorLoop({
@@ -140,8 +140,8 @@ describe("startJobExecutorLoop", () => {
     expect(sendApprovalPack).toHaveBeenCalledWith(12345, expect.objectContaining({
       filename: `work-item-${item.id}.html`,
       html: expect.stringContaining("Simplify module"),
-    }));
-    expect(sendMessage).toHaveBeenCalledWith(12345, expect.stringContaining("Refactor scan"), undefined);
+    }), 77);
+    expect(sendMessage).toHaveBeenCalledWith(12345, expect.stringContaining("Refactor scan"), undefined, 77);
   });
 
   it("sends PR approval HTML packs when pr_watch reports ready approvals", async () => {
@@ -168,7 +168,7 @@ describe("startJobExecutorLoop", () => {
     db.createWorkJob({
       task_type: "pr_watch",
       idempotency_key: "pr-watch:pack:1",
-      input_json: { notify_chat_id: 999 },
+      input_json: { notify_chat_id: 999, notify_thread_id: 88 },
     });
 
     const stop = startJobExecutorLoop({
@@ -186,7 +186,7 @@ describe("startJobExecutorLoop", () => {
     expect(sendApprovalPack).toHaveBeenCalledWith(999, expect.objectContaining({
       filename: "pr-9.html",
       html: expect.stringContaining("PR Approval Pack"),
-    }));
+    }), 88);
   });
 
   it("does not call sendMessage when no notify_chat_id is set", async () => {

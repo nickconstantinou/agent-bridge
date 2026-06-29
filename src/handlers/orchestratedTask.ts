@@ -24,6 +24,13 @@ interface OrchestratedTaskDeps {
   cleanupWorkspace?: (dir: string) => void;
 }
 
+function notifyFields(input: JobHandlerInput): Record<string, number> {
+  return {
+    ...(typeof input.notify_chat_id === "number" ? { notify_chat_id: input.notify_chat_id } : {}),
+    ...(typeof input.notify_thread_id === "number" ? { notify_thread_id: input.notify_thread_id } : {}),
+  };
+}
+
 interface OrchestratedPhaseData {
   workItemId?: number;
   repoPath?: string;
@@ -149,7 +156,7 @@ export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHa
             repository_path: phaseData.repoPath,
             verify_output: verify.output,
             ...(phaseData.workspaceDir ? { workspace_dir: phaseData.workspaceDir } : {}),
-            ...(typeof input.notify_chat_id === "number" ? { notify_chat_id: input.notify_chat_id } : {}),
+            ...notifyFields(input),
           },
         });
       } else if (phaseData.workspaceDir && cleanupWorkspace) {

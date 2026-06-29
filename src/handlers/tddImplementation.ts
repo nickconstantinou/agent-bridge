@@ -26,6 +26,13 @@ interface TddImplementationDeps {
   cleanupWorkspace?: (dir: string) => void;
 }
 
+function notifyFields(input: JobHandlerInput): Record<string, number> {
+  return {
+    ...(typeof input.notify_chat_id === "number" ? { notify_chat_id: input.notify_chat_id } : {}),
+    ...(typeof input.notify_thread_id === "number" ? { notify_thread_id: input.notify_thread_id } : {}),
+  };
+}
+
 /** True for paths that belong to test code. */
 export function isTestPath(path: string): boolean {
   return (
@@ -266,7 +273,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
               repository_path: repoPath,
               ...(workspaceDir ? { workspace_dir: workspaceDir } : {}),
               verify_output: verifyRun.output,
-              ...(typeof input.notify_chat_id === "number" ? { notify_chat_id: input.notify_chat_id } : {}),
+              ...notifyFields(input),
             },
           });
         }
@@ -349,7 +356,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
             repository: item.repository,
             repository_path: repoPath,
             ...(workspaceDir ? { workspace_dir: workspaceDir } : {}),
-            ...(typeof input.notify_chat_id === "number" ? { notify_chat_id: input.notify_chat_id } : {}),
+            ...notifyFields(input),
           },
         });
       }

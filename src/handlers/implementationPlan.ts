@@ -94,7 +94,14 @@ function hasLinkedIssue(ctx: JobHandlerContext, workItemId: number): boolean {
   ).get(workItemId) as { 1: number } | undefined) != null;
 }
 
-function enqueuePostPlanImplementation(ctx: JobHandlerContext, workItemId: number, repository: string | null, notifyChatId: number | null): void {
+function notifyFields(input: JobHandlerInput): Record<string, number> {
+  return {
+    ...(typeof input.notify_chat_id === "number" ? { notify_chat_id: input.notify_chat_id } : {}),
+    ...(typeof input.notify_thread_id === "number" ? { notify_thread_id: input.notify_thread_id } : {}),
+  };
+}
+
+function enqueuePostPlanImplementation(ctx: JobHandlerContext, workItemId: number, repository: string | null, input: JobHandlerInput): void {
   ctx.db.updateWorkItemStatus(workItemId, "approved");
   if (repository && !hasLinkedIssue(ctx, workItemId)) {
     ctx.db.createWorkJob({
@@ -104,7 +111,7 @@ function enqueuePostPlanImplementation(ctx: JobHandlerContext, workItemId: numbe
       input_json: {
         work_item_id: workItemId,
         repository,
-        ...(notifyChatId != null ? { notify_chat_id: notifyChatId } : {}),
+        ...notifyFields(input),
       },
     });
   }
@@ -115,7 +122,7 @@ function enqueuePostPlanImplementation(ctx: JobHandlerContext, workItemId: numbe
     input_json: {
       work_item_id: workItemId,
       ...(repository ? { repository } : {}),
-      ...(notifyChatId != null ? { notify_chat_id: notifyChatId } : {}),
+      ...notifyFields(input),
     },
   });
 }
@@ -183,8 +190,7 @@ export function createImplementationPlanHandler(deps: ImplementationPlanDeps): J
     }
 
     if (input.approve_after_plan === true) {
-      const notifyChatId = typeof input.notify_chat_id === "number" ? input.notify_chat_id : null;
-      enqueuePostPlanImplementation(ctx, canonicalItem.id, canonicalItem.repository, notifyChatId);
+      enqueuePostPlanImplementation(ctx, canonicalItem.id, canonicalItem.repository, input);
     }
 
     return {

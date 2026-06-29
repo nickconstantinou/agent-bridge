@@ -242,12 +242,13 @@ describe("worker commands with DB (Slice 4)", () => {
     expect(db.listWorkJobs().length).toBe(1);
   });
 
-  it("stores notify_chat_id in input_json when chatId is provided in context", async () => {
-    await handleWorkerCommand("/review", { workerEnabled: true, db, chatId: 99999, defaultRepo: "agent-bridge" });
+  it("stores notify chat and thread in input_json when provided in context", async () => {
+    await handleWorkerCommand("/review", { workerEnabled: true, db, chatId: 99999, threadId: 77, defaultRepo: "agent-bridge" });
     const jobs = db.listWorkJobs();
     expect(jobs.length).toBe(1);
     const input = JSON.parse(jobs[0].input_json);
     expect(input.notify_chat_id).toBe(99999);
+    expect(input.notify_thread_id).toBe(77);
   });
 
   it("omits notify_chat_id when no chatId is provided", async () => {
@@ -256,6 +257,7 @@ describe("worker commands with DB (Slice 4)", () => {
     expect(jobs.length).toBe(1);
     const input = JSON.parse(jobs[0].input_json);
     expect(input.notify_chat_id).toBeUndefined();
+    expect(input.notify_thread_id).toBeUndefined();
   });
 
   it("asks for a repo when /review has no repo and no default repo is configured", async () => {
@@ -401,13 +403,14 @@ describe("handleWorkerCommand /feature", () => {
 
   it("includes repository in feature_plan job input when defaultRepo is set", async () => {
     const result = await handleWorkerCommand("/feature add caching layer", {
-      workerEnabled: true, db, chatId: 42, userId: "u", defaultRepo: "agent-bridge",
+      workerEnabled: true, db, chatId: 42, threadId: 99, userId: "u", defaultRepo: "agent-bridge",
     });
     const jobs = db.listWorkJobs();
     const job = jobs.find((j: any) => j.task_type === "feature_plan");
     expect(job).toBeDefined();
     const input = JSON.parse(job!.input_json);
     expect(input.repository).toBe("agent-bridge");
+    expect(input.notify_thread_id).toBe(99);
     expect(result!.text).toContain("Repository: `agent-bridge`");
   });
 

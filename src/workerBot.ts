@@ -19,6 +19,7 @@ export interface WorkerCommandContext {
   cliChain?: string[];
   db?: BridgeDb;
   chatId?: number;
+  threadId?: number;
   userId?: string;
   defaultRepo?: string;
   runCommand?: (binary: string, args: string[]) => Promise<string>;
@@ -50,6 +51,11 @@ export function activeWorkItemSettingKey(chatId: number | string): string {
 function setActiveWorkItem(db: BridgeDb | undefined, chatId: number | undefined, workItemId: number): void {
   if (!db || chatId == null) return;
   db.setSetting(activeWorkItemSettingKey(chatId), String(workItemId));
+}
+
+function addNotifyFields(input: Record<string, unknown>, ctx: Pick<WorkerCommandContext, "chatId" | "threadId">): void {
+  if (ctx.chatId != null) input.notify_chat_id = ctx.chatId;
+  if (ctx.threadId != null) input.notify_thread_id = ctx.threadId;
 }
 
 export function clearActiveWorkItem(db: BridgeDb | undefined, chatId: number | undefined): void {
@@ -331,9 +337,9 @@ export async function handleWorkerCommand(
       const plan = db.createFeaturePlan({ chatId: chatKey, userId, brief });
       const jobInput: Record<string, unknown> = {
         plan_id: plan.id,
-        notify_chat_id: ctx.chatId,
         start_message: `Analysing codebase and drafting plan for **${brief}**... This takes 1–3 minutes.`,
       };
+      addNotifyFields(jobInput, ctx);
       jobInput.repository = defaultRepo;
       db.createWorkJob({
         task_type: "feature_plan",
@@ -460,7 +466,7 @@ export async function handleWorkerCommand(
     }
 
     const input: Record<string, unknown> = { repository: targetRepo };
-    if (ctx.chatId != null) input.notify_chat_id = ctx.chatId;
+    addNotifyFields(input, ctx);
 
     const newJob = db.createWorkJob({
       task_type: "defect_scan",
@@ -517,7 +523,7 @@ export async function handleWorkerCommand(
     }
 
     const input: Record<string, unknown> = { repository: targetRepo };
-    if (ctx.chatId != null) input.notify_chat_id = ctx.chatId;
+    addNotifyFields(input, ctx);
 
     const newJob = db.createWorkJob({
       task_type: "refactor_scan",

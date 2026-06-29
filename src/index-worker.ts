@@ -84,6 +84,10 @@ const asyncEnabled = process.env.BRIDGE_ASYNC_ENABLED !== "false";
 const db = openDb(dbPath);
 const client = new TelegramClient(token, fetch, 45_000);
 
+function withThread<T extends Record<string, unknown>>(body: T, threadId?: number): T & { message_thread_id?: number } {
+  return threadId != null ? { ...body, message_thread_id: threadId } : body;
+}
+
 // ── Fallback chain state (shared across all dispatches) ───────────────────────
 
 const fallbackChain = new WorkerFallbackChain(cliChain, db);
@@ -306,13 +310,14 @@ const jobExecutor = startJobExecutorLoop({
       cleanupWorkspace,
     }),
   },
-  sendMessage: async (chatId: number, text: string, replyMarkup?: object) => {
+  sendMessage: async (chatId: number, text: string, replyMarkup?: object, threadId?: number) => {
     const body: any = { text };
+    if (threadId != null) body.message_thread_id = threadId;
     if (replyMarkup) body.reply_markup = replyMarkup;
     await sendTelegramMessage({ client, kind: "worker-bot", chatId, body });
   },
-  sendApprovalPack: async (chatId, pack) => {
-    await sendApprovalHtmlPack(client, chatId, pack);
+  sendApprovalPack: async (chatId, pack, threadId) => {
+    await sendApprovalHtmlPack(client, chatId, pack, threadId);
   },
   intervalMs: jobPollIntervalMs,
 });
@@ -400,6 +405,7 @@ for (;;) {
 
         const rawText = (message.text || "").trim();
         const chatId = message.chat.id;
+        const threadId = message.message_thread_id;
         const chatKey = String(chatId);
         const userId = message.from ? String(message.from.id) : "unknown";
 
@@ -409,7 +415,7 @@ for (;;) {
           fallbackChain.setActiveCli(chatKey, activeCli);
           await sendTelegramMessage({
             client, kind: "worker-bot", chatId,
-            body: { text: buildCliStatusText(activeCli), reply_markup: buildCliKeyboard(activeCli) },
+            body: withThread({ text: buildCliStatusText(activeCli), reply_markup: buildCliKeyboard(activeCli) }, threadId),
           });
           continue;
         }
@@ -422,6 +428,7 @@ for (;;) {
             cliChain,
             db,
             chatId,
+            threadId,
             userId,
             defaultRepo: chatRepo ?? process.env.WORKER_DEFAULT_REPO,
             runCommand: (binary, args) => runWorkerCommand(binary, args),
@@ -430,7 +437,7 @@ for (;;) {
             const body = result.kind === "keyboard_message"
               ? { text: result.text, reply_markup: result.reply_markup }
               : { text: result.text };
-            await sendTelegramMessage({ client, kind: "worker-bot", chatId, body });
+            await sendTelegramMessage({ client, kind: "worker-bot", chatId, body: withThread(body, threadId) });
           }
           continue;
         }
@@ -441,10 +448,10 @@ for (;;) {
           const trimmed = rawText.trim();
           if (/^[\w.\-]+\/[\w.\-]+$/.test(trimmed)) {
             db?.setChatRepo(chatKey, trimmed);
-            const body = { text: `Default repo set to \`${trimmed}\` for this chat.` };
+            const body = withThread({ text: `Default repo set to \`${trimmed}\` for this chat.` }, threadId);
             await sendTelegramMessage({ client, kind: "worker-bot", chatId, body });
           } else {
-            const body = { text: `Invalid format. Send as \`owner/repo\` (e.g. \`microsoft/vscode\`).` };
+            const body = withThread({ text: `Invalid format. Send as \`owner/repo\` (e.g. \`microsoft/vscode\`).` }, threadId);
             await sendTelegramMessage({ client, kind: "worker-bot", chatId, body });
           }
           continue;
@@ -460,6 +467,7 @@ for (;;) {
             cliChain,
             db,
             chatId,
+            threadId,
             userId,
             defaultRepo,
             runCommand: (binary, args) => runWorkerCommand(binary, args),
@@ -468,7 +476,7 @@ for (;;) {
             const body = briefResult.kind === "keyboard_message"
               ? { text: briefResult.text, reply_markup: briefResult.reply_markup }
               : { text: briefResult.text };
-            await sendTelegramMessage({ client, kind: "worker-bot", chatId, body });
+            await sendTelegramMessage({ client, kind: "worker-bot", chatId, body: withThread(body, threadId) });
           }
           continue;
         }
@@ -478,6 +486,7 @@ for (;;) {
           cliChain,
           db,
           chatId,
+          threadId,
           userId,
           defaultRepo: db?.getChatRepo(chatKey) ?? process.env.WORKER_DEFAULT_REPO,
         });
@@ -485,7 +494,7 @@ for (;;) {
           const body = workflowResult.kind === "keyboard_message"
             ? { text: workflowResult.text, reply_markup: workflowResult.reply_markup }
             : { text: workflowResult.text };
-          await sendTelegramMessage({ client, kind: "worker-bot", chatId, body });
+          await sendTelegramMessage({ client, kind: "worker-bot", chatId, body: withThread(body, threadId) });
           continue;
         }
 
@@ -499,7 +508,7 @@ for (;;) {
           contextPreambles,
           db,
           notify: async (msg: string) => {
-            await sendTelegramMessage({ client, kind: "worker-bot", chatId, body: { text: msg } });
+            await sendTelegramMessage({ client, kind: "worker-bot", chatId, body: withThread({ text: msg }, threadId) });
           },
           onCliSwitched: async (newCli: CliKind) => {
             setUserCliPreference(db, chatKey, newCli);

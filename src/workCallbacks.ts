@@ -216,16 +216,32 @@ function resolveSelectedRepository(repo: string): string {
   return repo.includes("/") ? repo : `${resolveGithubOwner()}/${repo}`;
 }
 
-async function sendPackWithFallback(client: any, chatId: number | undefined, pack: ReturnType<typeof buildWorkItemApprovalPack> | null): Promise<void> {
+function callbackThreadId(cbq: any): number | undefined {
+  return typeof cbq?.message?.message_thread_id === "number" ? cbq.message.message_thread_id : undefined;
+}
+
+function notifyFields(chatId: number | undefined, threadId: number | undefined): Record<string, number> {
+  return {
+    ...(chatId != null ? { notify_chat_id: chatId } : {}),
+    ...(threadId != null ? { notify_thread_id: threadId } : {}),
+  };
+}
+
+async function sendPackWithFallback(
+  client: any,
+  chatId: number | undefined,
+  pack: ReturnType<typeof buildWorkItemApprovalPack> | null,
+  threadId?: number,
+): Promise<void> {
   if (chatId == null || !pack) return;
   try {
-    await sendApprovalHtmlPack(client, chatId, pack);
+    await sendApprovalHtmlPack(client, chatId, pack, threadId);
   } catch (err) {
     console.warn("[worker-callbacks] approval pack send failed", err);
   }
 }
 
-function ensureImplementationPlanQueued(db: BridgeDb, itemId: number, chatId: number | undefined): boolean {
+function ensureImplementationPlanQueued(db: BridgeDb, itemId: number, chatId: number | undefined, threadId?: number): boolean {
   const existing = db.listWorkJobs().find((j: WorkJob) => {
     if (j.work_item_id !== itemId || j.task_type !== "implementation_plan") return false;
     return j.status === "pending" || j.status === "leased" || j.status === "running";
@@ -238,7 +254,7 @@ function ensureImplementationPlanQueued(db: BridgeDb, itemId: number, chatId: nu
     input_json: {
       work_item_id: itemId,
       approve_after_plan: true,
-      ...(chatId != null ? { notify_chat_id: chatId } : {}),
+      ...notifyFields(chatId, threadId),
     },
     max_attempts: 1,
   });
@@ -264,6 +280,7 @@ export async function handleWorkerCallback(
   const parsed = parseWorkCallback(cbq.data || "");
   const messageId = cbq.message?.message_id;
   const chatId = cbq.message?.chat?.id;
+  const threadId = callbackThreadId(cbq);
   const repoSelect = parseRepoSelectCallback(cbq.data || "");
 
   if (repoSelect) {
@@ -281,7 +298,7 @@ export async function handleWorkerCallback(
         idempotency_key: `scan:${repository}:${Date.now()}`,
         input_json: {
           repository,
-          ...(chatId != null ? { notify_chat_id: chatId } : {}),
+          ...notifyFields(chatId, threadId),
         },
       });
       await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `Review queued for ${repository}` });
@@ -301,7 +318,7 @@ export async function handleWorkerCallback(
         idempotency_key: `refactor:${repository}:${Date.now()}`,
         input_json: {
           repository,
-          ...(chatId != null ? { notify_chat_id: chatId } : {}),
+          ...notifyFields(chatId, threadId),
         },
       });
       await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `Refactor scan queued for ${repository}` });
@@ -336,7 +353,7 @@ export async function handleWorkerCallback(
         input_json: {
           plan_id: plan.id,
           repository,
-          notify_chat_id: chatId,
+          ...notifyFields(chatId, threadId),
           start_message: `Analysing codebase and drafting plan for **${brief}**... This takes 1–3 minutes.`,
         },
       });
@@ -478,7 +495,7 @@ export async function handleWorkerCallback(
     const prAction = parsePrMergeCallback(cbq.data || "");
     if (prAction) {
       const runGhCommand = extra?.runCommand ?? createRunCommand({ loadGhToken: true });
-      await sendPackWithFallback(client, chatId, buildPrApprovalPack(db, prAction.id));
+      await sendPackWithFallback(client, chatId, buildPrApprovalPack(db, prAction.id), threadId);
 
       await handlePrMergeCallback(prAction, {
         db,
@@ -513,7 +530,7 @@ export async function handleWorkerCallback(
     }
     if (chatId != null) db.setSetting(activeWorkItemSettingKey(chatId), String(item.id));
     const { text, inline_keyboard } = getWorkItemDetailsText(item);
-    await sendPackWithFallback(client, chatId, buildWorkItemApprovalPack(db, item));
+    await sendPackWithFallback(client, chatId, buildWorkItemApprovalPack(db, item), threadId);
     await client.answerCallbackQuery({ callback_query_id: cbq.id });
     if (chatId && messageId) {
       await editWithEntities(client, {
@@ -539,7 +556,7 @@ export async function handleWorkerCallback(
     const storedPlan = db.getWorkItemPlan(item.id);
     const planQuality = validateImplementationPlan(storedPlan?.plan_text);
     if (!planQuality.valid) {
-      ensureImplementationPlanQueued(db, item.id, chatId);
+      ensureImplementationPlanQueued(db, item.id, chatId, threadId);
       await client.answerCallbackQuery({
         callback_query_id: cbq.id,
         text: "Implementation plan queued. Work will continue automatically when it is ready.",
@@ -553,7 +570,7 @@ export async function handleWorkerCallback(
       }
       return;
     }
-    await sendPackWithFallback(client, chatId, buildWorkItemApprovalPack(db, item));
+    await sendPackWithFallback(client, chatId, buildWorkItemApprovalPack(db, item), threadId);
     clearActiveWorkItem(db, chatId);
     db.updateWorkItemStatus(item.id, "approved");
     // Skip open_github_issue when the issue was imported from GitHub (already exists)
@@ -568,7 +585,7 @@ export async function handleWorkerCallback(
         input_json: {
           work_item_id: item.id,
           repository: item.repository,
-          ...(chatId != null ? { notify_chat_id: chatId } : {}),
+          ...notifyFields(chatId, threadId),
         },
       });
     }
@@ -579,7 +596,7 @@ export async function handleWorkerCallback(
       input_json: {
         work_item_id: item.id,
         ...(item.repository ? { repository: item.repository } : {}),
-        ...(chatId != null ? { notify_chat_id: chatId } : {}),
+        ...notifyFields(chatId, threadId),
       },
     });
 
@@ -706,7 +723,7 @@ export async function handleWorkerCallback(
         repository: link.repository,
         branch_name: link.branch_name,
         base_branch: "main",
-        ...(chatId != null ? { notify_chat_id: chatId } : {}),
+        ...notifyFields(chatId, threadId),
       },
       max_attempts: 1,
     });

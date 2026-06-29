@@ -13,6 +13,13 @@ type RunCommand = (binary: string, args: string[]) => Promise<string>;
 
 const TOP_N_FINDINGS = 3;
 
+function notifyFields(input: JobHandlerInput): Record<string, number> {
+  return {
+    ...(typeof input.notify_chat_id === "number" ? { notify_chat_id: input.notify_chat_id } : {}),
+    ...(typeof input.notify_thread_id === "number" ? { notify_thread_id: input.notify_thread_id } : {}),
+  };
+}
+
 interface DefectScanDeps {
   runCli: RunCli;
   command?: string;
@@ -378,7 +385,7 @@ export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
           : fallbackTriagePrompt;
         const triageOutput = await runCli(command, ["--print", "--output-format", "text", triagePrompt], scanCwd);
         const decisions = parseTriageDecisions(triageOutput);
-        const notifyChatId = typeof input.notify_chat_id === "number" ? input.notify_chat_id : undefined;
+        const notify = notifyFields(input);
 
         for (const decision of decisions) {
           const entry = createdItems[decision.index];
@@ -399,7 +406,7 @@ export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
                 input_json: {
                   work_item_id: entry.itemId,
                   repository,
-                  ...(notifyChatId != null ? { notify_chat_id: notifyChatId } : {}),
+                  ...notify,
                 },
               });
             }
@@ -410,7 +417,7 @@ export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
               input_json: {
                 work_item_id: entry.itemId,
                 ...(repository ? { repository } : {}),
-                ...(notifyChatId != null ? { notify_chat_id: notifyChatId } : {}),
+                ...notify,
               },
             });
           } else {

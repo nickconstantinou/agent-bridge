@@ -122,7 +122,7 @@ npm test`;
       id: "cb-123",
       data: `wi:${item.id}:view`,
       from: { id: 42 },
-      message: { message_id: 100, chat: { id: 10 } },
+      message: { message_id: 100, chat: { id: 10 }, message_thread_id: 44 },
     };
     await handleWorkerCallback(cbq as any, db, client, allowedUserIds);
     expect(client.answerCallbackQuery).toHaveBeenCalledWith({ callback_query_id: "cb-123" });
@@ -136,6 +136,7 @@ npm test`;
     );
     expect(client.sendDocumentBuffer).toHaveBeenCalledWith(expect.objectContaining({
       chat_id: 10,
+      message_thread_id: 44,
       filename: `work-item-${item.id}.html`,
       mime_type: "text/html",
     }));
@@ -655,13 +656,14 @@ npm test`;
       id: "cb-pr-pack",
       data: `wi:${item.id}:mrgpr`,
       from: { id: 42 },
-      message: { message_id: 100, chat: { id: 10 } },
+      message: { message_id: 100, chat: { id: 10 }, message_thread_id: 55 },
     };
 
     await handleWorkerCallback(cbq as any, db, client, allowedUserIds, { runCommand });
 
     expect(client.sendDocumentBuffer).toHaveBeenCalledWith(expect.objectContaining({
       chat_id: 10,
+      message_thread_id: 55,
       filename: "pr-44.html",
       mime_type: "text/html",
     }));

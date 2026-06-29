@@ -1,6 +1,6 @@
 /**
  * PURPOSE: Background polling loop that drives executeNextJob on a fixed interval.
- * Extracts notify_chat_id from job input_json and routes Telegram notifications.
+ * Extracts notify_chat_id/thread_id from job input_json and routes Telegram notifications.
  * Returns a stop() function; caller is responsible for cleanup on process exit.
  * NEIGHBORS: src/jobExecutor.ts, src/index-worker.ts
  */
@@ -14,8 +14,8 @@ export interface JobExecutorLoopDeps {
   db: BridgeDb;
   workerId: string;
   handlers: Partial<Record<string, JobHandler>>;
-  sendMessage: (chatId: number, text: string, replyMarkup?: object) => Promise<void> | void;
-  sendApprovalPack?: (chatId: number, pack: ApprovalHtmlPack) => Promise<void> | void;
+  sendMessage: (chatId: number, text: string, replyMarkup?: object, threadId?: number) => Promise<void> | void;
+  sendApprovalPack?: (chatId: number, pack: ApprovalHtmlPack, threadId?: number) => Promise<void> | void;
   intervalMs?: number;
 }
 
@@ -76,11 +76,15 @@ export function startJobExecutorLoop(deps: JobExecutorLoopDeps): JobExecutorStop
         if (!candidate) return;
 
         let notifyChatId: number | null = null;
+        let notifyThreadId: number | null = null;
         let startMessage: string | null = null;
         try {
           const parsed = JSON.parse(candidate.input_json);
           if (typeof parsed.notify_chat_id === "number") {
             notifyChatId = parsed.notify_chat_id;
+          }
+          if (typeof parsed.notify_thread_id === "number") {
+            notifyThreadId = parsed.notify_thread_id;
           }
           if (candidate.status === "pending" && typeof parsed.start_message === "string") {
             startMessage = parsed.start_message;
@@ -116,12 +120,14 @@ export function startJobExecutorLoop(deps: JobExecutorLoopDeps): JobExecutorStop
                 }
                 for (const pack of packs) {
                   try {
-                    await sendApprovalPack(notifyChatId!, pack);
+                    if (notifyThreadId != null) await sendApprovalPack(notifyChatId!, pack, notifyThreadId);
+                    else await sendApprovalPack(notifyChatId!, pack);
                   } catch (err) {
                     console.warn("[job-executor-loop] approval pack send failed", err);
                   }
                 }
               }
+              if (notifyThreadId != null) return sendMessage(notifyChatId!, sanitizeWorkerNotification(msg), replyMarkup, notifyThreadId);
               return sendMessage(notifyChatId!, sanitizeWorkerNotification(msg), replyMarkup);
             }
           : () => Promise.resolve();
@@ -140,7 +146,8 @@ export function startJobExecutorLoop(deps: JobExecutorLoopDeps): JobExecutorStop
           onStart: async () => {
             // Sent only after a successful claim — a stuck job can never spam this
             if (notifyChatId != null && startMessage != null) {
-              await sendMessage(notifyChatId, sanitizeWorkerNotification(startMessage));
+              if (notifyThreadId != null) await sendMessage(notifyChatId, sanitizeWorkerNotification(startMessage), undefined, notifyThreadId);
+              else await sendMessage(notifyChatId, sanitizeWorkerNotification(startMessage));
             }
           },
         });

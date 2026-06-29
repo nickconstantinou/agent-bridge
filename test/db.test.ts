@@ -588,6 +588,13 @@ describe("linkGithubIssue / linkGithubPr", () => {
     expect(link.issue_number).toBe(42);
   });
 
+  it("finds an existing github issue link", () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Issue", created_by: "user:1" });
+    const link = db.linkGithubIssue({ work_item_id: item.id, repository: "owner/repo", issue_number: 42 });
+    expect(db.getGithubIssueLink("owner/repo", 42)?.id).toBe(link.id);
+    expect(db.getGithubIssueLink("owner/repo", 43)).toBeNull();
+  });
+
   it("github_links enforces uniqueness for (repository, issue_number)", () => {
     const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "Dup", created_by: "user:1" });
     db.linkGithubIssue({ work_item_id: item.id, repository: "owner/repo", issue_number: 10 });

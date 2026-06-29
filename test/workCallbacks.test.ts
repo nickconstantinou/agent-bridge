@@ -462,6 +462,53 @@ describe("handleWorkerCallback (Slice 5)", () => {
       }));
     });
 
+    it("gi:<owner/repo>:<num> preserves external repository owner", async () => {
+      const issuePayload = JSON.stringify({
+        number: 42,
+        title: "Fix external bug",
+        body: "Steps to reproduce...",
+        labels: [{ name: "bug" }],
+      });
+      const runCommand = vi.fn().mockResolvedValue(issuePayload);
+      const cbq = {
+        id: "cb-gi-external",
+        data: "gi:external/repo:42",
+        from: { id: 42 },
+        message: { message_id: 200, chat: { id: 10 } },
+      };
+
+      await handleWorkerCallback(cbq as any, db, client, allowedUserIds, { runCommand });
+
+      expect(runCommand).toHaveBeenCalledWith("gh", expect.arrayContaining(["issue", "view", "42", "--repo", "external/repo"]));
+      expect(db.listWorkItems()[0].repository).toBe("external/repo");
+    });
+
+    it("gi:<repo>:<num> reuses an already imported issue", async () => {
+      const existing = db.createWorkItem({
+        kind: "feature",
+        source: "github",
+        title: "Existing",
+        created_by: "worker",
+        repository: "testuser/agent-bridge",
+      });
+      db.linkGithubIssue({ work_item_id: existing.id, repository: "testuser/agent-bridge", issue_number: 42 });
+      const runCommand = vi.fn();
+      const cbq = {
+        id: "cb-gi-existing",
+        data: "gi:agent-bridge:42",
+        from: { id: 42 },
+        message: { message_id: 200, chat: { id: 10 } },
+      };
+
+      await handleWorkerCallback(cbq as any, db, client, allowedUserIds, { runCommand });
+
+      expect(runCommand).not.toHaveBeenCalled();
+      expect(db.listWorkItems()).toHaveLength(1);
+      expect(client.answerCallbackQuery).toHaveBeenCalledWith(expect.objectContaining({
+        text: expect.stringContaining(`work item #${existing.id}`),
+      }));
+    });
+
     it("gi:<repo>:<num> skips open_github_issue when approved", async () => {
       const issuePayload = JSON.stringify({
         number: 7,

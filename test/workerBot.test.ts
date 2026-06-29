@@ -39,6 +39,11 @@ describe("isWorkerCommand", () => {
   it("recognises /issues", () => expect(isWorkerCommand("/issues")).toBe(true));
   it("recognises /review", () => expect(isWorkerCommand("/review")).toBe(true));
   it("recognises /review with repo arg", () => expect(isWorkerCommand("/review agent-bridge")).toBe(true));
+  it("recognises Telegram-safe GitHub issue command aliases", () => {
+    expect(isWorkerCommand("/github_issues")).toBe(true);
+    expect(isWorkerCommand("/github_issues owner/repo")).toBe(true);
+    expect(isWorkerCommand("/import_issue owner/repo#42")).toBe(true);
+  });
   it("ignores regular text", () => expect(isWorkerCommand("hello")).toBe(false));
   it("ignores other slash commands", () => expect(isWorkerCommand("/reset")).toBe(false));
 });

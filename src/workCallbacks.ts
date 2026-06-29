@@ -330,16 +330,37 @@ export async function handleWorkerCallback(
     return;
   }
 
-  // gi:<reponame>:<issuenum> — import a GitHub issue and create a work item
+  // gi:<repo-or-owner/repo>:<issuenum> — import a GitHub issue and create a work item
   if ((cbq.data || "").startsWith("gi:")) {
     const parts = (cbq.data || "").split(":");
     if (parts.length === 3) {
-      const repoShort = parts[1];
+      const repoToken = parts[1];
       const issueNum = Number(parts[2]);
-      if (repoShort && issueNum > 0) {
+      if (repoToken && issueNum > 0) {
         let owner = "";
         try { owner = resolveGithubOwner(); } catch { /* fallback: no prefix */ }
-        const fullRepo = owner ? `${owner}/${repoShort}` : repoShort;
+        const fullRepo = repoToken.includes("/") ? repoToken : (owner ? `${owner}/${repoToken}` : repoToken);
+        const existingLink = db.getGithubIssueLink(fullRepo, issueNum);
+        if (existingLink) {
+          const existingItem = db.getWorkItem(existingLink.work_item_id);
+          if (existingItem) {
+            await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `Already imported as work item #${existingItem.id}` });
+            if (chatId && messageId) {
+              await editWithEntities(client, {
+                chat_id: chatId,
+                message_id: messageId,
+                text: `Issue #${issueNum} in \`${fullRepo}\` is already imported as work item #${existingItem.id}.\n\nApprove to start implementation.`,
+                reply_markup: {
+                  inline_keyboard: [[
+                    { text: "✅ Approve", callback_data: `wi:${existingItem.id}:appv` },
+                    { text: "❌ Close/Reject", callback_data: `wi:${existingItem.id}:clse` },
+                  ]],
+                },
+              });
+            }
+            return;
+          }
+        }
         const runGhCommand = extra?.runCommand ?? createRunCommand({ loadGhToken: true });
         let issueData: { number: number; title: string; body: string; labels: Array<{ name: string }> };
         try {

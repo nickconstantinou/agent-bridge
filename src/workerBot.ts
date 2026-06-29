@@ -37,7 +37,11 @@ export interface WorkerKeyboardMessageResult {
 
 export type WorkerCommandResult = WorkerMessageResult | WorkerKeyboardMessageResult;
 
-const WORKER_COMMANDS = new Set(["/jobs", "/issues", "/review", "/models", "/job", "/issue", "/feature", "/approvals", "/refactor", "/github-issues", "/import-issue", "/repo"]);
+const WORKER_COMMANDS = new Set([
+  "/jobs", "/issues", "/review", "/models", "/job", "/issue", "/feature",
+  "/approvals", "/refactor", "/github-issues", "/github_issues",
+  "/import-issue", "/import_issue", "/repo",
+]);
 
 export function activeWorkItemSettingKey(chatId: number | string): string {
   return `${ACTIVE_WORK_ITEM_PREFIX}${chatId}`;
@@ -150,7 +154,9 @@ export function isWorkerCommand(text: string): boolean {
   if (text.trim().toLowerCase().startsWith("/feature ")) return true;
   if (text.trim().toLowerCase().startsWith("/refactor ")) return true;
   if (text.trim().toLowerCase().startsWith("/github-issues ")) return true;
+  if (text.trim().toLowerCase().startsWith("/github_issues ")) return true;
   if (text.trim().toLowerCase().startsWith("/import-issue ")) return true;
+  if (text.trim().toLowerCase().startsWith("/import_issue ")) return true;
   return false;
 }
 
@@ -517,7 +523,7 @@ export async function handleWorkerCommand(
     };
   }
 
-  if (cmd === "/github-issues") {
+  if (cmd === "/github-issues" || cmd === "/github_issues") {
     const parts = trimmed.split(/\s+/);
     const repoArg = parts.slice(1).join(" ").trim() || null;
     const targetRepo = repoArg || ctx.defaultRepo || process.env.WORKER_DEFAULT_REPO || null;
@@ -556,10 +562,9 @@ export async function handleWorkerCommand(
       return { kind: "message", text: `No open issues found in **${fullRepo}**.` };
     }
 
-    const repoShort = fullRepo.split("/").pop()!;
     const inline_keyboard = issueList.map(i => {
       const label = `#${i.number} ${i.title}`.slice(0, 60);
-      const cbData = `gi:${repoShort}:${i.number}`;
+      const cbData = `gi:${fullRepo}:${i.number}`;
       return cbData.length <= 64 ? [{ text: label, callback_data: cbData }] : [];
     }).filter(row => row.length > 0);
 
@@ -570,9 +575,9 @@ export async function handleWorkerCommand(
     };
   }
 
-  if (cmd === "/import-issue") {
-    // Accept: /import-issue repo#123  OR  /import-issue owner/repo#123  OR  /import-issue repo 123
-    const arg = trimmed.slice("/import-issue".length).trim();
+  if (cmd === "/import-issue" || cmd === "/import_issue") {
+    // Accept: /import-issue repo#123  OR  /import_issue owner/repo#123  OR  /import-issue repo 123
+    const arg = trimmed.slice(cmd.length).trim();
     let repoName = "";
     let issueNum = 0;
     const hashMatch = arg.match(/^(.+?)#(\d+)$/);
@@ -589,6 +594,24 @@ export async function handleWorkerCommand(
     const fullRepo = repoName.includes("/") ? repoName : (owner ? `${owner}/${repoName}` : repoName);
 
     if (!db) return { kind: "message", text: "Database not available." };
+
+    const existingLink = db.getGithubIssueLink(fullRepo, issueNum);
+    if (existingLink) {
+      const existingItem = db.getWorkItem(existingLink.work_item_id);
+      if (existingItem) {
+        setActiveWorkItem(db, ctx.chatId, existingItem.id);
+        return {
+          kind: "keyboard_message",
+          text: `Issue #${issueNum} in **${fullRepo}** is already imported as work item #${existingItem.id}.\n\nReview and approve to start implementation.`,
+          reply_markup: {
+            inline_keyboard: [[
+              { text: "✅ Approve", callback_data: `wi:${existingItem.id}:appv` },
+              { text: "❌ Close/Reject", callback_data: `wi:${existingItem.id}:clse` },
+            ]],
+          },
+        };
+      }
+    }
 
     let issueData: { number: number; title: string; body: string; labels: Array<{ name: string }> };
     try {

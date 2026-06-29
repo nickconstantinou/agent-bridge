@@ -691,6 +691,10 @@ export class BridgeDb {
     return this.workQueue.linkGithubIssue(input);
   }
 
+  getGithubIssueLink(repository: string, issueNumber: number): GithubLink | null {
+    return this.workQueue.getGithubIssueLink(repository, issueNumber);
+  }
+
   linkGithubPr(input: { work_item_id: number; repository: string; pr_number: number; branch_name?: string; commit_sha?: string }): GithubLink {
     return this.workQueue.linkGithubPr(input);
   }

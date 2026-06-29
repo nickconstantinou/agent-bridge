@@ -222,6 +222,14 @@ export class WorkQueueRepository {
     ).get(work_item_id, repository, issue_number) as GithubLink;
   }
 
+  getGithubIssueLink(repository: string, issueNumber: number): GithubLink | null {
+    return (this.db.prepare(
+      `SELECT * FROM github_links
+       WHERE repository = ? AND issue_number = ?
+       LIMIT 1`
+    ).get(repository, issueNumber) as GithubLink | undefined) ?? null;
+  }
+
   linkGithubPr(input: { work_item_id: number; repository: string; pr_number: number; branch_name?: string; commit_sha?: string }): GithubLink {
     const { work_item_id, repository, pr_number, branch_name = null, commit_sha = null } = input;
     return this.db.prepare(

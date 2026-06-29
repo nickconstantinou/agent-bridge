@@ -55,6 +55,7 @@ const PENDING_CHECK_STATES = new Set(["PENDING", "EXPECTED", "IN_PROGRESS", "QUE
 interface PrViewState {
   headRefOid?: string;
   isDraft?: boolean;
+  state?: string;
   statusCheckRollup?: Array<{ status?: string | null; conclusion?: string | null; state?: string | null }>;
 }
 
@@ -105,6 +106,62 @@ function cleanupWorkItemWorkspace(ctx: PrMergeCallbackCtx, workItemId: number): 
   cleanup(join(defaultWorkspaceBaseDir(), `work-${workItemId}`));
 }
 
+function parsePrUrl(prUrl: string | undefined): { repository?: string; pr_number?: number } {
+  const match = prUrl?.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)(?:[/?#].*)?$/);
+  if (!match) return {};
+  return { repository: match[1], pr_number: Number(match[2]) };
+}
+
+async function resolveTerminalPrIfNeeded(
+  ctx: PrMergeCallbackCtx,
+  actionId: number,
+  payload: { pr_url?: string; pr_number?: number; repository?: string },
+  approval: { id: number },
+): Promise<boolean> {
+  const { db, runCommand, answerCbq, editMessage } = ctx;
+  const parsedUrl = parsePrUrl(payload.pr_url);
+  const repo = payload.repository ?? parsedUrl.repository ?? "";
+  const prNumber = payload.pr_number ?? parsedUrl.pr_number;
+  const prRef: string[] = prNumber != null ? [String(prNumber)] : payload.pr_url ? [payload.pr_url] : [];
+  if (prRef.length === 0) return false;
+
+  let state = "";
+  try {
+    const raw = await runCommand("gh", ["pr", "view", ...prRef, ...(repo ? ["--repo", repo] : []), "--json", "state"]);
+    state = String((JSON.parse(raw) as { state?: string }).state ?? "").toLowerCase();
+  } catch {
+    return false;
+  }
+
+  if (state !== "merged" && state !== "closed") return false;
+
+  if (state === "merged") {
+    db.resolveApproval(approval.id, "approved", ctx.userId ?? "github-reconcile");
+    db.updateWorkItemStatus(actionId, "resolved");
+    if (prNumber != null) {
+      const link = db.raw.prepare("SELECT id FROM github_links WHERE work_item_id = ? AND pr_number = ?")
+        .get(actionId, prNumber) as { id: number } | undefined;
+      if (link) db.updatePrState(link.id, "merged");
+    }
+    cleanupWorkItemWorkspace(ctx, actionId);
+    await answerCbq();
+    await editMessage(`PR already merged on GitHub. Work item #${actionId} resolved.`);
+    return true;
+  }
+
+  db.resolveApproval(approval.id, "rejected", ctx.userId ?? "github-reconcile");
+  db.updateWorkItemStatus(actionId, "closed");
+  if (prNumber != null) {
+    const link = db.raw.prepare("SELECT id FROM github_links WHERE work_item_id = ? AND pr_number = ?")
+      .get(actionId, prNumber) as { id: number } | undefined;
+    if (link) db.updatePrState(link.id, "closed");
+  }
+  cleanupWorkItemWorkspace(ctx, actionId);
+  await answerCbq();
+  await editMessage(`PR already closed on GitHub. Work item #${actionId} closed.`);
+  return true;
+}
+
 export async function handlePrMergeCallback(
   action: PrMergeCallbackAction,
   ctx: PrMergeCallbackCtx,
@@ -123,12 +180,15 @@ export async function handlePrMergeCallback(
   let payload: { pr_url?: string; pr_number?: number; repository?: string; head_sha?: string; branch_name?: string } = {};
   try { payload = JSON.parse(approval.payload_json); } catch { /* non-fatal */ }
 
-  const repo = payload.repository ?? "";
-  const prNumber = payload.pr_number;
+  const parsedPrUrl = parsePrUrl(payload.pr_url);
+  const repo = payload.repository ?? parsedPrUrl.repository ?? "";
+  const prNumber = payload.pr_number ?? parsedPrUrl.pr_number;
   const prRef: string[] = prNumber != null
     ? [String(prNumber)]
     : payload.pr_url ? [payload.pr_url] : [];
   const repoFlag = repo ? ["--repo", repo] : [];
+
+  if (await resolveTerminalPrIfNeeded(ctx, action.id, payload, approval)) return;
 
   if (action.type === "wi_mrgpr") {
     if (prNumber != null) {

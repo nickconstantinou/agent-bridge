@@ -15,7 +15,7 @@ import { parsePrMergeCallback, handlePrMergeCallback } from "./prMergeGate.js";
 import { createRunCommand } from "./runCommandAsync.js";
 import { toTelegramEntitiesText } from "./render.js";
 import { activeWorkItemSettingKey, clearActiveWorkItem } from "./workerBot.js";
-import { consumePendingRepoBrief } from "./featureBriefCapture.js";
+import { consumePendingRepoBrief, setPendingCustomRepo } from "./featureBriefCapture.js";
 import { parseRepoSelectCallback, resolveGithubOwner } from "./repoRegistry.js";
 import { buildPrApprovalPack, buildWorkItemApprovalPack, sendApprovalHtmlPack } from "./approvalHtml.js";
 
@@ -383,6 +383,45 @@ export async function handleWorkerCallback(
         }
         return;
       }
+    }
+    await client.answerCallbackQuery({ callback_query_id: cbq.id });
+    return;
+  }
+
+  // rd:<name> or rd:__custom__ — set per-chat default repo
+  if ((cbq.data || "").startsWith("rd:")) {
+    const repoToken = (cbq.data || "").slice(3);
+    if (repoToken === "__custom__") {
+      const chatKey = chatId != null ? String(chatId) : null;
+      if (chatKey) setPendingCustomRepo(chatKey);
+      await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "Send me the repo as owner/repo:" });
+      if (chatId && messageId) {
+        await editWithEntities(client, {
+          chat_id: chatId,
+          message_id: messageId,
+          text: "Send the repo in `owner/repo` format (e.g. `microsoft/vscode`):",
+        });
+      }
+      return;
+    }
+    if (repoToken) {
+      let fullRepo: string;
+      try {
+        const owner = resolveGithubOwner();
+        fullRepo = repoToken.includes("/") ? repoToken : `${owner}/${repoToken}`;
+      } catch {
+        fullRepo = repoToken;
+      }
+      if (chatId != null) db.setChatRepo(String(chatId), fullRepo);
+      await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `Default repo set to ${fullRepo}` });
+      if (chatId && messageId) {
+        await editWithEntities(client, {
+          chat_id: chatId,
+          message_id: messageId,
+          text: `Default repo set to \`${fullRepo}\` for this chat.`,
+        });
+      }
+      return;
     }
     await client.answerCallbackQuery({ callback_query_id: cbq.id });
     return;

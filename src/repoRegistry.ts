@@ -71,6 +71,26 @@ export async function buildRepoKeyboard(
   return { inline_keyboard: rows };
 }
 
+export async function buildRepoSetKeyboard(): Promise<{ inline_keyboard: Array<Array<{ text: string; callback_data: string }>> }> {
+  let repos: Array<{ name: string; full_name: string }> = [];
+  try {
+    repos = await fetchUserRepos();
+  } catch (err) {
+    console.warn("[repoRegistry] fetchUserRepos failed:", err);
+  }
+
+  const rows: Array<Array<{ text: string; callback_data: string }>> = [];
+  const repoButtons = repos
+    .filter((r) => `rd:${r.name}`.length <= 64)
+    .map((r) => ({ text: r.name, callback_data: `rd:${r.name}` }));
+
+  for (let i = 0; i < repoButtons.length; i += 2) {
+    rows.push(repoButtons.slice(i, i + 2));
+  }
+  rows.push([{ text: "📝 Custom repo…", callback_data: "rd:__custom__" }]);
+  return { inline_keyboard: rows };
+}
+
 export function parseRepoSelectCallback(data: string): { repo: string; ctx: string } | null {
   if (data.length > 64) return null;
   if (!data.startsWith("rs:")) return null;

@@ -129,6 +129,32 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
     expect(row.status).toBe("pending");
   });
 
+  it("resolves stale approval when GitHub says the PR is already merged even if local state is stale", async () => {
+    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+    const { item, approval, link } = makeApprovedItem({ head_sha: "abc123" });
+    db.updatePrState(link.id, "ci_pending");
+
+    const runCommand = vi.fn(async (_binary: string, args: string[]) => {
+      if (args.includes("view")) return JSON.stringify({ state: "MERGED" });
+      return "";
+    });
+    const answerCbq = vi.fn().mockResolvedValue(undefined);
+    const editMessage = vi.fn().mockResolvedValue(undefined);
+    const cleanupWorkspace = vi.fn();
+
+    await handlePrMergeCallback(
+      { type: "wi_mrgpr", id: item.id },
+      { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1", cleanupWorkspace }
+    );
+
+    const row = db.raw.prepare("SELECT * FROM approvals WHERE id = ?").get(approval.id) as any;
+    expect(row.status).toBe("approved");
+    expect(db.getWorkItem(item.id)!.status).toBe("resolved");
+    const updatedLink = db.raw.prepare("SELECT pr_state FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(updatedLink.pr_state).toBe("merged");
+    expect(editMessage).toHaveBeenCalledWith(expect.stringMatching(/already merged/i));
+  });
+
   it("resolves the merge_pr approval and merges when head SHA matches and checks pass", async () => {
     const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
     const { item, approval, link } = makeApprovedItem({ head_sha: "abc123" });
@@ -413,9 +439,10 @@ describe("handlePrMergeCallback — wi_clspr", () => {
       { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1", cleanupWorkspace }
     );
 
-    const [binary, args]: [string, string[]] = runCommand.mock.calls[0];
-    expect(binary).toBe("gh");
-    expect(args).toContain("close");
+    const closeCall = runCommand.mock.calls.find(([, args]) => args.includes("close"));
+    expect(closeCall).toBeDefined();
+    expect(closeCall![0]).toBe("gh");
+    expect(closeCall![1]).toContain("close");
     expect(db.getWorkItem(item.id)!.status).toBe("closed");
     expect(cleanupWorkspace).toHaveBeenCalledWith(expect.stringContaining(`work-${item.id}`));
   });
@@ -479,6 +506,45 @@ describe("handlePrMergeCallback — wi_clspr", () => {
     const row = db.raw.prepare("SELECT * FROM approvals WHERE id = ?").get(approval.id) as any;
     expect(row.status).toBe("rejected");
     expect(db.getWorkItem(item.id)!.status).toBe("closed");
+  });
+
+  it("resolves stale close approval when GitHub says the PR is already closed", async () => {
+    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram", title: "Bug", created_by: "worker",
+      repository: "owner/repo",
+    });
+    const link = db.linkGithubPr({
+      work_item_id: item.id,
+      repository: "owner/repo",
+      pr_number: 6,
+      branch_name: "agent/work-6",
+    });
+    db.createApproval({
+      approval_type: "merge_pr",
+      requested_by: "agent",
+      work_item_id: item.id,
+      payload: { pr_url: "https://github.com/owner/repo/pull/6", pr_number: 6, repository: "owner/repo" },
+    });
+
+    const runCommand = vi.fn(async (_binary: string, args: string[]) => {
+      if (args.includes("view")) return JSON.stringify({ state: "CLOSED" });
+      return "";
+    });
+    const answerCbq = vi.fn().mockResolvedValue(undefined);
+    const editMessage = vi.fn().mockResolvedValue(undefined);
+
+    await handlePrMergeCallback(
+      { type: "wi_clspr", id: item.id },
+      { db, runCommand, answerCbq, editMessage, chatId: 1, messageId: 2, userId: "u" },
+    );
+
+    const row = db.raw.prepare("SELECT * FROM approvals WHERE work_item_id = ?").get(item.id) as any;
+    expect(row.status).toBe("rejected");
+    expect(db.getWorkItem(item.id)!.status).toBe("closed");
+    const updatedLink = db.raw.prepare("SELECT pr_state FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(updatedLink.pr_state).toBe("closed");
+    expect(editMessage).toHaveBeenCalledWith(expect.stringMatching(/already closed/i));
   });
 
   it("updates github_links pr_state to 'closed' when PR close succeeds", async () => {

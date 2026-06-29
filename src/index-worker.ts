@@ -43,7 +43,7 @@ import { createPrLifecycleHandler } from "./handlers/prLifecycle.js";
 import { createPrWatchHandler } from "./handlers/prWatch.js";
 import { createPrRefreshHandler } from "./handlers/prRefresh.js";
 import { createRefactorScanHandler } from "./handlers/refactorScan.js";
-import { captureFeatureBrief } from "./featureBriefCapture.js";
+import { captureFeatureBrief, hasPendingCustomRepo, clearPendingCustomRepo } from "./featureBriefCapture.js";
 import { runCli } from "./cli.js";
 import { createRunCommand } from "./runCommandAsync.js";
 import { prepareWorkspace, createWorkspaceCleanup, resolveLocalRepoPath } from "./workspace.js";
@@ -401,7 +401,16 @@ for (;;) {
 
         // Worker commands (/jobs, /issues, /review, /feature, /models) take priority
         if (isWorkerCommand(rawText)) {
-          const result = await handleWorkerCommand(rawText, { workerEnabled, cliChain, db, chatId, userId, defaultRepo: process.env.WORKER_DEFAULT_REPO });
+          const chatRepo = db?.getChatRepo(chatKey) ?? null;
+          const result = await handleWorkerCommand(rawText, {
+            workerEnabled,
+            cliChain,
+            db,
+            chatId,
+            userId,
+            defaultRepo: chatRepo ?? process.env.WORKER_DEFAULT_REPO,
+            runCommand: (binary, args) => runWorkerCommand(binary, args),
+          });
           if (result) {
             const body = result.kind === "keyboard_message"
               ? { text: result.text, reply_markup: result.reply_markup }
@@ -411,10 +420,35 @@ for (;;) {
           continue;
         }
 
+        // Check if this plain message is a pending custom repo (from /repo → "Custom repo…")
+        if (hasPendingCustomRepo(chatKey)) {
+          clearPendingCustomRepo(chatKey);
+          const trimmed = rawText.trim();
+          if (/^[\w.\-]+\/[\w.\-]+$/.test(trimmed)) {
+            db?.setChatRepo(chatKey, trimmed);
+            const body = { text: `Default repo set to \`${trimmed}\` for this chat.` };
+            await sendTelegramMessage({ client, kind: "worker-bot", chatId, body });
+          } else {
+            const body = { text: `Invalid format. Send as \`owner/repo\` (e.g. \`microsoft/vscode\`).` };
+            await sendTelegramMessage({ client, kind: "worker-bot", chatId, body });
+          }
+          continue;
+        }
+
         // Check if this plain message is a pending feature brief
         const capturedBrief = captureFeatureBrief(chatKey, rawText);
         if (capturedBrief) {
-          const briefResult = await handleWorkerCommand(`/feature ${capturedBrief}`, { workerEnabled, cliChain, db, chatId, userId, defaultRepo: process.env.WORKER_DEFAULT_REPO });
+          const chatRepo = db?.getChatRepo(chatKey) ?? null;
+          const defaultRepo = chatRepo ?? process.env.WORKER_DEFAULT_REPO;
+          const briefResult = await handleWorkerCommand(`/feature ${capturedBrief}`, {
+            workerEnabled,
+            cliChain,
+            db,
+            chatId,
+            userId,
+            defaultRepo,
+            runCommand: (binary, args) => runWorkerCommand(binary, args),
+          });
           if (briefResult) {
             const body = briefResult.kind === "keyboard_message"
               ? { text: briefResult.text, reply_markup: briefResult.reply_markup }
@@ -430,7 +464,7 @@ for (;;) {
           db,
           chatId,
           userId,
-          defaultRepo: process.env.WORKER_DEFAULT_REPO,
+          defaultRepo: db?.getChatRepo(chatKey) ?? process.env.WORKER_DEFAULT_REPO,
         });
         if (workflowResult) {
           const body = workflowResult.kind === "keyboard_message"

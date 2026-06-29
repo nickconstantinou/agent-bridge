@@ -595,6 +595,15 @@ export class BridgeDb {
       .run(key, value);
   }
 
+  getChatRepo(chatId: string): string | null {
+    const row = this.raw.prepare(`SELECT value FROM settings WHERE key = ?`).get(`chat:repo:${chatId}`) as { value: string } | undefined;
+    return row?.value ?? null;
+  }
+
+  setChatRepo(chatId: string, repo: string | null): void {
+    this.setSetting(`chat:repo:${chatId}`, repo);
+  }
+
   insertRun(
     runId: string,
     chatId: string,

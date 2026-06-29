@@ -49,3 +49,17 @@ export function consumePendingRepoBrief(chatKey: string): string | null {
   if (brief !== null) pendingRepoBriefs.delete(chatKey);
   return brief;
 }
+
+const pendingCustomRepoCaptures = new Map<string, true>();
+
+export function setPendingCustomRepo(chatKey: string): void {
+  pendingCustomRepoCaptures.set(chatKey, true);
+}
+
+export function hasPendingCustomRepo(chatKey: string): boolean {
+  return pendingCustomRepoCaptures.has(chatKey);
+}
+
+export function clearPendingCustomRepo(chatKey: string): void {
+  pendingCustomRepoCaptures.delete(chatKey);
+}

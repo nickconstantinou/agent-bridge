@@ -9,6 +9,12 @@ vi.mock("../src/repoRegistry.js", () => ({
   buildRepoKeyboard: vi.fn().mockResolvedValue({
     inline_keyboard: [[{ text: "agent-bridge", callback_data: "rs:agent-bridge:r" }]],
   }),
+  buildRepoSetKeyboard: vi.fn().mockResolvedValue({
+    inline_keyboard: [
+      [{ text: "agent-bridge", callback_data: "rd:agent-bridge" }],
+      [{ text: "📝 Custom repo…", callback_data: "rd:__custom__" }],
+    ],
+  }),
   resolveGithubOwner: vi.fn().mockReturnValue("testuser"),
 }));
 vi.mock("../src/featureBriefCapture.js", () => ({
@@ -529,6 +535,54 @@ describe("handleWorkerCommand /approvals", () => {
     expect(result!.kind).toBe("message");
     expect(result!.text.toLowerCase()).toMatch(/no pending approvals/i);
   });
+
+  it("reconciles locally merged PR approvals before listing", async () => {
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram", title: "Already merged", created_by: "worker",
+      repository: "owner/repo",
+    });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 21, branch_name: "agent/work-21" });
+    db.updatePrState(link.id, "merged");
+    const appr = db.createApproval({
+      approval_type: "merge_pr",
+      requested_by: "agent",
+      work_item_id: item.id,
+      payload: { pr_url: "https://github.com/owner/repo/pull/21", pr_number: 21, repository: "owner/repo" },
+    });
+
+    const result = await handleWorkerCommand("/approvals", { workerEnabled: true, db });
+
+    expect(result!.kind).toBe("message");
+    expect(result!.text.toLowerCase()).toMatch(/no pending approvals/i);
+    const row = db.raw.prepare("SELECT status FROM approvals WHERE id = ?").get(appr.id) as any;
+    expect(row.status).toBe("approved");
+    expect(db.getWorkItem(item.id)!.status).toBe("resolved");
+  });
+
+  it("reconciles live GitHub closed PR approvals before listing", async () => {
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram", title: "Already closed", created_by: "worker",
+      repository: "owner/repo",
+    });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 22, branch_name: "agent/work-22" });
+    db.updatePrState(link.id, "ready_to_merge");
+    const appr = db.createApproval({
+      approval_type: "merge_pr",
+      requested_by: "agent",
+      work_item_id: item.id,
+      payload: { pr_url: "https://github.com/owner/repo/pull/22", pr_number: 22, repository: "owner/repo" },
+    });
+    const runCommand = vi.fn().mockResolvedValue(JSON.stringify({ state: "CLOSED" }));
+
+    const result = await handleWorkerCommand("/approvals", { workerEnabled: true, db, runCommand });
+
+    expect(runCommand).toHaveBeenCalledWith("gh", ["pr", "view", "22", "--repo", "owner/repo", "--json", "state"]);
+    expect(result!.kind).toBe("message");
+    expect(result!.text.toLowerCase()).toMatch(/no pending approvals/i);
+    const row = db.raw.prepare("SELECT status FROM approvals WHERE id = ?").get(appr.id) as any;
+    expect(row.status).toBe("rejected");
+    expect(db.getWorkItem(item.id)!.status).toBe("closed");
+  });
 });
 
 // ── /refactor command ─────────────────────────────────────────────────────────
@@ -582,6 +636,63 @@ describe("/feature no-repo keyboard", () => {
       });
       expect(result?.kind).toBe("keyboard_message");
       expect(setPendingRepoBrief).toHaveBeenCalledWith("456", "add dark mode");
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("/repo command", () => {
+  it("returns keyboard with repo list and current default", async () => {
+    const { openDb } = await import("../src/db.js");
+    const db = openDb(":memory:");
+    try {
+      db.setChatRepo("789", "owner/my-repo");
+      const result = await handleWorkerCommand("/repo", {
+        workerEnabled: true,
+        db,
+        chatId: 789,
+      });
+      expect(result?.kind).toBe("keyboard_message");
+      expect(result?.text).toContain("owner/my-repo");
+      expect(result?.text).toContain("chat override");
+      const km = result as { kind: "keyboard_message"; reply_markup: { inline_keyboard: unknown[][] } };
+      const flat = km.reply_markup.inline_keyboard.flat() as Array<{ callback_data: string }>;
+      expect(flat.some(b => b.callback_data === "rd:__custom__")).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("shows env fallback when no chat override", async () => {
+    const { openDb } = await import("../src/db.js");
+    const db = openDb(":memory:");
+    process.env.WORKER_DEFAULT_REPO = "owner/env-repo";
+    try {
+      const result = await handleWorkerCommand("/repo", {
+        workerEnabled: true,
+        db,
+        chatId: 101,
+      });
+      expect(result?.text).toContain("owner/env-repo");
+      expect(result?.text).toContain("env");
+    } finally {
+      delete process.env.WORKER_DEFAULT_REPO;
+      db.close();
+    }
+  });
+
+  it("shows 'no default' when nothing configured", async () => {
+    const { openDb } = await import("../src/db.js");
+    const db = openDb(":memory:");
+    delete process.env.WORKER_DEFAULT_REPO;
+    try {
+      const result = await handleWorkerCommand("/repo", {
+        workerEnabled: true,
+        db,
+        chatId: 202,
+      });
+      expect(result?.text).toContain("No default");
     } finally {
       db.close();
     }

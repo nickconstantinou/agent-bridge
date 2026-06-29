@@ -7,7 +7,7 @@
 
 import type { BridgeDb } from "./db.js";
 import { setPendingFeatureBrief, setPendingRepoBrief } from "./featureBriefCapture.js";
-import { buildRepoKeyboard, resolveGithubOwner } from "./repoRegistry.js";
+import { buildRepoKeyboard, buildRepoSetKeyboard, resolveGithubOwner } from "./repoRegistry.js";
 import { createRunCommand } from "./runCommandAsync.js";
 
 const DEFAULT_CLI_CHAIN = ["codex", "claude", "antigravity"];
@@ -20,6 +20,7 @@ export interface WorkerCommandContext {
   chatId?: number;
   userId?: string;
   defaultRepo?: string;
+  runCommand?: (binary: string, args: string[]) => Promise<string>;
 }
 
 export interface WorkerMessageResult {
@@ -35,7 +36,7 @@ export interface WorkerKeyboardMessageResult {
 
 export type WorkerCommandResult = WorkerMessageResult | WorkerKeyboardMessageResult;
 
-const WORKER_COMMANDS = new Set(["/jobs", "/issues", "/review", "/models", "/job", "/issue", "/feature", "/approvals", "/refactor", "/github-issues", "/import-issue"]);
+const WORKER_COMMANDS = new Set(["/jobs", "/issues", "/review", "/models", "/job", "/issue", "/feature", "/approvals", "/refactor", "/github-issues", "/import-issue", "/repo"]);
 
 export function activeWorkItemSettingKey(chatId: number | string): string {
   return `${ACTIVE_WORK_ITEM_PREFIX}${chatId}`;
@@ -67,12 +68,75 @@ export function buildWorkerCommands(): Array<{ command: string; description: str
     { command: "refactor", description: "Analyse code quality: /refactor [repo]" },
     { command: "github_issues", description: "List open GitHub issues: /github-issues [repo]" },
     { command: "import_issue", description: "Import GitHub issue: /import-issue repo#123" },
+    { command: "repo",    description: "Switch default repo: /repo" },
     { command: "models",  description: "Show CLI execution chain" },
   ];
 }
 
 function normalizeCommand(text: string): string {
   return text.trim().toLowerCase().split(/\s+/)[0].replace(/@\S+$/, "");
+}
+
+function parsePrUrl(prUrl: string | undefined): { repository?: string; pr_number?: number } {
+  const match = prUrl?.match(/^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)(?:[/?#].*)?$/);
+  if (!match) return {};
+  return { repository: match[1], pr_number: Number(match[2]) };
+}
+
+function parseApprovalPayload(payloadJson: string): { pr_url?: string; pr_number?: number; repository?: string } {
+  try {
+    const payload = JSON.parse(payloadJson) as { pr_url?: string; pr_number?: number; repository?: string };
+    const parsedUrl = parsePrUrl(payload.pr_url);
+    return {
+      ...payload,
+      repository: payload.repository ?? parsedUrl.repository,
+      pr_number: payload.pr_number ?? parsedUrl.pr_number,
+    };
+  } catch {
+    return {};
+  }
+}
+
+async function reconcilePendingMergeApprovals(
+  db: BridgeDb,
+  runCommand?: (binary: string, args: string[]) => Promise<string>,
+): Promise<void> {
+  const pending = db.raw.prepare(
+    `SELECT * FROM approvals WHERE approval_type = 'merge_pr' AND status = 'pending' ORDER BY id ASC`,
+  ).all() as Array<{ id: number; work_item_id: number | null; payload_json: string }>;
+
+  for (const approval of pending) {
+    if (approval.work_item_id == null) continue;
+    const payload = parseApprovalPayload(approval.payload_json);
+    const repo = payload.repository ?? "";
+    const prNumber = payload.pr_number;
+    let state: string | null = null;
+
+    const link = prNumber != null
+      ? db.raw.prepare("SELECT id, pr_state FROM github_links WHERE work_item_id = ? AND pr_number = ?")
+          .get(approval.work_item_id, prNumber) as { id: number; pr_state: string } | undefined
+      : undefined;
+
+    if (runCommand && repo && prNumber != null) {
+      try {
+        const raw = await runCommand("gh", ["pr", "view", String(prNumber), "--repo", repo, "--json", "state"]);
+        state = String((JSON.parse(raw) as { state?: string }).state ?? "").toLowerCase();
+      } catch {
+        state = null;
+      }
+    }
+    state ??= link?.pr_state ?? null;
+
+    if (state === "merged") {
+      db.resolveApproval(approval.id, "approved", "github-reconcile");
+      db.updateWorkItemStatus(approval.work_item_id, "resolved");
+      if (link) db.updatePrState(link.id, "merged");
+    } else if (state === "closed") {
+      db.resolveApproval(approval.id, "rejected", "github-reconcile");
+      db.updateWorkItemStatus(approval.work_item_id, "closed");
+      if (link) db.updatePrState(link.id, "closed");
+    }
+  }
 }
 
 export function isWorkerCommand(text: string): boolean {
@@ -288,6 +352,8 @@ export async function handleWorkerCommand(
     if (!db) {
       return { kind: "message", text: "Database not available." };
     }
+    await reconcilePendingMergeApprovals(db, ctx.runCommand);
+
     const pending = db.raw.prepare(
       `SELECT * FROM approvals WHERE status = 'pending' ORDER BY id ASC`
     ).all() as Array<{ id: number; approval_type: string; work_item_id: number | null; requested_at: string; payload_json: string }>;
@@ -299,8 +365,7 @@ export async function handleWorkerCommand(
     let textOut = "⚖️ **Pending Approvals**\n\n";
     const inline_keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
     for (const appr of pending) {
-      let payload: { pr_url?: string } = {};
-      try { payload = JSON.parse(appr.payload_json); } catch { /* non-fatal */ }
+      const payload = parseApprovalPayload(appr.payload_json);
 
       textOut += `• **#${appr.id}** | \`${appr.approval_type}\``;
       if (appr.work_item_id != null) textOut += ` | work item #${appr.work_item_id}`;
@@ -563,6 +628,22 @@ export async function handleWorkerCommand(
           { text: "❌ Close/Reject", callback_data: `wi:${item.id}:clse` },
         ]],
       },
+    };
+  }
+
+  if (cmd === "/repo") {
+    if (!db) return { kind: "message", text: "Worker not available." };
+    const chatKey = String(ctx.chatId ?? "");
+    const chatRepo = chatKey ? db.getChatRepo(chatKey) : null;
+    const effectiveRepo = chatRepo ?? process.env.WORKER_DEFAULT_REPO ?? null;
+    const currentLabel = effectiveRepo
+      ? `Current default: \`${effectiveRepo}\`` + (chatRepo ? " *(chat override)*" : " *(env)*")
+      : "No default repo configured.";
+    const keyboard = await buildRepoSetKeyboard();
+    return {
+      kind: "keyboard_message",
+      text: `**Repo switcher**\n${currentLabel}\n\nPick a repo to set as default for this chat, or enter a custom one:`,
+      reply_markup: keyboard,
     };
   }
 

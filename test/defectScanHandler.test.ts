@@ -214,8 +214,10 @@ OVERALL: 2 potential issues found.`;
       { index: 1, decision: "REJECT", reason: "Too speculative" },
     ]);
     const runCli = vi.fn()
-      .mockResolvedValueOnce(SCAN_OUTPUT_WITH_TWO_FINDINGS)
-      .mockResolvedValueOnce(triageJson);
+      .mockResolvedValueOnce(SCAN_OUTPUT_WITH_TWO_FINDINGS) // scan
+      .mockResolvedValueOnce("Plan for finding 1.")          // plan: race condition
+      .mockResolvedValueOnce("Plan for finding 2.")          // plan: speculative dead code
+      .mockResolvedValueOnce(triageJson);                    // triage
 
     const handler = createDefectScanHandler({
       runCli,
@@ -244,17 +246,19 @@ OVERALL: 2 potential issues found.`;
 
   it("passes all findings with title/evidence/confidence to the triage CLI call", async () => {
     const runCli = vi.fn()
-      .mockResolvedValueOnce(SCAN_OUTPUT_WITH_TWO_FINDINGS)
+      .mockResolvedValueOnce(SCAN_OUTPUT_WITH_TWO_FINDINGS)            // scan
+      .mockResolvedValueOnce("Plan for finding 1.")                     // plan: race condition
+      .mockResolvedValueOnce("Plan for finding 2.")                     // plan: speculative dead code
       .mockResolvedValueOnce(JSON.stringify([
         { index: 0, decision: "APPROVE", reason: "ok" },
         { index: 1, decision: "APPROVE", reason: "ok" },
-      ]));
+      ]));                                                               // triage
 
     const handler = createDefectScanHandler({ runCli, autoTriage: true });
     await handler({ repository: "agent-bridge" }, { db, workerId: "worker" });
 
-    expect(runCli).toHaveBeenCalledTimes(2);
-    const triagePrompt: string = runCli.mock.calls[1][1].at(-1);
+    expect(runCli).toHaveBeenCalledTimes(4);
+    const triagePrompt: string = runCli.mock.calls[3][1].at(-1);
     expect(triagePrompt).toMatch(/race condition/i);
     expect(triagePrompt).toMatch(/speculative dead code/i);
     expect(triagePrompt).toMatch(/APPROVE|REJECT/);
@@ -275,7 +279,8 @@ OVERALL: 2 potential issues found.`;
 
     await handler({ repository: "agent-bridge" }, { db, workerId: "worker" });
 
-    expect(runCli).toHaveBeenCalledTimes(1);
+    // 1 scan call + 1 plan call per actionable finding (2 high/medium confidence findings)
+    expect(runCli).toHaveBeenCalledTimes(3);
     const items = db.listWorkItems();
     expect(items.every(i => i.status === "proposed")).toBe(true);
   });

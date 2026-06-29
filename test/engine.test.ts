@@ -1100,6 +1100,54 @@ describe("BridgeEngine", () => {
       expect(db.buildConvContext("100")).not.toContain("agent-bridge-memory");
     });
 
+    it("passes the BridgeDb abstraction to project memory storage", async () => {
+      const candidate = {
+        type: "decision",
+        scope: "project",
+        text: "Engine forwards project memory writes through BridgeDb.",
+      };
+      const storeProjectMemoryCandidate = vi.fn().mockReturnValue({ status: "stored", id: "mem_test" });
+      vi.resetModules();
+      vi.doMock("../src/projectMemory.js", () => ({
+        extractProjectMemorySidecars: vi.fn().mockReturnValue({
+          cleanText: "Visible answer.",
+          candidates: [candidate],
+        }),
+        storeProjectMemoryCandidate,
+      }));
+
+      try {
+        const { BridgeEngine } = await import("../src/engine.js");
+        const client = makeMockClient();
+        const runCli = vi.fn().mockResolvedValue("Visible answer with sidecar.");
+
+        const engine = new BridgeEngine(
+          {
+            kind: "claude",
+            botConfig: { command: "claude", modelPreference: [] },
+            allowedUserIds: new Set(["42"]),
+            executionMode: "safe",
+            asyncEnabled: false,
+            pollIntervalMs: 1000,
+            fullConfig: makeFullConfig(dbPath),
+          },
+          db,
+          client,
+          { runCli },
+        );
+
+        await engine.handleMessages([makeMessage("remember through db")]);
+
+        expect(storeProjectMemoryCandidate).toHaveBeenCalledWith(db, candidate, expect.objectContaining({
+          chatKey: "100",
+          cliKind: "claude",
+        }));
+      } finally {
+        vi.doUnmock("../src/projectMemory.js");
+        vi.resetModules();
+      }
+    });
+
     it("rejects secret-looking post-turn memory sidecars", async () => {
       const { BridgeEngine } = await import("../src/engine.js");
       const client = makeMockClient();

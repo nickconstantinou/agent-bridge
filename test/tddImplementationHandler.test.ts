@@ -274,6 +274,26 @@ describe("createTddImplementationHandler", () => {
     ).rejects.toThrow(/test-only code leaked into production source|vitest|VITEST_WORKER_ID/i);
   });
 
+  it("uses stored implementation plan as the implementation context", async () => {
+    const stubs = makeStubs();
+    const item = db.createWorkItem({
+      kind: "feature", source: "github",
+      title: "Imported issue", body: "Raw issue only", created_by: "worker",
+    });
+    db.setWorkItemPlan(item.id, "## Problem Summary\nStored robust plan\n\n## Target Files\n- src/x.ts", { valid: true });
+
+    await createTddImplementationHandler(stubs)(
+      { work_item_id: item.id, repository_path: "/tmp/repo" },
+      { db, workerId: "w" },
+    );
+
+    const redPrompt = stubs.runCli.mock.calls[0][1].at(-1) as string;
+    const greenPrompt = stubs.runCli.mock.calls[1][1].at(-1) as string;
+    expect(redPrompt).toContain("Stored robust plan");
+    expect(greenPrompt).toContain("Stored robust plan");
+    expect(redPrompt).not.toContain("Raw issue only");
+  });
+
   it("makes two git commits — one for tests, one for implementation", async () => {
     const stubs = makeStubs();
     const item = db.createWorkItem({

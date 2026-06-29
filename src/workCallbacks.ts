@@ -234,6 +234,7 @@ function ensureImplementationPlanQueued(db: BridgeDb, itemId: number, chatId: nu
     work_item_id: itemId,
     input_json: {
       work_item_id: itemId,
+      approve_after_plan: true,
       ...(chatId != null ? { notify_chat_id: chatId } : {}),
     },
     max_attempts: 1,
@@ -538,13 +539,13 @@ export async function handleWorkerCallback(
       ensureImplementationPlanQueued(db, item.id, chatId);
       await client.answerCallbackQuery({
         callback_query_id: cbq.id,
-        text: "Implementation plan queued. Review the approval pack when it is ready.",
+        text: "Implementation plan queued. Work will continue automatically when it is ready.",
       });
       if (chatId && messageId) {
         await editWithEntities(client, {
           chat_id: chatId,
           message_id: messageId,
-          text: `Implementation plan queued for work item #${item.id}.\n\nApproval is blocked until the plan passes the quality gate.`,
+          text: `Implementation plan queued for work item #${item.id}.\n\nNo further approval tap needed. The worker will improve the plan and continue automatically.`,
         });
       }
       return;

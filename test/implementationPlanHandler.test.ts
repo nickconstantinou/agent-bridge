@@ -57,6 +57,60 @@ describe("implementation plan handler", () => {
     }
   });
 
+  it("improves a weak plan automatically before storing it", async () => {
+    const db = openDb(":memory:");
+    try {
+      const item = db.createWorkItem({
+        kind: "feature",
+        source: "github",
+        repository: "owner/repo",
+        title: "Imported issue",
+        body: "Original issue",
+        created_by: "user",
+      });
+      const runCli = vi.fn()
+        .mockResolvedValueOnce("Looks good. Fix it.")
+        .mockResolvedValueOnce(strongPlan);
+      const handler = createImplementationPlanHandler({ runCli });
+
+      await handler({ work_item_id: item.id }, { db, workerId: "worker", phase: "initial", phaseData: {} });
+
+      expect(runCli).toHaveBeenCalledTimes(2);
+      expect(runCli.mock.calls[1][1].at(-1)).toContain("Improve this implementation plan");
+      expect(db.getWorkItemPlan(item.id)?.plan_text).toBe(strongPlan);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("continues approved work after plan generation without a second approval click", async () => {
+    const db = openDb(":memory:");
+    try {
+      const item = db.createWorkItem({
+        kind: "feature",
+        source: "github",
+        repository: "owner/repo",
+        title: "Imported issue",
+        body: "Original issue",
+        created_by: "user",
+      });
+      const runCli = vi.fn().mockResolvedValue(strongPlan);
+      const handler = createImplementationPlanHandler({ runCli });
+
+      await handler(
+        { work_item_id: item.id, approve_after_plan: true, notify_chat_id: 10 },
+        { db, workerId: "worker", phase: "initial", phaseData: {} },
+      );
+
+      expect(db.getWorkItem(item.id)!.status).toBe("approved");
+      expect(db.listWorkJobs().map(j => j.task_type)).toEqual(["open_github_issue", "tdd_implementation"]);
+      const tdd = db.listWorkJobs().find(j => j.task_type === "tdd_implementation")!;
+      expect(JSON.parse(tdd.input_json).notify_chat_id).toBe(10);
+    } finally {
+      db.close();
+    }
+  });
+
   it("refreshes linked GitHub issue content before generating the plan", async () => {
     const db = openDb(":memory:");
     try {

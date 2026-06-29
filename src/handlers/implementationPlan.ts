@@ -66,6 +66,60 @@ Explicit non-goals.
 Do not implement code. Do not restate the issue without a concrete plan.`;
 }
 
+function buildImprovePrompt(planText: string, missing: string[]): string {
+  return `Improve this implementation plan so it is concrete enough for autonomous TDD execution.
+
+Missing or weak sections:
+${missing.map(m => `- ${m}`).join("\n")}
+
+Current plan:
+${planText}
+
+Return a complete replacement plan in Markdown with these sections:
+
+## Problem Summary
+## Target Files
+## Architectural Intent
+## Test Plan
+## Implementation Phases
+## Acceptance Criteria
+## Verification Commands
+## Risks / Rollback
+## Out of Scope`;
+}
+
+function hasLinkedIssue(ctx: JobHandlerContext, workItemId: number): boolean {
+  return (ctx.db.raw.prepare(
+    `SELECT 1 FROM github_links WHERE work_item_id = ? AND issue_number IS NOT NULL LIMIT 1`,
+  ).get(workItemId) as { 1: number } | undefined) != null;
+}
+
+function enqueuePostPlanImplementation(ctx: JobHandlerContext, workItemId: number, repository: string | null, notifyChatId: number | null): void {
+  ctx.db.updateWorkItemStatus(workItemId, "approved");
+  if (repository && !hasLinkedIssue(ctx, workItemId)) {
+    ctx.db.createWorkJob({
+      task_type: "open_github_issue",
+      idempotency_key: `gh_issue:${workItemId}`,
+      work_item_id: workItemId,
+      input_json: {
+        work_item_id: workItemId,
+        repository,
+        ...(notifyChatId != null ? { notify_chat_id: notifyChatId } : {}),
+      },
+    });
+  }
+  ctx.db.createWorkJob({
+    task_type: "tdd_implementation",
+    idempotency_key: `tdd:${workItemId}`,
+    work_item_id: workItemId,
+    input_json: {
+      work_item_id: workItemId,
+      ...(repository ? { repository } : {}),
+      ...(notifyChatId != null ? { notify_chat_id: notifyChatId } : {}),
+    },
+  });
+}
+
 async function refreshFromLinkedGithubIssue(
   item: WorkItem,
   ctx: JobHandlerContext,
@@ -111,10 +165,11 @@ export function createImplementationPlanHandler(deps: ImplementationPlanDeps): J
     const canonicalItem = await refreshFromLinkedGithubIssue(item, ctx, runCommand);
 
     const cwd = canonicalItem.repository ? resolveRepoPath(canonicalItem.repository) ?? process.cwd() : process.cwd();
-    const planText = await runCli(command, ["--print", "--output-format", "text", buildPrompt(canonicalItem)], cwd);
-    const quality = validateImplementationPlan(planText);
+    let planText = await runCli(command, ["--print", "--output-format", "text", buildPrompt(canonicalItem)], cwd);
+    let quality = validateImplementationPlan(planText);
     if (!quality.valid) {
-      throw new PermanentJobFailureError(`Implementation plan failed quality gate: ${quality.missing.join(", ")}`);
+      planText = await runCli(command, ["--print", "--output-format", "text", buildImprovePrompt(planText, quality.missing)], cwd);
+      quality = validateImplementationPlan(planText);
     }
 
     ctx.db.setWorkItemPlan(canonicalItem.id, planText, quality);
@@ -125,6 +180,11 @@ export function createImplementationPlanHandler(deps: ImplementationPlanDeps): J
     if (link) {
       const comment = buildGithubWorkItemComment(ctx.db, ctx.db.getWorkItem(canonicalItem.id) ?? canonicalItem);
       await runCommand("gh", ["issue", "comment", String(link.issue_number), "--repo", link.repository, "--body", comment]);
+    }
+
+    if (input.approve_after_plan === true) {
+      const notifyChatId = typeof input.notify_chat_id === "number" ? input.notify_chat_id : null;
+      enqueuePostPlanImplementation(ctx, canonicalItem.id, canonicalItem.repository, notifyChatId);
     }
 
     return {

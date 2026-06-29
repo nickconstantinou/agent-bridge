@@ -158,6 +158,7 @@ npm test`;
     const jobs = db.listWorkJobs();
     expect(jobs).toHaveLength(1);
     expect(jobs[0].task_type).toBe("implementation_plan");
+    expect(JSON.parse(jobs[0].input_json).approve_after_plan).toBe(true);
     expect(db.getWorkItem(item.id)!.status).toBe("proposed");
     expect(client.answerCallbackQuery).toHaveBeenCalledWith(expect.objectContaining({
       text: expect.stringContaining("Implementation plan queued"),

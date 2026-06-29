@@ -141,6 +141,8 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
 
     const item = ctx.db.getWorkItem(workItemId);
     if (!item) throw new Error(`Work item ${workItemId} not found`);
+    const planText = ctx.db.getWorkItemPlan(workItemId)?.plan_text?.trim();
+    const workContext = planText || item.body;
 
     // Resolve the working directory: explicit path, or a disposable workspace
     // cloned from the local checkout. Never default to the worker's own cwd.
@@ -179,7 +181,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
         });
         const ciSummary = typeof input.ci_failure_summary === "string" ? input.ci_failure_summary : "";
         const ciLog = typeof input.ci_failure_log === "string" ? input.ci_failure_log : "";
-        const ciPrompt = buildCiFixPrompt(item.title, item.body, ciSummary, ciLog);
+        const ciPrompt = buildCiFixPrompt(item.title, workContext, ciSummary, ciLog);
         await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, ciPrompt], repoPath);
 
         await runGit(["add", "-A"], repoPath);
@@ -220,7 +222,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
           await Promise.resolve(runGit(["checkout", "-b", branchName], repoPath));
         });
         const priorError = typeof input.repair_context === "string" ? input.repair_context : "";
-        const repairPrompt = buildRepairPrompt(item.title, item.body, priorError);
+        const repairPrompt = buildRepairPrompt(item.title, workContext, priorError);
         await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, repairPrompt], repoPath);
 
         await runGit(["add", "-A"], repoPath);
@@ -261,7 +263,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
       }
 
       // ── Red: write failing tests ────────────────────────────────────────────
-      const redPrompt = buildRedTestPrompt(item.title, item.body);
+      const redPrompt = buildRedTestPrompt(item.title, workContext);
       await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, redPrompt], repoPath);
 
       await runGit(["add", "-A"], repoPath);
@@ -285,7 +287,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
       );
 
       // ── Green: implement the fix ────────────────────────────────────────────
-      const greenPrompt = buildGreenImplementationPrompt(item.title, item.body);
+      const greenPrompt = buildGreenImplementationPrompt(item.title, workContext);
       await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, greenPrompt], repoPath);
 
       await runGit(["add", "-A"], repoPath);

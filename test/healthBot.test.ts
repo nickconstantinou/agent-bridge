@@ -199,6 +199,60 @@ describe("HealthBridgeBot", () => {
     expect(ctx?.lastSuggestion).toBe("Run: systemctl restart worker");
   });
 
+  it("does not generate suggestion when all non-green checks are cli-update checks", async () => {
+    const { HealthBridgeBot } = await import("../src/health/bot.js");
+    const suggestCalls: number[] = [];
+    const bot = new HealthBridgeBot({
+      db,
+      chatId: 12345,
+      sessionTtlSeconds: 1800,
+      autonomy: "suggest",
+      cliBot: "claude",
+      cliBotConfig: { command: "claude", modelPreference: [] },
+      _sendText: async () => {},
+      _suggestFn: async () => { suggestCalls.push(1); return "you should update"; },
+    });
+    const report = {
+      pluginName: "agent-bridge",
+      status: "amber" as const,
+      checks: [
+        { name: "cli-update-claude-code", status: "amber" as const, message: "update available" },
+        { name: "cli-update-codex", status: "amber" as const, message: "update available" },
+      ],
+      summary: "CLI update available",
+      timestamp: new Date().toISOString(),
+    };
+    await bot.handleReport(report);
+    expect(suggestCalls).toHaveLength(0);
+  });
+
+  it("still generates suggestion when non-cli-update checks are also non-green", async () => {
+    const { HealthBridgeBot } = await import("../src/health/bot.js");
+    const suggestCalls: number[] = [];
+    const bot = new HealthBridgeBot({
+      db,
+      chatId: 12345,
+      sessionTtlSeconds: 1800,
+      autonomy: "suggest",
+      cliBot: "claude",
+      cliBotConfig: { command: "claude", modelPreference: [] },
+      _sendText: async () => {},
+      _suggestFn: async () => { suggestCalls.push(1); return "check the circuit breaker"; },
+    });
+    const report = {
+      pluginName: "agent-bridge",
+      status: "red" as const,
+      checks: [
+        { name: "cli-update-claude-code", status: "amber" as const, message: "update available" },
+        { name: "circuit-breaker", status: "red" as const, message: "tripped" },
+      ],
+      summary: "Multiple issues",
+      timestamp: new Date().toISOString(),
+    };
+    await bot.handleReport(report);
+    expect(suggestCalls).toHaveLength(1);
+  });
+
   it("buildOnDemandPrompt returns prompt with context prefix when context exists", async () => {
     const { HealthBridgeBot } = await import("../src/health/bot.js");
     const { HealthContextStore } = await import("../src/health/context.js");

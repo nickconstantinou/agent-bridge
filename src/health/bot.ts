@@ -51,7 +51,9 @@ export class HealthBridgeBot {
       await this.sendTextImpl(formatReport(report));
     }
 
-    if (!options?.silent && this.autonomy !== "report" && report.status !== "green") {
+    const nonGreenChecks = report.checks.filter(c => c.status !== "green");
+    const onlyCliUpdates = nonGreenChecks.length > 0 && nonGreenChecks.every(c => c.name.startsWith("cli-update-"));
+    if (!options?.silent && this.autonomy !== "report" && report.status !== "green" && !onlyCliUpdates) {
       const suggestion = await this.suggestFn(report, this.cliBot, this.cliBotConfig);
       if (suggestion) {
         this.contextStore.saveSuggestion(suggestion);

@@ -698,3 +698,42 @@ describe("/repo command", () => {
     }
   });
 });
+
+describe("WORKER_DEFAULT_REPO test isolation", () => {
+  it("allows a worker bot test to set an env default", () => {
+    process.env.WORKER_DEFAULT_REPO = "owner/leaky-default";
+
+    expect(process.env.WORKER_DEFAULT_REPO).toBe("owner/leaky-default");
+  });
+
+  it("keeps no-default repo picker scenarios isolated from previous env mutations", async () => {
+    expect(process.env.WORKER_DEFAULT_REPO).toBeUndefined();
+
+    const reviewDb = openDb(":memory:");
+    const featureDb = openDb(":memory:");
+    try {
+      const refactorResult = await handleWorkerCommand("/refactor", {
+        workerEnabled: true,
+        db: { createWorkJob: vi.fn(), listWorkJobs: vi.fn().mockReturnValue([]) } as any,
+        chatId: 123,
+      });
+      const reviewResult = await handleWorkerCommand("/review", {
+        workerEnabled: true,
+        db: reviewDb,
+        chatId: 124,
+      });
+      const featureResult = await handleWorkerCommand("/feature add dark mode", {
+        workerEnabled: true,
+        db: featureDb,
+        chatId: 125,
+      });
+
+      expect(refactorResult?.kind).toBe("keyboard_message");
+      expect(reviewResult?.kind).toBe("keyboard_message");
+      expect(featureResult?.kind).toBe("keyboard_message");
+    } finally {
+      reviewDb.close();
+      featureDb.close();
+    }
+  });
+});

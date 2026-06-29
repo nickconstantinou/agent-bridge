@@ -7,6 +7,7 @@
 
 import type { BridgeDb, GithubLink } from "./db.js";
 import { createWorkspaceCleanup, defaultWorkspaceBaseDir } from "./workspace.js";
+import { closeLinkedIssueForMergedPr } from "./githubIssueClosure.js";
 import { join } from "node:path";
 
 export type PrMergeCallbackAction =
@@ -143,6 +144,7 @@ async function resolveTerminalPrIfNeeded(
         .get(actionId, prNumber) as { id: number } | undefined;
       if (link) db.updatePrState(link.id, "merged");
     }
+    await closeLinkedIssueForMergedPr(db, runCommand, actionId, repo, prNumber);
     cleanupWorkItemWorkspace(ctx, actionId);
     await answerCbq();
     await editMessage(`PR already merged on GitHub. Work item #${actionId} resolved.`);
@@ -291,6 +293,7 @@ export async function handlePrMergeCallback(
       ).get(action.id, prNumber) as { id: number } | undefined;
       if (mergedLink) db.updatePrState(mergedLink.id, "merged");
     }
+    await closeLinkedIssueForMergedPr(db, runCommand, action.id, repo, prNumber);
     cleanupWorkItemWorkspace(ctx, action.id);
 
     await answerCbq();

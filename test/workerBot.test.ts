@@ -583,6 +583,34 @@ describe("handleWorkerCommand /approvals", () => {
     expect(row.status).toBe("rejected");
     expect(db.getWorkItem(item.id)!.status).toBe("closed");
   });
+
+  it("closes the linked issue when live GitHub reconciliation sees a merged PR", async () => {
+    const item = db.createWorkItem({
+      kind: "defect", source: "telegram", title: "Already merged", created_by: "worker",
+      repository: "owner/repo",
+    });
+    db.linkGithubIssue({ work_item_id: item.id, repository: "owner/repo", issue_number: 44 });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 23, branch_name: "agent/work-23" });
+    db.updatePrState(link.id, "ready_to_merge");
+    db.createApproval({
+      approval_type: "merge_pr",
+      requested_by: "agent",
+      work_item_id: item.id,
+      payload: { pr_url: "https://github.com/owner/repo/pull/23", pr_number: 23, repository: "owner/repo" },
+    });
+    const runCommand = vi.fn(async (_binary: string, args: string[]) => {
+      if (args.includes("view")) return JSON.stringify({ state: "MERGED" });
+      return "";
+    });
+
+    await handleWorkerCommand("/approvals", { workerEnabled: true, db, runCommand });
+
+    expect(runCommand).toHaveBeenCalledWith("gh", [
+      "issue", "close", "44",
+      "--repo", "owner/repo",
+      "--comment", "Closed by Agent Bridge: implemented by merged PR #23.",
+    ]);
+  });
 });
 
 // ── /refactor command ─────────────────────────────────────────────────────────

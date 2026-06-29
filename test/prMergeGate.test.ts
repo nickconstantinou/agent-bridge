@@ -155,6 +155,31 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
     expect(editMessage).toHaveBeenCalledWith(expect.stringMatching(/already merged/i));
   });
 
+  it("closes the linked GitHub issue when a stale PR is already merged", async () => {
+    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+    const { item, link } = makeApprovedItem({ head_sha: "abc123" });
+    db.linkGithubIssue({ work_item_id: item.id, repository: "owner/repo", issue_number: 42 });
+    db.updatePrState(link.id, "ci_pending");
+
+    const runCommand = vi.fn(async (_binary: string, args: string[]) => {
+      if (args.includes("view")) return JSON.stringify({ state: "MERGED" });
+      return "";
+    });
+    const answerCbq = vi.fn().mockResolvedValue(undefined);
+    const editMessage = vi.fn().mockResolvedValue(undefined);
+
+    await handlePrMergeCallback(
+      { type: "wi_mrgpr", id: item.id },
+      { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
+    );
+
+    expect(runCommand).toHaveBeenCalledWith("gh", [
+      "issue", "close", "42",
+      "--repo", "owner/repo",
+      "--comment", "Closed by Agent Bridge: implemented by merged PR #3.",
+    ]);
+  });
+
   it("resolves the merge_pr approval and merges when head SHA matches and checks pass", async () => {
     const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
     const { item, approval, link } = makeApprovedItem({ head_sha: "abc123" });
@@ -183,6 +208,31 @@ describe("handlePrMergeCallback — wi_mrgpr", () => {
     const mergedLink = db.raw.prepare("SELECT pr_state FROM github_links WHERE work_item_id = ? AND pr_number = 3").get(item.id) as any;
     expect(mergedLink.pr_state).toBe("merged");
     expect(cleanupWorkspace).toHaveBeenCalledWith(expect.stringContaining(`work-${item.id}`));
+  });
+
+  it("closes the linked GitHub issue after a successful merge", async () => {
+    const { handlePrMergeCallback } = await import("../src/prMergeGate.js");
+    const { item, link } = makeApprovedItem({ head_sha: "abc123" });
+    db.linkGithubIssue({ work_item_id: item.id, repository: "owner/repo", issue_number: 43 });
+    db.updatePrState(link.id, "ready_to_merge");
+
+    const runCommand = makeGhStub({
+      headRefOid: "abc123",
+      statusCheckRollup: [{ status: "COMPLETED", conclusion: "SUCCESS" }],
+    });
+    const answerCbq = vi.fn().mockResolvedValue(undefined);
+    const editMessage = vi.fn().mockResolvedValue(undefined);
+
+    await handlePrMergeCallback(
+      { type: "wi_mrgpr", id: item.id },
+      { db, runCommand, answerCbq, editMessage, chatId: 100, messageId: 200, userId: "u1" }
+    );
+
+    expect(runCommand).toHaveBeenCalledWith("gh", [
+      "issue", "close", "43",
+      "--repo", "owner/repo",
+      "--comment", "Closed by Agent Bridge: implemented by merged PR #3.",
+    ]);
   });
 
   it("marks draft PRs as ready before merging", async () => {

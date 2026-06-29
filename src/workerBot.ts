@@ -7,6 +7,7 @@
 
 import type { BridgeDb } from "./db.js";
 import { setPendingFeatureBrief, setPendingRepoBrief } from "./featureBriefCapture.js";
+import { closeLinkedIssueForMergedPr } from "./githubIssueClosure.js";
 import { buildRepoKeyboard, buildRepoSetKeyboard, resolveGithubOwner } from "./repoRegistry.js";
 import { createRunCommand } from "./runCommandAsync.js";
 
@@ -131,6 +132,7 @@ async function reconcilePendingMergeApprovals(
       db.resolveApproval(approval.id, "approved", "github-reconcile");
       db.updateWorkItemStatus(approval.work_item_id, "resolved");
       if (link) db.updatePrState(link.id, "merged");
+      if (runCommand) await closeLinkedIssueForMergedPr(db, runCommand, approval.work_item_id, repo, prNumber);
     } else if (state === "closed") {
       db.resolveApproval(approval.id, "rejected", "github-reconcile");
       db.updateWorkItemStatus(approval.work_item_id, "closed");

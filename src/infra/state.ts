@@ -26,6 +26,17 @@ export interface WorkspaceState {
   tags: Record<string, string>;
   lastHeartbeatAt?: string;
   sshRuleId?: string | number;
+
+  setupToken?: {
+    token: string;
+    expiresAt: string;
+    used: boolean;
+  };
+  githubConnected?: boolean;
+  chatConnected?: boolean;
+  chatChannel?: "telegram" | "discord";
+  chatId?: string;
+  cliAuthenticated?: boolean;
 }
 
 export type InfraState = WorkspaceState;

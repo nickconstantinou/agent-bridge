@@ -235,7 +235,11 @@ function escapeHtml(text: string): string {
     .replaceAll('"', "&quot;");
 }
 
-function renderInlineMarkerText(text: string, markers: Pick<MarkerTable, "text" | "bold" | "code_inline">): string {
+function renderInlineMarkerText(
+  text: string,
+  markers: Pick<MarkerTable, "text" | "bold" | "code_inline">,
+  lineSep = "\n",
+): string {
   const parts: string[] = [];
   for (const node of parseMarkdownToIR(text)) {
     if (node.type === "bold") {
@@ -249,19 +253,20 @@ function renderInlineMarkerText(text: string, markers: Pick<MarkerTable, "text" 
     } else if (node.type === "heading") {
       parts.push(markers.bold(node.value));
     } else if (node.type === "list") {
-      parts.push(node.items.map((item) => renderInlineMarkerText(item, markers)).join("\n"));
+      parts.push(node.items.map((item) => renderInlineMarkerText(item, markers, lineSep)).join(lineSep));
     } else if (node.type === "table") {
-      parts.push(node.rows.flat().map((cell) => renderInlineMarkerText(cell, markers)).join(" "));
+      parts.push(node.rows.flat().map((cell) => renderInlineMarkerText(cell, markers, lineSep)).join(" "));
     }
   }
   return parts.join("");
 }
 
 const renderTelegramInlineHtml = (text: string) => renderInlineMarkerText(text, {
-  text: escapeHtml,
+  // Same <br> conversion as block-level text — rich_message HTML collapses \n.
+  text: (value) => escapeHtml(value).replace(/\n\n/g, "<br><br>").replace(/\n/g, "<br>"),
   bold: (value) => `<b>${escapeHtml(value)}</b>`,
   code_inline: (value) => `<code>${escapeHtml(value)}</code>`,
-});
+}, "<br>");
 
 export const TELEGRAM_HTML_MARKERS: MarkerTable = {
   text: (text) => escapeHtml(text),

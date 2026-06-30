@@ -5,7 +5,8 @@ export type IRNode =
   | { type: "code_block"; value: string; language?: string }
   | { type: "heading"; level: number; value: string }
   | { type: "table"; headers: string[]; rows: string[][] }
-  | { type: "list"; items: string[]; ordered?: boolean };
+  | { type: "list"; items: string[]; ordered?: boolean }
+  | { type: "link"; text: string; url: string };
 
 const TABLE_SEPARATOR_RE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/;
 
@@ -141,6 +142,19 @@ function parseInlineSpans(text: string, nodes: IRNode[]): void {
       }
     }
 
+    if (text[i] === "[") {
+      const closeBracket = text.indexOf("]", i + 1);
+      if (closeBracket > i && text[closeBracket + 1] === "(") {
+        const closeParen = text.indexOf(")", closeBracket + 2);
+        if (closeParen > closeBracket + 2) {
+          flushBuffer();
+          nodes.push({ type: "link", text: text.slice(i + 1, closeBracket), url: text.slice(closeBracket + 2, closeParen) });
+          i = closeParen + 1;
+          continue;
+        }
+      }
+    }
+
     buffer += text[i];
     i += 1;
   }
@@ -156,6 +170,7 @@ export type MarkerTable = {
   heading: (text: string, level: number) => string;
   table: (headers: string[], rows: string[][]) => string;
   list: (items: string[], ordered?: boolean) => string;
+  link: (text: string, url: string) => string;
 };
 
 export function renderMarkerString(ir: IRNode[], markers: MarkerTable, blockSeparator = "\n"): string {
@@ -169,6 +184,9 @@ export function renderMarkerString(ir: IRNode[], markers: MarkerTable, blockSepa
         break;
       case "bold":
         parts.push(markers.bold(node.value));
+        break;
+      case "link":
+        parts.push(markers.link(node.text, node.url));
         break;
       case "code_inline":
         parts.push(markers.code_inline(node.value));
@@ -219,6 +237,7 @@ export const DISCORD_MARKERS: MarkerTable = {
   code_inline: (text) => `\`${text}\``,
   code_block: (text, language) => "```" + (language ?? "") + "\n" + text + "\n```",
   heading: (text, level) => `${"#".repeat(level)} ${text}`,
+  link: (linkText, url) => `[${linkText}](${url})`,
   list: (items, ordered) =>
     ordered
       ? items.map((item, i) => `${i + 1}. ${item}`).join("\n")
@@ -237,7 +256,7 @@ function escapeHtml(text: string): string {
 
 function renderInlineMarkerText(
   text: string,
-  markers: Pick<MarkerTable, "text" | "bold" | "code_inline">,
+  markers: Pick<MarkerTable, "text" | "bold" | "code_inline" | "link">,
   lineSep = "\n",
 ): string {
   const parts: string[] = [];
@@ -246,6 +265,8 @@ function renderInlineMarkerText(
       parts.push(markers.bold(node.value));
     } else if (node.type === "code_inline") {
       parts.push(markers.code_inline(node.value));
+    } else if (node.type === "link") {
+      parts.push(markers.link(node.text, node.url));
     } else if (node.type === "text") {
       parts.push(markers.text(node.value));
     } else if (node.type === "code_block") {
@@ -266,6 +287,7 @@ const renderTelegramInlineHtml = (text: string) => renderInlineMarkerText(text, 
   text: (value) => escapeHtml(value).replace(/\n\n/g, "<br><br>").replace(/\n/g, "<br>"),
   bold: (value) => `<b>${escapeHtml(value)}</b>`,
   code_inline: (value) => `<code>${escapeHtml(value)}</code>`,
+  link: (linkText, url) => `<a href="${escapeHtml(url)}">${escapeHtml(linkText)}</a>`,
 }, "<br>");
 
 export const TELEGRAM_HTML_MARKERS: MarkerTable = {
@@ -274,6 +296,7 @@ export const TELEGRAM_HTML_MARKERS: MarkerTable = {
   code_inline: (text) => `<code>${escapeHtml(text)}</code>`,
   code_block: (text, language) => language ? `<pre language="${escapeHtml(language)}">${escapeHtml(text)}</pre>` : `<pre>${escapeHtml(text)}</pre>`,
   heading: (text) => `<b>${escapeHtml(text)}</b>`,
+  link: (linkText, url) => `<a href="${escapeHtml(url)}">${escapeHtml(linkText)}</a>`,
   list: (items, ordered) =>
     ordered
       ? items.map((item, i) => `${i + 1}. ${renderTelegramInlineHtml(item)}`).join("\n")
@@ -296,6 +319,7 @@ export const TELEGRAM_RICH_HTML_MARKERS: MarkerTable = {
   code_inline: (text) => `<code>${escapeHtml(text)}</code>`,
   code_block: (text, language) => language ? `<pre language="${escapeHtml(language)}">${escapeHtml(text)}</pre>` : `<pre>${escapeHtml(text)}</pre>`,
   heading: (text) => `<b>${escapeHtml(text)}</b>`,
+  link: (linkText, url) => `<a href="${escapeHtml(url)}">${escapeHtml(linkText)}</a>`,
   list: (items, ordered) =>
     ordered
       ? items.map((item, i) => `${i + 1}. ${renderTelegramInlineHtml(item)}`).join("<br>")

@@ -72,7 +72,7 @@ export class ApplianceDb {
   }
 
   listApps(): AppState[] {
-    return this.db.prepare("SELECT * FROM apps ORDER BY name").all() as AppState[];
+    return (this.db.prepare("SELECT * FROM apps ORDER BY name").all() as AppState[] | undefined) ?? [];
   }
 
   deleteApp(name: string): void {

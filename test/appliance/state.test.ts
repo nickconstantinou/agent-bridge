@@ -64,6 +64,18 @@ describe("ApplianceDb - port allocator", () => {
     db.upsertApp({ ...BASE, name: "app2", port: 10001, domain: "b.example.com" });
     expect(db.allocatePort()).toBe(10002);
   });
+
+  it("throws when port pool is exhausted", () => {
+    // Simulate exhaustion by updating port_seq to 20000 (beyond the 10000-19999 range)
+    (db as any).db.prepare("UPDATE port_seq SET next = 20000 WHERE rowid = 1").run();
+    expect(() => db.allocatePort()).toThrow("Port pool exhausted (10000-19999)");
+  });
+
+  it("throws when port_seq row is missing", () => {
+    // Delete the port_seq row to simulate DB corruption
+    (db as any).db.prepare("DELETE FROM port_seq WHERE rowid = 1").run();
+    expect(() => db.allocatePort()).toThrow("port_seq row missing — DB may be corrupted");
+  });
 });
 
 describe("ApplianceDb - incidents", () => {

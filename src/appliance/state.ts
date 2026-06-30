@@ -83,9 +83,14 @@ export class ApplianceDb {
     const usedPorts = new Set<number>(
       (this.db.prepare("SELECT port FROM apps").all() as { port: number }[]).map(r => r.port)
     );
-    const row = this.db.prepare("SELECT next FROM port_seq WHERE rowid = 1").get() as { next: number };
+    const row = this.db.prepare("SELECT next FROM port_seq WHERE rowid = 1").get() as { next: number } | undefined;
+    if (!row) throw new Error("port_seq row missing — DB may be corrupted");
     let port = row.next;
-    while (usedPorts.has(port)) port++;
+    while (usedPorts.has(port)) {
+      port++;
+      if (port > 19999) throw new Error("Port pool exhausted (10000-19999)");
+    }
+    if (port > 19999) throw new Error("Port pool exhausted (10000-19999)");
     this.db.prepare("UPDATE port_seq SET next = ? WHERE rowid = 1").run(port + 1);
     return port;
   }

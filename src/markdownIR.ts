@@ -280,19 +280,21 @@ export const TELEGRAM_HTML_MARKERS: MarkerTable = {
 
 /** Render markdown with <table> HTML for sendRichMessage (Telegram Bot API 10.1+). */
 export function markdownTableToRichHtml(markdown: string): string {
-  return renderMarkerString(parseMarkdownToIR(markdown), TELEGRAM_RICH_HTML_MARKERS);
+  // Use <br><br> as block separator: in rich HTML documents \n collapses to whitespace.
+  return renderMarkerString(parseMarkdownToIR(markdown), TELEGRAM_RICH_HTML_MARKERS, "<br><br>");
 }
 
 export const TELEGRAM_RICH_HTML_MARKERS: MarkerTable = {
-  text: (text) => escapeHtml(text),
+  // In rich_message HTML, \n is whitespace-collapsed. Convert to <br>.
+  text: (text) => escapeHtml(text).replace(/\n\n/g, "<br><br>").replace(/\n/g, "<br>"),
   bold: (text) => `<b>${escapeHtml(text)}</b>`,
   code_inline: (text) => `<code>${escapeHtml(text)}</code>`,
   code_block: (text, language) => language ? `<pre language="${escapeHtml(language)}">${escapeHtml(text)}</pre>` : `<pre>${escapeHtml(text)}</pre>`,
   heading: (text) => `<b>${escapeHtml(text)}</b>`,
   list: (items, ordered) =>
     ordered
-      ? items.map((item, i) => `${i + 1}. ${renderTelegramInlineHtml(item)}`).join("\n")
-      : items.map((item) => `• ${renderTelegramInlineHtml(item)}`).join("\n"),
+      ? items.map((item, i) => `${i + 1}. ${renderTelegramInlineHtml(item)}`).join("<br>")
+      : items.map((item) => `• ${renderTelegramInlineHtml(item)}`).join("<br>"),
   table: (headers, rows) =>
     `<table bordered striped><thead><tr>${headers.map((h) => `<th>${escapeHtml(h)}</th>`).join("")}</tr></thead><tbody>${rows.map((row) => `<tr>${headers.map((_, i) => `<td>${escapeHtml(row[i] ?? "")}</td>`).join("")}</tr>`).join("")}</tbody></table>`,
 };

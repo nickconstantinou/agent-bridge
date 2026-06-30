@@ -31,10 +31,14 @@ export class MemoryRepository {
     );
   }
 
-  searchMemories(query: string, limit = 5): Array<{ id: string; type: string; text: string; score: number; snippet: string }> {
+  searchMemories(query: string, limit = 5, chatKey?: string): Array<{ id: string; type: string; text: string; score: number; snippet: string }> {
     if (!query.trim()) return [];
     const ftsQuery = buildMemoryFtsQuery(query);
     if (!ftsQuery) return [];
+    const scopeFilter = chatKey
+      ? "AND (pm.scope IN ('project', 'global') OR (pm.scope = 'chat' AND pm.source_chat_key = ?))"
+      : "AND pm.scope IN ('project', 'global')";
+    const params = chatKey ? [ftsQuery, chatKey, limit] : [ftsQuery, limit];
     try {
       return this.db.prepare(`
         SELECT
@@ -46,9 +50,10 @@ export class MemoryRepository {
         FROM project_memories_fts fts
         JOIN project_memories pm ON pm.rowid = fts.rowid
         WHERE project_memories_fts MATCH ?
+          ${scopeFilter}
         ORDER BY rank
         LIMIT ?
-      `).all(ftsQuery, limit) as Array<{ id: string; type: string; text: string; score: number; snippet: string }>;
+      `).all(...params) as Array<{ id: string; type: string; text: string; score: number; snippet: string }>;
     } catch {
       return [];
     }

@@ -976,8 +976,10 @@ export class BridgeDb {
     return this.memories.getLatestConvTurnId(chatKey);
   }
 
-  searchMemories(query: string, limit = 5): Array<{ id: string; type: string; text: string; score: number; snippet: string }> {
-    return this.memories.searchMemories(query, limit);
+  searchMemories(query: string, limit = 5, chatKey?: string): Array<{ id: string; type: string; text: string; score: number; snippet: string }> {
+    return chatKey === undefined
+      ? this.memories.searchMemories(query, limit)
+      : this.memories.searchMemories(query, limit, chatKey);
   }
 
   getMemoryCount(): number {

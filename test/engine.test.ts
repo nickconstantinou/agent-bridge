@@ -1100,6 +1100,39 @@ describe("BridgeEngine", () => {
       expect(db.buildConvContext("100")).not.toContain("agent-bridge-memory");
     });
 
+    it("exposes memory context helper on a chat's first turn when project memories exist", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addMemory({
+        id: "mem_first_turn",
+        type: "decision",
+        scope: "project",
+        text: "First-turn prompts still need access to durable project memory.",
+      });
+      const client = makeMockClient();
+      const runCli = vi.fn().mockResolvedValue("Visible answer.");
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          fullConfig: makeFullConfig(dbPath),
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("first message in this chat", 42, 999)]);
+
+      const promptArg = runCli.mock.calls[0][1].at(-1);
+      expect(promptArg).toContain("AGENT_BRIDGE_CONTEXT_COMMAND");
+      expect(promptArg).toContain("--memory");
+    });
+
     it("passes the BridgeDb abstraction to project memory storage", async () => {
       const candidate = {
         type: "decision",

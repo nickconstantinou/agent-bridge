@@ -48,7 +48,7 @@ function buildQueryFromContext(db: Database.Database, chatKey: string): string {
   return words.join(" ");
 }
 
-function searchMemories(db: Database.Database, query: string): string {
+function searchMemories(db: Database.Database, query: string, chatKey: string): string {
   if (!query.trim()) return "No project memories found.";
   const ftsQuery = buildMemoryFtsQuery(query);
   if (!ftsQuery) return "No project memories found.";
@@ -63,9 +63,10 @@ function searchMemories(db: Database.Database, query: string): string {
       FROM project_memories_fts fts
       JOIN project_memories pm ON pm.rowid = fts.rowid
       WHERE project_memories_fts MATCH ?
+        AND (pm.scope IN ('project', 'global') OR (pm.scope = 'chat' AND pm.source_chat_key = ?))
       ORDER BY rank
       LIMIT 5
-    `).all(ftsQuery) as Array<{ id: string; type: string; text: string; score: number; snippet: string }>;
+    `).all(ftsQuery, chatKey) as Array<{ id: string; type: string; text: string; score: number; snippet: string }>;
 
     if (!rows.length) return "No project memories found matching that query.";
     const items = rows.map((r, i) => {
@@ -144,11 +145,11 @@ export function renderAgentBridgeContext(args: string[], env: EnvLike = process.
     if (args.includes("--memory-query")) {
       const idx = args.indexOf("--memory-query");
       const query = args[idx + 1] ?? "";
-      return searchMemories(db, query);
+      return searchMemories(db, query, chatKey);
     }
     if (args.includes("--memory")) {
       const query = buildQueryFromContext(db, chatKey);
-      return searchMemories(db, query);
+      return searchMemories(db, query, chatKey);
     }
     return latestSummary(db, chatKey);
   } finally {

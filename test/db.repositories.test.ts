@@ -535,6 +535,29 @@ describe("MemoryRepository", () => {
     expect(results[0].text).toContain("fallback");
   });
 
+  it("searchMemories excludes other chats' chat-scoped rows when chatKey is provided", () => {
+    const repo = new MemoryRepository(raw);
+    repo.addMemory({
+      id: "mem_private",
+      type: "decision",
+      scope: "chat",
+      source_chat_key: "chat:private",
+      text: "private chat scoped deploy preference",
+    });
+    repo.addMemory({
+      id: "mem_project",
+      type: "decision",
+      scope: "project",
+      source_chat_key: "chat:other",
+      text: "project scoped deploy preference",
+    });
+
+    const results = repo.searchMemories("deploy preference", 5, "chat:public");
+
+    expect(results.map((r: any) => r.id)).not.toContain("mem_private");
+    expect(results.map((r: any) => r.id)).toContain("mem_project");
+  });
+
   it("searchMemories returns empty when no relevant match", () => {
     const repo = new MemoryRepository(raw);
     repo.addMemory({ id: "mem_2", type: "decision", scope: "project", text: "compact summarises conversation history" });

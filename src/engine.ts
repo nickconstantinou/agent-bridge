@@ -712,9 +712,10 @@ export class BridgeEngine {
     const dbPath = this.opts.fullConfig?.dbPath;
     if (!dbPath) return null;
     const status = this.db.getConvStatus(chatKey);
-    if (status.turnCount === 0 && !status.latestSummaryAt) return null;
+    const memoryCount = this.db.getMemoryCount();
+    if (status.turnCount === 0 && !status.latestSummaryAt && memoryCount === 0) return null;
     const commandPath = join(process.cwd(), "bin", "agent-bridge-context");
-    const memoryHint = this.db.getMemoryCount() > 0 ? [
+    const memoryHint = memoryCount > 0 ? [
       '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory',
       '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-query "<specific query>"',
       '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-add-json \'<json>\'',

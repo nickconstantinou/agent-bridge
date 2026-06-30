@@ -93,6 +93,37 @@ describe("agent-bridge-context helper", () => {
     }
   });
 
+  it("--memory-query excludes chat-scoped memories from other chats", () => {
+    const { db, path } = makeDb();
+    try {
+      db.addMemory({
+        id: "mem_ctx_private",
+        type: "decision",
+        scope: "chat",
+        source_chat_key: "chat:private",
+        text: "private chat scoped deploy preference",
+      });
+      db.addMemory({
+        id: "mem_ctx_project",
+        type: "decision",
+        scope: "project",
+        source_chat_key: "chat:other",
+        text: "project scoped deploy preference",
+      });
+
+      const output = renderAgentBridgeContext(["--memory-query", "deploy preference"], {
+        AGENT_BRIDGE_CONTEXT_DB: path,
+        AGENT_BRIDGE_CHAT_KEY: "chat:public",
+      });
+
+      expect(output).not.toContain("private chat scoped");
+      expect(output).toContain("project scoped deploy preference");
+    } finally {
+      db.close();
+      rmSync(path, { force: true });
+    }
+  });
+
   it("--memory flag returns empty message when no memories exist", () => {
     const { db, path } = makeDb();
     try {

@@ -32,6 +32,11 @@ export interface WorkspaceState {
     expiresAt: string;
     used: boolean;
   };
+  sessionToken?: {
+    token: string;
+    expiresAt: string;
+    used: boolean;
+  };
   githubConnected?: boolean;
   chatConnected?: boolean;
   chatChannel?: "telegram" | "discord";

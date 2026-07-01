@@ -54,7 +54,6 @@ export async function runInstall(opts?: InstallOptions): Promise<InstallResult> 
       if (result.code !== 0) {
         failed = true;
         failDetail = result.stderr || `mkdir -p ${dir} exited with code ${result.code}`;
-        break;
       }
     }
     if (failed) {

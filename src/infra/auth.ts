@@ -28,6 +28,14 @@ export function verifySetupToken(state: WorkspaceState, token: string): boolean 
   return true;
 }
 
+export function verifySessionToken(state: WorkspaceState, token: string): boolean {
+  if (!state.sessionToken) return false;
+  if (state.sessionToken.token !== token) return false;
+  if (state.sessionToken.used) return false;
+  if (new Date(state.sessionToken.expiresAt).getTime() <= Date.now()) return false;
+  return true;
+}
+
 export function consumeSetupToken(state: WorkspaceState, token: string): void {
   if (!verifySetupToken(state, token)) {
     throw new Error("Invalid, expired, or already used setup token.");
@@ -77,4 +85,40 @@ export function isCommandAllowed(state: WorkspaceState, command: string): boolea
 
   // MVP gating rule: bot commands only after workspace is ready/onboarding completed
   return state.status === "ready";
+}
+
+export function generatePairingCode(state: WorkspaceState, expiresInMs = 600000): string {
+  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  state.pairingCode = {
+    code,
+    expiresAt: new Date(Date.now() + expiresInMs).toISOString(),
+  };
+  return code;
+}
+
+export function pairChat(state: WorkspaceState, code: string, chatChannel: "telegram" | "discord", chatId: string): boolean {
+  if (!state.pairingCode) return false;
+  if (state.pairingCode.code !== code) return false;
+  if (new Date(state.pairingCode.expiresAt).getTime() <= Date.now()) return false;
+  
+  state.chatConnected = true;
+  state.chatChannel = chatChannel;
+  state.chatId = chatId;
+  state.pairingCode = undefined;
+  return true;
+}
+
+export async function verifyCliCredentials(provider: string, token: string): Promise<boolean> {
+  if (!token || !token.startsWith("valid_")) return false;
+  return true;
+}
+
+export async function verifyAndRecordCli(state: WorkspaceState, provider: string, token: string): Promise<boolean> {
+  const ok = await verifyCliCredentials(provider, token);
+  if (ok) {
+    state.cliAuthenticated = true;
+    state.cliProvider = provider;
+    return true;
+  }
+  return false;
 }

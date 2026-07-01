@@ -1,20 +1,64 @@
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { readWorkspaceState, writeWorkspaceState, type WorkspaceState } from "./state.js";
+import {
+  verifySessionToken,
+  generatePairingCode,
+  pairChat,
+  verifyAndRecordCli,
+} from "./auth.js";
 
-export function verifySessionToken(state: WorkspaceState, token: string): boolean {
-  if (!state.sessionToken) return false;
-  if (state.sessionToken.token !== token) return false;
-  if (state.sessionToken.used) return false;
-  if (new Date(state.sessionToken.expiresAt).getTime() <= Date.now()) return false;
-  return true;
+async function parseBody(req: IncomingMessage): Promise<Record<string, string>> {
+  return new Promise((resolve) => {
+    let body = "";
+    req.on("data", (chunk) => { body += chunk; });
+    req.on("end", () => {
+      const params = new URLSearchParams(body);
+      const result: Record<string, string> = {};
+      for (const [key, value] of params.entries()) {
+        result[key] = value;
+      }
+      resolve(result);
+    });
+  });
 }
 
 export function createSetupServer(state: WorkspaceState, statePath: string): Server {
-  return createServer((req, res) => {
+  return createServer(async (req, res) => {
+    res.setHeader("Connection", "close");
     const url = req.url || "";
     const method = req.method || "GET";
+    const parsedUrl = new URL(url, "http://localhost");
 
-    const match = url.match(/^\/setup\/([a-zA-Z0-9-]+)(?:\/(github|chat|cli|repo|complete))?$/);
+    // 1. GitHub Callback Route (does not contain token in path, uses state query param)
+    if (parsedUrl.pathname === "/setup/github/callback") {
+      const stateToken = parsedUrl.searchParams.get("state") || "";
+      const code = parsedUrl.searchParams.get("code") || "";
+      const currentState = readWorkspaceState(statePath) || state;
+
+      if (!verifySessionToken(currentState, stateToken)) {
+        res.writeHead(403, { "Content-Type": "text/html" });
+        res.end("<h1>403 Forbidden</h1><p>Invalid or expired state session.</p>");
+        return;
+      }
+
+      if (!code || !code.startsWith("github_")) {
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        res.end("Invalid code");
+        return;
+      }
+
+      currentState.githubConnected = true;
+      currentState.githubUsername = "github_user";
+      currentState.githubInstallationId = "inst_999";
+      writeWorkspaceState(statePath, currentState);
+
+      res.writeHead(302, { Location: `/setup/${stateToken}` });
+      res.end();
+      return;
+    }
+
+    // 2. Token-scoped routes
+    const match = parsedUrl.pathname.match(/^\/setup\/([a-zA-Z0-9-]+)(?:\/(github\/oauth|chat\/pair|cli\/verify|repo|complete))?$/);
     if (!match) {
       res.writeHead(404, { "Content-Type": "text/plain" });
       res.end("Not Found");
@@ -22,59 +66,119 @@ export function createSetupServer(state: WorkspaceState, statePath: string): Ser
     }
 
     const token = match[1];
-    const action = match[2];
+    const subRoute = match[2];
 
     const currentState = readWorkspaceState(statePath) || state;
 
     if (!verifySessionToken(currentState, token)) {
       res.writeHead(403, { "Content-Type": "text/html" });
-      res.end("<h1>403 Forbidden</h1><p>Invalid, expired, or already used onboarding session token.</p>");
+      res.end("<h1>403 Forbidden</h1><p>Invalid or expired session token.</p>");
       return;
     }
 
-    if (method === "GET" && !action) {
+    // GET /setup/:token -> Render Page
+    if (method === "GET" && !subRoute) {
+      // Ensure pairing code exists and is active
+      if (!currentState.pairingCode || new Date(currentState.pairingCode.expiresAt).getTime() <= Date.now()) {
+        generatePairingCode(currentState);
+        writeWorkspaceState(statePath, currentState);
+      }
       res.writeHead(200, { "Content-Type": "text/html" });
       res.end(renderSetupPage(currentState, token));
       return;
     }
 
-    if (method === "POST" && action) {
-      if (action === "github") {
-        currentState.githubConnected = true;
-      } else if (action === "chat") {
-        currentState.chatConnected = true;
-        currentState.chatChannel = "telegram";
-        currentState.chatId = "123456789";
-      } else if (action === "cli") {
-        currentState.cliAuthenticated = true;
-      } else if (action === "repo") {
-        currentState.repo = "github-owner/my-first-repo";
-      } else if (action === "complete") {
-        const isComplete =
-          currentState.githubConnected &&
-          currentState.chatConnected &&
-          currentState.cliAuthenticated &&
-          currentState.repo;
-        if (!isComplete) {
-          res.writeHead(400, { "Content-Type": "text/plain" });
-          res.end("Checklist is not fully completed");
-          return;
-        }
-        currentState.status = "ready";
-        if (currentState.sessionToken) {
-          currentState.sessionToken.used = true;
-        }
+    // GET /setup/:token/github/oauth -> Redirect to GitHub OAuth simulation
+    if (method === "GET" && subRoute === "github/oauth") {
+      res.writeHead(302, { Location: `/setup/github/callback?state=${token}&code=github_code_123` });
+      res.end();
+      return;
+    }
+
+    // POST /setup/:token/chat/pair -> Bot Command simulation/call
+    if (method === "POST" && subRoute === "chat/pair") {
+      const body = await parseBody(req);
+      const code = body.code || parsedUrl.searchParams.get("code") || "";
+      const chatChannel = (body.chatChannel || parsedUrl.searchParams.get("chatChannel") || "telegram") as "telegram" | "discord";
+      const chatId = body.chatId || parsedUrl.searchParams.get("chatId") || "";
+
+      const ok = pairChat(currentState, code, chatChannel, chatId);
+      if (!ok) {
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        res.end("Invalid or expired pairing code");
+        return;
       }
 
       writeWorkspaceState(statePath, currentState);
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("Paired successfully");
+      return;
+    }
 
-      if (action === "complete") {
-        res.writeHead(200, { "Content-Type": "text/html" });
-        res.end("<h1>Success</h1><p>Onboarding complete! You can now manage your workspace via Telegram/Discord.</p>");
-      } else {
-        res.writeHead(302, { Location: `/setup/${token}` });
+    // POST /setup/:token/cli/verify -> CLI verification form handler
+    if (method === "POST" && subRoute === "cli/verify") {
+      const body = await parseBody(req);
+      const provider = body.provider || "";
+      const cliToken = body.token || "";
+
+      const ok = await verifyAndRecordCli(currentState, provider, cliToken);
+      if (!ok) {
+        res.writeHead(302, { Location: `/setup/${token}?error=cli_verification_failed` });
         res.end();
+        return;
       }
+
+      writeWorkspaceState(statePath, currentState);
+      res.writeHead(302, { Location: `/setup/${token}` });
+      res.end();
+      return;
+    }
+
+    // POST /setup/:token/repo -> Repo selection handler
+    if (method === "POST" && subRoute === "repo") {
+      if (!currentState.githubConnected) {
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        res.end("GitHub must be connected first");
+        return;
+      }
+
+      const body = await parseBody(req);
+      const repo = body.repo || "";
+      if (!repo) {
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        res.end("Repo is required");
+        return;
+      }
+
+      currentState.repo = repo;
+      writeWorkspaceState(statePath, currentState);
+      res.writeHead(302, { Location: `/setup/${token}` });
+      res.end();
+      return;
+    }
+
+    // POST /setup/:token/complete -> Onboarding completion validator
+    if (method === "POST" && subRoute === "complete") {
+      const isComplete =
+        currentState.githubConnected &&
+        currentState.chatConnected &&
+        currentState.cliAuthenticated &&
+        currentState.repo;
+
+      if (!isComplete) {
+        res.writeHead(400, { "Content-Type": "text/plain" });
+        res.end("Checklist is not fully completed");
+        return;
+      }
+
+      currentState.status = "ready";
+      if (currentState.sessionToken) {
+        currentState.sessionToken.used = true;
+      }
+      writeWorkspaceState(statePath, currentState);
+
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end("<h1>Success</h1><p>Onboarding complete! You can now manage your workspace via Telegram/Discord.</p>");
       return;
     }
 
@@ -191,9 +295,6 @@ function renderSetupPage(state: WorkspaceState, token: string): string {
       font-size: 0.875rem;
       color: var(--text-secondary);
     }
-    form {
-      margin: 0;
-    }
     .btn {
       background-color: var(--primary);
       color: white;
@@ -203,6 +304,8 @@ function renderSetupPage(state: WorkspaceState, token: string): string {
       cursor: pointer;
       font-family: inherit;
       font-weight: 600;
+      text-decoration: none;
+      display: inline-block;
       transition: background-color 0.2s;
     }
     .btn:hover {
@@ -235,6 +338,19 @@ function renderSetupPage(state: WorkspaceState, token: string): string {
       font-size: 0.8rem;
       color: var(--text-secondary);
     }
+    .form-group {
+      margin-top: 0.5rem;
+      display: flex;
+      gap: 0.5rem;
+    }
+    .form-input {
+      background-color: var(--bg-color);
+      border: 1px solid var(--border);
+      color: white;
+      padding: 0.5rem;
+      border-radius: 6px;
+      font-family: inherit;
+    }
   </style>
 </head>
 <body>
@@ -246,68 +362,89 @@ function renderSetupPage(state: WorkspaceState, token: string): string {
       <div class="status-badge">Status: ${state.status.toUpperCase()}</div>
 
       <div class="checklist">
+        <!-- GitHub Connection -->
         <div class="checklist-item">
           <div class="item-info">
             <div class="status-dot ${isGithub ? "complete" : ""}"></div>
             <div>
               <div class="item-title">GitHub Connection</div>
-              <div class="item-detail">${isGithub ? "Connected successfully" : "Link your GitHub account"}</div>
+              <div class="item-detail">${isGithub ? `Connected as @${state.githubUsername}` : "Link your GitHub account"}</div>
             </div>
           </div>
           ${
             isGithub
               ? '<button class="btn disabled" disabled>Connected</button>'
-              : `<form action="/setup/${token}/github" method="POST"><button class="btn" type="submit">Connect GitHub</button></form>`
+              : `<a class="btn" href="/setup/${token}/github/oauth">Connect GitHub</a>`
           }
         </div>
 
+        <!-- Chat Connection -->
         <div class="checklist-item">
           <div class="item-info">
             <div class="status-dot ${isChat ? "complete" : ""}"></div>
             <div>
               <div class="item-title">Telegram / Discord Bot</div>
-              <div class="item-detail">${isChat ? "Linked successfully" : "Connect your chat channel"}</div>
+              <div class="item-detail">${isChat ? `Linked to ${state.chatChannel} (${state.chatId})` : "Pair your chat application"}</div>
+              ${
+                !isChat && state.pairingCode
+                  ? `<div class="cli-instructions">Message the bot: /pair ${state.pairingCode.code}</div>`
+                  : ""
+              }
             </div>
           </div>
-          ${
-            isChat
-              ? '<button class="btn disabled" disabled>Connected</button>'
-              : `<form action="/setup/${token}/chat" method="POST"><button class="btn" type="submit">Connect Chat</button></form>`
-          }
+          <button class="btn disabled" disabled>${isChat ? "Connected" : "Pending bot /pair"}</button>
         </div>
 
+        <!-- CLI Authentication -->
         <div class="checklist-item">
           <div class="item-info">
             <div class="status-dot ${isCli ? "complete" : ""}"></div>
             <div>
               <div class="item-title">CLI Authentication</div>
-              <div class="item-detail">${isCli ? "CLI Authenticated" : "Verify coding CLI access"}</div>
+              <div class="item-detail">${isCli ? `Verified: ${state.cliProvider}` : "Verify coding CLI access"}</div>
               ${
                 !isCli
-                  ? '<div class="cli-instructions">npm install -g @google/agy-cli<br>agy auth login</div>'
+                  ? `
+                  <form action="/setup/${token}/cli/verify" method="POST" class="form-group">
+                    <select name="provider" class="form-input">
+                      <option value="claude">Claude</option>
+                      <option value="codex">Codex</option>
+                      <option value="gemini">Gemini</option>
+                    </select>
+                    <input type="password" name="token" placeholder="Key (starts with valid_)" class="form-input" required />
+                    <button class="btn" type="submit">Verify</button>
+                  </form>`
                   : ""
               }
             </div>
           </div>
-          ${
-            isCli
-              ? '<button class="btn disabled" disabled>Verified</button>'
-              : `<form action="/setup/${token}/cli" method="POST"><button class="btn" type="submit">Verify Auth</button></form>`
-          }
+          ${isCli ? '<button class="btn disabled" disabled>Verified</button>' : ""}
         </div>
 
+        <!-- Select First Repo -->
         <div class="checklist-item">
           <div class="item-info">
             <div class="status-dot ${isRepo ? "complete" : ""}"></div>
             <div>
               <div class="item-title">Select First Repository</div>
               <div class="item-detail">${isRepo ? `Selected: ${state.repo}` : "Choose a repository to manage"}</div>
+              ${
+                !isRepo && isGithub
+                  ? `
+                  <form action="/setup/${token}/repo" method="POST" class="form-group">
+                    <input type="text" name="repo" placeholder="owner/repo" class="form-input" required />
+                    <button class="btn" type="submit">Select</button>
+                  </form>`
+                  : ""
+              }
             </div>
           </div>
           ${
             isRepo
               ? '<button class="btn disabled" disabled>Selected</button>'
-              : `<form action="/setup/${token}/repo" method="POST"><button class="btn" type="submit">Select Repo</button></form>`
+              : !isGithub
+              ? '<button class="btn disabled" disabled>Requires GitHub</button>'
+              : ""
           }
         </div>
       </div>

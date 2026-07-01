@@ -64,6 +64,7 @@ describe("Setup Web Portal", () => {
   });
 
   afterEach(async () => {
+    server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     rmSync(tmpDir, { recursive: true, force: true });
   });
@@ -81,29 +82,113 @@ describe("Setup Web Portal", () => {
     expect(res.status).toBe(403);
   });
 
-  it("updates checklist items when corresponding actions are posted", async () => {
-    // 1. Post GitHub connection
-    const resGithub = await fetch(`http://localhost:${serverPort}/setup/session-123/github`, { method: "POST" });
-    expect(resGithub.status).toBe(200);
-    
-    // 2. Post Chat connection
-    const resChat = await fetch(`http://localhost:${serverPort}/setup/session-123/chat`, { method: "POST" });
-    expect(resChat.status).toBe(200);
+  it("integrates GitHub callback boundary", async () => {
+    // 1. Invalid OAuth code prefix
+    const resBadCode = await fetch(`http://localhost:${serverPort}/setup/github/callback?state=session-123&code=bad_code`);
+    expect(resBadCode.status).toBe(400);
 
-    // 3. Post CLI authentication
-    const resCli = await fetch(`http://localhost:${serverPort}/setup/session-123/cli`, { method: "POST" });
-    expect(resCli.status).toBe(200);
+    // 2. Invalid session token
+    const resBadState = await fetch(`http://localhost:${serverPort}/setup/github/callback?state=invalid-state&code=github_code_123`);
+    expect(resBadState.status).toBe(403);
 
-    // 4. Post first repo selection
-    const resRepo = await fetch(`http://localhost:${serverPort}/setup/session-123/repo`, { method: "POST" });
-    expect(resRepo.status).toBe(200);
+    // 3. Valid OAuth callback
+    const resOk = await fetch(`http://localhost:${serverPort}/setup/github/callback?state=session-123&code=github_code_123`, { redirect: "manual" });
+    expect(resOk.status).toBe(302);
+    expect(resOk.headers.get("location")).toBe("/setup/session-123");
 
-    // Read state to verify updates
+    // Read state to verify metadata
     const updatedState = readWorkspaceState(statePath)!;
     expect(updatedState.githubConnected).toBe(true);
+    expect(updatedState.githubUsername).toBe("github_user");
+    expect(updatedState.githubInstallationId).toBe("inst_999");
+  });
+
+  it("integrates chat pairing boundary", async () => {
+    // Trigger pairing code generation by loading the setup page
+    await fetch(`http://localhost:${serverPort}/setup/session-123`);
+
+    // Read state to get pairing code
+    let currentState = readWorkspaceState(statePath)!;
+    expect(currentState.pairingCode).toBeDefined();
+    const code = currentState.pairingCode!.code;
+
+    // 1. Post wrong pairing code
+    const resBadPair = await fetch(`http://localhost:${serverPort}/setup/session-123/chat/pair`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `code=999999&chatChannel=telegram&chatId=11111`
+    });
+    expect(resBadPair.status).toBe(400);
+
+    // 2. Post correct pairing code
+    const resOk = await fetch(`http://localhost:${serverPort}/setup/session-123/chat/pair`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `code=${code}&chatChannel=telegram&chatId=12345`
+    });
+    expect(resOk.status).toBe(200);
+
+    // Read state to verify pairing
+    const updatedState = readWorkspaceState(statePath)!;
     expect(updatedState.chatConnected).toBe(true);
+    expect(updatedState.chatChannel).toBe("telegram");
+    expect(updatedState.chatId).toBe("12345");
+    expect(updatedState.pairingCode).toBeUndefined();
+  });
+
+  it("integrates CLI verification boundary", async () => {
+    // 1. Post invalid credentials
+    const resBad = await fetch(`http://localhost:${serverPort}/setup/session-123/cli/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `provider=claude&token=invalid_token`,
+      redirect: "manual"
+    });
+    expect(resBad.status).toBe(302);
+    expect(resBad.headers.get("location")).toBe("/setup/session-123?error=cli_verification_failed");
+
+    // 2. Post valid credentials
+    const resOk = await fetch(`http://localhost:${serverPort}/setup/session-123/cli/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `provider=claude&token=valid_my_token`,
+      redirect: "manual"
+    });
+    expect(resOk.status).toBe(302);
+    expect(resOk.headers.get("location")).toBe("/setup/session-123");
+
+    // Read state to verify cli status
+    const updatedState = readWorkspaceState(statePath)!;
     expect(updatedState.cliAuthenticated).toBe(true);
-    expect(updatedState.repo).toBe("github-owner/my-first-repo");
+    expect(updatedState.cliProvider).toBe("claude");
+  });
+
+  it("integrates repo selection boundary and enforces GitHub connection dependency", async () => {
+    // 1. Attempt selecting repo when GitHub is not connected
+    const resNoGithub = await fetch(`http://localhost:${serverPort}/setup/session-123/repo`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `repo=owner/repo`
+    });
+    expect(resNoGithub.status).toBe(400);
+
+    // 2. Mark GitHub connected directly in state
+    let currentState = readWorkspaceState(statePath)!;
+    currentState.githubConnected = true;
+    writeFileSync(statePath, JSON.stringify(currentState, null, 2));
+
+    // 3. Attempt selecting repo now
+    const resOk = await fetch(`http://localhost:${serverPort}/setup/session-123/repo`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `repo=owner/my-first-repo`,
+      redirect: "manual"
+    });
+    expect(resOk.status).toBe(302);
+
+    // Read state to verify repo is set
+    const updatedState = readWorkspaceState(statePath)!;
+    expect(updatedState.repo).toBe("owner/my-first-repo");
   });
 
   it("prevents onboarding completion if checklist is incomplete", async () => {

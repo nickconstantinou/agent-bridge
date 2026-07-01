@@ -1,0 +1,41 @@
+#cloud-config
+users:
+  - name: agentbridge
+    groups: sudo
+    shell: /bin/bash
+    sudo: ['ALL=(ALL) NOPASSWD:ALL']
+    ssh_authorized_keys:
+      - "${SSH_PUBLIC_KEY}"
+
+write_files:
+  - path: /etc/ssh/sshd_config.d/harden.conf
+    permissions: '0644'
+    content: |
+      PasswordAuthentication no
+      PubkeyAuthentication yes
+      PermitRootLogin no
+
+runcmd:
+  - apt-get update
+  - apt-get install -y ca-certificates curl git gnupg lsb-release tar ufw unattended-upgrades
+  - dpkg-reconfigure -plow unattended-upgrades
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - usermod -aG docker agentbridge
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow 22/tcp
+  - ufw --force enable
+  - mkdir -p /opt/agent-bridge /var/lib/agent-bridge /var/log/agent-bridge /etc/agent-bridge
+  - chown -R agentbridge:agentbridge /opt/agent-bridge /var/lib/agent-bridge /var/log/agent-bridge
+  - chmod 0700 /etc/agent-bridge
+  - systemctl restart ssh
+  - |
+    if [ -n "${TAILSCALE_AUTH_KEY}" ]; then
+      curl -fsSL https://tailscale.com/install.sh | sh
+      tailscale up --auth-key="${TAILSCALE_AUTH_KEY}" --ssh --accept-routes
+    fi

@@ -1,0 +1,30 @@
+services:
+  agent-bridge-worker:
+    image: node:24-bookworm-slim
+    container_name: agent-bridge-worker
+    user: "1000:1000"
+    working_dir: /app
+    command: >
+      sh -lc "npm ci --omit=dev &&
+      exec node ./node_modules/tsx/dist/cli.mjs src/index-worker.ts"
+    env_file:
+      - /etc/agent-bridge/agent-bridge.env
+    environment:
+      BRIDGE_ENV_FILE: /etc/agent-bridge/agent-bridge.env
+      BRIDGE_PROJECT_DIR: /app
+      DB_PATH: /var/lib/agent-bridge/bridge.sqlite
+    volumes:
+      - /opt/agent-bridge:/app
+      - /var/lib/agent-bridge:/var/lib/agent-bridge
+      - /var/log/agent-bridge:/var/log/agent-bridge
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'src/index-worker.ts' >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

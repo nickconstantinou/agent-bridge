@@ -38,10 +38,17 @@ export interface WorkspaceState {
     used: boolean;
   };
   githubConnected?: boolean;
+  githubUsername?: string;
+  githubInstallationId?: string;
   chatConnected?: boolean;
   chatChannel?: "telegram" | "discord";
   chatId?: string;
   cliAuthenticated?: boolean;
+  cliProvider?: string;
+  pairingCode?: {
+    code: string;
+    expiresAt: string;
+  };
 }
 
 export type InfraState = WorkspaceState;

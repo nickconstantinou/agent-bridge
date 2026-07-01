@@ -82,7 +82,7 @@ if [[ "${1:-}" == "--update" ]]; then
   echo "[update] Updating CLI packages..."
   if command -v npm >/dev/null 2>&1; then
     (cd "${REPO_DIR}" && npm install --include=dev)
-    npm update -g @anthropic-ai/claude-code @openai/codex 2>/dev/null || true
+    npm install -g @anthropic-ai/claude-code@latest @openai/codex@latest 2>/dev/null || true
   fi
 
   echo "[update] Updating agy (antigravity)..."
@@ -178,7 +178,7 @@ run_as_target_user() {
 if [[ "${1:-}" != "--skip-cli-install" ]]; then
   if command -v npm >/dev/null 2>&1; then
     (cd "${REPO_DIR}" && npm install)
-    npm update -g @anthropic-ai/claude-code @openai/codex 2>/dev/null || true
+    npm install -g @anthropic-ai/claude-code@latest @openai/codex@latest 2>/dev/null || true
     install_shared_skills
   fi
 

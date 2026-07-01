@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { renderControlPlaneFrontend } from "./frontend.js";
+import { frontendDtoFromApi, frontendStateFromDto } from "./frontendClient.js";
 import type { WorkspaceService } from "./service.js";
 
 async function parseJson(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -31,6 +33,11 @@ function sendJson(res: ServerResponse, status: number, body: Record<string, unkn
   res.end(JSON.stringify(body));
 }
 
+function sendHtml(res: ServerResponse, status: number, body: string): void {
+  res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
+  res.end(body);
+}
+
 function idFromPath(pathname: string, suffix = ""): string | null {
   const pattern = suffix
     ? new RegExp(`^/workspaces/([^/]+)/${suffix}$`)
@@ -46,6 +53,23 @@ export function createControlPlaneServer(service: WorkspaceService): Server {
     const parsedUrl = new URL(req.url || "/", "http://localhost");
 
     try {
+      if (method === "GET" && parsedUrl.pathname === "/app") {
+        const dto = frontendDtoFromApi({ workspace: null });
+        sendHtml(res, 200, renderControlPlaneFrontend(frontendStateFromDto(dto)));
+        return;
+      }
+
+      const appWorkspaceMatch = parsedUrl.pathname.match(/^\/app\/workspaces\/([^/]+)$/);
+      if (method === "GET" && appWorkspaceMatch) {
+        const workspaceId = decodeURIComponent(appWorkspaceMatch[1]);
+        const dto = frontendDtoFromApi({
+          workspace: service.getWorkspace(workspaceId),
+          events: service.getWorkspaceEvents(workspaceId),
+        });
+        sendHtml(res, 200, renderControlPlaneFrontend(frontendStateFromDto(dto)));
+        return;
+      }
+
       if (method === "POST" && parsedUrl.pathname === "/workspaces") {
         const body = await parseJson(req);
         const created = await service.createWorkspace({

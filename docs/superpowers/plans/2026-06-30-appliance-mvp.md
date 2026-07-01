@@ -2276,7 +2276,7 @@ git commit -m "feat(appliance): CLI entry point, typecheck clean, all tests gree
 - Multi-app concurrency control (one active app initially)
 - `deploy --force` to overwrite `.env`
 - Python runtime (`npm ci` swapped for `pip install`) — `installDeps` handles it but not tested
-- VPS provisioning is deferred (Aruba pivot abandoned)
+- VPS provisioning is handled by the active compute provider abstraction
 
 **Placeholder scan:** None found.
 

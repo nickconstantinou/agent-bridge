@@ -1,6 +1,6 @@
 # Hetzner Agent Bridge MVP
 
-Provider-agnostic VPS orchestration lives in `scripts/infra.ts`. Hetzner is the production-MVP provider; Aruba remains a documented future provider target under `src/infra/providers/aruba/`.
+Provider-agnostic VPS orchestration lives in `scripts/infra.ts`. DigitalOcean is the active MVP provider; Hetzner remains a legacy supported provider path.
 
 ## Required Env
 
@@ -100,4 +100,4 @@ Default `cx22` is the cheapest practical x86 Hetzner Cloud instance for this wor
 - Hetzner firewall still allows public SSH on port `22`; Tailscale narrows management path but edge SSH restriction by Tailscale CIDR is not automated yet.
 - Tailscale IP discovery is attempted after `deploy`; if unavailable, commands continue using the public IPv4.
 - Compose healthcheck verifies worker process presence, not an HTTP endpoint.
-- Aruba Cloud is intentionally not expanded until the Hetzner path is repeatedly provisioned, deployed, verified, and destroyed without drift.
+- DigitalOcean is the active provider path for current UAT.

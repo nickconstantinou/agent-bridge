@@ -10,7 +10,7 @@ export type WorkspaceStatus =
   | "destroyed"
   | "failed";
 
-export type InfrastructureStatus = "provisioned" | "destroyed" | "unknown";
+export type InfrastructureStatus = "planned" | "provisioned" | "destroyed" | "unknown";
 
 export type WorkspaceEventType =
   | "workspace_created"
@@ -79,7 +79,7 @@ export interface WorkspaceEvent {
 
 export interface WorkspaceInfrastructure {
   workspaceId: string;
-  provider: "mock";
+  provider: "mock" | "aruba";
   status: InfrastructureStatus;
   region: string;
   flavor: string;
@@ -88,6 +88,7 @@ export interface WorkspaceInfrastructure {
   securityGroupId: string;
   bootVolumeId: string;
   keyPairId: string;
+  ipAddress: string | null;
   tags: Record<string, string>;
   createdAt: string;
   updatedAt: string;
@@ -98,10 +99,11 @@ export interface ProvisionWorkspaceInput {
   customerId: string;
   region: string;
   flavor: string;
+  bootstrapToken?: string;
 }
 
 export interface WorkspaceProvider {
-  readonly name: "mock";
+  readonly name: "mock" | "aruba";
   estimatedMonthlyCostEur(): number;
   provisionWorkspace(input: ProvisionWorkspaceInput): Promise<Omit<WorkspaceInfrastructure, "createdAt" | "updatedAt">>;
   canDestroyWorkspace(infra: WorkspaceInfrastructure): Promise<boolean>;

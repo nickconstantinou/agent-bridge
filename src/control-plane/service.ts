@@ -68,6 +68,12 @@ export class WorkspaceService {
     });
     this.store.addWorkspaceEvent(workspaceId, "workspace_created", { customerId: input.customerId });
     this.store.addWorkspaceEvent(workspaceId, "provisioning_started", { provider: this.provider.name });
+    const bootstrapToken = `bt_${randomUUID()}`;
+    this.store.createBootstrapToken({
+      token: bootstrapToken,
+      workspaceId,
+      expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    });
 
     try {
       const infra = await this.provider.provisionWorkspace({
@@ -75,18 +81,13 @@ export class WorkspaceService {
         customerId: input.customerId,
         region: input.region,
         flavor,
+        bootstrapToken,
       });
       this.store.createInfrastructure(infra);
       this.store.addWorkspaceEvent(workspaceId, "infrastructure_ready", { provider: this.provider.name });
 
       workspace = this.store.updateWorkspaceStatus(workspaceId, "installing_appliance");
       this.store.addWorkspaceEvent(workspaceId, "appliance_installing");
-      const bootstrapToken = `bt_${randomUUID()}`;
-      this.store.createBootstrapToken({
-        token: bootstrapToken,
-        workspaceId,
-        expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      });
       return { ...toWorkspaceView(workspace), bootstrapToken };
     } catch (err) {
       this.store.updateWorkspaceStatus(workspaceId, "failed");
@@ -131,7 +132,7 @@ export class WorkspaceService {
   async destroyWorkspace(workspaceId: string): Promise<WorkspaceView> {
     this.store.requireWorkspace(workspaceId);
     const infra = this.store.getInfrastructure(workspaceId);
-    if (!infra || infra.status !== "provisioned" || !(await this.provider.canDestroyWorkspace(infra))) {
+    if (!infra || infra.status === "unknown" || !(await this.provider.canDestroyWorkspace(infra))) {
       this.store.updateWorkspaceStatus(workspaceId, "failed");
       this.store.addWorkspaceEvent(workspaceId, "workspace_failed", { error: "unknown infrastructure state" });
       throw new Error("unknown infrastructure state");

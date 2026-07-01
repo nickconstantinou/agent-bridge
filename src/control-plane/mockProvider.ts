@@ -24,8 +24,10 @@ export class MockWorkspaceProvider implements WorkspaceProvider {
       securityGroupId: `mock-sg-${input.workspaceId}`,
       bootVolumeId: `mock-boot-${input.workspaceId}`,
       keyPairId: `mock-key-${input.workspaceId}`,
+      ipAddress: "198.51.100.10",
       tags: {
         project: "agent-bridge",
+        "managed-by": "agent-bridge",
         customerId: input.customerId,
         workspaceId: input.workspaceId,
       },

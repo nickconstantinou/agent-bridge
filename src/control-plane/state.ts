@@ -57,6 +57,7 @@ function infraFromRow(row: DbRow): WorkspaceInfrastructure {
     securityGroupId: String(row.security_group_id),
     bootVolumeId: String(row.boot_volume_id),
     keyPairId: String(row.key_pair_id),
+    ipAddress: row.ip_address == null ? null : String(row.ip_address),
     tags: parseTags(row.tags_json),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
@@ -119,6 +120,7 @@ export class ControlPlaneStore {
         security_group_id TEXT NOT NULL,
         boot_volume_id TEXT NOT NULL,
         key_pair_id TEXT NOT NULL,
+        ip_address TEXT,
         tags_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -143,6 +145,11 @@ export class ControlPlaneStore {
         FOREIGN KEY(workspace_id) REFERENCES workspaces(id)
       );
     `);
+    try {
+      this.db.exec("ALTER TABLE workspace_infrastructure ADD COLUMN ip_address TEXT");
+    } catch {
+      // Existing databases already have the column.
+    }
   }
 
   createCustomer(input: { id: string; email: string }): Customer {
@@ -253,8 +260,8 @@ export class ControlPlaneStore {
     this.db.prepare(`
       INSERT INTO workspace_infrastructure
         (workspace_id, provider, status, region, flavor, server_id, elastic_ip_id,
-         security_group_id, boot_volume_id, key_pair_id, tags_json, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         security_group_id, boot_volume_id, key_pair_id, ip_address, tags_json, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       input.workspaceId,
       input.provider,
@@ -266,6 +273,7 @@ export class ControlPlaneStore {
       input.securityGroupId,
       input.bootVolumeId,
       input.keyPairId,
+      input.ipAddress,
       JSON.stringify(input.tags),
       at,
       at,

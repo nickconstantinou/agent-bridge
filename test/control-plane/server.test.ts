@@ -117,4 +117,23 @@ describe("SaaS control plane HTTP API", () => {
     });
     expect(reused.res.status).toBe(400);
   });
+
+  it("mounts the frontend shell without infrastructure terminology", async () => {
+    const welcome = await fetch(`${baseUrl}/app`);
+    expect(welcome.status).toBe(200);
+    expect(await welcome.text()).toContain("Create your workspace");
+
+    const created = await json("/workspaces", {
+      method: "POST",
+      body: JSON.stringify({ customerId: "cust-api", region: "ITBG-1" }),
+    });
+    const workspaceId = created.body.workspace.workspaceId;
+    const page = await fetch(`${baseUrl}/app/workspaces/${workspaceId}`);
+    const html = await page.text();
+    expect(page.status).toBe(200);
+    expect(html).toContain("Creating your workspace");
+    for (const term of ["Aruba", "VPS", "SSH", "Caddy", "systemd", "SQLite", "Elastic IP", "security group", "provider error"]) {
+      expect(html).not.toContain(term);
+    }
+  });
 });

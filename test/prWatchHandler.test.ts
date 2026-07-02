@@ -35,14 +35,15 @@ function prViewPayload(opts: {
   passing?: boolean;
   updatedAt?: string;
   detailsUrl?: string;
+  state?: string;
 } = {}) {
-  const { headRefOid = "abc123", failing = false, passing = false, updatedAt = new Date().toISOString(), detailsUrl } = opts;
+  const { headRefOid = "abc123", failing = false, passing = false, updatedAt = new Date().toISOString(), detailsUrl, state = "OPEN" } = opts;
   const rollup = failing
     ? [{ __typename: "CheckRun", conclusion: "FAILURE", name: "ci/test", detailsUrl }]
     : passing
     ? [{ __typename: "CheckRun", conclusion: "SUCCESS", name: "ci/test" }]
     : [];
-  return JSON.stringify({ headRefOid, statusCheckRollup: rollup, mergeable: "MERGEABLE", updatedAt });
+  return JSON.stringify({ headRefOid, statusCheckRollup: rollup, mergeable: "MERGEABLE", updatedAt, state });
 }
 
 describe("createPrWatchHandler", () => {
@@ -320,5 +321,55 @@ describe("createPrWatchHandler — stale digest", () => {
     } finally {
       delete process.env.PR_DEFECT_SCAN_ENABLED;
     }
+  });
+
+  it("handles merged PR state by marking work item resolved and closing linked issue", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 40, branch_name: "agent/work-40" });
+    db.linkGithubIssue({ work_item_id: item.id, repository: "owner/repo", issue_number: 100 });
+    db.createApproval({
+      approval_type: "merge_pr", requested_by: "agent", work_item_id: item.id,
+      payload: { pr_number: 40, head_sha: "greensha" },
+    });
+
+    const runCommand = makeRunCommand({ "40": prViewPayload({ state: "MERGED" }) });
+    await createPrWatchHandler({ runCommand })({}, { db, workerId: "w" });
+
+    const updatedLink = db.raw.prepare("SELECT pr_state FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(updatedLink.pr_state).toBe("merged");
+
+    const updatedItem = db.getWorkItem(item.id);
+    expect(updatedItem?.status).toBe("resolved");
+
+    const approval = db.raw.prepare("SELECT status FROM approvals WHERE work_item_id = ?").get(item.id) as any;
+    expect(approval.status).toBe("approved");
+
+    // Verify gh issue close was called
+    expect(runCommand).toHaveBeenCalledWith("gh", [
+      "issue", "close", "100",
+      "--repo", "owner/repo",
+      "--comment", "Closed by Agent Bridge: implemented by merged PR #40.",
+    ]);
+  });
+
+  it("handles closed PR state by marking work item closed and rejecting approval", async () => {
+    const item = db.createWorkItem({ kind: "defect", source: "telegram", title: "T", created_by: "w" });
+    const link = db.linkGithubPr({ work_item_id: item.id, repository: "owner/repo", pr_number: 41, branch_name: "agent/work-41" });
+    db.createApproval({
+      approval_type: "merge_pr", requested_by: "agent", work_item_id: item.id,
+      payload: { pr_number: 41, head_sha: "greensha" },
+    });
+
+    const runCommand = makeRunCommand({ "41": prViewPayload({ state: "CLOSED" }) });
+    await createPrWatchHandler({ runCommand })({}, { db, workerId: "w" });
+
+    const updatedLink = db.raw.prepare("SELECT pr_state FROM github_links WHERE id = ?").get(link.id) as any;
+    expect(updatedLink.pr_state).toBe("closed");
+
+    const updatedItem = db.getWorkItem(item.id);
+    expect(updatedItem?.status).toBe("closed");
+
+    const approval = db.raw.prepare("SELECT status FROM approvals WHERE work_item_id = ?").get(item.id) as any;
+    expect(approval.status).toBe("rejected");
   });
 });

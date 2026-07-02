@@ -11,6 +11,7 @@
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
 import type { GithubLink } from "../db.js";
 import { resolveGithubOwner } from "../repoRegistry.js";
+import { closeLinkedIssueForMergedPr } from "../githubIssueClosure.js";
 
 type RunCommand = (binary: string, args: string[]) => Promise<string>;
 
@@ -27,6 +28,7 @@ interface GhPrView {
   statusCheckRollup: Array<{ __typename: string; conclusion: string; name: string; detailsUrl?: string }>;
   mergeable: string;
   updatedAt: string;
+  state: string;
 }
 
 function isRollupFailing(rollup: GhPrView["statusCheckRollup"]): boolean {
@@ -91,11 +93,54 @@ export function createPrWatchHandler(deps: PrWatchDeps): JobHandler {
       const viewOutput = await runCommand("gh", [
         "pr", "view", String(link.pr_number),
         "--repo", link.repository.includes("/") ? link.repository : `${resolveGithubOwner()}/${link.repository}`,
-        "--json", "headRefOid,statusCheckRollup,mergeable,updatedAt",
+        "--json", "headRefOid,statusCheckRollup,mergeable,updatedAt,state",
       ]);
 
       const prData = JSON.parse(viewOutput) as GhPrView;
-      const { headRefOid, statusCheckRollup, updatedAt } = prData;
+      const { headRefOid, statusCheckRollup, updatedAt, state } = prData;
+
+      const lowerState = (state || "").toLowerCase();
+      if (lowerState === "merged" || lowerState === "closed") {
+        ctx.db.updatePrState(link.id, lowerState);
+        const resolvedOrClosed = lowerState === "merged" ? "resolved" : "closed";
+        ctx.db.updateWorkItemStatus(link.work_item_id, resolvedOrClosed);
+
+        // Resolve any pending approvals for this work item
+        const approval = ctx.db.raw.prepare(
+          "SELECT id FROM approvals WHERE work_item_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1"
+        ).get(link.work_item_id) as { id: number } | undefined;
+        if (approval) {
+          ctx.db.resolveApproval(
+            approval.id,
+            lowerState === "merged" ? "approved" : "rejected",
+            "github-reconcile"
+          );
+        }
+
+        // If merged, close the linked GitHub issue
+        if (lowerState === "merged") {
+          await closeLinkedIssueForMergedPr(
+            ctx.db,
+            runCommand,
+            link.work_item_id,
+            link.repository,
+            link.pr_number
+          );
+        }
+
+        // Best effort workspace cleanup
+        try {
+          const { defaultWorkspaceBaseDir, createWorkspaceCleanup } = await import("../workspace.js");
+          const { join } = await import("node:path");
+          const cleanup = createWorkspaceCleanup();
+          cleanup(join(defaultWorkspaceBaseDir(), `work-${link.work_item_id}`));
+        } catch {
+          // Ignore
+        }
+
+        lines.push(`#${link.pr_number} (${link.repository}): detected as ${lowerState} on GitHub. Work item #${link.work_item_id} marked ${resolvedOrClosed}.`);
+        continue;
+      }
 
       // Stale check takes priority over CI state
       const updatedAtMs = new Date(updatedAt).getTime();

@@ -1,3 +1,17 @@
+# Platform Infrastructure Ownership
+
+| Component | Host | Managed by | Keys/Access |
+|---|---|---|---|
+| Control plane + onboarding frontend | Aruba VPS | User (manual deploy) | `~/.secrets/ARUBA_API_KEY.TXT` + `ARUBA_API_SECRET.TXT` |
+| Cloudflare tunnel (exposes control plane) | Aruba VPS | `cloudflared` on Aruba | tunnel URL changes on restart unless named tunnel |
+| Customer workspace droplets | DigitalOcean | Appliance code in `agent-bridge-platform` | `~/.secrets/DIGITALOCEAN_API_TOKEN.TXT` |
+| Agent bridge bots (Claude, Codex, Agy) | This machine (`content-crawler`) | systemd user units | `~/.ssh/id_ed25519` for GitHub |
+
+Claude (this agent) can directly manage DigitalOcean droplets via the API token.
+Claude cannot SSH to Aruba — the user must pull and restart the control plane there manually.
+
+---
+
 # Development Practice — Red-Green-Refactor TDD
 
 **All implementation work uses red-green-refactor TDD. No exceptions.**

@@ -277,6 +277,25 @@ export function buildCliInvocation({
     );
     const finalPrompt = appendOutputDirInstruction(annotatedPrompt, outputDir);
     args.push("--print", finalPrompt);
+  } else if (bot === "kimchi") {
+    // Kimchi: --print for non-interactive mode, --model for model selection.
+    // Session resume uses --resume <uuid> (UUID extracted from JSONL session filename).
+    // Attachments are not supported; pass text annotations inline.
+    args.push("--print");
+    if (model) args.push("--model", model);
+    if (sessionId) {
+      args.push("--resume", sessionId);
+    } else {
+      args.push("--no-session");
+    }
+    const annotatedPrompt = attachments.length > 0
+      ? appendAttachmentAnnotations(prompt, attachments)
+      : prompt;
+    const finalPrompt = appendOutputDirInstruction(
+      wrapPromptContext(annotatedPrompt, soulContext),
+      outputDir,
+    );
+    args.push(finalPrompt);
   }
 
   return { command, args: appendEffortArgs(command, args, effort) };
@@ -346,6 +365,8 @@ export function parseCliResult({
     return parseClaudeResult(stdout);
   } else if (bot === "antigravity") {
     return parseAntigravityResult(stdout, logContent);
+  } else if (bot === "kimchi") {
+    return parseKimchiResult(stdout);
   }
   throw new Error(`Unknown bot type: ${bot}`);
 }
@@ -397,6 +418,47 @@ function parseClaudeResult(stdout: string): CliResult {
     } catch { /* not JSON */ }
   }
   return { text: stdout.trim(), sessionId: null };
+}
+
+/**
+ * Kimchi outputs plain text to stdout. Session IDs are not embedded in stdout;
+ * the JSONL session file is written to ~/.config/kimchi/harness/sessions/<cwd>/<uuid>.jsonl
+ * by the CLI automatically. We cannot read the session ID from stdout, so we scan
+ * the sessions directory for the most-recently-modified file after each invocation.
+ *
+ * Session resume: caller passes the UUID from a prior invocation as sessionId,
+ * which is forwarded as --resume <uuid> to kimchi.
+ */
+function parseKimchiResult(stdout: string): CliResult {
+  // Kimchi --print emits plain text; extract session UUID if kimchi echoes it (it doesn't currently).
+  // Session tracking is handled by the engine via resolveKimchiSessionId() after the process exits.
+  return { text: stdout.trim(), sessionId: null };
+}
+
+/**
+ * Scan the kimchi sessions directory for the UUID of the most recently written session file.
+ * Called by the engine after a kimchi invocation to persist the session for the next turn.
+ *
+ * Session files live at: ~/.config/kimchi/harness/sessions/<escaped-cwd>/<timestamp>_<uuid>.jsonl
+ * We look in the directory matching the current cwd and return the UUID from the newest file.
+ */
+export function resolveKimchiSessionId(cwd: string, homeDir: string = homedir()): string | null {
+  try {
+    const sessionsRoot = join(homeDir, ".config", "kimchi", "harness", "sessions");
+    const escapedCwd = cwd.replace(/[/\\]/g, "-").replace(/^-/, "");
+    const sessionDir = join(sessionsRoot, escapedCwd);
+    if (!existsSync(sessionDir)) return null;
+    const files = readdirSync(sessionDir)
+      .filter(f => f.endsWith(".jsonl"))
+      .map(f => ({ name: f, mtime: statSync(join(sessionDir, f)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime);
+    if (!files.length) return null;
+    // Filename format: <timestamp>_<uuid>.jsonl — extract the UUID part
+    const match = files[0].name.match(/_([0-9a-f-]{36})\.jsonl$/);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
 }
 
 export function extractAntigravityConversationId(text: string | null | undefined): string | null {

@@ -217,6 +217,15 @@ export function openDb(dbPath: string): BridgeDb {
     raw.exec(`ALTER TABLE bridge_state ADD COLUMN claude_session_created_at TEXT`);
   } catch { /* column already exists */ }
   try {
+    raw.exec(`ALTER TABLE bridge_state ADD COLUMN kimchi_session_id TEXT`);
+  } catch { /* column already exists */ }
+  try {
+    raw.exec(`ALTER TABLE bridge_state ADD COLUMN kimchi_consecutive_failures INTEGER NOT NULL DEFAULT 0`);
+  } catch { /* column already exists */ }
+  try {
+    raw.exec(`ALTER TABLE bridge_state ADD COLUMN kimchi_session_created_at TEXT`);
+  } catch { /* column already exists */ }
+  try {
     raw.exec(`ALTER TABLE github_links ADD COLUMN pr_state TEXT NOT NULL DEFAULT 'draft'`);
   } catch { /* column already exists */ }
   try {
@@ -501,11 +510,11 @@ export class BridgeDb {
 
   // ── Session management ───────────────────────────────────────────────────
 
-  getSession(chatId: string, bot: "codex" | "antigravity" | "claude"): string | null {
+  getSession(chatId: string, bot: "codex" | "antigravity" | "claude" | "kimchi"): string | null {
     return this.sessions.getSession(chatId, bot);
   }
 
-  setSession(chatId: string, bot: "codex" | "antigravity" | "claude", sessionId: string | null): void {
+  setSession(chatId: string, bot: "codex" | "antigravity" | "claude" | "kimchi", sessionId: string | null): void {
     this.sessions.setSession(chatId, bot, sessionId);
   }
 
@@ -521,11 +530,11 @@ export class BridgeDb {
 
   // ── Global polling offset (per bot kind) ────────────────────────────────
 
-  getLastUpdateId(bot: "codex" | "antigravity" | "claude"): number {
+  getLastUpdateId(bot: "codex" | "antigravity" | "claude" | "kimchi"): number {
     return this.settings.getLastUpdateId(bot);
   }
 
-  setLastUpdateId(bot: "codex" | "antigravity" | "claude", updateId: number): void {
+  setLastUpdateId(bot: "codex" | "antigravity" | "claude" | "kimchi", updateId: number): void {
     this.settings.setLastUpdateId(bot, updateId);
   }
 
@@ -537,11 +546,11 @@ export class BridgeDb {
 
   // ── Session failure circuit breaker ─────────────────────────────────────
 
-  incrementFailures(chatId: string, bot: "codex" | "antigravity" | "claude"): number {
+  incrementFailures(chatId: string, bot: "codex" | "antigravity" | "claude" | "kimchi"): number {
     return this.settings.incrementFailures(chatId, bot);
   }
 
-  resetFailures(chatId: string, bot: "codex" | "antigravity" | "claude"): void {
+  resetFailures(chatId: string, bot: "codex" | "antigravity" | "claude" | "kimchi"): void {
     this.settings.resetFailures(chatId, bot);
   }
 

@@ -44,7 +44,7 @@ export function isAntigravityNarrationVisible(db: BridgeDb, chatId: string): boo
   return db.getSetting(antigravityNarrationSettingKey(chatId)) === "visible";
 }
 
-function handleNarrationCommand(kind: "codex" | "antigravity" | "claude", text: string, db: BridgeDb, chatId: string): CommandResult {
+function handleNarrationCommand(kind: "codex" | "antigravity" | "claude" | "kimchi", text: string, db: BridgeDb, chatId: string): CommandResult {
   if (kind !== "antigravity") {
     return { kind: "message", text: "/narration is only available on Antigravity." };
   }
@@ -89,7 +89,7 @@ function buildSkillsText(): string {
 }
 
 export function handleCommand(
-  kind: "codex" | "antigravity" | "claude",
+  kind: "codex" | "antigravity" | "claude" | "kimchi",
   prompt: string,
   {
     db,
@@ -186,7 +186,7 @@ export function handleCommand(
   return null;
 }
 
-export function buildTelegramCommands(kind: "codex" | "antigravity" | "claude"): Array<{ command: string; description: string }> {
+export function buildTelegramCommands(kind: "codex" | "antigravity" | "claude" | "kimchi"): Array<{ command: string; description: string }> {
   const commands = [
     { command: "models",   description: "Switch model" },
     { command: "effort",   description: "Switch reasoning effort" },

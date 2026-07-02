@@ -427,7 +427,7 @@ describe("interactive command registration scopes", () => {
 describe("buildCliKeyboard", () => {
   it("returns an inline_keyboard with one row per CLI kind", () => {
     const kb = buildCliKeyboard("codex");
-    expect(kb.inline_keyboard).toHaveLength(3);
+    expect(kb.inline_keyboard).toHaveLength(4);
   });
 
   it("marks the active CLI with a checkmark", () => {

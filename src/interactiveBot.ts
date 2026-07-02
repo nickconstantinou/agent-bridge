@@ -9,13 +9,13 @@ import type { TelegramUpdate } from "./types.js";
 import { buildTelegramCommands } from "./commands.js";
 import { WorkerFallbackChain } from "./workerFallback.js";
 
-export type CliKind = "codex" | "claude" | "antigravity";
+export type CliKind = "codex" | "claude" | "antigravity" | "kimchi";
 export type InteractiveCommandRegistration = {
   commands: Array<{ command: string; description: string }>;
   scope?: { type: "all_group_chats" | "all_chat_administrators" } | { type: "chat" | "chat_administrators"; chat_id: number };
 };
 
-const VALID_CLI_KINDS: CliKind[] = ["codex", "claude", "antigravity"];
+const VALID_CLI_KINDS: CliKind[] = ["codex", "claude", "antigravity", "kimchi"];
 const DEFAULT_CLI: CliKind = "codex";
 
 export interface InteractiveUpdateLogSummary {
@@ -101,7 +101,7 @@ export function buildInteractiveCommands(pref: CliKind): Array<{ command: string
   const interactiveOnly = [
     { command: "cli", description: "Show active CLI and switch with one tap" },
   ];
-  const cliKind = pref === "antigravity" ? "antigravity" : pref === "claude" ? "claude" : "codex";
+  const cliKind = pref === "antigravity" ? "antigravity" : pref === "claude" ? "claude" : pref === "kimchi" ? "kimchi" : "codex";
   const cliCmds = buildTelegramCommands(cliKind);
   const seen = new Set(interactiveOnly.map(c => c.command));
   const merged = [...interactiveOnly];

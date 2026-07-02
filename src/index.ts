@@ -24,13 +24,14 @@ dotenv.config({
   override: false,
 });
 
-function getServiceKindFromEnvFile(envPath: string): "codex" | "antigravity" | "claude" | null {
+function getServiceKindFromEnvFile(envPath: string): "codex" | "antigravity" | "claude" | "kimchi" | null {
   if (!envPath) return null;
   const name = basename(envPath);
   if (name.includes("codex")) return "codex";
   if (name.includes("antigravity")) return "antigravity";
   if (name.includes("gemini")) return "antigravity";
   if (name.includes("claude")) return "claude";
+  if (name.includes("kimchi")) return "kimchi";
   return null;
 }
 
@@ -64,6 +65,13 @@ const config: BridgeConfig = {
       token: process.env.TELEGRAM_BOT_TOKEN_CLAUDE,
       command: process.env.CLAUDE_COMMAND || "claude",
       modelPreference: parseModelPreference(process.env.CLAUDE_MODEL_PREFERENCE),
+    },
+    kimchi: {
+      token: process.env.TELEGRAM_BOT_TOKEN_KIMCHI,
+      command: process.env.KIMCHI_COMMAND || `${process.env.HOME || "~"}/.local/bin/kimchi`,
+      modelPreference: parseModelPreference(
+        process.env.KIMCHI_MODEL_PREFERENCE || "glm-5.2-fp8,kimi-k2.7,minimax-m2.5,deepseek-v4-flash"
+      ),
     },
   },
 };

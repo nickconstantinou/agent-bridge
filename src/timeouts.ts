@@ -13,6 +13,7 @@ const DEFAULTS: Record<BotKind, PerKindDefaults> = {
   codex:       { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 1_200_000 },
   antigravity: { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 1_200_000 },
   claude:      { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 1_200_000 },
+  kimchi:      { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 1_200_000 },
 };
 
 const DEFAULT_FETCH_TIMEOUT_MS = 45_000;

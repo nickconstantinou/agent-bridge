@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-export type BotKind = "codex" | "antigravity" | "claude";
+export type BotKind = "codex" | "antigravity" | "claude" | "kimchi";
 
 export interface BridgeEventBase {
   version: 1;

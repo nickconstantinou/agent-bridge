@@ -70,7 +70,7 @@ const config: BridgeConfig = {
       token: process.env.TELEGRAM_BOT_TOKEN_KIMCHI,
       command: process.env.KIMCHI_COMMAND || `${process.env.HOME || "~"}/.local/bin/kimchi`,
       modelPreference: parseModelPreference(
-        process.env.KIMCHI_MODEL_PREFERENCE || "glm-5.2-fp8,kimi-k2.7,minimax-m2.5,deepseek-v4-flash"
+        process.env.KIMCHI_MODEL_PREFERENCE || "kimi-k2.7,nemotron-3-ultra-fp4,minimax-m3,deepseek-v4-flash"
       ),
     },
   },

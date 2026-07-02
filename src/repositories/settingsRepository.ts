@@ -1,6 +1,6 @@
 import Database from "better-sqlite3";
 
-type BotKind = "codex" | "antigravity" | "claude";
+type BotKind = "codex" | "antigravity" | "claude" | "kimchi";
 
 const pollingKey = (bot: string) => `$polling:${bot}`;
 

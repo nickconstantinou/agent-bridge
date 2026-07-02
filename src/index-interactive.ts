@@ -81,6 +81,13 @@ const config: BridgeConfig = {
       command: process.env.CLAUDE_COMMAND || "claude",
       modelPreference: parseModelPreference(process.env.CLAUDE_MODEL_PREFERENCE),
     },
+    kimchi: {
+      token: undefined,
+      command: process.env.KIMCHI_COMMAND || `${process.env.HOME || "~"}/.local/bin/kimchi`,
+      modelPreference: parseModelPreference(
+        process.env.KIMCHI_MODEL_PREFERENCE || "glm-5.2-fp8,kimi-k2.7,minimax-m2.5,deepseek-v4-flash"
+      ),
+    },
   },
 };
 
@@ -120,14 +127,14 @@ if (!botUsername) {
 }
 
 // Fallback chain state
-const cliChain = (process.env.INTERACTIVE_CLI_CHAIN || process.env.WORKER_CLI_CHAIN || "codex,claude,antigravity")
+const cliChain = (process.env.INTERACTIVE_CLI_CHAIN || process.env.WORKER_CLI_CHAIN || "codex,claude,antigravity,kimchi")
   .split(",").map(s => s.trim()).filter(Boolean);
 const fallbackChain = new WorkerFallbackChain(cliChain, db);
 const exhaustedChats = new Set<string>();
 const contextPreambles = new Map<string, string>();
 
 // Build one engine per CLI kind — none polls; we dispatch handleUpdate manually.
-const CLI_KINDS: CliKind[] = ["codex", "claude", "antigravity"];
+const CLI_KINDS: CliKind[] = ["codex", "claude", "antigravity", "kimchi"];
 const engines = Object.fromEntries(
   CLI_KINDS.map((kind) => {
     const botConfig = config.bots[kind as BotKind];

@@ -432,7 +432,28 @@ function parseClaudeResult(stdout: string): CliResult {
 function parseKimchiResult(stdout: string): CliResult {
   // Kimchi --print emits plain text; extract session UUID if kimchi echoes it (it doesn't currently).
   // Session tracking is handled by the engine via resolveKimchiSessionId() after the process exits.
-  return { text: stdout.trim(), sessionId: null };
+  let text = stdout.trim();
+
+  // Strip tool calls section
+  text = text.replace(/<\|tool_calls_section_begin[\s\S]*?<\|tool_calls_section_end\|>/g, "");
+  text = text.replace(/<\|tool_call_begin[\s\S]*?<\|tool_call_end\|>/g, "");
+  text = text.replace(/<\|tool_call_argument_begin[\s\S]*?<\|tool_call_argument_end\|>/g, "");
+
+  // Strip thoughts / reasoning sections
+  text = text.replace(/<\|thought_section_begin[\s\S]*?<\|thought_section_end\|>/g, "");
+  text = text.replace(/<\|thought_begin[\s\S]*?<\|thought_end\|>/g, "");
+  text = text.replace(/<\|thought[\s\S]*?<\|\/thought\|>/g, "");
+  text = text.replace(/<\|thinking_section_begin[\s\S]*?<\|thinking_section_end\|>/g, "");
+  text = text.replace(/<\|thinking_begin[\s\S]*?<\|thinking_end\|>/g, "");
+  text = text.replace(/<\|thinking[\s\S]*?<\|\/thinking\|>/g, "");
+  text = text.replace(/<\|reasoning_section_begin[\s\S]*?<\|reasoning_section_end\|>/g, "");
+  text = text.replace(/<\|reasoning_begin[\s\S]*?<\|reasoning_end\|>/g, "");
+  text = text.replace(/<\|reasoning[\s\S]*?<\|\/reasoning\|>/g, "");
+
+  // Strip any remaining special tags starting with <| and ending with |>
+  text = text.replace(/<\|.*?\|>/g, "");
+
+  return { text: text.trim(), sessionId: null };
 }
 
 /**
@@ -804,6 +825,7 @@ export function toUserMessage(err: Error): string {
 
 export function isCapacityExhaustedError(err: Error): boolean {
   const msg = err.message || "";
+  const lowerMsg = msg.toLowerCase();
   return (
     msg.includes("MODEL_CAPACITY_EXHAUSTED") ||
     msg.includes("No capacity available") ||
@@ -817,7 +839,11 @@ export function isCapacityExhaustedError(err: Error): boolean {
     msg.includes("session limit") ||
     msg.includes("usage limit") ||
     msg.includes("resets") ||
-    msg.includes("api_error_status\":429")
+    msg.includes("api_error_status\":429") ||
+    lowerMsg.includes("not found") ||
+    lowerMsg.includes("does not exist") ||
+    lowerMsg.includes("unknown model") ||
+    lowerMsg.includes("unsupported model")
   );
 }
 

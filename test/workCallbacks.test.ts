@@ -808,4 +808,25 @@ describe("stale PR callbacks — pr:<id>:hold/rels/clse", () => {
       expect.objectContaining({ text: expect.stringMatching(/unauthorized/i) })
     );
   });
+
+  it("handles wi_plan callback by queueing plan job without auto-approval", async () => {
+    const item = db2.createWorkItem({
+      kind: "defect",
+      source: "telegram",
+      title: "Need plan",
+      repository: "owner/repo",
+      created_by: "user",
+    });
+    const cl = makeClient();
+    await handleWorkerCallback(
+      { id: "cb-plan-draft", data: `wi:${item.id}:plan`, from: { id: 77 }, message: { message_id: 100, chat: { id: 10 } } } as any,
+      db2, cl as any, allowedIds,
+    );
+
+    const jobs = db2.listWorkJobs();
+    const planJob = jobs.find(j => j.work_item_id === item.id && j.task_type === "implementation_plan")!;
+    expect(planJob).toBeDefined();
+    expect(JSON.parse(planJob.input_json).approve_after_plan).toBe(false);
+    expect(db2.getWorkItem(item.id)!.status).toBe("proposed");
+  });
 });

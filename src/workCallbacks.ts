@@ -38,6 +38,7 @@ export type WorkCallbackAction =
   | { type: "wi_view"; id: number }
   | { type: "wi_appv"; id: number }
   | { type: "wi_clse"; id: number }
+  | { type: "wi_plan"; id: number }
   | { type: "job_cncl"; id: number }
   | { type: "ap_yes"; id: number }
   | { type: "ap_no"; id: number }
@@ -45,7 +46,7 @@ export type WorkCallbackAction =
   | { type: "pr_rels"; id: number }
   | { type: "pr_rfsh"; id: number }
   | { type: "pr_clse"; id: number };
-
+ 
 export function parseWorkCallback(data: string): WorkCallbackAction | null {
   if (data.length > 64) return null;
   const parts = data.split(":");
@@ -53,11 +54,12 @@ export function parseWorkCallback(data: string): WorkCallbackAction | null {
   const [prefix, rawId, action] = parts;
   const id = Number(rawId);
   if (!rawId || !Number.isInteger(id) || id <= 0 || String(id) !== rawId) return null;
-
+ 
   if (prefix === "wi") {
     if (action === "view") return { type: "wi_view", id };
     if (action === "appv") return { type: "wi_appv", id };
     if (action === "clse") return { type: "wi_clse", id };
+    if (action === "plan") return { type: "wi_plan", id };
   }
   if (prefix === "job") {
     if (action === "cncl") return { type: "job_cncl", id };
@@ -74,7 +76,7 @@ export function parseWorkCallback(data: string): WorkCallbackAction | null {
   }
   return null;
 }
-
+ 
 export function buildWorkCallback(action: WorkCallbackAction): string {
   let prefix = "";
   let actionStr = "";
@@ -98,7 +100,7 @@ export function buildWorkCallback(action: WorkCallbackAction): string {
   return payload;
 }
 
-function getWorkItemDetailsText(item: any): { text: string; inline_keyboard: any[] } {
+function getWorkItemDetailsText(item: any, db?: any): { text: string; inline_keyboard: any[] } {
   let textOut = `📦 **Work Item Details**\n\n`;
   textOut += `**Work Item ID**: ${item.id}\n`;
   textOut += `**Type**: \`${item.kind}\`\n`;
@@ -114,13 +116,21 @@ function getWorkItemDetailsText(item: any): { text: string; inline_keyboard: any
   }
   textOut += `**Created At**: ${item.created_at}\n`;
   textOut += `**Updated At**: ${item.updated_at}\n`;
-
+ 
   const inline_keyboard: Array<Array<{ text: string; callback_data: string }>> = [];
   if (item.status === "proposed" || item.status === "needs_approval" || item.status === "waiting_approval") {
-    inline_keyboard.push([
-      { text: "✅ Approve", callback_data: `wi:${item.id}:appv` },
-      { text: "❌ Close/Reject", callback_data: `wi:${item.id}:clse` }
-    ]);
+    const hasPlan = db ? db.getWorkItemPlan(item.id) != null : false;
+    if (hasPlan) {
+      inline_keyboard.push([
+        { text: "✅ Approve", callback_data: `wi:${item.id}:appv` },
+        { text: "❌ Close/Reject", callback_data: `wi:${item.id}:clse` }
+      ]);
+    } else {
+      inline_keyboard.push([
+        { text: "📝 Draft Plan", callback_data: `wi:${item.id}:plan` },
+        { text: "❌ Close/Reject", callback_data: `wi:${item.id}:clse` }
+      ]);
+    }
   }
   return { text: textOut.trim(), inline_keyboard };
 }
@@ -241,7 +251,7 @@ async function sendPackWithFallback(
   }
 }
 
-function ensureImplementationPlanQueued(db: BridgeDb, itemId: number, chatId: number | undefined, threadId?: number): boolean {
+function ensureImplementationPlanQueued(db: BridgeDb, itemId: number, chatId: number | undefined, threadId?: number, approveAfterPlan = true): boolean {
   const existing = db.listWorkJobs().find((j: WorkJob) => {
     if (j.work_item_id !== itemId || j.task_type !== "implementation_plan") return false;
     return j.status === "pending" || j.status === "leased" || j.status === "running";
@@ -253,7 +263,7 @@ function ensureImplementationPlanQueued(db: BridgeDb, itemId: number, chatId: nu
     work_item_id: itemId,
     input_json: {
       work_item_id: itemId,
-      approve_after_plan: true,
+      approve_after_plan: approveAfterPlan,
       ...notifyFields(chatId, threadId),
     },
     max_attempts: 1,
@@ -529,7 +539,7 @@ export async function handleWorkerCallback(
       return;
     }
     if (chatId != null) db.setSetting(activeWorkItemSettingKey(chatId), String(item.id));
-    const { text, inline_keyboard } = getWorkItemDetailsText(item);
+    const { text, inline_keyboard } = getWorkItemDetailsText(item, db);
     await sendPackWithFallback(client, chatId, buildWorkItemApprovalPack(db, item), threadId);
     await client.answerCallbackQuery({ callback_query_id: cbq.id });
     if (chatId && messageId) {
@@ -538,6 +548,31 @@ export async function handleWorkerCallback(
         message_id: messageId,
         text,
         reply_markup: inline_keyboard.length > 0 ? { inline_keyboard } : undefined,
+      });
+    }
+  } else if (parsed.type === "wi_plan") {
+    const item = db.getWorkItem(parsed.id);
+    if (!item) {
+      await client.answerCallbackQuery({ callback_query_id: cbq.id, text: "Work item not found." });
+      return;
+    }
+    if (!item.repository) {
+      await client.answerCallbackQuery({
+        callback_query_id: cbq.id,
+        text: "Cannot plan: work item has no repository.",
+      });
+      return;
+    }
+    ensureImplementationPlanQueued(db, item.id, chatId, threadId, false);
+    await client.answerCallbackQuery({
+      callback_query_id: cbq.id,
+      text: "Drafting implementation plan...",
+    });
+    if (chatId && messageId) {
+      await editWithEntities(client, {
+        chat_id: chatId,
+        message_id: messageId,
+        text: `Drafting implementation plan for work item #${item.id}.\n\nYou will be notified when it is ready to review.`,
       });
     }
   } else if (parsed.type === "wi_appv") {
@@ -599,12 +634,12 @@ export async function handleWorkerCallback(
         ...notifyFields(chatId, threadId),
       },
     });
-
+ 
     await client.answerCallbackQuery({ callback_query_id: cbq.id });
     if (chatId && messageId) {
       const updatedItem = db.getWorkItem(item.id);
       const isList = cbq.message?.text && cbq.message.text.includes("Proposed Work Items");
-      const { text, inline_keyboard } = isList ? getIssuesListText(db) : getWorkItemDetailsText(updatedItem);
+      const { text, inline_keyboard } = isList ? getIssuesListText(db) : getWorkItemDetailsText(updatedItem, db);
       await editWithEntities(client, {
         chat_id: chatId,
         message_id: messageId,
@@ -629,7 +664,7 @@ export async function handleWorkerCallback(
     if (chatId && messageId) {
       const updatedItem = db.getWorkItem(item.id);
       const isList = cbq.message?.text && cbq.message.text.includes("Proposed Work Items");
-      const { text, inline_keyboard } = isList ? getIssuesListText(db) : getWorkItemDetailsText(updatedItem);
+      const { text, inline_keyboard } = isList ? getIssuesListText(db) : getWorkItemDetailsText(updatedItem, db);
       await editWithEntities(client, {
         chat_id: chatId,
         message_id: messageId,

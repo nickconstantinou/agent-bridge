@@ -24,7 +24,7 @@ interface ImplementationPlanDeps {
 export { validateImplementationPlan };
 
 function buildPrompt(input: { title: string; body: string | null; kind: string; source: string; repository: string | null }): string {
-  return `Create an implementation-ready plan for this work item.
+  return `Create a highly detailed, concrete, implementation-ready plan for this work item. The plan must be actionable enough that an autonomous agent can execute it without further clarification.
 
 Repository: ${input.repository ?? "(unknown)"}
 Kind: ${input.kind}
@@ -37,31 +37,50 @@ ${input.body ?? "(none)"}
 Return Markdown with exactly these sections:
 
 ## Problem Summary
-Summarise the actual defect/feature/refactor in implementation terms.
+Detailed analysis of the defect/feature/refactor. Reference existing behavior, file relations, and why the current design/behavior needs modification.
 
 ## Target Files
-List concrete file paths likely to change and why.
+List concrete, absolute (or repo-relative) file paths that will be created or modified. For each file, specify:
+- Exact classes, methods, or interfaces to be modified or added.
+- The role of this file in the solution.
 
 ## Architectural Intent
-Describe the boundary/ownership/design intent that must be preserved or changed.
+Explain the design principles, boundary conditions, and ownership patterns to preserve or introduce.
+Specify:
+- Which component owns what state/responsibility.
+- How to avoid leaking test-only code/imports into production.
+- If refactoring, define the before/after ownership boundary clearly.
 
 ## Test Plan
-Name the first failing test file and assertion intent. Include focused command.
+Detailed plan for writing failing tests first:
+- The exact test file path to create or modify.
+- The assertion logic, test cases, and inputs/outputs to cover.
+- The exact command to run the new test and verify failure.
+- A skeleton code snippet of the proposed test.
 
 ## Implementation Phases
-Small red/green phases. Each phase must include test-first step, production change, verification command, and commit message.
+Provide a sequential, step-by-step execution roadmap. Break the work down into small red/green iterations (TDD phases).
+For each phase, specify:
+- Test changes (what test is added/modified).
+- Production changes (what files/classes/functions are changed).
+- Exact verification command to run.
+- Git commit message for this phase (separate test/implementation commits).
 
 ## Acceptance Criteria
-3-7 verifiable criteria.
+A list of 5-8 concrete, verifiable, and binary (yes/no) criteria that the implementation must meet.
+Include:
+- Functional criteria.
+- Non-functional criteria (performance, security, error handling).
+- Architectural constraints (e.g. delegation, no test leak).
 
 ## Verification Commands
-Exact commands to run, including typecheck and tests where applicable.
+A list of exact, copy-pasteable shell commands to run at the end of implementation to verify correctness (e.g. linting, typechecking, full test suite execution, coverage).
 
 ## Risks / Rollback
-Operational risks and rollback notes.
+Potential side effects, backwards compatibility concerns, dependency updates, and recovery/rollback procedure.
 
 ## Out of Scope
-Explicit non-goals.
+Explicitly list non-goals and things the implementation must NOT do.
 
 Do not implement code. Do not restate the issue without a concrete plan.`;
 }

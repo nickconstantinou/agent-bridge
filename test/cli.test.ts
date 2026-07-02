@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
-import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage, buildCliInvocation, buildSafeChildEnv } from "../src/cli.js";
+import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage, buildCliInvocation, buildSafeChildEnv, resolveKimchiSessionId } from "../src/cli.js";
 import { isBridgeCommand, handleCommand } from "../src/commands.js";
 import { openDb } from "../src/db.js";
 import type { BridgeConfig } from "../src/types.js";
@@ -179,6 +179,12 @@ describe("model fallback", () => {
     )).toBe(true);
     expect(isCapacityExhaustedError(
       new Error(`CLI exited with code 1: {"type":"result","subtype":"success","is_error":true,"api_error_status":429,"result":"You've hit your limit · resets 2:40am (Europe/London)"}`)
+    )).toBe(true);
+    expect(isCapacityExhaustedError(
+      new Error("CLI exited with code 1: Error: Model \"glm-5.2-fp8\" not found.")
+    )).toBe(true);
+    expect(isCapacityExhaustedError(
+      new Error("CLI exited with code 1: Error: unknown model minimax-m2.5")
     )).toBe(true);
     expect(isCapacityExhaustedError(new Error("CLI hard timeout after 120000ms"))).toBe(false);
     expect(isCapacityExhaustedError(new Error("Network error"))).toBe(false);
@@ -874,5 +880,69 @@ describe("/context command", () => {
 
     expect(result?.kind).toBe("message");
     expect(result?.text).toContain("Compact: in progress since 2026-06-27T13:35:20.000Z");
+  });
+});
+
+describe("kimchi integration", () => {
+  it("parseCliResult parses kimchi result to return stdout and null sessionId", () => {
+    const result = parseCliResult({ bot: "kimchi", stdout: "  kimchi output text  \n" });
+    expect(result.text).toBe("kimchi output text");
+    expect(result.sessionId).toBeNull();
+  });
+
+  it("parseCliResult strips tool calls and reasoning sections from kimchi result", () => {
+    const stdout = `
+<|thought_section_begin|>
+Thinking about the response.
+<|thought_section_end|>
+Here is the actual response.
+<|tool_calls_section_begin|><|tool_call_begin|>functions.update_todos:60<|tool_call_argument_begin|>{"todos": []}<|tool_call_end|><|tool_calls_section_end|>
+Done.
+    `;
+    const result = parseCliResult({ bot: "kimchi", stdout });
+    expect(result.text).toBe("Here is the actual response.\n\nDone.");
+  });
+
+  it("resolveKimchiSessionId scans directory and extracts newest session UUID", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "kimchi-test-home-"));
+    const cwd = "/my/project/dir";
+    const escapedCwd = "my-project-dir";
+    
+    // Create the session directory structure
+    const sessionDir = join(tempHome, ".config", "kimchi", "harness", "sessions", escapedCwd);
+    const fs = require("node:fs");
+    fs.mkdirSync(sessionDir, { recursive: true });
+
+    // Create old session file
+    const oldFile = join(sessionDir, "1719912000_11111111-2222-3333-4444-555555555555.jsonl");
+    fs.writeFileSync(oldFile, "{}");
+    const oldTime = 10000;
+    fs.utimesSync(oldFile, oldTime, oldTime);
+
+    // Create new session file
+    const newFile = join(sessionDir, "1719912060_abcdefab-abcd-abcd-abcd-abcdefabcdef.jsonl");
+    fs.writeFileSync(newFile, "{}");
+    const newTime = 20000;
+    fs.utimesSync(newFile, newTime, newTime);
+
+    const resolved = resolveKimchiSessionId(cwd, tempHome);
+    expect(resolved).toBe("abcdefab-abcd-abcd-abcd-abcdefabcdef");
+
+    // Clean up
+    rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  it("resolveKimchiSessionId returns null if no session dir or files exist", () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "kimchi-test-home-"));
+    const resolvedNoDir = resolveKimchiSessionId("/some/path", tempHome);
+    expect(resolvedNoDir).toBeNull();
+
+    // Create dir but no files
+    const fs = require("node:fs");
+    fs.mkdirSync(join(tempHome, ".config", "kimchi", "harness", "sessions", "some-path"), { recursive: true });
+    const resolvedEmpty = resolveKimchiSessionId("/some/path", tempHome);
+    expect(resolvedEmpty).toBeNull();
+
+    rmSync(tempHome, { recursive: true, force: true });
   });
 });

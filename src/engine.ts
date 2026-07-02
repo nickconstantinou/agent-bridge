@@ -22,6 +22,7 @@ import {
   abortCliProcess,
   toUserMessage,
   resolveAntigravityConversationId,
+  resolveKimchiSessionId,
   setAntigravityModel,
   scrubOutputDir,
 } from "./cli.js";
@@ -817,6 +818,8 @@ export class BridgeEngine {
       }
       if (executionKind === "antigravity" && !result.sessionId) {
         result.sessionId = resolveAntigravityConversationId({ cwd, sinceMs: startedAtMs, explicitLogContent: logContent });
+      } else if (executionKind === "kimchi" && !result.sessionId) {
+        result.sessionId = resolveKimchiSessionId(cwd);
       }
       if (result?.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
       if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);

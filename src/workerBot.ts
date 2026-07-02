@@ -590,17 +590,30 @@ export async function handleWorkerCommand(
   }
 
   if (cmd === "/import-issue" || cmd === "/import_issue") {
-    // Accept: /import-issue repo#123  OR  /import_issue owner/repo#123  OR  /import-issue repo 123
+    // Accept: /import-issue repo#123  OR  /import_issue owner/repo#123  OR  /import-issue repo 123  OR  /import-issue #123
     const arg = trimmed.slice(cmd.length).trim();
     let repoName = "";
     let issueNum = 0;
     const hashMatch = arg.match(/^(.+?)#(\d+)$/);
     const spaceMatch = arg.match(/^(.+?)\s+(\d+)$/);
-    if (hashMatch) { repoName = hashMatch[1].trim(); issueNum = Number(hashMatch[2]); }
-    else if (spaceMatch) { repoName = spaceMatch[1].trim(); issueNum = Number(spaceMatch[2]); }
+    const numOnlyMatch = arg.match(/^#?(\d+)$/);
+    if (hashMatch) {
+      repoName = hashMatch[1].trim();
+      issueNum = Number(hashMatch[2]);
+    } else if (spaceMatch) {
+      repoName = spaceMatch[1].trim();
+      issueNum = Number(spaceMatch[2]);
+    } else if (numOnlyMatch) {
+      issueNum = Number(numOnlyMatch[1]);
+      const chatKey = ctx.chatId != null ? String(ctx.chatId) : "";
+      repoName = ctx.defaultRepo || (ctx.db && chatKey ? ctx.db.getChatRepo(chatKey) : null) || process.env.WORKER_DEFAULT_REPO || "";
+    }
 
     if (!repoName || !issueNum) {
-      return { kind: "message", text: "Usage: `/import-issue owner/repo#123` or `/import-issue repo 123`" };
+      return {
+        kind: "message",
+        text: "Usage: `/import-issue owner/repo#123`, `/import-issue repo 123`, or `/import-issue #123` (using default repository)",
+      };
     }
 
     let owner: string;

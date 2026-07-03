@@ -840,8 +840,10 @@ export function isCapacityExhaustedError(err: Error): boolean {
     msg.includes("usage limit") ||
     msg.includes("resets") ||
     msg.includes("api_error_status\":429") ||
-    lowerMsg.includes("not found") ||
-    lowerMsg.includes("does not exist") ||
+    // Model-unavailable errors trigger model fallback, but only when the
+    // message is actually about a model — plain "not found" also appears in
+    // session/file/command errors that must surface, not silently fall back.
+    /model\s+"?[\w./-]+"?\s+(not found|does not exist)/.test(lowerMsg) ||
     lowerMsg.includes("unknown model") ||
     lowerMsg.includes("unsupported model")
   );

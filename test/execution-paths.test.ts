@@ -19,10 +19,12 @@ describe("Execution Path Selection - TDD", () => {
       const fs = await import("fs");
       const index = fs.readFileSync("src/index.ts", "utf-8");
       const bridge = fs.readFileSync("src/bridge.ts", "utf-8");
+      // Bot env aliases moved from index.ts into the shared config module (Epic 1).
+      const config = fs.readFileSync("src/config.ts", "utf-8");
 
-      expect(index).toContain("TELEGRAM_BOT_TOKEN_GEMINI");
-      expect(index).toContain("GEMINI_COMMAND");
-      expect(index).toContain("GEMINI_MODEL_PREFERENCE");
+      expect(config).toContain("TELEGRAM_BOT_TOKEN_GEMINI");
+      expect(config).toContain("GEMINI_COMMAND");
+      expect(config).toContain("GEMINI_MODEL_PREFERENCE");
       expect(index).toContain('name.includes("gemini")');
       expect(bridge).toContain("GEMINI_PROJECT_DIR");
     });

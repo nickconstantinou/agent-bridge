@@ -13,8 +13,8 @@ import {
   openDb,
   isAuthorizedMessage,
   shutdownCliProcesses,
-  parseModelPreference,
 } from "./bridge.js";
+import { loadBotsConfig } from "./config.js";
 import { TelegramClient } from "./telegram.js";
 import { BridgeEngine } from "./engine.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
@@ -105,28 +105,7 @@ const config: BridgeConfig = {
   executionMode,
   asyncEnabled,
   dbPath,
-  bots: {
-    codex: {
-      token: undefined,
-      command: process.env.CODEX_COMMAND || "codex",
-      modelPreference: parseModelPreference(process.env.CODEX_MODEL_PREFERENCE),
-    },
-    antigravity: {
-      token: undefined,
-      command: process.env.ANTIGRAVITY_COMMAND || "agy",
-      modelPreference: parseModelPreference(process.env.ANTIGRAVITY_MODEL_PREFERENCE),
-    },
-    claude: {
-      token: undefined,
-      command: process.env.CLAUDE_COMMAND || "claude",
-      modelPreference: parseModelPreference(process.env.CLAUDE_MODEL_PREFERENCE),
-    },
-    kimchi: {
-      token: undefined,
-      command: process.env.KIMCHI_COMMAND || `${process.env.HOME || "~"}/.local/bin/kimchi`,
-      modelPreference: parseModelPreference(process.env.KIMCHI_MODEL_PREFERENCE || "glm-5.2-fp8,kimi-k2.7,nemotron-3-ultra-fp4,minimax-m3,deepseek-v4-flash"),
-    },
-  },
+  bots: loadBotsConfig(process.env),
 };
 
 // ── Build one engine per CLI kind ─────────────────────────────────────────────

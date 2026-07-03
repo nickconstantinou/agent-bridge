@@ -18,6 +18,7 @@ import { BridgeEngine } from "./engine.js";
 import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import type { BridgeConfig, BotConfig, BotKind } from "./types.js";
+import { loadBotsConfig, validateTokenUniqueness } from "./config.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env",
@@ -35,10 +36,6 @@ function getServiceKindFromEnvFile(envPath: string): "codex" | "antigravity" | "
   return null;
 }
 
-function parseModelPreference(raw: string | undefined): string[] {
-  return raw ? raw.split(",").map((s) => s.trim()).filter(Boolean) : [];
-}
-
 const config: BridgeConfig = {
   allowedUserIds: new Set(
     (process.env.TELEGRAM_ALLOWED_USER_IDS || process.env.TELEGRAM_ALLOWED_USER_ID || "")
@@ -50,31 +47,12 @@ const config: BridgeConfig = {
   executionMode: (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") || "safe",
   asyncEnabled: process.env.BRIDGE_ASYNC_ENABLED !== "false",
   dbPath: process.env.DB_PATH || `${getBridgeProjectDir()}/.data/bridge.sqlite`,
-  bots: {
-    codex: {
-      token: process.env.TELEGRAM_BOT_TOKEN_CODEX,
-      command: process.env.CODEX_COMMAND || "codex",
-      modelPreference: parseModelPreference(process.env.CODEX_MODEL_PREFERENCE),
-    },
-    antigravity: {
-      token: process.env.TELEGRAM_BOT_TOKEN_ANTIGRAVITY || process.env.TELEGRAM_BOT_TOKEN_GEMINI,
-      command: process.env.ANTIGRAVITY_COMMAND || process.env.GEMINI_COMMAND || "agy",
-      modelPreference: parseModelPreference(process.env.ANTIGRAVITY_MODEL_PREFERENCE || process.env.GEMINI_MODEL_PREFERENCE),
-    },
-    claude: {
-      token: process.env.TELEGRAM_BOT_TOKEN_CLAUDE,
-      command: process.env.CLAUDE_COMMAND || "claude",
-      modelPreference: parseModelPreference(process.env.CLAUDE_MODEL_PREFERENCE),
-    },
-    kimchi: {
-      token: process.env.TELEGRAM_BOT_TOKEN_KIMCHI,
-      command: process.env.KIMCHI_COMMAND || `${process.env.HOME || "~"}/.local/bin/kimchi`,
-      modelPreference: parseModelPreference(
-        process.env.KIMCHI_MODEL_PREFERENCE || "glm-5.2-fp8,kimi-k2.7,nemotron-3-ultra-fp4,minimax-m3,deepseek-v4-flash"
-      ),
-    },
-  },
+  bots: loadBotsConfig(process.env, { withTokens: true }),
 };
+
+validateTokenUniqueness(
+  Object.fromEntries(Object.entries(config.bots).map(([kind, bot]) => [kind, bot.token]))
+);
 
 const validation = validateBridgeConfig(config);
 if (!validation.ok) {

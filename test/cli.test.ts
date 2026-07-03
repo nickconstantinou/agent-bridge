@@ -190,6 +190,21 @@ describe("model fallback", () => {
     expect(isCapacityExhaustedError(new Error("Network error"))).toBe(false);
   });
 
+  it("does not treat non-model 'not found' errors as capacity exhaustion", () => {
+    expect(isCapacityExhaustedError(
+      new Error("CLI exited with code 1: Error: Session abc-123 not found.")
+    )).toBe(false);
+    expect(isCapacityExhaustedError(
+      new Error("CLI exited with code 1: ENOENT: no such file or directory, config.json not found")
+    )).toBe(false);
+    expect(isCapacityExhaustedError(
+      new Error("CLI exited with code 1: fatal: repository 'origin' does not exist")
+    )).toBe(false);
+    expect(isCapacityExhaustedError(
+      new Error("CLI exited with code 1: command not found: kimchi")
+    )).toBe(false);
+  });
+
   it("returns the next model in the preference list", () => {
     const prefs = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
     expect(getNextFallbackModel("gemini-2.5-flash", prefs)).toBe("gemini-2.5-flash-lite");

@@ -2,7 +2,11 @@
 
 ## Status
 
-Active roadmap. This is the only approved implementation plan for Epic 11.
+Active roadmap. Execution is tracked in GitHub issues, not in this document.
+
+Epic issue: #48 — `Epic 11 Runtime Architecture Hardening`
+
+This document is the durable roadmap index for Epic 11. Keep implementation discussion, ownership, status, and PR linkage in the linked GitHub issues.
 
 Everything outside this document is research, historical context, or future consideration unless it is promoted by a later architecture decision and roadmap update.
 
@@ -24,72 +28,19 @@ Agent Bridge OSS
     └── Common runtime services consumed by both
 ```
 
-## Product Boundaries
+## Task Issues
 
-### Companion Runtime
-
-The Companion Runtime is the domain-agnostic conversational runtime.
-
-It owns:
-
-- Telegram conversational surfaces
-- Discord conversational surfaces
-- future chat/TUI transports
-- conversation routing
-- provider selection
-- session management
-- usage monitoring
-- fallback
-- memory use
-- response delivery
-
-It must not own or depend on worker-only concepts:
-
-- repositories
-- work items
-- Git branches
-- pull requests
-- TDD
-- CI
-- merge approvals
-
-### Engineering Worker
-
-The Engineering Worker is software-engineering-only.
-
-It owns:
-
-- repository resolution
-- disposable clones / workspaces
-- work items and jobs
-- planning for software changes
-- TDD implementation
-- test and verification commands
-- Git and GitHub issue/PR lifecycle
-- CI reaction
-- review repair
-- merge approval gates
-
-It must not become a general-purpose conversational agent framework.
-
-### Shared Runtime
-
-Shared Runtime provides common services used by both products.
-
-Approved shared areas for Epic 11:
-
-- provider / CLI selection
-- session persistence boundaries
-- notifications
-- memory access seams
-- minimal capability registry
-- diagnostics
+- #49 — Documentation boundary update
+- #50 — Minimal capability registry
+- #51 — Shared provider selection seam
+- #52 — Boundary tests
+- #53 — Doctor diagnostics
 
 ## Scope
 
 Epic 11 includes only the high-value changes that reduce future coupling.
 
-### 1. Documentation Boundary Update
+### Documentation Boundary Update
 
 Update docs to consistently describe Agent Bridge OSS as:
 
@@ -99,7 +50,7 @@ Companion Runtime + Engineering Worker + Shared Runtime
 
 Do not rename systemd services or environment variables for this epic.
 
-### 2. Minimal Capability Registry
+### Minimal Capability Registry
 
 Introduce a small capability registry, not a plugin ecosystem.
 
@@ -117,13 +68,13 @@ Initial capability examples may be static metadata only.
 
 Do not implement browser automation, internet tooling, or a marketplace in Epic 11.
 
-### 3. Shared Provider Selection
+### Shared Provider Selection
 
 Move duplicated provider/CLI routing concepts toward a shared abstraction that both Companion Runtime and Engineering Worker can consume.
 
 This should preserve existing behavior.
 
-### 4. Boundary Tests
+### Boundary Tests
 
 Add tests that prevent cross-contamination between products.
 
@@ -134,7 +85,7 @@ At minimum:
 - Provider fallback order remains deterministic.
 - Unknown capabilities fail clearly.
 
-### 5. Doctor Diagnostics
+### Doctor Diagnostics
 
 Add `doctor`-style diagnostics for runtime readiness.
 
@@ -165,6 +116,7 @@ Epic 11 must not implement:
 
 Epic 11 is complete when:
 
+- every Epic 11 task issue is complete
 - docs clearly present the three-part OSS architecture
 - active roadmap and research docs are separated
 - minimal capability registry exists with tests
@@ -179,3 +131,12 @@ Epic 11 is complete when:
 When in doubt, choose the smallest change that clarifies the boundary and preserves existing behavior.
 
 Do not promote research ideas into implementation during Epic 11.
+
+## References
+
+- Documentation index: [`../README.md`](../README.md)
+- Architecture overview: [`../architecture/overview.md`](../architecture/overview.md)
+- Companion Runtime: [`../architecture/companion-runtime.md`](../architecture/companion-runtime.md)
+- Engineering Worker: [`../architecture/engineering-worker.md`](../architecture/engineering-worker.md)
+- Shared Runtime: [`../architecture/shared-runtime.md`](../architecture/shared-runtime.md)
+- Capability registry architecture: [`../architecture/capability-registry.md`](../architecture/capability-registry.md)

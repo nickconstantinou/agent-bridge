@@ -10,7 +10,7 @@
 
 import type { BotConfig, BotKind } from "./types.js";
 
-export const KIMCHI_DEFAULT_MODELS = "glm-5.2-fp8,kimi-k2.7,nemotron-3-ultra-fp4,minimax-m3,deepseek-v4-flash";
+export const KIMCHI_DEFAULT_MODELS = "kimi-k2.7,nemotron-3-ultra-fp4,minimax-m3,deepseek-v4-flash";
 
 type Env = Record<string, string | undefined>;
 

@@ -27,3 +27,5 @@ dist/
 .data-health/
 cache/
 .worktrees/
+.kimchi/ferments/
+.kimchi/events.jsonl

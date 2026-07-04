@@ -2,6 +2,35 @@
 
 Evolution of the existing codebase, not a rewrite. Every layer below maps to modules that already exist; new elements are marked ★.
 
+## Mission
+
+> Agent Bridge is an open-source runtime for autonomous AI agents. It consists of a domain-agnostic **Companion Runtime** for conversational AI agents and a specialized autonomous **Engineering Worker** for software development. Both share a common runtime providing provider abstraction, memory, eventing, capability management, and infrastructure services. The hosted Agent Bridge Platform provisions, manages, and monitors deployments, but all autonomous execution lives within the OSS.
+
+## Two products, one shared runtime (ADR-008)
+
+```
+                Agent Bridge OSS
+                       │
+      ┌────────────────┴────────────────┐
+      │                                 │
+Companion Runtime              Engineering Worker
+(domain-agnostic)              (software engineering only)
+      │                                 │
+Telegram/Discord/future        Work item → plan → arch review
+surfaces → conversation        → TDD → implement → test →
+router → provider selection    review → repair → PR → CI →
+→ sessions → usage/fallback    reviewer comments → merge gate
+→ memory → response            Owns: repos, worktrees, Git,
+Knows nothing of Git/PR/CI     GitHub, CI, releases. Nothing else.
+      └────────────────┬────────────────┘
+                Shared Runtime
+  SQLite · Event store · Memory · Provider adapters ·
+  CLI mgmt · Config/secrets · Notifications · Metrics ·
+  Capability Registry★ (Tranche 2 — ProviderAdapter is member #1)
+```
+
+Boundary rule (enforced by arch-lint, Epic 11): companion modules (`engine.ts`, `interactiveBot.ts`, router) never import worker modules (`workerBot`, `jobExecutor*`, `handlers/*`, `prMergeGate`, `workspace`) and vice versa; both import only Shared Runtime.
+
 ## Layer diagram
 
 ```
@@ -40,8 +69,11 @@ Evolution of the existing codebase, not a rewrite. Every layer below maps to mod
 
 ## Reference-project influences (patterns only, no code import)
 
-| Source | Adopted pattern | Where |
+| Source | Adopted pattern | Layer influenced |
 |---|---|---|
-| gstack | Named engineering skills as first-class workflow steps; planning discipline (plan artifact gates implementation); review/QA as separate pipeline stages | Workflow Engine, skills.ts, implementationPlanQuality.ts |
-| agent-orchestrator | Adapter abstraction per agent; durable event model as truth; isolated worktrees; runtime supervision & lifecycle | ProviderAdapter, Event Store, workspace.ts, jobExecutorLoop |
+| gstack | Named engineering skills as first-class workflow steps; planning discipline (plan artifact gates implementation); review/QA as separate pipeline stages | **Engineering Workflows** (Workflow Engine, skills.ts, implementationPlanQuality.ts) |
+| agent-orchestrator | Adapter abstraction per agent; durable event model as truth; isolated worktrees; parallel sessions; feedback routing; runtime supervision | **Engineering Worker** (ProviderAdapter, Event Store, workspace.ts, jobExecutorLoop) |
+| Agent-Reach (github.com/Panniantong/Agent-Reach) | Capability layer giving agents internet access (web pages, YouTube transcripts, social platforms, RSS, semantic search) with per-channel primary+fallback backends and a `doctor` diagnostic | **Companion Runtime** + Capability Registry shape; its fallback-chain-per-channel pattern independently validates Epic 8. Near-term: installable as a host tool for the CLIs directly, zero bridge code |
 | Rejected | Claude-specific assumptions, interactive-only flow, Electron/desktop, loopback daemon | — |
+
+Rule: each external influence maps to exactly one layer — general-purpose agent capabilities never blend into the engineering-specific worker.

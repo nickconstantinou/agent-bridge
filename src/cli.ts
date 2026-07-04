@@ -280,9 +280,13 @@ export function buildCliInvocation({
   } else if (bot === "kimchi") {
     // Kimchi: --print for non-interactive mode, --model for model selection.
     // Session resume uses --resume <uuid> (UUID extracted from JSONL session filename).
+    // Trusted mode maps to --yolo (no classifier guards).
     // Attachments are not supported; pass text annotations inline.
     args.push("--print");
     if (model) args.push("--model", model);
+    if (executionMode === "trusted") {
+      args.push("--yolo");
+    }
     if (sessionId) {
       args.push("--resume", sessionId);
     } else {

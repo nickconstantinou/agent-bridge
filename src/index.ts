@@ -18,7 +18,7 @@ import { BridgeEngine } from "./engine.js";
 import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import type { BridgeConfig, BotConfig, BotKind } from "./types.js";
-import { loadBotsConfig, validateTokenUniqueness } from "./config.js";
+import { loadBotsConfig, validateTokenUniqueness, resolveExecutionMode } from "./config.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env",
@@ -44,7 +44,7 @@ const config: BridgeConfig = {
   serviceEnvFile: process.env.BRIDGE_ENV_FILE || null,
   serviceKind: getServiceKindFromEnvFile(process.env.BRIDGE_ENV_FILE || ""),
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 1000),
-  executionMode: (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") || "safe",
+  executionMode: resolveExecutionMode(getServiceKindFromEnvFile(process.env.BRIDGE_ENV_FILE || "") || "codex", process.env),
   asyncEnabled: process.env.BRIDGE_ASYNC_ENABLED !== "false",
   dbPath: process.env.DB_PATH || `${getBridgeProjectDir()}/.data/bridge.sqlite`,
   bots: loadBotsConfig(process.env, { withTokens: true }),
@@ -78,7 +78,7 @@ const engines = (Object.entries(config.bots) as [BotKind, BotConfig][])
         kind,
         botConfig,
         allowedUserIds: config.allowedUserIds,
-        executionMode: config.executionMode,
+        executionMode: resolveExecutionMode(kind, process.env),
         asyncEnabled: config.asyncEnabled,
         pollIntervalMs: config.pollIntervalMs,
         soulContext,

@@ -50,6 +50,20 @@ export function loadBotsConfig(env: Env, opts: { withTokens?: boolean } = {}): R
 }
 
 /**
+ * Resolve the execution mode for a specific bot kind.
+ * Per-bot env vars (e.g. KIMCHI_EXECUTION_MODE) override the global
+ * BRIDGE_EXECUTION_MODE. Kimchi defaults to trusted because it has no
+ * interactive approval flow; other kinds default to safe.
+ */
+export function resolveExecutionMode(kind: BotKind, env: Env): "safe" | "trusted" {
+  const perBotRaw = env[`${kind.toUpperCase()}_EXECUTION_MODE`];
+  if (perBotRaw === "safe" || perBotRaw === "trusted") return perBotRaw;
+  const globalRaw = env.BRIDGE_EXECUTION_MODE;
+  if (globalRaw === "safe" || globalRaw === "trusted") return globalRaw;
+  return kind === "kimchi" ? "trusted" : "safe";
+}
+
+/**
  * Fail fast when two surfaces are configured with the same Telegram token.
  * Two pollers on one token fight over getUpdates and Telegram rejects both —
  * this took the Antigravity bridge offline in production (Risk R2).

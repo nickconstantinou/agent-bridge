@@ -19,7 +19,7 @@ import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
 import { isAuthorizedMessage, extractPromptText } from "./bridge.js";
-import { loadBotsConfig } from "./config.js";
+import { loadBotsConfig, resolveExecutionMode } from "./config.js";
 import { WorkerFallbackChain } from "./workerFallback.js";
 import {
   getUserCliPreference,
@@ -55,7 +55,7 @@ const allowedUserIds = new Set(
 
 const dbPath = process.env.DB_PATH || `${getBridgeProjectDir()}/.data/bridge.sqlite`;
 const pollIntervalMs = Number(process.env.POLL_INTERVAL_MS || 1000);
-const executionMode = (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") || "safe";
+const executionMode = resolveExecutionMode("codex", process.env);
 const asyncEnabled = process.env.BRIDGE_ASYNC_ENABLED !== "false";
 
 const config: BridgeConfig = {
@@ -123,7 +123,7 @@ const engines = Object.fromEntries(
           kind,
           botConfig: { ...botConfig, token },
           allowedUserIds,
-          executionMode,
+          executionMode: resolveExecutionMode(kind as BotKind, process.env),
           asyncEnabled,
           pollIntervalMs,
           soulContext,

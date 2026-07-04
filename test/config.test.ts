@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { loadBotsConfig, validateTokenUniqueness } from "../src/config.js";
+import { loadBotsConfig, validateTokenUniqueness, resolveExecutionMode } from "../src/config.js";
 
 describe("loadBotsConfig", () => {
   it("builds all four bot configs with defaults from an empty env", () => {
@@ -49,6 +49,25 @@ describe("validateTokenUniqueness", () => {
 
   it("ignores undefined and empty tokens", () => {
     expect(() => validateTokenUniqueness({ a: undefined, b: "", c: "x" })).not.toThrow();
+  });
+});
+
+describe("resolveExecutionMode", () => {
+  it("defaults Kimchi to trusted and others to safe", () => {
+    expect(resolveExecutionMode("kimchi", {})).toBe("trusted");
+    expect(resolveExecutionMode("codex", {})).toBe("safe");
+    expect(resolveExecutionMode("claude", {})).toBe("safe");
+    expect(resolveExecutionMode("antigravity", {})).toBe("safe");
+  });
+
+  it("lets per-bot env vars override the global mode", () => {
+    expect(resolveExecutionMode("kimchi", { KIMCHI_EXECUTION_MODE: "safe" })).toBe("safe");
+    expect(resolveExecutionMode("codex", { CODEX_EXECUTION_MODE: "trusted", BRIDGE_EXECUTION_MODE: "safe" })).toBe("trusted");
+  });
+
+  it("falls back to BRIDGE_EXECUTION_MODE when no per-bot var is set", () => {
+    expect(resolveExecutionMode("kimchi", { BRIDGE_EXECUTION_MODE: "safe" })).toBe("safe");
+    expect(resolveExecutionMode("codex", { BRIDGE_EXECUTION_MODE: "trusted" })).toBe("trusted");
   });
 });
 

@@ -1,20 +1,14 @@
-# Autonomous Agent Bridge Research
+# Agent Bridge OSS Product Split Plan
 
 ## Status
 
 Superseded. Do not implement from this file.
 
-The original autonomous-worker research note has been archived because it mixed implemented history, future worker ideas, and roadmap-like phase language.
-
-## Current Worker Documentation
-
-Use this for the current implemented worker behavior:
-
-- `docs/WORKER-GUIDE.md`
+The original product split plan mixed approved Epic 11 work with deferred research ideas. It has been split so future implementation agents have one active source of truth.
 
 ## Active Roadmap
 
-Use this for next implementation work:
+Use this for implementation:
 
 - `docs/roadmap/epic-11-runtime-hardening.md`
 
@@ -28,7 +22,7 @@ Use this only for future evaluation:
 
 Historical summary:
 
-- `docs/archive/autonomous-agent-bridge-research-v1.md`
+- `docs/archive/oss-product-split-plan-v1.md`
 
 ## Rule
 

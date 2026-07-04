@@ -1,3 +1,11 @@
+---
+status: authoritative
+type: operations
+authority: canonical
+implementation_status: implemented
+last_validated_against: 23d06cfc3e098561ec21ce29880e60d1d146b7cc
+---
+
 # Safe Remote Restart
 
 Use this path when a bridge bot needs to restart services from inside an active

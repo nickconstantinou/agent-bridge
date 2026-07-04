@@ -10,7 +10,7 @@ describe("loadBotsConfig", () => {
     expect(bots.claude.command).toBe("claude");
     expect(bots.antigravity.command).toBe("agy");
     expect(bots.kimchi.command).toContain("kimchi");
-    expect(bots.kimchi.modelPreference[0]).toBe("glm-5.2-fp8");
+    expect(bots.kimchi.modelPreference[0]).toBe("kimi-k2.7");
   });
 
   it("respects env overrides for commands and model preferences", () => {

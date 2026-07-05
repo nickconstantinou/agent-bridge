@@ -63,5 +63,6 @@ export function parseModelPreference(raw: string | undefined): string[] {
 }
 
 export { runCli, runCliAsync, parseCliResult, validateBridgeConfig, buildCliInvocation, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, abortCliProcess, shutdownCliProcesses, toUserMessage, resolveAntigravityConversationId, extractAntigravityConversationId, readAntigravityLastConversation, readLatestAntigravityConversationFromLogs, setAntigravityModel, toAntigravityModelLabel, scrubOutputDir, normalizeCliArgs };
+export { classifyAnyProviderError, classifyProviderError, isFallbackEligibleProviderError } from "./providers/errorClassification.js";
 export { openDb, BridgeDb };
 export { buildTelegramCommands, handleCommand, isBridgeCommand } from "./commands.js";

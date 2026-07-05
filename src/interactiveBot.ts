@@ -71,15 +71,15 @@ export function handleCliSwitchCallback(data: string): CliKind | null {
 }
 
 export function getSelectableCliKinds(authenticated: ReadonlySet<CliKind> = DEFAULT_AUTHENTICATED_CLI_KINDS): CliKind[] {
-  const selectable = VALID_CLI_KINDS.filter((kind) => authenticated.has(kind));
-  return selectable.length > 0 ? selectable : ["kimchi"];
+  return VALID_CLI_KINDS.filter((kind) => authenticated.has(kind));
 }
 
 export function resolveAvailableCliPreference(
   preferred: CliKind,
   authenticated: ReadonlySet<CliKind> = DEFAULT_AUTHENTICATED_CLI_KINDS,
-): CliKind {
+): CliKind | null {
   const selectable = getSelectableCliKinds(authenticated);
+  if (selectable.length === 0) return null;
   return selectable.includes(preferred) ? preferred : selectable[0];
 }
 
@@ -88,12 +88,20 @@ export function buildCliStatusText(
   authenticated: ReadonlySet<CliKind> = DEFAULT_AUTHENTICATED_CLI_KINDS,
 ): string {
   const selectable = getSelectableCliKinds(authenticated);
+  if (selectable.length === 0) {
+    return [
+      "Active CLI: **none available**",
+      "Available: none",
+      "Switch with: no available CLI",
+    ].join("\n");
+  }
+
   const resolvedActive = selectable.includes(activeCli) ? activeCli : selectable[0];
   const others = selectable.filter((k) => k !== resolvedActive);
   return [
     `Active CLI: **${resolvedActive}**`,
     `Available: ${selectable.join(", ")}`,
-    others.length > 0 ? `Switch with: /switch ${others[0]}` : "Switch with: no other authenticated CLI",
+    others.length > 0 ? `Switch with: /switch ${others[0]}` : "Switch with: no other available CLI",
   ].join("\n");
 }
 

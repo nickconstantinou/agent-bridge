@@ -25,6 +25,51 @@ The intended follow-up implementation should use this precedence:
 2. Bundled prompt file from this directory.
 3. Hardcoded emergency fallback only for critical paths.
 
+DB overrides are assumed to be complete templates. The prompt loader should not append bundled supplements to DB overrides unless a caller explicitly opts in.
+
+## Token budget policy
+
+The prompt pack should preserve quality without appending all context to every CLI call.
+
+Wiring rules:
+
+- Inject only the supplements mapped to the current prompt key.
+- Keep supplements compact and phase-specific.
+- Do not paste full Agent Skills documents into runtime prompts.
+- Create a compact execution contract during implementation planning and pass that to red/green/repair phases instead of repeatedly passing the full plan.
+- Cap large variables before rendering, especially `body`, `plan_text`, `failure_output`, CI logs, and PR diff excerpts.
+- Prefer narrow excerpts for execution phases: relevant phase, target files, verification command, risk boundary, and out-of-scope list.
+- Keep the full human-readable plan for approval packs and PR context, not for every CLI execution pass.
+- Add prompt-size tests or snapshot checks when wiring handlers.
+
+Recommended context shape:
+
+| Phase | Context to pass |
+|---|---|
+| Feature, defect, refactor scan | Repository name plus concise scan instructions; let the CLI inspect the repo locally. |
+| Implementation planning | Full work item context, capped, plus compact supplements. |
+| Red test | Execution contract plus relevant plan slice only. |
+| Green implementation | Execution contract, failing-test summary, target files, and verification command. |
+| CI fix | Execution contract plus capped CI failure excerpt. |
+| Repair | Execution contract plus capped prior failure and current phase. |
+
+## Execution contract
+
+Implementation planning prompts should emit a compact machine-facing section that later phases can consume without the full plan:
+
+```json
+{
+  "target_files": ["src/example.ts"],
+  "test_files": ["src/example.test.ts"],
+  "phase": "red-test | green-implementation | ci-fix | repair",
+  "verification": "npm test -- example",
+  "risk_level": "low | medium | high",
+  "out_of_scope": ["unrelated cleanup", "schema migration"]
+}
+```
+
+The follow-up wiring should store the full Markdown plan for humans and extract/store this compact execution contract for execution prompts.
+
 ## Prompt families
 
 | Prompt key | File | Purpose |

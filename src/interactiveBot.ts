@@ -235,7 +235,6 @@ export interface InteractiveDispatchDeps {
   engines: Record<string, InteractiveDispatchEngine>;
   fallbackChain: WorkerFallbackChain;
   exhaustedChats: Set<string>;
-  contextPreambles: Map<string, string>;
   db: BridgeDb;
   notify: (msg: string) => Promise<void> | void;
   onCliSwitched?: (newCli: CliKind) => Promise<void> | void;
@@ -247,7 +246,7 @@ export async function dispatchInteractiveWithFallback(
   deps: InteractiveDispatchDeps,
   tried = new Set<string>(),
 ): Promise<void> {
-  const { engines, fallbackChain, exhaustedChats, contextPreambles, db, notify, onCliSwitched } = deps;
+  const { engines, fallbackChain, exhaustedChats, db, notify, onCliSwitched } = deps;
 
   exhaustedChats.delete(chatKey);
 
@@ -272,8 +271,6 @@ export async function dispatchInteractiveWithFallback(
     }
     if (next) {
       fallbackChain.setActiveCli(chatKey, next);
-      contextPreambles.set(chatKey, fallbackChain.buildContextPreamble(chatKey));
-
       await notify(`Switching to ${next} (${activeCli} at capacity)`);
       if (onCliSwitched) {
         await onCliSwitched(next);

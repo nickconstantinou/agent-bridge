@@ -87,7 +87,6 @@ const cliChain = (process.env.INTERACTIVE_CLI_CHAIN || "codex,claude,antigravity
   .split(",").map((s) => s.trim()).filter(Boolean);
 const fallbackChain = new WorkerFallbackChain(cliChain, db);
 const exhaustedChats = new Set<string>();
-const contextPreambles = new Map<string, string>();
 const snowflakeAliases = new Map<string, string>();
 
 class DiscordEngineClient implements MessagingPlatform {
@@ -194,17 +193,6 @@ const engines = Object.fromEntries(
         hooks: {
           onCapacityExhausted: async (chatKey: string) => {
             exhaustedChats.add(chatKey);
-          },
-          onBeforeExecute: async (prompt: string, ctx: { chatKey: string }) => {
-            const preamble = contextPreambles.get(ctx.chatKey);
-            if (preamble) {
-              contextPreambles.delete(ctx.chatKey);
-              return preamble + prompt;
-            }
-            return prompt;
-          },
-          onAfterExecute: async (_prompt: string, resultText: string, ctx: { chatKey: string }) => {
-            fallbackChain.addTurn(ctx.chatKey, "assistant", resultText);
           },
         },
       },
@@ -314,8 +302,6 @@ async function handleMessage(d: any): Promise<void> {
   const chatId = rememberSnowflakeAlias(channelId);
   const userId = rememberSnowflakeAlias(authorId);
 
-  if (content) fallbackChain.addTurn(chatKey, "user", content);
-
   const update: TelegramUpdate = {
     update_id: numericId(d.id ?? "0"),
     message: {
@@ -330,7 +316,6 @@ async function handleMessage(d: any): Promise<void> {
     engines,
     fallbackChain,
     exhaustedChats,
-    contextPreambles,
     db,
     notify: async (msg) => {
       await client.sendMessage({ chat_id: channelId, text: msg });
@@ -358,8 +343,6 @@ async function handleInteraction(d: any): Promise<void> {
     const channelId = String(d.channel_id ?? "");
     setUserCliPreference(db, channelId, newCli);
     fallbackChain.setActiveCli(channelId, newCli);
-    const preamble = fallbackChain.buildContextPreamble(channelId);
-    if (preamble) contextPreambles.set(channelId, preamble);
 
     // UPDATE_MESSAGE (type 7) — edit the /cli message in-place
     await client.answerCallbackQuery({
@@ -389,8 +372,6 @@ async function handleInteraction(d: any): Promise<void> {
         if (newCli) {
           setUserCliPreference(db, channelId, newCli);
           fallbackChain.setActiveCli(channelId, newCli);
-          const preamble = fallbackChain.buildContextPreamble(channelId);
-          if (preamble) contextPreambles.set(channelId, preamble);
         }
       }
       const pref = getUserCliPreference(db, channelId);

@@ -642,6 +642,9 @@ describe("BridgeEngine", () => {
       expect(promptArg).toContain("User: hello");
       expect(promptArg).toContain("Assistant: Hello there! I am Claude.");
       expect(promptArg).toContain("help me");
+      // Regression: retry must not wrap the prompt in a second context block
+      const contextBlocks = promptArg.match(/\[Context from previous conversation\]/g) ?? [];
+      expect(contextBlocks).toHaveLength(1);
     });
     it("falls back to the next model in preference list and retries with context and null sessionId on capacity error", async () => {
       const { BridgeEngine } = await import("../src/engine.js");

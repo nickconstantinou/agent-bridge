@@ -1,10 +1,9 @@
 /**
- * Tests for WorkerFallbackChain — per-chat CLI fallback state + turn history.
+ * Tests for WorkerFallbackChain — per-chat CLI fallback state.
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { WorkerFallbackChain } from "../src/workerFallback.js";
-import { DEFAULT_CONTEXT_MAX_CHARS } from "../src/db.js";
 import { openDb, BridgeDb } from "../src/db.js";
 
 describe("WorkerFallbackChain", () => {
@@ -85,70 +84,6 @@ describe("WorkerFallbackChain", () => {
       c.advance("chat:1");
       c.resetToHead("chat:1");
       expect(c.getActiveCli("chat:1")).toBe("codex");
-    });
-  });
-
-  describe("addTurn + buildContextPreamble", () => {
-    it("returns empty string when no turns have been added", () => {
-      expect(chain.buildContextPreamble("chat:1")).toBe("");
-    });
-
-    it("includes user and assistant turns in the preamble", () => {
-      chain.addTurn("chat:1", "user", "What is TypeScript?");
-      chain.addTurn("chat:1", "assistant", "A typed superset of JavaScript.");
-      const preamble = chain.buildContextPreamble("chat:1");
-      expect(preamble).toContain("What is TypeScript?");
-      expect(preamble).toContain("A typed superset of JavaScript.");
-      expect(preamble).toContain("User:");
-      expect(preamble).toContain("Assistant:");
-    });
-
-    it("drops oldest turns when char budget is exceeded", () => {
-      // bigText chosen so that "User: <newest>" + "User: <bigText>" nearly fills the
-      // budget, leaving < 17 chars — not enough room for "User: oldest turn" (17 chars).
-      // Formula: budget(8000) - 17(newest line) - 6(prefix) - bigTextLen < 17
-      //          → bigTextLen > 7960; use 7970 for a clean margin.
-      const bigText = "x".repeat(DEFAULT_CONTEXT_MAX_CHARS - 30); // 7970 chars
-      chain.addTurn("chat:1", "user", "oldest turn");
-      chain.addTurn("chat:1", "user", bigText);
-      chain.addTurn("chat:1", "user", "newest turn");
-      const preamble = chain.buildContextPreamble("chat:1");
-      expect(preamble).toContain("newest turn");
-      expect(preamble).not.toContain("oldest turn");
-    });
-
-    it("preamble starts with a context header and ends with a separator", () => {
-      chain.addTurn("chat:1", "user", "Hello");
-      const preamble = chain.buildContextPreamble("chat:1");
-      expect(preamble).toContain("[Context from previous conversation]");
-      expect(preamble).toContain("[End context");
-    });
-
-    it("turns are isolated per chat key", () => {
-      chain.addTurn("chat:1", "user", "message for chat 1");
-      chain.addTurn("chat:2", "user", "message for chat 2");
-      expect(chain.buildContextPreamble("chat:1")).toContain("message for chat 1");
-      expect(chain.buildContextPreamble("chat:1")).not.toContain("message for chat 2");
-    });
-  });
-
-  describe("addTurn + buildContextPreamble (persistent)", () => {
-    it("returns empty string when no turns", () => {
-      expect(chain.buildContextPreamble("chat:1")).toBe("");
-    });
-
-    it("includes stored turns in preamble", () => {
-      chain.addTurn("chat:1", "user", "hello");
-      chain.addTurn("chat:1", "assistant", "hi there");
-      const preamble = chain.buildContextPreamble("chat:1");
-      expect(preamble).toContain("User: hello");
-      expect(preamble).toContain("Assistant: hi there");
-    });
-
-    it("turns survive across WorkerFallbackChain instances (persistence)", () => {
-      chain.addTurn("chat:1", "user", "remembered");
-      const chain2 = new WorkerFallbackChain(["codex", "claude"], db);
-      expect(chain2.buildContextPreamble("chat:1")).toContain("remembered");
     });
   });
 });

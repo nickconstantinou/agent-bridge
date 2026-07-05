@@ -504,7 +504,6 @@ describe("dispatchInteractiveWithFallback", () => {
   let antigravity: { handleUpdate: any; handleCount: number };
   let fallbackChain: WorkerFallbackChain;
   let exhaustedChats: Set<string>;
-  let contextPreambles: Map<string, string>;
   let sentMessages: string[];
   let onCliSwitchedCalls: CliKind[];
 
@@ -515,7 +514,6 @@ describe("dispatchInteractiveWithFallback", () => {
     antigravity = { handleCount: 0, handleUpdate: async () => { antigravity.handleCount++; } };
     fallbackChain = new WorkerFallbackChain(["codex", "claude", "antigravity"], db);
     exhaustedChats = new Set();
-    contextPreambles = new Map();
     sentMessages = [];
     onCliSwitchedCalls = [];
   });
@@ -524,7 +522,6 @@ describe("dispatchInteractiveWithFallback", () => {
     engines: { codex, claude, antigravity },
     fallbackChain,
     exhaustedChats,
-    contextPreambles,
     db,
     notify: (msg: string) => { sentMessages.push(msg); },
     onCliSwitched: async (newCli: CliKind) => { onCliSwitchedCalls.push(newCli); },
@@ -551,20 +548,6 @@ describe("dispatchInteractiveWithFallback", () => {
     expect(getUserCliPreference(db, "chat:1")).toBe("claude");
     expect(sentMessages).toContain("Switching to claude (codex at capacity)");
     expect(onCliSwitchedCalls).toContain("claude");
-  });
-
-  it("sets context preamble when falling back", async () => {
-    setUserCliPreference(db, "chat:1", "codex");
-    fallbackChain.addTurn("chat:1", "user", "previous question");
-    codex.handleUpdate = async () => {
-      codex.handleCount++;
-      exhaustedChats.add("chat:1");
-    };
-
-    await dispatchInteractiveWithFallback({ update_id: 1, message: { text: "hello", chat: { id: 1 } } } as any, "chat:1", deps());
-
-    expect(contextPreambles.has("chat:1")).toBe(true);
-    expect(contextPreambles.get("chat:1")).toContain("previous question");
   });
 
   it("auto-fallback promotes the successful fallback CLI into the stored DB preference", async () => {

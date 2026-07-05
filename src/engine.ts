@@ -860,8 +860,8 @@ export class BridgeEngine {
       if (sessionId && /No conversation found with session ID|thread not found|session not found|conversation not found/i.test((error as Error).message ?? "")) {
         console.warn(`[${this.kind}] session ID invalid, retrying with fresh session...`);
         if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
-        const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
-        return this.executePromptAsync(retryPrompt, null, chatId, body, onProgress, attachments, eventContext, runId, collect, chatKey);
+        // executePromptAsync injects conversation context itself — do not pre-wrap
+        return this.executePromptAsync(prompt, null, chatId, body, onProgress, attachments, eventContext, runId, collect, chatKey);
       }
       if (executionKind === "antigravity" && (isAntigravityPrintTimeoutError(error as Error) || isRecoverableAntigravityExecutionError(error as Error))) {
         return this._retryAntigravityFreshSession(prompt, chatId, chatKey, outDir, onProgress, attachments, "async", eventContext, runId, collect, body.message_thread_id);
@@ -983,8 +983,8 @@ export class BridgeEngine {
       if (sessionId && /No conversation found with session ID|thread not found|session not found|conversation not found/i.test((error as Error).message ?? "")) {
         console.warn(`[${this.kind}] session ID invalid, retrying with fresh session...`);
         if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
-        const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
-        return this.executePrompt(retryPrompt, null, chatId, body, attachments, eventContext, runId, collect, chatKey);
+        // executePrompt injects conversation context itself — do not pre-wrap
+        return this.executePrompt(prompt, null, chatId, body, attachments, eventContext, runId, collect, chatKey);
       }
       if (executionKind === "antigravity" && (isAntigravityPrintTimeoutError(error as Error) || isRecoverableAntigravityExecutionError(error as Error))) {
         return this._retryAntigravityFreshSession(prompt, chatId, chatKey, outDir, () => {}, attachments, "sync", eventContext, runId, collect, body.message_thread_id);

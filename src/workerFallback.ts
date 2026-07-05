@@ -1,13 +1,12 @@
 /**
  * PURPOSE: Per-chat CLI fallback chain for the worker bot.
- * Tracks which CLI is active for each chat and the last N message turns.
- * When a CLI is exhausted, advance() moves to the next CLI in the chain and
- * buildContextPreamble() returns the recent turns as inline context.
+ * Tracks which CLI is active for each chat. When a CLI is exhausted,
+ * advance() moves to the next CLI in the chain. Conversation turns and
+ * context injection are owned by BridgeEngine (single recorder/injector).
  * NEIGHBORS: src/index-worker.ts, src/engine.ts
  */
 
 import type { BridgeDb } from "./db.js";
-import { DEFAULT_CONTEXT_MAX_CHARS } from "./db.js";
 
 export class WorkerFallbackChain {
   private readonly chain: string[];
@@ -50,13 +49,5 @@ export class WorkerFallbackChain {
 
   resetToHead(chatKey: string): void {
     this.chatActiveIdx.delete(chatKey);
-  }
-
-  addTurn(chatKey: string, role: "user" | "assistant", text: string): void {
-    this.db.addConvTurn(chatKey, role, text);
-  }
-
-  buildContextPreamble(chatKey: string): string {
-    return this.db.buildConvContext(chatKey, parseInt(process.env.BRIDGE_CONTEXT_MAX_CHARS ?? "") || DEFAULT_CONTEXT_MAX_CHARS);
   }
 }

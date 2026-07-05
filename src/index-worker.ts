@@ -92,8 +92,6 @@ function withThread<T extends Record<string, unknown>>(body: T, threadId?: numbe
 
 const fallbackChain = new WorkerFallbackChain(cliChain, db);
 const exhaustedChats = new Set<string>();
-// contextPreambles: set by dispatchWithFallback before retry; consumed + deleted by onBeforeExecute
-const contextPreambles = new Map<string, string>();
 
 // ── Bridge config ─────────────────────────────────────────────────────────────
 
@@ -128,17 +126,6 @@ const engines = Object.fromEntries(
           hooks: {
             onCapacityExhausted: async (chatKey: string) => {
               exhaustedChats.add(chatKey);
-            },
-            onBeforeExecute: async (prompt: string, ctx: { chatKey: string }) => {
-              const preamble = contextPreambles.get(ctx.chatKey);
-              if (preamble) {
-                contextPreambles.delete(ctx.chatKey);
-                return preamble + prompt;
-              }
-              return prompt;
-            },
-            onAfterExecute: async (prompt: string, resultText: string, ctx: { chatKey: string }) => {
-              fallbackChain.addTurn(ctx.chatKey, "assistant", resultText);
             },
           },
         },
@@ -482,14 +469,11 @@ for (;;) {
           continue;
         }
 
-        // Plain message — record user turn, route to preferred CLI with interactive fallback
-        fallbackChain.addTurn(chatKey, "user", rawText);
-
+        // Plain message — route to preferred CLI with interactive fallback
         await dispatchInteractiveWithFallback(update as TelegramUpdate, chatKey, {
           engines,
           fallbackChain,
           exhaustedChats,
-          contextPreambles,
           db,
           notify: async (msg: string) => {
             await sendTelegramMessage({ client, kind: "worker-bot", chatId, body: withThread({ text: msg }, threadId) });

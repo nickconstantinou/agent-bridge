@@ -43,7 +43,6 @@ describe("dispatchWithFallback", () => {
   let antigravity: MockEngine;
   let fallbackChain: WorkerFallbackChain;
   let exhaustedChats: Set<string>;
-  let contextPreambles: Map<string, string>;
   let sentMessages: string[];
 
   beforeEach(() => {
@@ -53,7 +52,6 @@ describe("dispatchWithFallback", () => {
     antigravity = makeMockEngine("antigravity");
     fallbackChain = new WorkerFallbackChain(["codex", "claude", "antigravity"], db);
     exhaustedChats = new Set();
-    contextPreambles = new Map();
     sentMessages = [];
   });
 
@@ -61,7 +59,6 @@ describe("dispatchWithFallback", () => {
     engines: { codex, claude, antigravity },
     fallbackChain,
     exhaustedChats,
-    contextPreambles,
     notify: (msg: string) => { sentMessages.push(msg); },
   });
 
@@ -100,27 +97,6 @@ describe("dispatchWithFallback", () => {
 
     await dispatchWithFallback({ message: "hello" }, "chat:1", deps());
     expect(sentMessages.some(m => m.toLowerCase().includes("claude"))).toBe(true);
-  });
-
-  it("sets context preamble before the fallback engine handles the update", async () => {
-    fallbackChain.addTurn("chat:1", "user", "prior user message");
-    fallbackChain.addTurn("chat:1", "assistant", "prior assistant response");
-    codex.handleUpdate = async () => {
-      codex.handleCount++;
-      exhaustedChats.add("chat:1");
-    };
-
-    const capturedPreambles: string[] = [];
-    claude.handleUpdate = async () => {
-      claude.handleCount++;
-      if (contextPreambles.has("chat:1")) {
-        capturedPreambles.push(contextPreambles.get("chat:1")!);
-      }
-    };
-
-    await dispatchWithFallback({ message: "new question" }, "chat:1", deps());
-    expect(capturedPreambles.length).toBeGreaterThanOrEqual(1);
-    expect(capturedPreambles[0]).toContain("prior user message");
   });
 
   it("reports all-exhausted when the entire chain is at capacity", async () => {

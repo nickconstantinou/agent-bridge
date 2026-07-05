@@ -109,7 +109,6 @@ const cliChain = (process.env.INTERACTIVE_CLI_CHAIN || process.env.WORKER_CLI_CH
   .split(",").map(s => s.trim()).filter(Boolean);
 const fallbackChain = new WorkerFallbackChain(cliChain, db);
 const exhaustedChats = new Set<string>();
-const contextPreambles = new Map<string, string>();
 
 // Build one engine per CLI kind — none polls; we dispatch handleUpdate manually.
 const CLI_KINDS: CliKind[] = ["codex", "claude", "antigravity", "kimchi"];
@@ -131,17 +130,6 @@ const engines = Object.fromEntries(
           hooks: {
             onCapacityExhausted: async (chatKey: string) => {
               exhaustedChats.add(chatKey);
-            },
-            onBeforeExecute: async (prompt: string, ctx: { chatKey: string }) => {
-              const preamble = contextPreambles.get(ctx.chatKey);
-              if (preamble) {
-                contextPreambles.delete(ctx.chatKey);
-                return preamble + prompt;
-              }
-              return prompt;
-            },
-            onAfterExecute: async (prompt: string, resultText: string, ctx: { chatKey: string }) => {
-              fallbackChain.addTurn(ctx.chatKey, "assistant", resultText);
             },
           },
         },
@@ -248,8 +236,6 @@ for (;;) {
             if (chatKey) {
               setUserCliPreference(db, chatKey, newCli);
               fallbackChain.setActiveCli(chatKey, newCli);
-              const preamble = fallbackChain.buildContextPreamble(chatKey);
-              if (preamble) contextPreambles.set(chatKey, preamble);
             }
             await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `Switched to ${newCli}` });
             if (chatId && messageId) {
@@ -273,10 +259,6 @@ for (;;) {
         // Route to the user's preferred engine with fallback support
         const chatKey = resolveUpdateChatKey(typedUpdate);
         if (chatKey) {
-          const messageText = typedUpdate.message?.text?.trim() || "";
-          if (messageText) {
-            fallbackChain.addTurn(chatKey, "user", messageText);
-          }
           const chatId = typedUpdate.message?.chat?.id ?? typedUpdate.callback_query?.message?.chat?.id;
           const threadId = resolveMessageThreadId(typedUpdate);
           if (chatId != null) {
@@ -284,7 +266,6 @@ for (;;) {
               engines,
               fallbackChain,
               exhaustedChats,
-              contextPreambles,
               db,
               notify: async (msg) => {
                 await sendTelegramMessage({ client, kind: "interactive", chatId, body: { text: msg, message_thread_id: threadId } });

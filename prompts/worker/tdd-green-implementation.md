@@ -19,6 +19,11 @@ Instructions:
 - Stage only production/runtime files.
 - Do not create a commit.
 
+Architectural acceptance criteria:
+- The production path must use the intended abstraction or boundary, not merely add unused classes or helpers.
+- Test-only imports, hooks, and environment cleanup must not be added to production source.
+- If this is refactor work, verify the before/after ownership boundary changed in production code.
+
 Stop and report `NEEDS_HUMAN_REVIEW` if the required change exceeds the approved contract, changes test expectations, or crosses a risky boundary.
 
 Report:

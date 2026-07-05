@@ -36,8 +36,10 @@ describe("interactive CLI availability filtering", () => {
     });
 
     expect(available).toEqual(new Set<CliKind>());
-    expect(getSelectableCliKinds(available)).toEqual(["kimchi"]);
-    expect(resolveAvailableCliPreference("codex", available)).toBe("kimchi");
+    expect(getSelectableCliKinds(available)).toEqual([]);
+    expect(resolveAvailableCliPreference("codex", available)).toBeNull();
+    expect(buildCliKeyboard("codex", available).inline_keyboard).toEqual([]);
+    expect(buildCliStatusText("codex", available)).toContain("Available: none");
   });
 
   it("detects kimchi when the executable/runtime check passes", () => {

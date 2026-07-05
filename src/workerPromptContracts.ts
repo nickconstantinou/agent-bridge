@@ -71,6 +71,14 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(item => typeof item === "string");
 }
 
+function getStringArray(candidate: Record<string, unknown>, field: typeof REQUIRED_STRING_ARRAY_FIELDS[number]): string[] {
+  return candidate[field] as string[];
+}
+
+function getString(candidate: Record<string, unknown>, field: typeof REQUIRED_STRING_FIELDS[number]): string {
+  return candidate[field] as string;
+}
+
 function validateContract(value: unknown): ExecutionContractResult {
   if (typeof value !== "object" || value == null || Array.isArray(value)) {
     return { ok: false, error: "Execution contract JSON must be an object" };
@@ -96,16 +104,16 @@ function validateContract(value: unknown): ExecutionContractResult {
   return {
     ok: true,
     contract: {
-      target_files: candidate.target_files,
-      test_files: candidate.test_files,
-      phase_order: candidate.phase_order,
-      red_test_command: candidate.red_test_command,
-      verification_command: candidate.verification_command,
-      risk_level: candidate.risk_level,
+      target_files: getStringArray(candidate, "target_files"),
+      test_files: getStringArray(candidate, "test_files"),
+      phase_order: getStringArray(candidate, "phase_order"),
+      red_test_command: getString(candidate, "red_test_command"),
+      verification_command: getString(candidate, "verification_command"),
+      risk_level: getString(candidate, "risk_level"),
       human_decision_required: candidate.human_decision_required,
-      out_of_scope: candidate.out_of_scope,
-      notes_for_red_pass: candidate.notes_for_red_pass,
-      notes_for_green_pass: candidate.notes_for_green_pass,
+      out_of_scope: getStringArray(candidate, "out_of_scope"),
+      notes_for_red_pass: getString(candidate, "notes_for_red_pass"),
+      notes_for_green_pass: getString(candidate, "notes_for_green_pass"),
     },
   };
 }

@@ -7,10 +7,11 @@
  */
 
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
-import { buildExecutionPromptContext } from "../workerPromptContracts.js";
+import { buildExecutionPromptContext, extractExecutionContract } from "../workerPromptContracts.js";
+import type { WorkerExecutionContract } from "../workerPromptContracts.js";
 import { createWorkerPromptFileReader } from "../workerPromptFileReader.js";
 import { getExecutionContractFromMetadata } from "../workerPromptPlanMetadata.js";
-import { loadWorkerPrompt } from "../workerPrompts.js";
+import { loadWorkerPrompt, truncateWorkerPromptValue } from "../workerPrompts.js";
 import type { WorkerPromptKey } from "../workerPrompts.js";
 
 type RunCli = (command: string, args: string[], cwd?: string) => Promise<string>;
@@ -50,21 +51,48 @@ export function isTestPath(path: string): boolean {
   );
 }
 
-function getPlanContext(ctx: JobHandlerContext, workItemId: number, phase: "red" | "green" | "ci_fix" | "repair", failureOutput = "") {
-  const plan = ctx.db.getWorkItemPlan(workItemId);
-  if (!plan?.plan_text?.trim()) throw new Error(`Work item ${workItemId} is missing an implementation plan`);
+function buildFallbackExecutionContract(title: string): WorkerExecutionContract {
+  return {
+    target_files: [],
+    test_files: [],
+    phase_order: ["red-test", "green-implementation", "verification"],
+    red_test_command: "npm test",
+    verification_command: "npm test",
+    risk_level: "medium",
+    human_decision_required: false,
+    out_of_scope: ["unrelated cleanup", "unapproved scope expansion"],
+    notes_for_red_pass: `Write failing tests only for: ${title}`,
+    notes_for_green_pass: `Implement the smallest production change for: ${title}`,
+  };
+}
 
-  const executionContract = getExecutionContractFromMetadata(plan.quality_json);
-  if (!executionContract) {
-    throw new Error(`Work item ${workItemId} is missing or invalid execution_contract metadata`);
+function getPlanContext(
+  ctx: JobHandlerContext,
+  item: { id: number; title: string; body: string | null },
+  phase: "red" | "green" | "ci_fix" | "repair",
+  failureOutput = "",
+) {
+  const plan = ctx.db.getWorkItemPlan(item.id);
+  const planText = plan?.plan_text?.trim() || item.body?.trim() || item.title;
+
+  let executionContract = plan ? getExecutionContractFromMetadata(plan.quality_json) : null;
+  if (!executionContract && planText) {
+    const extracted = extractExecutionContract(planText);
+    if (extracted.ok) executionContract = extracted.contract;
   }
+  executionContract ??= buildFallbackExecutionContract(item.title);
 
-  return buildExecutionPromptContext({
-    planText: plan.plan_text,
+  const context = buildExecutionPromptContext({
+    planText,
     executionContract,
     phase,
     failureOutput,
   });
+
+  return {
+    ...context,
+    plan_text: truncateWorkerPromptValue([context.plan_text, planText].filter(Boolean).join("\n\n"), 2_400),
+  };
 }
 
 async function loadTddPrompt(
@@ -135,7 +163,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
         });
         const ciSummary = typeof input.ci_failure_summary === "string" ? input.ci_failure_summary : "";
         const ciLog = typeof input.ci_failure_log === "string" ? input.ci_failure_log : "";
-        const promptContext = getPlanContext(ctx, workItemId, "ci_fix", `${ciSummary}\n${ciLog}`);
+        const promptContext = getPlanContext(ctx, item, "ci_fix", `${ciSummary}\n${ciLog}`);
         const ciPrompt = await loadTddPrompt(ctx, "tdd_implementation:ci_fix", {
           title: item.title,
           execution_contract: promptContext.execution_contract,
@@ -181,7 +209,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
           await Promise.resolve(runGit(["checkout", "-b", branchName], repoPath));
         });
         const priorError = typeof input.repair_context === "string" ? input.repair_context : "";
-        const promptContext = getPlanContext(ctx, workItemId, "repair", priorError);
+        const promptContext = getPlanContext(ctx, item, "repair", priorError);
         const repairPrompt = await loadTddPrompt(ctx, "tdd_implementation:repair", {
           title: item.title,
           execution_contract: promptContext.execution_contract,
@@ -227,7 +255,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
         await runGit(["checkout", "-b", branchName], repoPath);
       }
 
-      const redContext = getPlanContext(ctx, workItemId, "red");
+      const redContext = getPlanContext(ctx, item, "red");
       const redPrompt = await loadTddPrompt(ctx, "tdd_implementation:red_test", {
         work_item_id: workItemId,
         title: item.title,
@@ -256,7 +284,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
         repoPath,
       );
 
-      const greenContext = getPlanContext(ctx, workItemId, "green");
+      const greenContext = getPlanContext(ctx, item, "green");
       const greenPrompt = await loadTddPrompt(ctx, "tdd_implementation:green_implementation", {
         work_item_id: workItemId,
         title: item.title,

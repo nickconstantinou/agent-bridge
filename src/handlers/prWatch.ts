@@ -15,6 +15,14 @@ import { closeLinkedIssueForMergedPr } from "../githubIssueClosure.js";
 
 type RunCommand = (binary: string, args: string[]) => Promise<string>;
 
+type RollupCheck = {
+  __typename: string;
+  conclusion?: string | null;
+  state?: string | null;
+  name: string;
+  detailsUrl?: string;
+};
+
 interface PrWatchDeps {
   runCommand: RunCommand;
   /** Hours without activity before a PR is considered stale (default 72). */
@@ -25,22 +33,29 @@ interface PrWatchDeps {
 
 interface GhPrView {
   headRefOid: string;
-  statusCheckRollup: Array<{ __typename: string; conclusion: string; name: string; detailsUrl?: string }>;
+  statusCheckRollup: RollupCheck[];
   mergeable: string;
   updatedAt: string;
   state: string;
 }
 
+const FAILING_ROLLUP_STATES = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ERROR", "ACTION_REQUIRED"]);
+const PASSING_ROLLUP_STATES = new Set(["SUCCESS"]);
+
+function rollupState(check: RollupCheck): string {
+  return String(check.conclusion ?? check.state ?? "").toUpperCase();
+}
+
 function isRollupFailing(rollup: GhPrView["statusCheckRollup"]): boolean {
-  return rollup.some(c => c.conclusion === "FAILURE" || c.conclusion === "TIMED_OUT");
+  return rollup.some(c => FAILING_ROLLUP_STATES.has(rollupState(c)));
 }
 
 function isRollupPassing(rollup: GhPrView["statusCheckRollup"]): boolean {
-  return rollup.length > 0 && rollup.every(c => c.conclusion === "SUCCESS");
+  return rollup.length > 0 && rollup.every(c => PASSING_ROLLUP_STATES.has(rollupState(c)));
 }
 
 function failedChecks(rollup: GhPrView["statusCheckRollup"]): GhPrView["statusCheckRollup"] {
-  return rollup.filter(c => c.conclusion === "FAILURE" || c.conclusion === "TIMED_OUT");
+  return rollup.filter(c => FAILING_ROLLUP_STATES.has(rollupState(c)));
 }
 
 function extractActionsRunId(detailsUrl: string | undefined): string | null {
@@ -165,7 +180,7 @@ export function createPrWatchHandler(deps: PrWatchDeps): JobHandler {
 
         ctx.db.updatePrState(link.id, "ci_failed");
         const failures = failedChecks(statusCheckRollup);
-        const ciFailureSummary = failures.map(c => `${c.name}: ${c.conclusion}`).join("\n");
+        const ciFailureSummary = failures.map(c => `${c.name}: ${rollupState(c)}`).join("\n");
         const ciFailureLog = await collectFailureLog(runCommand, link.repository, statusCheckRollup);
         const fixJob = ctx.db.createWorkJob({
           task_type: "tdd_implementation",

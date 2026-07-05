@@ -177,7 +177,7 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
 
       ctx.db.updateWorkItemStatus(workItemId, "blocked");
       const summary = `Existing PR refreshed with latest head (${headSha.slice(0, 7)}): ${existingPrUrl}\n\nCI watch queued; merge approval will be created after GitHub checks pass.`;
-      return { summary, prUrl: existingPrUrl };
+      return { summary, prUrl: existingPrUrl, work_item_id: workItemId, work_item_ids: [workItemId] };
     }
 
     // ── PR caps — only applies to new PR creation ────────────────────────────
@@ -296,6 +296,6 @@ export function createPrLifecycleHandler(deps: PrLifecycleDeps): JobHandler {
     ctx.db.updateWorkItemStatus(workItemId, "blocked");
 
     const summary = `Draft PR opened: ${prUrl}\n\nCI watch queued; merge approval will be created after GitHub checks pass.`;
-    return { summary, prUrl };
+    return { summary, prUrl, work_item_id: workItemId, work_item_ids: [workItemId] };
   };
 }

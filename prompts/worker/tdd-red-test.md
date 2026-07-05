@@ -1,5 +1,7 @@
 You are preparing the test-only pass for work item {work_item_id}.
 
+This is the red test / failing test pass. Do not implement production code.
+
 Work item title:
 {title}
 
@@ -13,7 +15,7 @@ Instructions:
 - Use the execution contract as the primary source of scope.
 - Edit test files only.
 - Leave application/runtime files unchanged.
-- Add the smallest test or characterization coverage required by the approved contract.
+- Add the smallest failing test or characterization coverage required by the approved contract.
 - For features and defects, the new coverage should fail for the expected reason before implementation.
 - For pure refactors, preserve behavior with characterization coverage or existing tests as described in the contract.
 - Run only the narrow verification command first.

@@ -61,7 +61,7 @@ function buildFallbackExecutionContract(title: string): WorkerExecutionContract 
     risk_level: "medium",
     human_decision_required: false,
     out_of_scope: ["unrelated cleanup", "unapproved scope expansion"],
-    notes_for_red_pass: `Write failing tests only for: ${title}`,
+    notes_for_red_pass: `Add required regression coverage for: ${title}`,
     notes_for_green_pass: `Implement the smallest production change for: ${title}`,
   };
 }

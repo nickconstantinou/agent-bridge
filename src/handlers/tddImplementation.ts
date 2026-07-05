@@ -7,11 +7,16 @@
  */
 
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
+import { buildExecutionPromptContext } from "../workerPromptContracts.js";
+import { createWorkerPromptFileReader } from "../workerPromptFileReader.js";
+import { getExecutionContractFromMetadata } from "../workerPromptPlanMetadata.js";
+import { loadWorkerPrompt } from "../workerPrompts.js";
+import type { WorkerPromptKey } from "../workerPrompts.js";
 
 type RunCli = (command: string, args: string[], cwd?: string) => Promise<string>;
 type RunGit = (args: string[], cwd: string) => string | Promise<string>;
 type RunTests = (cwd: string) => { ok: boolean; output: string } | Promise<{ ok: boolean; output: string }>;
-const TEST_ONLY_SOURCE_PATTERN = "from ['\\\"]vitest|import\\(['\\\"]vitest|VITEST_WORKER_ID|delete process\\.env\\.WORKER_DEFAULT_REPO";
+const TEST_ONLY_SOURCE_PATTERN = "from ['\"]vitest|import\\(['\"]vitest|VITEST_WORKER_ID|delete process\\.env\\.WORKER_DEFAULT_REPO";
 
 interface TddImplementationDeps {
   runCli: RunCli;
@@ -25,6 +30,8 @@ interface TddImplementationDeps {
   /** Remove a workspace directory (no-op outside the workspace base). */
   cleanupWorkspace?: (dir: string) => void;
 }
+
+const promptReader = createWorkerPromptFileReader();
 
 function notifyFields(input: JobHandlerInput): Record<string, number> {
   return {
@@ -43,85 +50,31 @@ export function isTestPath(path: string): boolean {
   );
 }
 
-function buildRedTestPrompt(title: string, body: string | null): string {
-  return `You are implementing a fix using strict TDD. The work item is:
+function getPlanContext(ctx: JobHandlerContext, workItemId: number, phase: "red" | "green" | "ci_fix" | "repair", failureOutput = "") {
+  const plan = ctx.db.getWorkItemPlan(workItemId);
+  if (!plan?.plan_text?.trim()) throw new Error(`Work item ${workItemId} is missing an implementation plan`);
 
-Title: ${title}
-${body ? `Details: ${body}\n` : ""}
-**Step 1 of 2 — Write failing tests only.**
+  const executionContract = getExecutionContractFromMetadata(plan.quality_json);
+  if (!executionContract) {
+    throw new Error(`Work item ${workItemId} is missing or invalid execution_contract metadata`);
+  }
 
-Your task:
-1. Understand the issue from the title and details.
-2. Write focused failing tests that describe the desired behaviour.
-3. Run the tests and confirm they fail (red state).
-4. Do NOT implement the fix yet — only the tests.
-5. Stage all new/modified test files with: git add <test files>
-
-Do not modify production code. Do not commit — just stage the test files.`;
+  return buildExecutionPromptContext({
+    planText: plan.plan_text,
+    executionContract,
+    phase,
+    failureOutput,
+  });
 }
 
-function buildGreenImplementationPrompt(title: string, body: string | null): string {
-  return `You are implementing a fix using strict TDD. The work item is:
-
-Title: ${title}
-${body ? `Details: ${body}\n` : ""}
-**Step 2 of 2 — Implement the smallest change to make the tests pass.**
-
-The failing tests have already been committed. Your task:
-1. Read the committed test files to understand what must pass.
-2. Implement the minimal production code change to make those tests green.
-3. Run the full test suite and confirm it passes.
-4. Confirm the implementation satisfies the architectural intent in the work item, not just the test assertions.
-5. For architecture/refactor work, ensure the production path uses the new boundary/abstraction and include a before/after ownership check in your reasoning.
-6. Stage all modified production files with: git add <files>
-
-Architectural acceptance criteria:
-- The production path must use the intended abstraction/boundary, not merely add unused classes or helpers.
-- Test-only imports, test environment cleanup, or Vitest hooks must not be added to production source under src/.
-- If the request is a refactor, verify the before/after ownership changed in the production code.
-
-Do not modify test files. Do not commit — just stage the production files.`;
-}
-
-function buildCiFixPrompt(title: string, body: string | null, ciSummary: string, ciLog: string): string {
-  return `You are repairing a failing CI check on an existing agent PR branch.
-
-Title: ${title}
-${body ? `Details: ${body}\n` : ""}
-CI failure summary:
-${ciSummary || "(no summary provided)"}
-
-Failed CI log excerpt:
-${ciLog || "(no log provided)"}
-
-Your task:
-1. Diagnose the failing CI check from the log.
-2. Make the smallest code or test update required to make CI pass.
-3. Preserve architectural intent: production code must use intended abstractions, and test-only hooks/imports must stay out of src/.
-4. Run the relevant tests locally, then the full verification command if practical.
-5. Stage all modified files with: git add <files>
-
-Do not open or merge a PR. Do not commit — just stage the fix.`;
-}
-
-function buildRepairPrompt(title: string, body: string | null, priorError: string): string {
-  return `You are repairing a failed autonomous TDD implementation attempt.
-
-Title: ${title}
-${body ? `Details: ${body}\n` : ""}
-Previous failure:
-${priorError || "(no failure context provided)"}
-
-Your task:
-1. Diagnose the prior failure before changing files.
-2. Reuse the existing worktree state if present.
-3. Make the smallest correction needed so verification passes.
-4. Preserve architectural intent: production paths must use intended abstractions, not just satisfy narrow tests.
-5. Keep test-only imports/env cleanup out of src/.
-6. Run the relevant focused test first, then the full suite if practical.
-7. Stage all modified files with: git add <files>
-
-Do not open or merge a PR. Do not commit — just stage the repair.`;
+async function loadTddPrompt(
+  ctx: JobHandlerContext,
+  key: WorkerPromptKey,
+  variables: Record<string, unknown>,
+): Promise<string> {
+  return loadWorkerPrompt(key, variables, promptReader, {
+    dbTemplate: ctx.db.getPrompt(key, ""),
+  });
 }
 
 async function assertNoTestOnlyCodeInProduction(runGit: RunGit, repoPath: string): Promise<void> {
@@ -148,11 +101,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
 
     const item = ctx.db.getWorkItem(workItemId);
     if (!item) throw new Error(`Work item ${workItemId} not found`);
-    const planText = ctx.db.getWorkItemPlan(workItemId)?.plan_text?.trim();
-    const workContext = planText || item.body;
 
-    // Resolve the working directory: explicit path, or a disposable workspace
-    // cloned from the local checkout. Never default to the worker's own cwd.
     let repoPath: string;
     let workspaceDir: string | null = null;
     if (typeof input.repository_path === "string") {
@@ -173,13 +122,11 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
         .split("\n").map(l => l.trim()).filter(Boolean);
 
     try {
-      // Pre-flight: repo must be clean
       const status = await runGit(["status", "--porcelain"], repoPath);
       if (status.trim()) {
         throw new Error(`Repository has uncommitted changes (dirty working tree):\n${status}`);
       }
 
-      // Create isolated agent branch
       const branchName = `agent/work-${workItemId}`;
       if (input.ci_fix) {
         await Promise.resolve(runGit(["fetch", "origin", branchName], repoPath)).catch(() => {});
@@ -188,15 +135,13 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
         });
         const ciSummary = typeof input.ci_failure_summary === "string" ? input.ci_failure_summary : "";
         const ciLog = typeof input.ci_failure_log === "string" ? input.ci_failure_log : "";
-        const fallbackCiPrompt = buildCiFixPrompt(item.title, workContext, ciSummary, ciLog);
-        const dbCiTemplate = ctx.db.getPrompt("tdd_implementation:ci_fix", "");
-        const ciPrompt = dbCiTemplate
-          ? dbCiTemplate
-              .replace(/{title}/g, item.title)
-              .replace(/{body}/g, workContext ?? "")
-              .replace(/{ciSummary}/g, ciSummary)
-              .replace(/{ciLog}/g, ciLog)
-          : fallbackCiPrompt;
+        const promptContext = getPlanContext(ctx, workItemId, "ci_fix", `${ciSummary}\n${ciLog}`);
+        const ciPrompt = await loadTddPrompt(ctx, "tdd_implementation:ci_fix", {
+          title: item.title,
+          execution_contract: promptContext.execution_contract,
+          plan_text: promptContext.plan_text,
+          failure_output: promptContext.failure_output,
+        });
         await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, ciPrompt], repoPath);
 
         await runGit(["add", "-A"], repoPath);
@@ -232,19 +177,17 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
         const summary = `CI fix pushed on **${branchName}** (${headSha.slice(0, 7)}); PR watch queued.`;
         return { summary, branchName, verifyOutput: verifyRun.output, headSha };
       } else if (input.repair_of_job_id || input.repair_context) {
-        const branchName = `agent/work-${workItemId}`;
         await Promise.resolve(runGit(["checkout", branchName], repoPath)).catch(async () => {
           await Promise.resolve(runGit(["checkout", "-b", branchName], repoPath));
         });
         const priorError = typeof input.repair_context === "string" ? input.repair_context : "";
-        const fallbackRepairPrompt = buildRepairPrompt(item.title, workContext, priorError);
-        const dbRepairTemplate = ctx.db.getPrompt("tdd_implementation:repair", "");
-        const repairPrompt = dbRepairTemplate
-          ? dbRepairTemplate
-              .replace(/{title}/g, item.title)
-              .replace(/{body}/g, workContext ?? "")
-              .replace(/{priorError}/g, priorError)
-          : fallbackRepairPrompt;
+        const promptContext = getPlanContext(ctx, workItemId, "repair", priorError);
+        const repairPrompt = await loadTddPrompt(ctx, "tdd_implementation:repair", {
+          title: item.title,
+          execution_contract: promptContext.execution_contract,
+          plan_text: promptContext.plan_text,
+          failure_output: promptContext.failure_output,
+        });
         await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, repairPrompt], repoPath);
 
         await runGit(["add", "-A"], repoPath);
@@ -284,14 +227,13 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
         await runGit(["checkout", "-b", branchName], repoPath);
       }
 
-      // ── Red: write failing tests ────────────────────────────────────────────
-      const fallbackRedPrompt = buildRedTestPrompt(item.title, workContext);
-      const dbRedTemplate = ctx.db.getPrompt("tdd_implementation:red_test", "");
-      const redPrompt = dbRedTemplate
-        ? dbRedTemplate
-            .replace(/{title}/g, item.title)
-            .replace(/{body}/g, workContext ?? "")
-        : fallbackRedPrompt;
+      const redContext = getPlanContext(ctx, workItemId, "red");
+      const redPrompt = await loadTddPrompt(ctx, "tdd_implementation:red_test", {
+        work_item_id: workItemId,
+        title: item.title,
+        execution_contract: redContext.execution_contract,
+        plan_text: redContext.plan_text,
+      });
       await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, redPrompt], repoPath);
 
       await runGit(["add", "-A"], repoPath);
@@ -314,14 +256,13 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
         repoPath,
       );
 
-      // ── Green: implement the fix ────────────────────────────────────────────
-      const fallbackGreenPrompt = buildGreenImplementationPrompt(item.title, workContext);
-      const dbGreenTemplate = ctx.db.getPrompt("tdd_implementation:green_implementation", "");
-      const greenPrompt = dbGreenTemplate
-        ? dbGreenTemplate
-            .replace(/{title}/g, item.title)
-            .replace(/{body}/g, workContext ?? "")
-        : fallbackGreenPrompt;
+      const greenContext = getPlanContext(ctx, workItemId, "green");
+      const greenPrompt = await loadTddPrompt(ctx, "tdd_implementation:green_implementation", {
+        work_item_id: workItemId,
+        title: item.title,
+        execution_contract: greenContext.execution_contract,
+        plan_text: greenContext.plan_text,
+      });
       await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, greenPrompt], repoPath);
 
       await runGit(["add", "-A"], repoPath);
@@ -344,7 +285,6 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
 
       ctx.db.updateWorkItemStatus(workItemId, "in_progress");
 
-      // Queue PR lifecycle job if item is linked to a repository
       if (item.repository) {
         ctx.db.createWorkJob({
           task_type: "pr_lifecycle",
@@ -364,7 +304,6 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
       const summary = `TDD implementation complete on **${branchName}**`;
       return { summary, branchName, verifyOutput: greenRun.output };
     } catch (err) {
-      // Preserve failed workspaces for repair jobs; cleanup happens after PR merge/close.
       throw err;
     }
   };

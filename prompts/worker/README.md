@@ -4,6 +4,8 @@ This directory contains the version-controlled default prompts for the Agent Bri
 
 This is a scaffold only. The current worker handlers still use their existing inline prompts and DB override paths until the follow-up wiring work is completed.
 
+For the exact handler-by-handler wiring contract, see [`WIRING.md`](./WIRING.md).
+
 ## Boundary
 
 Prompts may guide CLI behavior, but they are not the source of truth for safety. These invariants must remain mechanically enforced in code:

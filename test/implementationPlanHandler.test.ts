@@ -19,6 +19,23 @@ Add failing test in test/workerBot.test.ts for imported issues.
 1. Red: add failing test.
 2. Green: implement smallest route fix.
 
+## Execution Contract
+
+\`\`\`json
+{
+  "target_files": ["src/workerBot.ts"],
+  "test_files": ["test/workerBot.test.ts"],
+  "phase_order": ["red-test", "green-implementation", "verification"],
+  "red_test_command": "npm test -- workerBot",
+  "verification_command": "npm test && npm run typecheck",
+  "risk_level": "medium",
+  "human_decision_required": false,
+  "out_of_scope": ["unrelated cleanup"],
+  "notes_for_red_pass": "Add failing coverage for imported GitHub issues.",
+  "notes_for_green_pass": "Implement the smallest production route fix."
+}
+\`\`\`
+
 ## Acceptance Criteria
 - Imported issue creates one work item.
 - Approval is blocked until plan exists.

@@ -16,11 +16,10 @@ import {
 import { TelegramClient } from "./telegram.js";
 import { BridgeEngine } from "./engine.js";
 import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
-import { resolveTimeoutsForKind } from "./timeouts.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
-import { isAuthorizedMessage, extractPromptText } from "./bridge.js";
 import { loadBotsConfig, resolveExecutionMode } from "./config.js";
 import { WorkerFallbackChain } from "./workerFallback.js";
+import { getAvailableCliKinds } from "./interactiveCliAuth.js";
 import {
   getUserCliPreference,
   setUserCliPreference,
@@ -36,6 +35,7 @@ import {
   describeInteractiveUpdateForLog,
   isGroupInteractiveUpdate,
   dispatchInteractiveWithFallback,
+  resolveAvailableCliPreference,
   type CliKind,
 } from "./interactiveBot.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
@@ -110,6 +110,17 @@ const cliChain = (process.env.INTERACTIVE_CLI_CHAIN || process.env.WORKER_CLI_CH
 const fallbackChain = new WorkerFallbackChain(cliChain, db);
 const exhaustedChats = new Set<string>();
 
+function resolveCredentialCheckedPreference(chatKey: string): { pref: CliKind | null; available: Set<CliKind>; stored: CliKind } {
+  const available = getAvailableCliKinds();
+  const stored = getUserCliPreference(db, chatKey);
+  const pref = resolveAvailableCliPreference(stored, available);
+  if (pref && pref !== stored) {
+    setUserCliPreference(db, chatKey, pref);
+    fallbackChain.setActiveCli(chatKey, pref);
+  }
+  return { pref, available, stored };
+}
+
 // Build one engine per CLI kind — none polls; we dispatch handleUpdate manually.
 const CLI_KINDS: CliKind[] = ["codex", "claude", "antigravity", "kimchi"];
 const engines = Object.fromEntries(
@@ -140,7 +151,7 @@ const engines = Object.fromEntries(
   }),
 ) as Record<CliKind, BridgeEngine>;
 
-const defaultPref = getUserCliPreference(db, "default");
+const defaultPref = resolveAvailableCliPreference(getUserCliPreference(db, "default"), getAvailableCliKinds()) ?? "codex";
 async function registerGlobalCommands(pref: CliKind, label: string): Promise<void> {
   for (const body of buildGlobalInteractiveCommandRegistrations(pref)) {
     const scopeName = body.scope?.type ?? "default";
@@ -160,12 +171,12 @@ async function registerGroupChatCommands(pref: CliKind, chatId: number): Promise
 await registerGlobalCommands(defaultPref, "");
 // Tracks which group chat IDs have had per-chat commands registered this session.
 // Telegram requires a chat-specific scope registration for commands to appear reliably
-// in individual groups, even when global group scopes are set.
+// in individual groups, even when global scope alone is not always picked up.
 const registeredGroupChats = new Set<number>();
 
 console.log("[interactive] starting polling...");
 
-let offset = db.getLastUpdateId("codex"); // reuse existing offset tracking
+let offset = db.getLastUpdateId("codex");
 const POLL_KIND = "codex" as const;
 
 for (;;) {
@@ -184,17 +195,13 @@ for (;;) {
           console.log("[interactive] update.received", JSON.stringify(describeInteractiveUpdateForLog(typedUpdate)));
         }
 
-        // Register per-chat commands the first time a group/supergroup is seen so that
-        // the command menu appears reliably in that specific chat (global scope alone is
-        // not always picked up by Telegram clients for existing groups).
         const groupChatId = isGroupUpdate
           ? (typedUpdate.message?.chat?.id ?? typedUpdate.callback_query?.message?.chat?.id ?? null)
           : null;
         if (groupChatId != null && !registeredGroupChats.has(groupChatId)) {
           registeredGroupChats.add(groupChatId);
-          const groupChatKey = String(groupChatId);
-          const groupPref = getUserCliPreference(db, groupChatKey);
-          registerGroupChatCommands(groupPref, groupChatId);
+          const { pref: groupPref } = resolveCredentialCheckedPreference(String(groupChatId));
+          registerGroupChatCommands(groupPref ?? "codex", groupChatId);
         }
 
         if (!isAuthorizedInteractiveUpdate(typedUpdate, allowedUserIds)) {
@@ -207,7 +214,6 @@ for (;;) {
           continue;
         }
 
-        // Handle /cli before engine dispatch
         const message = typedUpdate.message;
         if (message) {
           const rawText = (message.text || "").trim();
@@ -215,21 +221,26 @@ for (;;) {
           const chatKey = resolveUpdateChatKey(typedUpdate) ?? String(chatId);
 
           if (isCliCommandText(rawText, botUsername)) {
-            const pref = getUserCliPreference(db, chatKey);
+            const { pref, available, stored } = resolveCredentialCheckedPreference(chatKey);
             await sendTelegramMessage({ client, kind: "interactive", chatId, body: {
-              text: buildCliStatusText(pref),
-              reply_markup: buildCliKeyboard(pref),
+              text: buildCliStatusText(pref ?? stored, available),
+              reply_markup: buildCliKeyboard(pref ?? stored, available),
               message_thread_id: message.message_thread_id,
             } });
             continue;
           }
         }
 
-        // Handle cli:* callback taps (CLI switch from inline keyboard)
         const cbq = typedUpdate.callback_query;
         if (cbq?.data) {
           const newCli = handleCliSwitchCallback(cbq.data);
           if (newCli !== null) {
+            const available = getAvailableCliKinds();
+            if (!available.has(newCli)) {
+              await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `${newCli} is not available on this box` });
+              continue;
+            }
+
             const chatId = cbq.message?.chat?.id;
             const messageId = cbq.message?.message_id;
             const chatKey = resolveUpdateChatKey(typedUpdate);
@@ -242,8 +253,8 @@ for (;;) {
               await client.editMessageText({
                 chat_id: chatId,
                 message_id: messageId,
-                text: buildCliStatusText(newCli),
-                reply_markup: buildCliKeyboard(newCli),
+                text: buildCliStatusText(newCli, available),
+                reply_markup: buildCliKeyboard(newCli, available),
               });
             }
             if (chatKey) {
@@ -256,11 +267,23 @@ for (;;) {
           }
         }
 
-        // Route to the user's preferred engine with fallback support
         const chatKey = resolveUpdateChatKey(typedUpdate);
         if (chatKey) {
           const chatId = typedUpdate.message?.chat?.id ?? typedUpdate.callback_query?.message?.chat?.id;
           const threadId = resolveMessageThreadId(typedUpdate);
+          const { pref } = resolveCredentialCheckedPreference(chatKey);
+          if (!pref) {
+            if (chatId != null) {
+              await sendTelegramMessage({
+                client,
+                kind: "interactive",
+                chatId,
+                body: { text: "No CLI is currently available on this box. Authenticate or install a CLI, then run /cli again.", message_thread_id: threadId },
+              });
+            }
+            continue;
+          }
+
           if (chatId != null) {
             dispatchInteractiveWithFallback(typedUpdate, chatKey, {
               engines,
@@ -278,13 +301,14 @@ for (;;) {
               },
             }).catch((err: unknown) => console.error("[interactive] dispatch error", err));
           } else {
-            const pref = getUserCliPreference(db, chatKey);
             engines[pref].handleUpdate(typedUpdate)
               .catch((err: unknown) => console.error("[interactive] handleUpdate error", err));
           }
         } else {
-          const pref = "codex";
-          await engines[pref].handleUpdate(typedUpdate);
+          const pref = resolveAvailableCliPreference("codex", getAvailableCliKinds());
+          if (pref) {
+            await engines[pref].handleUpdate(typedUpdate);
+          }
         }
       } catch (err) {
         console.error("[interactive] update handling failed", err);

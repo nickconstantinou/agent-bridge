@@ -17,6 +17,7 @@ import { buildClaudeStreamJsonInput, parseClaudeStreamJsonOutput } from "./claud
 import { type as evtType } from "./events/types.js";
 import type { BridgeEvent } from "./events/types.js";
 import { appendEffortArgs, type EffortLevel } from "./effort.js";
+import { isProviderFallbackEligibleError } from "./providers/fallbackEligibility.js";
 
 const activeProcesses = new Map<number | string, ChildProcess>();
 const abortedChildren = new WeakSet<ChildProcess>();
@@ -828,29 +829,7 @@ export function toUserMessage(err: Error): string {
 }
 
 export function isCapacityExhaustedError(err: Error): boolean {
-  const msg = err.message || "";
-  const lowerMsg = msg.toLowerCase();
-  return (
-    msg.includes("MODEL_CAPACITY_EXHAUSTED") ||
-    msg.includes("No capacity available") ||
-    msg.includes("rateLimitExceeded") ||
-    msg.includes("overloaded_error") ||
-    msg.includes("Overloaded") ||
-    msg.includes("RESOURCE_EXHAUSTED") ||
-    msg.includes("quota reached") ||
-    msg.includes("quota exceeded") ||
-    msg.includes("hit your limit") ||
-    msg.includes("session limit") ||
-    msg.includes("usage limit") ||
-    msg.includes("resets") ||
-    msg.includes("api_error_status\":429") ||
-    // Model-unavailable errors trigger model fallback, but only when the
-    // message is actually about a model — plain "not found" also appears in
-    // session/file/command errors that must surface, not silently fall back.
-    /model\s+"?[\w./-]+"?\s+(not found|does not exist)/.test(lowerMsg) ||
-    lowerMsg.includes("unknown model") ||
-    lowerMsg.includes("unsupported model")
-  );
+  return isProviderFallbackEligibleError(err);
 }
 
 export function getNextFallbackModel(currentModel: string | null, modelPreference: string[]): string | null {

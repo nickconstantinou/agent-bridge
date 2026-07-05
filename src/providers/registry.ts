@@ -64,4 +64,4 @@ export function assertProviderId(value: string): ProviderId {
 }
 
 export { PROVIDER_IDS } from "./types.js";
-export type { ProviderAdapter, ProviderCapabilities, ProviderId } from "./types.js";
+export type { ProviderAdapter, ProviderCapabilities, ProviderErrorClassification, ProviderId } from "./types.js";

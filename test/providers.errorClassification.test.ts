@@ -4,6 +4,7 @@ import {
   classifyProviderError,
   isFallbackEligibleProviderError,
 } from "../src/providers/errorClassification.js";
+import { isProviderFallbackEligibleError } from "../src/providers/fallbackEligibility.js";
 
 describe("provider error classification", () => {
   it("classifies Codex capacity and model-unavailable messages", () => {
@@ -53,11 +54,13 @@ describe("provider error classification", () => {
 
     for (const message of ordinaryErrors) {
       expect(isFallbackEligibleProviderError(classifyAnyProviderError(new Error(message)))).toBe(false);
+      expect(isProviderFallbackEligibleError(new Error(message))).toBe(false);
     }
   });
 
   it("marks capacity and model-unavailable errors as fallback-eligible", () => {
     expect(isFallbackEligibleProviderError(classifyAnyProviderError(new Error("MODEL_CAPACITY_EXHAUSTED")))).toBe(true);
     expect(isFallbackEligibleProviderError(classifyAnyProviderError(new Error("Error: unknown model minimax-m2.5")))).toBe(true);
+    expect(isProviderFallbackEligibleError(new Error("MODEL_CAPACITY_EXHAUSTED"))).toBe(true);
   });
 });

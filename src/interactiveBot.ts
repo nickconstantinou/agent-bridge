@@ -17,6 +17,7 @@ export type InteractiveCommandRegistration = {
 
 const VALID_CLI_KINDS: CliKind[] = ["codex", "claude", "antigravity", "kimchi"];
 const DEFAULT_CLI: CliKind = "codex";
+const DEFAULT_AUTHENTICATED_CLI_KINDS = new Set<CliKind>(VALID_CLI_KINDS);
 
 export interface InteractiveUpdateLogSummary {
   updateId: number;
@@ -69,12 +70,30 @@ export function handleCliSwitchCallback(data: string): CliKind | null {
   return isValidCliKind(kind) ? kind : null;
 }
 
-export function buildCliStatusText(activeCli: CliKind): string {
-  const others = VALID_CLI_KINDS.filter((k) => k !== activeCli);
+export function getSelectableCliKinds(authenticated: ReadonlySet<CliKind> = DEFAULT_AUTHENTICATED_CLI_KINDS): CliKind[] {
+  const selectable = VALID_CLI_KINDS.filter((kind) => authenticated.has(kind));
+  return selectable.length > 0 ? selectable : ["kimchi"];
+}
+
+export function resolveAvailableCliPreference(
+  preferred: CliKind,
+  authenticated: ReadonlySet<CliKind> = DEFAULT_AUTHENTICATED_CLI_KINDS,
+): CliKind {
+  const selectable = getSelectableCliKinds(authenticated);
+  return selectable.includes(preferred) ? preferred : selectable[0];
+}
+
+export function buildCliStatusText(
+  activeCli: CliKind,
+  authenticated: ReadonlySet<CliKind> = DEFAULT_AUTHENTICATED_CLI_KINDS,
+): string {
+  const selectable = getSelectableCliKinds(authenticated);
+  const resolvedActive = selectable.includes(activeCli) ? activeCli : selectable[0];
+  const others = selectable.filter((k) => k !== resolvedActive);
   return [
-    `Active CLI: **${activeCli}**`,
-    `Available: ${VALID_CLI_KINDS.join(", ")}`,
-    `Switch with: /switch ${others[0]}`,
+    `Active CLI: **${resolvedActive}**`,
+    `Available: ${selectable.join(", ")}`,
+    others.length > 0 ? `Switch with: /switch ${others[0]}` : "Switch with: no other authenticated CLI",
   ].join("\n");
 }
 
@@ -85,10 +104,15 @@ export function isCliCommandText(rawText: string, botUsername?: string | null): 
   return command.slice("/cli@".length) === botUsername.toLowerCase();
 }
 
-export function buildCliKeyboard(activeCli: CliKind): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+export function buildCliKeyboard(
+  activeCli: CliKind,
+  authenticated: ReadonlySet<CliKind> = DEFAULT_AUTHENTICATED_CLI_KINDS,
+): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+  const selectable = getSelectableCliKinds(authenticated);
+  const resolvedActive = selectable.includes(activeCli) ? activeCli : selectable[0];
   return {
-    inline_keyboard: VALID_CLI_KINDS.map((cli) => [{
-      text: cli === activeCli ? `✓ ${cli}` : cli,
+    inline_keyboard: selectable.map((cli) => [{
+      text: cli === resolvedActive ? `✓ ${cli}` : cli,
       callback_data: `cli:${cli}`,
     }]),
   };

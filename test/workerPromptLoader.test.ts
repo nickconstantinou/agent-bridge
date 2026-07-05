@@ -23,4 +23,22 @@ describe("worker loader basics", () => {
 
     expect(prompt).toBe("Feature abc");
   });
+
+  it("uses an override without extras by default", async () => {
+    const prompt = await loadWorkerPrompt("feature_plan", { value: "abc" }, reader, {
+      dbTemplate: "Override {value}",
+    });
+
+    expect(prompt).toBe("Override abc");
+  });
+
+  it("can append extras to an override when requested", async () => {
+    const prompt = await loadWorkerPrompt("feature_plan", { value: "abc" }, reader, {
+      dbTemplate: "Override {value}",
+      includeSupplementsForDbTemplate: true,
+    });
+
+    expect(prompt).toContain("Override abc");
+    expect(prompt).toContain("Supplement text");
+  });
 });

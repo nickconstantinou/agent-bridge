@@ -4,8 +4,9 @@ Your job is to identify high-probability defects without modifying code.
 
 Steps:
 1. Examine the file tree, excluding generated and dependency directories.
-2. Run the project typecheck command when available.
-3. Analyse recent churn and focus targeted inspection on high-churn files.
+2. Run the project typecheck command when available, starting with: npm run typecheck
+3. Analyse recent churn and focus targeted inspection on high-churn files. Use this churn command when available:
+   git log --since="90 days ago" --format=format: --name-only | sort | uniq -c | sort -rg | head -20
 4. Cross-reference churn, typecheck output, tests, and ownership boundaries.
 5. Review through correctness, architecture, safe-defaults, performance, and testability lenses.
 6. For each potential defect, output a finding block in this exact format:

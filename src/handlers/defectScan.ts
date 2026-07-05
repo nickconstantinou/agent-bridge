@@ -7,11 +7,18 @@
  */
 
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
+import { createWorkerPromptFileReader } from "../workerPromptFileReader.js";
+import { loadWorkerPrompt } from "../workerPrompts.js";
 
 type RunCli = (command: string, args: string[], cwd?: string) => Promise<string>;
 type RunCommand = (binary: string, args: string[]) => Promise<string>;
 
 const TOP_N_FINDINGS = 3;
+const promptReader = createWorkerPromptFileReader();
+const GH_PR = "pr";
+const GH_ISSUE = "issue";
+const GH_COMMENT = "comment";
+const GH_CREATE = "create";
 
 function notifyFields(input: JobHandlerInput): Record<string, number> {
   return {
@@ -46,78 +53,50 @@ interface DefectFinding {
   effort_score?: number;
 }
 
-function buildPrompt(repository: string): string {
-  return `You are performing a read-only defect scan of the repository: ${repository}.
-
-Your job is to identify high-probability defects without modifying any code.
-
-Steps to follow:
-
-1. Examine the file tree (excluding node_modules, dist, build, .git).
-2. Run: npm run typecheck
-   Report any type errors as potential defects.
-3. Analyse recent churn using:
-   git log --since="90 days ago" --format=format: --name-only | sort | uniq -c | sort -rg | head -20
-   Focus targeted inspection on the top churned files.
-4. Cross-reference high-churn files with any typecheck output.
-5. For each potential defect, output a finding block in this exact format:
-   - Title: <short title>
-     Impact: <High|Medium|Low>
-     ImpactScore: <1-10>
-     EffortScore: <1-10>
-     Confidence: <high|medium|low>
-     Evidence: <one-line evidence note>
-
-   ImpactScore: severity if the defect ships (10=production outage, 1=cosmetic).
-   EffortScore: cost to fix (1=one-line change, 10=architectural surgery).
-
-6. End your response with a line matching exactly:
-   OVERALL: <N> potential issue(s) found.
-
-Important constraints:
-- Do NOT make any code changes.
-- Only report issues you have direct evidence for in this repository.
-- If you find no issues, output: OVERALL: 0 potential issues found.`;
+async function buildScanPrompt(ctx: JobHandlerContext, repository: string, prChangedFiles = ""): Promise<string> {
+  return loadWorkerPrompt(
+    "defect_scan:scan",
+    {
+      repository,
+      pr_changed_files: prChangedFiles,
+      typecheck_output: "",
+    },
+    promptReader,
+    { dbTemplate: ctx.db.getPrompt("defect_scan:scan", "") },
+  );
 }
 
-function buildPlanPrompt(finding: DefectFinding, repository: string): string {
-  return `You are a senior TDD engineer. Generate a detailed, actionable implementation plan for fixing this defect.
+async function buildPlanPrompt(ctx: JobHandlerContext, finding: DefectFinding, repository: string): Promise<string> {
+  return loadWorkerPrompt(
+    "defect_scan:plan",
+    {
+      repository,
+      title: finding.title,
+      evidence: finding.evidence ?? "see repository",
+      impact: finding.impact ?? "unknown",
+      impact_score: String(finding.impact_score ?? "?"),
+      effort_score: String(finding.effort_score ?? "?"),
+    },
+    promptReader,
+    { dbTemplate: ctx.db.getPrompt("defect_scan:plan", "") },
+  );
+}
 
-Repository: ${repository}
-Title: ${finding.title}
-Evidence: ${finding.evidence ?? "see repository"}
-Impact: ${finding.impact ?? "unknown"} (score: ${finding.impact_score ?? "?"}/10)
-Fix effort: ${finding.effort_score ?? "?"}/10
+async function buildTriagePrompt(
+  ctx: JobHandlerContext,
+  repository: string,
+  findings: Array<{ title: string; evidence?: string; confidence?: string; impact?: string }>,
+): Promise<string> {
+  const findingsText = findings.map((f, i) =>
+    `${i + 1}. Title: ${f.title}\n   Evidence: ${f.evidence ?? "none"}\n   Impact: ${f.impact ?? "unknown"}\n   Confidence: ${f.confidence ?? "unknown"}`
+  ).join("\n\n");
 
-Produce the plan in these sections:
-
-## Problem Statement
-Explain the root cause in 2–3 sentences.
-
-## Target Files
-List each file that must change and why.
-
-## Red Test Specification
-- Exact test file path
-- Test framework command to run it
-- The assertion that must FAIL before the fix
-- Expected failure reason
-
-## Implementation Phases
-For each phase:
-- Behaviour change
-- Red test (write first, commit separately)
-- Green change (smallest fix)
-- Verification command
-- Commit message
-
-## Acceptance Criteria
-3–5 verifiable criteria. Each must be checkable by running a command or reading a file.
-
-Rules:
-- Do NOT write any code yet — plan only.
-- Every phase must test before fixing.
-- Keep phases small and independently releasable.`;
+  return loadWorkerPrompt(
+    "defect_scan:triage",
+    { repository, findings: findingsText },
+    promptReader,
+    { dbTemplate: ctx.db.getPrompt("defect_scan:triage", "") },
+  );
 }
 
 function parseFindings(output: string): DefectFinding[] {
@@ -200,24 +179,6 @@ interface TriageDecision {
   reason?: string;
 }
 
-function buildTriagePrompt(repository: string, findings: Array<{ title: string; evidence?: string; confidence?: string; impact?: string }>): string {
-  const list = findings.map((f, i) =>
-    `${i + 1}. Title: ${f.title}\n   Evidence: ${f.evidence ?? "none"}\n   Impact: ${f.impact ?? "unknown"}\n   Confidence: ${f.confidence ?? "unknown"}`
-  ).join("\n\n");
-
-  return `You are a senior engineer evaluating defect scan findings for an automated TDD agent working on: ${repository}.
-
-Review each finding and decide whether it should be auto-approved for immediate implementation.
-
-${list}
-
-Return ONLY a JSON array (no markdown fences, no explanation), one entry per finding in order:
-[{"index":0,"decision":"APPROVE","reason":"..."},{"index":1,"decision":"REJECT","reason":"..."}]
-
-Approve if: the finding is well-evidenced, reproducible, and safe to fix with a small targeted change.
-Reject if: the finding is speculative, too broad, or would require risky structural changes.`;
-}
-
 function parseTriageDecisions(output: string): TriageDecision[] {
   const jsonMatch = output.match(/\[[\s\S]*\]/);
   if (!jsonMatch) return [];
@@ -261,27 +222,20 @@ export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
         scanCwd = resolved;
       }
 
-      let prPromptAddendum = "";
+      let prChangedFiles = "";
       if (input.pr_mode && runCommand) {
         try {
           const diffFiles = await runCommand("git", ["diff", "--name-only", "origin/main...HEAD"]);
-          if (diffFiles.trim()) {
-            prPromptAddendum = `\n\nThis is a pull request scan. Focus your analysis on these changed files:\n${diffFiles.trim()}`;
-          }
+          if (diffFiles.trim()) prChangedFiles = diffFiles.trim();
         } catch {}
       }
 
-      const fallbackPrompt = buildPrompt(repository);
-      const dbTemplate = ctx.db.getPrompt("defect_scan:scan", "");
-      const prompt = (dbTemplate
-        ? dbTemplate.replace(/{repository}/g, repository).replace(/\${repository}/g, repository)
-        : fallbackPrompt) + prPromptAddendum;
+      const prompt = await buildScanPrompt(ctx, repository, prChangedFiles);
       const rawOutput = await runCli(command, ["--print", "--output-format", "text", prompt], scanCwd);
 
       const findings = parseFindings(rawOutput);
       const summaryLine = extractSummaryLine(rawOutput);
 
-      // Filter to actionable findings, rank by value score (impact/effort), take top N
       const actionableFindings = findings
         .filter(f => f.confidence === "high" || f.confidence === "medium")
         .sort((a, b) => valueScore(b) - valueScore(a))
@@ -290,11 +244,11 @@ export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
       if (input.pr_mode) {
         if (input.pr_number && runCommand) {
           const commentBody = actionableFindings.length > 0
-            ? `### ⚠️ pre-merge defect scan findings\n\n${actionableFindings.map((f, i) => `${i + 1}. **${f.title}** (Impact: ${f.impact}, Confidence: ${f.confidence})\n   Evidence: ${f.evidence}`).join("\n\n")}`
-            : `### ✅ pre-merge defect scan findings\n\nNo issues found.`;
-          
+            ? `### pre-merge defect scan findings\n\n${actionableFindings.map((f, i) => `${i + 1}. **${f.title}** (Impact: ${f.impact}, Confidence: ${f.confidence})\n   Evidence: ${f.evidence}`).join("\n\n")}`
+            : `### pre-merge defect scan findings\n\nNo issues found.`;
+
           await runCommand("gh", [
-            "pr", "comment", String(input.pr_number),
+            GH_PR, GH_COMMENT, String(input.pr_number),
             "--repo", repository,
             "--body", commentBody,
           ]).catch(err => console.warn("[defect-scan] failed to post PR comment", err));
@@ -309,20 +263,9 @@ export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
       const createdItems: Array<{ itemId: number; finding: DefectFinding }> = [];
 
       for (const f of actionableFindings) {
-        // Plan generation pass
         let planText = "";
         try {
-          const fallbackPlanPrompt = buildPlanPrompt(f, repository);
-          const dbPlanTemplate = ctx.db.getPrompt("defect_scan:plan", "");
-          const planPrompt = dbPlanTemplate
-            ? dbPlanTemplate
-                .replace(/{repository}/g, repository)
-                .replace(/{title}/g, f.title)
-                .replace(/{evidence}/g, f.evidence ?? "see repository")
-                .replace(/{impact}/g, f.impact ?? "unknown")
-                .replace(/{impact_score}/g, String(f.impact_score ?? "?"))
-                .replace(/{effort_score}/g, String(f.effort_score ?? "?"))
-            : fallbackPlanPrompt;
+          const planPrompt = await buildPlanPrompt(ctx, f, repository);
           planText = await runCli(command, ["--print", "--output-format", "text", planPrompt], scanCwd);
         } catch (err) {
           console.warn("[defect-scan] plan generation failed for:", f.title, err);
@@ -349,12 +292,11 @@ export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
           created_by: "worker",
         });
 
-        // Create GitHub issue inline with full plan
         if (runCommand) {
           try {
             const issueBody = buildIssueBody(f, planText, repository);
             const issueUrl = await runCommand("gh", [
-              "issue", "create",
+              GH_ISSUE, GH_CREATE,
               "--repo", repository,
               "--title", f.title,
               "--body", issueBody.slice(0, 65000),
@@ -372,17 +314,8 @@ export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
         createdItems.push({ itemId: item.id, finding: f });
       }
 
-      // Auto-triage: optional second pass to approve/reject findings
       if (autoTriage && createdItems.length > 0) {
-        const fallbackTriagePrompt = buildTriagePrompt(repository, actionableFindings);
-        const dbTriageTemplate = ctx.db.getPrompt("defect_scan:triage", "");
-        const triagePrompt = dbTriageTemplate
-          ? dbTriageTemplate
-              .replace(/{repository}/g, repository)
-              .replace(/{findings}/g, actionableFindings.map((f, i) =>
-                `${i + 1}. Title: ${f.title}\n   Evidence: ${f.evidence ?? "none"}\n   Impact: ${f.impact ?? "unknown"}\n   Confidence: ${f.confidence ?? "unknown"}`
-              ).join("\n\n"))
-          : fallbackTriagePrompt;
+        const triagePrompt = await buildTriagePrompt(ctx, repository, actionableFindings);
         const triageOutput = await runCli(command, ["--print", "--output-format", "text", triagePrompt], scanCwd);
         const decisions = parseTriageDecisions(triageOutput);
         const notify = notifyFields(input);
@@ -393,7 +326,6 @@ export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
 
           if (decision.decision === "APPROVE") {
             ctx.db.updateWorkItemStatus(entry.itemId, "approved");
-            // Only queue open_github_issue if not already linked
             const hasLinkedIssue = (ctx.db.raw.prepare(
               `SELECT 1 FROM github_links WHERE work_item_id = ? AND issue_number IS NOT NULL LIMIT 1`,
             ).get(entry.itemId) as { 1: number } | undefined) != null;

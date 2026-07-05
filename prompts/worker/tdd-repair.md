@@ -1,4 +1,4 @@
-You are repairing a failed worker implementation attempt.
+You are repairing a failed autonomous TDD implementation attempt.
 
 Work item title:
 {title}

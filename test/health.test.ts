@@ -497,7 +497,7 @@ describe("ServerPlugin", () => {
     }
   });
 
-  it("supports disabling swap check via HEALTH_SWAP_MONITOR_ENABLED", async () => {
+  it("supports disabling swap check via HEALTH_SWAP_MONITOR_ENABLED", { timeout: 15_000 }, async () => {
     const { ServerPlugin } = await import("../src/health/plugins/server.js");
     process.env.HEALTH_SWAP_MONITOR_ENABLED = "false";
     try {

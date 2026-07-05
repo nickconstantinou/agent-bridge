@@ -7,11 +7,16 @@
 
 import type { JobHandler, JobHandlerInput, JobHandlerContext } from "../jobExecutor.js";
 import { resolveLocalRepoPath } from "../workspace.js";
+import { createWorkerPromptFileReader } from "../workerPromptFileReader.js";
+import { loadWorkerPrompt } from "../workerPrompts.js";
 
 type RunCli = (command: string, args: string[], cwd?: string) => Promise<string>;
 type RunCommand = (binary: string, args: string[]) => Promise<string>;
 
 const TOP_N_FINDINGS = 3;
+const promptReader = createWorkerPromptFileReader();
+const GH_ISSUE = "issue";
+const GH_CREATE = "create";
 
 interface RefactorScanDeps {
   runCli: RunCli;
@@ -31,62 +36,6 @@ interface RefactorFinding {
   impact_score?: number;
   /** Implementation effort 1–10 (1=trivial, 10=requires major restructure). */
   effort_score?: number;
-}
-
-function buildPrompt(repository: string): string {
-  return `You are performing a read-only refactoring analysis of the repository: ${repository}.
-
-Your task:
-1. Examine the repository structure, key source files, and TypeScript/JS patterns.
-2. Identify up to 5 concrete refactoring opportunities: dead code, duplicated logic, oversized files, unclear boundaries, or naming that harms readability.
-3. Score each opportunity on two dimensions:
-   - impact_score (1-10): value delivered — improved correctness, maintainability, or performance (10=transformative, 1=cosmetic).
-   - effort_score (1-10): implementation cost (1=one-file rename, 10=cross-cutting restructure).
-4. For each finding output a JSON object on its own line:
-   {"title": "...", "rationale": "...", "files": ["..."], "impact_score": <1-10>, "effort_score": <1-10>}
-
-Output only the JSON lines. No markdown, no prose.`;
-}
-
-function buildPlanPrompt(finding: RefactorFinding, repository: string): string {
-  return `You are a senior TDD engineer. Generate a detailed, actionable implementation plan for this refactoring opportunity.
-
-Repository: ${repository}
-Title: ${finding.title}
-Rationale: ${finding.rationale ?? "see repository"}
-Files: ${finding.files?.join(", ") ?? "unspecified"}
-Value score: ${finding.impact_score ?? "?"}/10
-Effort score: ${finding.effort_score ?? "?"}/10
-
-Produce the plan in these sections:
-
-## Problem Statement
-Explain the current problem and why refactoring is valuable in 2–3 sentences.
-
-## Target Files
-List each file that must change, and the specific change required.
-
-## Red Test Specification
-- Exact test file path
-- Test framework command to run it
-- The assertion that must FAIL before implementation starts
-- Expected failure reason
-
-## Implementation Phases
-For each phase:
-- Behaviour change description
-- Red test (write first, commit separately)
-- Green change (minimal refactor)
-- Verification command
-- Commit message
-
-## Acceptance Criteria
-3–5 verifiable criteria. Each must be checkable by running a command or reading a file.
-
-Rules:
-- Do NOT write any code yet — plan only.
-- Every phase must test before refactoring.
-- Keep phases small and independently releasable.`;
 }
 
 function parseFindings(output: string): RefactorFinding[] {
@@ -135,6 +84,31 @@ function buildIssueBody(finding: RefactorFinding, planText: string, repository: 
   ].filter(l => l !== null).join("\n");
 }
 
+async function buildScanPrompt(ctx: JobHandlerContext, repository: string): Promise<string> {
+  return loadWorkerPrompt(
+    "refactor_scan:scan",
+    { repository },
+    promptReader,
+    { dbTemplate: ctx.db.getPrompt("refactor_scan:scan", "") },
+  );
+}
+
+async function buildPlanPrompt(ctx: JobHandlerContext, finding: RefactorFinding, repository: string): Promise<string> {
+  return loadWorkerPrompt(
+    "refactor_scan:plan",
+    {
+      repository,
+      title: finding.title,
+      rationale: finding.rationale ?? "see repository",
+      files: finding.files?.join(", ") ?? "unspecified",
+      impact_score: String(finding.impact_score ?? "?"),
+      effort_score: String(finding.effort_score ?? "?"),
+    },
+    promptReader,
+    { dbTemplate: ctx.db.getPrompt("refactor_scan:plan", "") },
+  );
+}
+
 export function createRefactorScanHandler(deps: RefactorScanDeps): JobHandler {
   const { runCli, command = "claude", resolveRepoPath = resolveLocalRepoPath, runCommand, topN = TOP_N_FINDINGS } = deps;
 
@@ -145,11 +119,7 @@ export function createRefactorScanHandler(deps: RefactorScanDeps): JobHandler {
     const repoPath = resolveRepoPath(repository);
     const cwd = repoPath ?? process.cwd();
 
-    const fallbackPrompt = buildPrompt(repository);
-    const dbTemplate = ctx.db.getPrompt("refactor_scan:scan", "");
-    const prompt = dbTemplate
-      ? dbTemplate.replace(/{repository}/g, repository).replace(/\${repository}/g, repository)
-      : fallbackPrompt;
+    const prompt = await buildScanPrompt(ctx, repository);
     const output = await runCli(command, ["-p", prompt], cwd);
 
     const findings = parseFindings(output);
@@ -161,20 +131,9 @@ export function createRefactorScanHandler(deps: RefactorScanDeps): JobHandler {
 
     const workItemIds: number[] = [];
     for (const f of ranked) {
-      // Plan generation pass
       let planText = "";
       try {
-        const fallbackPlanPrompt = buildPlanPrompt(f, repository);
-        const dbPlanTemplate = ctx.db.getPrompt("refactor_scan:plan", "");
-        const planPrompt = dbPlanTemplate
-          ? dbPlanTemplate
-              .replace(/{repository}/g, repository)
-              .replace(/{title}/g, f.title)
-              .replace(/{rationale}/g, f.rationale ?? "see repository")
-              .replace(/{files}/g, f.files?.join(", ") ?? "unspecified")
-              .replace(/{impact_score}/g, String(f.impact_score ?? "?"))
-              .replace(/{effort_score}/g, String(f.effort_score ?? "?"))
-          : fallbackPlanPrompt;
+        const planPrompt = await buildPlanPrompt(ctx, f, repository);
         planText = await runCli(command, ["-p", planPrompt], cwd);
       } catch (err) {
         console.warn("[refactor-scan] plan generation failed for:", f.title, err);
@@ -200,12 +159,11 @@ export function createRefactorScanHandler(deps: RefactorScanDeps): JobHandler {
         priority: "normal",
       });
 
-      // Create GitHub issue inline with full plan
       if (runCommand) {
         try {
           const issueBody = buildIssueBody(f, planText, repository);
           const issueUrl = await runCommand("gh", [
-            "issue", "create",
+            GH_ISSUE, GH_CREATE,
             "--repo", repository,
             "--title", f.title,
             "--body", issueBody.slice(0, 65000),

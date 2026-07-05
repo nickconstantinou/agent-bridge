@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   loadWorkerPrompt,
   renderWorkerPrompt,
+  truncateWorkerPromptValue,
 } from "../src/workerPrompts.js";
 
 const reader = {
@@ -40,5 +41,12 @@ describe("worker loader basics", () => {
 
     expect(prompt).toContain("Override abc");
     expect(prompt).toContain("Supplement text");
+  });
+
+  it("caps long values with a visible marker", () => {
+    const capped = truncateWorkerPromptValue("0123456789".repeat(40), 120);
+
+    expect(capped.length).toBeLessThanOrEqual(120);
+    expect(capped).toContain("truncated");
   });
 });

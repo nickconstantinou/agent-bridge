@@ -52,6 +52,27 @@ The Companion Runtime should support domain-agnostic requests such as:
 - explain a technical concept
 - answer questions using configured capabilities
 
+## Memory and Provider Handoff
+
+The Companion Runtime should preserve continuity across provider switching without repeatedly injecting full Agent Bridge context into every turn.
+
+For the interactive/companion bot:
+
+- native CLI session IDs should maintain continuity while the same provider session is active;
+- manual provider switching should start a fresh target CLI session;
+- capacity fallback should start a fresh target CLI session;
+- Agent Bridge should inject handoff context only on the first turn of a fresh target CLI session;
+- after a successful first target response, the target CLI session ID should be stored and Agent Bridge should stop injecting the full handoff context on every turn.
+
+Handoff context should be built from:
+
+- the latest compact summary;
+- the latest N recent turns after that summary, bounded by the configured context budget;
+- memory-search instructions and guidance;
+- persistent memories only when searched or explicitly selected by the agent.
+
+The canonical memory and handoff design is `docs/architecture/memory-and-handoff.md`.
+
 ## Explicit Non-Responsibilities
 
 The Companion Runtime must not own or depend on Engineering Worker concepts:

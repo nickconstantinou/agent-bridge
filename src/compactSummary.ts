@@ -3,6 +3,10 @@
  * NEIGHBORS: src/engine.ts (compact handler)
  */
 
+import type { ProjectMemoryCandidate } from "./projectMemory.js";
+
+export type CompactProfile = "engineering" | "companion";
+
 export const COMPACT_PROMPT_MAX_CHARS = 18_000;
 export const COMPACT_TIMEOUT_MS = 60_000;
 export const COMPACT_CHUNK_MAX_CHARS = 16_000;
@@ -29,25 +33,57 @@ export function compactParallelism(): number {
 
 export type CompactTurn = { id?: number; role: string; text: string };
 
-const SUMMARY_SYSTEM_HEADER = `You are summarising a Telegram conversation with an AI coding assistant.
-Output ONLY the summary in this exact format — no preamble, no explanation:
+const ENGINEERING_DURABLE_FACTS_GUIDANCE =
+  "<repo, branch, active PR/issue numbers, file paths, job IDs, architectural decisions>";
+const COMPANION_DURABLE_FACTS_GUIDANCE =
+  "<user preferences, constraints, decisions, named projects, recurring context, " +
+  "health/training/travel/home/work context, technical/project details where relevant>";
 
-Current objective:
+function summaryFormatBlock(profile: CompactProfile): string {
+  const durableFacts = profile === "companion"
+    ? COMPANION_DURABLE_FACTS_GUIDANCE
+    : ENGINEERING_DURABLE_FACTS_GUIDANCE;
+  return `Current objective:
 - <one line>
 
 Durable facts:
-- <repo, branch, active PR/issue numbers, file paths, job IDs, decisions>
+- ${durableFacts}
 
 Open state:
-- <unresolved questions, blocked items, pending approvals>
+- <unresolved questions, blocked items, pending approvals>`;
+}
 
-Be dense. Omit pleasantries, filler turns, and completed sub-steps.`;
+function jsonOutputHeader(profile: CompactProfile): string {
+  return `You are summarising a Telegram conversation with an AI ${profile === "companion" ? "companion" : "coding"} assistant.
+Output ONLY a single JSON object — no preamble, no explanation, no markdown fence:
+
+{
+  "summary_md": "<markdown summary described below, as one string using \\n line breaks>",
+  "memory_candidates": [
+    { "type": "decision", "scope": "project", "text": "<durable standalone fact>", "confidence": 0.9 }
+  ]
+}
+
+summary_md must use this exact markdown format:
+
+${summaryFormatBlock(profile)}
+
+Be dense. Omit pleasantries, filler turns, and completed sub-steps.
+
+memory_candidates: durable facts, decisions, bug fixes, conventions, or unresolved
+TODOs that a future agent should know standalone, outside this conversation.
+Use [] when nothing durable should be stored. Do not store secrets, tokens,
+passwords, private personal details, raw logs, transient status, or generic
+summaries. Allowed type values: decision, bug, bugfix, convention, todo, note.
+Allowed scope values: project, chat, global.`;
+}
 
 export function buildCompactSummaryPrompt(
   turns: CompactTurn[],
+  profile: CompactProfile = "engineering",
   maxChars = compactPromptMaxChars(),
 ): string {
-  const header = `${SUMMARY_SYSTEM_HEADER}\n\n--- Conversation ---\n`;
+  const header = `${jsonOutputHeader(profile)}\n\n--- Conversation ---\n`;
   const footer = `\n--- End ---\n\nSummarise now:`;
   const budget = maxChars - header.length - footer.length;
 
@@ -94,8 +130,10 @@ export function chunkCompactTurns(
 export function buildCompactReducePrompt(
   previousSummary: string | null,
   chunkSummaries: Array<{ startId: number; endId: number; summary: string }>,
+  profile: CompactProfile = "engineering",
   maxChars = compactPromptMaxChars(),
 ): string {
+  const header = jsonOutputHeader(profile);
   const previousText = previousSummary?.trim();
   const previous = previousText
     ? `--- Previous compact summary ---\n${previousText}\n\n`
@@ -107,7 +145,7 @@ export function buildCompactReducePrompt(
     ].join("\n"))
     .join("\n\n");
   const prompt = [
-    SUMMARY_SYSTEM_HEADER,
+    header,
     "",
     "Merge these compact summaries into one updated durable conversation summary.",
     "Preserve current objectives, durable facts, decisions, open state, file paths, commands, PR/issue IDs, and unresolved work.",
@@ -122,13 +160,13 @@ export function buildCompactReducePrompt(
   const trimmedPrevious = previousText
     ? `--- Previous compact summary ---\n[... earlier previous summary truncated ...]\n${previousText.slice(-previousBudget)}\n\n`
     : "";
-  const fixedLength = SUMMARY_SYSTEM_HEADER.length + trimmedPrevious.length + 400;
+  const fixedLength = header.length + trimmedPrevious.length + 400;
   const bodyBudget = Math.max(500, maxChars - fixedLength);
   const trimmedBody = body.length > bodyBudget
     ? body.slice(-bodyBudget)
     : body;
   return [
-    SUMMARY_SYSTEM_HEADER,
+    header,
     "",
     "Merge these compact summaries into one updated durable conversation summary.",
     trimmedPrevious,
@@ -152,4 +190,44 @@ export function buildTombstone(
     `CLI at compact time: ${cli}.`,
     `Last user message: ${lastUser}`,
   ].join("\n");
+}
+
+export type CompactOutput = {
+  summaryMd: string;
+  memoryCandidates: ProjectMemoryCandidate[];
+};
+
+function stripJsonFence(text: string): string {
+  const fence = text.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fence ? fence[1].trim() : text;
+}
+
+/**
+ * Parses the structured `{ summary_md, memory_candidates }` compact output.
+ * Returns null on any parse/shape failure so the caller can fall back to a
+ * tombstone rather than store a broken or partial result.
+ */
+export function parseCompactOutput(raw: string): CompactOutput | null {
+  const text = raw.trim();
+  if (!text) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stripJsonFence(text));
+  } catch {
+    return null;
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const obj = parsed as Record<string, unknown>;
+
+  const summaryMd = obj.summary_md;
+  if (typeof summaryMd !== "string" || summaryMd.trim().length === 0) return null;
+
+  const rawCandidates = obj.memory_candidates;
+  const memoryCandidates = Array.isArray(rawCandidates)
+    ? rawCandidates.filter((item) => item && typeof item === "object") as ProjectMemoryCandidate[]
+    : [];
+
+  return { summaryMd, memoryCandidates };
 }

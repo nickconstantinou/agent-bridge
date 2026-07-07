@@ -1,6 +1,6 @@
 /**
  * PURPOSE: Entry point for the autonomous worker bot.
- * Handles /jobs, /issues, /review, /models commands. Routes plain messages
+ * Handles /jobs, /issues, /review, /chain commands. Routes plain messages
  * to the active CLI engine via a fallback chain (codex → claude → antigravity).
  * When a CLI is at capacity, the chain advances and retries with the next CLI,
  * injecting the last 3 turns as context.
@@ -369,6 +369,11 @@ for (;;) {
               continue;
             }
           }
+          const [action, targetKind] = String(callbackQuery.data || "").split(":");
+          if (action === "model" && targetKind && engines[targetKind]) {
+            await engines[targetKind].handleCallback(callbackQuery);
+            continue;
+          }
           await handleWorkerCallback(callbackQuery, db, client, allowedUserIds);
           continue;
         }
@@ -394,7 +399,7 @@ for (;;) {
           continue;
         }
 
-        // Worker commands (/jobs, /issues, /review, /feature, /models) take priority
+        // Worker commands (/jobs, /issues, /review, /feature, /chain) take priority
         if (isWorkerCommand(rawText)) {
           const chatRepo = db?.getChatRepo(chatKey) ?? null;
           const result = await handleWorkerCommand(rawText, {

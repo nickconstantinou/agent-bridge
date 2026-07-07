@@ -39,6 +39,7 @@ import { buildEffortKeyboard, buildEffortText, effortSettingKey, resolveDefaultE
 import { getCodexUsageText } from "./codexUsage.js";
 import { chunkCompactTurns, type CompactProfile } from "./compactSummary.js";
 import { compactConversation } from "./compactConversation.js";
+import { consumeHandoffRequired } from "./handoffState.js";
 import type { BridgeEvent } from "./events/types.js";
 import { EventStore } from "./events/store.js";
 import type { BridgeConfig, BotKind, BotConfig, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult, CliOptions } from "./types.js";
@@ -609,6 +610,12 @@ export class BridgeEngine {
 
   private _buildRecentContextPrompt(chatKey: string, prompt: string): string {
     if (this.db.getSetting(`ctx_suppress:${chatKey}`)) return prompt;
+    // Context is injected on every turn regardless (bounded by ENGINE_CONTEXT_MAX_CHARS),
+    // so a pending handoff mark doesn't change what gets sent — it's consumed here purely
+    // to clear the flag and log that the target CLI's first post-switch turn happened.
+    if (consumeHandoffRequired(this.db, chatKey, this.kind)) {
+      console.log(`[handoff] consumed chatKey=${chatKey} cliKind=${this.kind}`);
+    }
     const ctx = this.db.buildConvContext(chatKey, ENGINE_CONTEXT_MAX_CHARS);
     return ctx ? `${ctx}${prompt}` : prompt;
   }

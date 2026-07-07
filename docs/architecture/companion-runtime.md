@@ -56,13 +56,19 @@ The Companion Runtime should support domain-agnostic requests such as:
 
 The Companion Runtime should preserve continuity across provider switching without repeatedly injecting full Agent Bridge context into every turn.
 
-For the interactive/companion bot:
+**Current implementation (issue #69 PR 6):**
 
-- native CLI session IDs should maintain continuity while the same provider session is active;
-- manual provider switching should start a fresh target CLI session;
-- capacity fallback should start a fresh target CLI session;
-- Agent Bridge should inject handoff context only on the first turn of a fresh target CLI session;
-- after a successful first target response, the target CLI session ID should be stored and Agent Bridge should stop injecting the full handoff context on every turn.
+- manual provider switching and capacity fallback both clear the target CLI's session (`db.setSession(chatKey, targetCli, null)`) so it starts fresh rather than resuming a possibly stale, long-abandoned native session;
+- fallback additionally compacts the outgoing CLI's conversation first (rate-limited by `fallbackCompactCooldown.ts`) and promotes durable memory candidates, so the target CLI's context is a fresh summary rather than raw un-compacted turns; compaction failure never blocks the fallback itself;
+- a one-time `handoff_required:<chatKey>:<cliKind>` flag (`src/handoffState.ts`) is set on the target and consumed (cleared, logged) on its first turn.
+
+**Deferred, not yet implemented:** `_buildRecentContextPrompt` still injects `buildConvContext` on *every* turn for every CLI kind (bounded by `BRIDGE_CONTEXT_MAX_CHARS`), not only on the first turn of a fresh session. The handoff flag is consumed for audit/logging, but does not currently gate whether context is injected — the aspirational "stop injecting full context once the native session takes over" optimization below was judged too large a behavior change to bundle into the handoff-state PR, given this exact code path already produced one duplicate-injection bug earlier. It remains a candidate follow-up, not a correctness gap: every-turn injection is redundant but not wrong.
+
+Target end-state (not yet built):
+
+- native CLI session IDs maintain continuity while the same provider session is active;
+- Agent Bridge injects handoff context only on the first turn of a fresh target CLI session;
+- after a successful first target response, Agent Bridge stops injecting the full handoff context on every turn, relying on the native session instead.
 
 Handoff context should be built from:
 

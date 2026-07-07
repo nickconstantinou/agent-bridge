@@ -69,3 +69,21 @@ Epic 11 should introduce only small shared seams:
 - tests for scope and fallback behavior
 
 It should not perform a broad directory move or service rename.
+
+## Memory and Handoff Seams
+
+Recorded for issue #69 without changing the boundary rules above.
+
+Shared Runtime may provide neutral services for:
+
+- loading conversation turns and compact summaries;
+- chunking and reducing un-compacted conversation turns;
+- validating/storing persistent memory candidates;
+- building provider-agnostic handoff context;
+- tracking one-time handoff state.
+
+The Companion Runtime and Engineering Worker decide when those services are invoked and which compact profile to use.
+
+Shared Runtime must not own Companion-specific chat behavior or Engineering Worker-specific job/PR/review/merge lifecycles.
+
+The canonical memory and handoff architecture is `docs/architecture/memory-and-handoff.md`.

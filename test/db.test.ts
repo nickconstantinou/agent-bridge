@@ -224,6 +224,38 @@ describe("BridgeDb conversation startup pruning", () => {
   });
 });
 
+describe("BridgeDb getUncompactedConvStats", () => {
+  it("returns zero stats for a chat with no turns", () => {
+    expect(db.getUncompactedConvStats("chat:none")).toEqual({ turnCount: 0, charCount: 0 });
+  });
+
+  it("counts all turns and total chars when there is no summary yet", () => {
+    db.addConvTurn("chat:1", "user", "12345");
+    db.addConvTurn("chat:1", "assistant", "1234567890");
+    expect(db.getUncompactedConvStats("chat:1")).toEqual({ turnCount: 2, charCount: 15 });
+  });
+
+  it("only counts turns after the latest summary's range_end_turn_id", () => {
+    db.addConvTurn("chat:1", "user", "covered-one");
+    db.addConvTurn("chat:1", "assistant", "covered-two");
+    const raw = (db as any).raw as import("better-sqlite3").Database;
+    const coveredEnd = (raw
+      .prepare(`SELECT id FROM conversation_turns WHERE chat_key = ? AND text = ?`)
+      .get("chat:1", "covered-two") as any).id;
+    db.addConvSummary("chat:1", 1, coveredEnd, "summary");
+    db.addConvTurn("chat:1", "user", "uncovered");
+
+    expect(db.getUncompactedConvStats("chat:1")).toEqual({ turnCount: 1, charCount: "uncovered".length });
+  });
+
+  it("isolates stats per chat key", () => {
+    db.addConvTurn("chat:1", "user", "abc");
+    db.addConvTurn("chat:2", "user", "abcdefg");
+    expect(db.getUncompactedConvStats("chat:1")).toEqual({ turnCount: 1, charCount: 3 });
+    expect(db.getUncompactedConvStats("chat:2")).toEqual({ turnCount: 1, charCount: 7 });
+  });
+});
+
 describe("Per-topic session isolation", () => {
   it("composite chat:thread key isolates sessions between forum topics", () => {
     db.setSession("100:10", "antigravity", "s-topic-10");

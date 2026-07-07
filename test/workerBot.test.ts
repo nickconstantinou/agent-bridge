@@ -106,21 +106,22 @@ describe("handleWorkerCommand unknown", () => {
   });
 });
 
-// ── /models keyboard ──────────────────────────────────────────────────────────
+// ── /chain keyboard ───────────────────────────────────────────────────────────
 
-describe("isWorkerCommand /models", () => {
-  it("recognises /models", () => expect(isWorkerCommand("/models")).toBe(true));
+describe("isWorkerCommand /chain", () => {
+  it("recognises /chain", () => expect(isWorkerCommand("/chain")).toBe(true));
+  it("does not claim /models", () => expect(isWorkerCommand("/models")).toBe(false));
 });
 
-describe("handleWorkerCommand /models", () => {
+describe("handleWorkerCommand /chain", () => {
   it("returns a keyboard_message result", async () => {
-    const result = await handleWorkerCommand("/models", { workerEnabled: false, cliChain: ["codex", "claude", "antigravity"] });
+    const result = await handleWorkerCommand("/chain", { workerEnabled: false, cliChain: ["codex", "claude", "antigravity"] });
     expect(result).not.toBeNull();
     expect(result!.kind).toBe("keyboard_message");
   });
 
   it("keyboard includes one button per CLI in the chain", async () => {
-    const result = await handleWorkerCommand("/models", { workerEnabled: false, cliChain: ["codex", "claude", "antigravity"] });
+    const result = await handleWorkerCommand("/chain", { workerEnabled: false, cliChain: ["codex", "claude", "antigravity"] });
     expect(result!.kind).toBe("keyboard_message");
     const kb = result as WorkerKeyboardMessageResult;
     const allButtons = kb.reply_markup.inline_keyboard.flat();
@@ -131,7 +132,7 @@ describe("handleWorkerCommand /models", () => {
   });
 
   it("uses default chain when cliChain not provided", async () => {
-    const result = await handleWorkerCommand("/models", { workerEnabled: false });
+    const result = await handleWorkerCommand("/chain", { workerEnabled: false });
     expect(result!.kind).toBe("keyboard_message");
   });
 });
@@ -157,8 +158,12 @@ describe("buildWorkerCommands", () => {
     }
   });
 
-  it("includes /models command", () => {
-    expect(buildWorkerCommands().some(c => c.command === "models")).toBe(true);
+  it("includes /chain command", () => {
+    expect(buildWorkerCommands().some(c => c.command === "chain")).toBe(true);
+  });
+
+  it("does not include /models command", () => {
+    expect(buildWorkerCommands().some(c => c.command === "models")).toBe(false);
   });
 });
 

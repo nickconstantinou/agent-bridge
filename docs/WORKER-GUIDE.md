@@ -35,7 +35,8 @@ orchestrated_task  →  plan checkpoint → execute checkpoint → verify
 | `/jobs` | List active and pending jobs with Cancel buttons. |
 | `/job <id>` | Show one job in detail (lease, attempts, errors, result). |
 | `/approvals` | Re-list every pending approval with its action buttons. Use this if you lost or dismissed a merge keyboard. |
-| `/models` | Show the CLI fallback chain (`codex → claude → antigravity`). |
+| `/models` | Show/change the active CLI model. |
+| `/chain` | Show the CLI fallback chain (`codex → claude → antigravity`). |
 | `/effort` | Show/change manual effort for interactive worker chat. Job effort is task-selected. |
 | `/cli` | Show active CLI with switch keyboard. |
 

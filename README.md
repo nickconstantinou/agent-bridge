@@ -141,7 +141,8 @@ run in disposable git clones, never in live checkouts, and merges are blocked
 unless the PR head SHA still matches the approval and CI checks are green.
 
 Worker commands: `/review`, `/feature`, `/issues`, `/issue`, `/jobs`, `/job`,
-`/approvals`, `/models`, `/effort`. The worker also schedules `pr_watch` jobs to react to
+`/approvals`, `/chain`, `/models`, `/effort`. `/models` follows the active CLI;
+`/chain` shows the worker fallback order. The worker also schedules `pr_watch` jobs to react to
 CI status, stale PRs, and held/refresh/close decisions.
 
 Full guide: `docs/WORKER-GUIDE.md`. Architecture: `agents.md` → "Autonomous

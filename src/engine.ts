@@ -37,7 +37,8 @@ import { buildModelKeyboard, buildModelsText, getCliWorkingDir, extractPromptTex
 import { handleCommand, isBridgeCommand, buildTelegramCommands, isAntigravityNarrationVisible, compactInProgressSettingKey } from "./commands.js";
 import { buildEffortKeyboard, buildEffortText, effortSettingKey, resolveDefaultEffort, resolveEffort, isEffortLevel } from "./effort.js";
 import { getCodexUsageText } from "./codexUsage.js";
-import { buildCompactReducePrompt, buildCompactSummaryPrompt, buildTombstone, chunkCompactTurns, compactParallelism, parseCompactOutput, COMPACT_TIMEOUT_MS, type CompactProfile } from "./compactSummary.js";
+import { chunkCompactTurns, type CompactProfile } from "./compactSummary.js";
+import { compactConversation } from "./compactConversation.js";
 import type { BridgeEvent } from "./events/types.js";
 import { EventStore } from "./events/store.js";
 import type { BridgeConfig, BotKind, BotConfig, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult, CliOptions } from "./types.js";
@@ -103,23 +104,6 @@ const ENGINE_TURN_TEXT_LIMIT = 1_200;
 const AGENT_KINDS = new Set<string>(["codex", "antigravity", "claude", "kimchi"]);
 function isAgentKind(kind: string): kind is BotKind {
   return AGENT_KINDS.has(kind);
-}
-
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T, index: number) => Promise<R>,
-): Promise<R[]> {
-  const results = new Array<R>(items.length);
-  let next = 0;
-  const workerCount = Math.max(1, Math.min(limit, items.length));
-  await Promise.all(Array.from({ length: workerCount }, async () => {
-    while (next < items.length) {
-      const index = next++;
-      results[index] = await fn(items[index], index);
-    }
-  }));
-  return results;
 }
 
 function isAntigravityPrintTimeoutError(error: Error): boolean {
@@ -386,83 +370,47 @@ export class BridgeEngine {
               });
               return;
             }
-            const previousSummary = this.db.getLatestConvSummary(ck);
-            const turns = this.db.getConvTurnsForCompaction(ck);
-            if (turns.length === 0) {
+            const pendingTurns = this.db.getConvTurnsForCompaction(ck);
+            if (pendingTurns.length === 0) {
               await this.sendText(chatId, { text: "Nothing to compact — no conversation turns yet.", message_thread_id: threadId });
               return;
             }
-            const startId = turns[0].id;
-            const endId = turns[turns.length - 1].id;
-            const chunks = chunkCompactTurns(turns);
+            const chunks = chunkCompactTurns(pendingTurns);
             const startedAt = new Date().toISOString();
             await this.sendText(chatId, {
-              text: `Compacting context... ${turns.length} turn${turns.length === 1 ? "" : "s"} across ${chunks.length} chunk${chunks.length === 1 ? "" : "s"}. /context will show progress.`,
+              text: `Compacting context... ${pendingTurns.length} turn${pendingTurns.length === 1 ? "" : "s"} across ${chunks.length} chunk${chunks.length === 1 ? "" : "s"}. /context will show progress.`,
               message_thread_id: threadId,
             });
             this.db.setSetting(inProgressKey, startedAt);
-            console.log(`[compact] start chatKey=${ck} bot=${this.kind} turns=${turns.length} chunks=${chunks.length} startId=${startId} endId=${endId}`);
+            console.log(`[compact] start chatKey=${ck} bot=${this.kind} turns=${pendingTurns.length} chunks=${chunks.length}`);
 
-            const compactProfile = this.opts.compactProfile ?? "engineering";
-            let summaryMd: string;
-            const summarizePrompt = async (summaryPrompt: string): Promise<string> => {
-              const model = this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null;
-              const invocation = buildCliInvocation({
-                bot: this.kind,
-                prompt: summaryPrompt,
-                sessionId: null,
-                command: this.opts.botConfig.command,
-                model,
-                effort: resolveEffort(this.kind as BotKind, this.db),
-                executionMode: "safe",
-              });
-              const raw = await Promise.race([
-                this.exec.runCli(invocation.command, invocation.args, process.cwd(), {}),
-                new Promise<never>((_, reject) =>
-                  setTimeout(() => reject(new Error("compact timeout")), COMPACT_TIMEOUT_MS)
-                ),
-              ]);
-              if (typeof raw === "string" && raw.trim().length > 0) return raw.trim();
-              throw new Error("empty compact summary");
-            };
-            // Structured JSON output only; a missing/invalid summary_md is treated as a
-            // failure (falls back to tombstone below) rather than storing a broken result.
-            const summarizeToMarkdown = async (summaryPrompt: string): Promise<string> => {
-              const raw = await summarizePrompt(summaryPrompt);
-              const parsed = parseCompactOutput(raw);
-              if (!parsed) throw new Error("invalid compact JSON output");
-              return parsed.summaryMd;
-            };
             try {
-              if (chunks.length === 1 && !previousSummary) {
-                summaryMd = await summarizeToMarkdown(buildCompactSummaryPrompt(turns, compactProfile));
-              } else {
-                const parallelism = compactParallelism();
-                console.log(`[compact] summarizing chatKey=${ck} chunks=${chunks.length} parallelism=${parallelism}`);
-                const chunkSummaries = await mapWithConcurrency(chunks, parallelism, async (chunk) => {
-                  return {
-                    startId: chunk[0].id!,
-                    endId: chunk[chunk.length - 1].id!,
-                    summary: await summarizeToMarkdown(buildCompactSummaryPrompt(chunk, compactProfile)),
-                  };
+              const result = await compactConversation(ck, {
+                db: this.db,
+                runCli: (command, args, cwd, options) => this.exec.runCli(command, args, cwd, options),
+                botConfig: this.opts.botConfig,
+                cliKind: this.kind,
+                compactProfile: this.opts.compactProfile ?? "engineering",
+              });
+
+              if (result.outcome === "compacted") {
+                this.db.setSetting(`ctx_suppress:${ck}`, null);
+                if (isAgentKind(this.kind)) db_setSession(this.db, ck, this.kind, null);
+                console.log(`[compact] success chatKey=${ck} summaryRange=${result.startId}-${result.endId} promoted=${result.promotedMemoryIds?.length ?? 0} rejected=${result.rejectedCandidateCount ?? 0}`);
+                await this.sendText(chatId, {
+                  text: `Context compacted. ${result.turnCount} turn${result.turnCount === 1 ? "" : "s"} summarised. Session reset — next message starts fresh, seeded with this summary.`,
+                  message_thread_id: threadId,
                 });
-                summaryMd = await summarizeToMarkdown(buildCompactReducePrompt(previousSummary?.summary_md ?? null, chunkSummaries, compactProfile));
+              } else {
+                // Non-destructive failure: no summary stored, no turns pruned — the
+                // previous summary and raw turns remain available so the conversation
+                // can continue uninterrupted.
+                console.warn(`[compact] failed chatKey=${ck} bot=${this.kind} error=${result.error}`);
+                await this.sendText(chatId, {
+                  text: `Compaction failed — conversation history was left unchanged. You can try /compact again or keep working normally.`,
+                  message_thread_id: threadId,
+                });
               }
-            } catch {
-              console.warn(`[compact] summarization fallback chatKey=${ck} bot=${this.kind} turns=${turns.length}`);
-              summaryMd = buildTombstone(turns, this.kind);
-            }
-
-            try {
-              this.db.addConvSummary(ck, startId, endId, summaryMd);
-              this.db.pruneConvTurns(ck, endId);
-              this.db.setSetting(`ctx_suppress:${ck}`, null);
-              if (isAgentKind(this.kind)) db_setSession(this.db, ck, this.kind, null);
-              console.log(`[compact] success chatKey=${ck} summaryRange=${startId}-${endId} chars=${summaryMd.length}`);
-              await this.sendText(chatId, {
-                text: `Context compacted. ${turns.length} turn${turns.length === 1 ? "" : "s"} summarised. Session reset — next message starts fresh, seeded with this summary.`,
-                message_thread_id: threadId,
-              });
             } finally {
               this.db.setSetting(inProgressKey, null);
             }

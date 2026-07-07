@@ -177,21 +177,6 @@ export function buildCompactReducePrompt(
   ].join("\n");
 }
 
-export function buildTombstone(
-  turns: CompactTurn[],
-  cli: string,
-): string {
-  const userCount = turns.filter((t) => t.role === "user").length;
-  const assistantCount = turns.filter((t) => t.role === "assistant").length;
-  const lastUser = turns.filter((t) => t.role === "user").pop()?.text ?? "none";
-  return [
-    `[Compacted at ${new Date().toISOString()}]`,
-    `${turns.length} turn${turns.length === 1 ? "" : "s"} captured (${userCount} user, ${assistantCount} assistant).`,
-    `CLI at compact time: ${cli}.`,
-    `Last user message: ${lastUser}`,
-  ].join("\n");
-}
-
 export type CompactOutput = {
   summaryMd: string;
   memoryCandidates: ProjectMemoryCandidate[];

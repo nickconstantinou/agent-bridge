@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   buildCompactSummaryPrompt,
-  buildTombstone,
   parseCompactOutput,
   COMPACT_PROMPT_MAX_CHARS,
   COMPACT_TIMEOUT_MS,
@@ -120,38 +119,6 @@ describe("parseCompactOutput", () => {
 
   it("returns null for valid JSON that is not an object (e.g. a bare array)", () => {
     expect(parseCompactOutput("[]")).toBeNull();
-  });
-});
-
-describe("buildTombstone", () => {
-  it("includes turn count", () => {
-    const turns = [
-      { role: "user", text: "hello" },
-      { role: "assistant", text: "world" },
-    ];
-    const t = buildTombstone(turns, "claude");
-    expect(t).toContain("2 turns");
-    expect(t).toContain("1 user");
-    expect(t).toContain("1 assistant");
-  });
-
-  it("includes CLI name", () => {
-    const t = buildTombstone([{ role: "user", text: "hi" }], "codex");
-    expect(t).toContain("codex");
-  });
-
-  it("includes last user message", () => {
-    const t = buildTombstone([
-      { role: "assistant", text: "first" },
-      { role: "user", text: "last user" },
-    ], "claude");
-    expect(t).toContain("last user");
-  });
-
-  it("handles empty turns", () => {
-    const t = buildTombstone([], "claude");
-    expect(t).toContain("0 turns");
-    expect(t).toContain("none");
   });
 });
 

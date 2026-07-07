@@ -106,14 +106,14 @@ Every user message and assistant response is persisted to SQLite in `conversatio
 
 `buildConvContext(chatKey, maxChars)` composes the latest compact summary (if any) plus recent raw turns into a context preamble prepended to CLI prompts. It walks turns newest-first, accumulating character count, and stops when the char budget is exhausted. The summary always takes priority and is included even if it alone exceeds the budget. Default budget: `BRIDGE_CONTEXT_MAX_CHARS = 8_000` (~2K tokens); override via env var.
 
-**`/compact`** — Creates a semantic checkpoint and starts a fresh CLI session. The engine:
+**`/compact`** — Creates a semantic checkpoint and starts a fresh CLI session, via the shared `compactConversation()` service (`src/compactConversation.ts`):
 1. Loads all un-compacted turns for the chat key via `getConvTurnsForCompaction` (`id > latest_summary.range_end_turn_id`).
 2. Sends an immediate `Compacting context...` acknowledgement, records `compact_in_progress:<chatKey>` in `settings`, and logs compact lifecycle events.
 3. Chunks the loaded turns by prompt budget (`COMPACT_CHUNK_MAX_CHARS = 16_000`, override with `BRIDGE_COMPACT_CHUNK_MAX_CHARS`).
-4. Summarises each chunk with `buildCompactSummaryPrompt` in single-shot print mode (`sessionId: null`) with a 60s `Promise.race` timeout. Chunk summaries run with bounded parallelism (`COMPACT_PARALLELISM = 2`, override with `BRIDGE_COMPACT_PARALLELISM`, max 8).
+4. Summarises each chunk with `buildCompactSummaryPrompt` (profile-aware: `engineering` or `companion`) in single-shot print mode (`sessionId: null`) with a 60s `Promise.race` timeout. Each call requests a single JSON object `{ summary_md, memory_candidates }`, parsed by `parseCompactOutput`. Chunk summaries run with bounded parallelism (`COMPACT_PARALLELISM = 2`, override with `BRIDGE_COMPACT_PARALLELISM`, max 8).
 5. If multiple chunks or a previous summary exists, reduce-merges the previous compact summary plus chunk summaries into one durable `summary_md`.
-6. If any summariser call fails or returns empty output, stores a tombstone covering the exact loaded turn range instead of pruning uncovered turns.
-7. Stores the final summary via `addConvSummary`, then prunes raw turns up to `endId` via `pruneConvTurns`.
+6. **Non-destructive failure:** if any summariser call fails, times out, or returns output that isn't valid `{ summary_md, memory_candidates }` JSON, compaction stops there — no summary is stored and no turns are pruned. The previous summary and raw turns remain exactly as they were, and the user is told compaction failed so the conversation can continue uninterrupted.
+7. On success, stores the final summary via `addConvSummary`, promotes `memory_candidates` through `storeProjectMemoryCandidate()` into `project_memories`, then prunes raw turns up to `endId` via `pruneConvTurns`.
 8. Clears the `compact_in_progress` / `ctx_suppress` flags and the CLI session — next prompt starts a fresh CLI seeded with the new summary.
 
 **`/context`** — Reports current conversation state: turn count, pending queue depth, last turn timestamp, last compact time, and any active `compact_in_progress:<chatKey>` marker. Reads from `getConvStatus` and `getLatestConvSummary`. If stored turns exceed 100, it appends `High turn count - consider /compact`.
@@ -320,7 +320,7 @@ CREATE TABLE conversation_summaries (
 );
 ```
 
-> Note: `conversation_turns` are pruned after `/compact` only after a final summary or tombstone is stored for the exact loaded range (rows up to `range_end_turn_id` deleted). Startup also performs the same summary-gated cleanup for any already-summarized turns left behind by an interrupted process. Unsummarized turns are never TTL-deleted. `conversation_summaries` are small and kept indefinitely.
+> Note: `conversation_turns` are pruned after `/compact` only after a final summary is successfully stored for the exact loaded range (rows up to `range_end_turn_id` deleted). Compaction failure prunes nothing. Startup also performs the same summary-gated cleanup for any already-summarized turns left behind by an interrupted process. Unsummarized turns are never TTL-deleted. `conversation_summaries` are small and kept indefinitely.
 
 ---
 
@@ -337,7 +337,8 @@ src/
 ├── db.ts               — BridgeDb (SQLite via better-sqlite3); conversation_turns/summaries/pending
 ├── types.ts            — TypeScript interfaces
 ├── commands.ts         — /reset, /models, /compact, /context (synchronous, returns string | null)
-├── compactSummary.ts   — chunkCompactTurns, buildCompactSummaryPrompt, buildCompactReducePrompt, buildTombstone, compact constants
+├── compactSummary.ts   — chunkCompactTurns, buildCompactSummaryPrompt, buildCompactReducePrompt, parseCompactOutput, compact constants
+├── compactConversation.ts — shared compaction service: summarise, promote memory candidates, prune (non-destructive on failure)
 ├── contextCommand.ts   — renderAgentBridgeContext: read-only DB helper for agent CLI access
 ├── timeouts.ts         — Timeout resolution (per-bot prefix → global → default)
 └── projectMemory.ts    — guarded bridge-owned project memory validation

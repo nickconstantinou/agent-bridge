@@ -1379,7 +1379,7 @@ describe("BridgeEngine", () => {
       expect(runCli.mock.calls.length).toBeGreaterThan(2);
     });
 
-    it("compact handler falls back to tombstone when runCli fails", async () => {
+    it("compact failure is non-destructive when runCli fails: no summary stored, turns preserved", async () => {
       const { BridgeEngine } = await import("../src/engine.js");
       const client = makeMockClient();
 
@@ -1404,12 +1404,14 @@ describe("BridgeEngine", () => {
 
       await engine.handleMessages([makeMessage("/compact")]);
 
-      const summary = db.getLatestConvSummary("100");
-      expect(summary).not.toBeNull();
-      expect(summary!.summary_md).toContain("turns captured");
+      expect(db.getLatestConvSummary("100")).toBeNull();
+      expect(db.getRecentConvTurns("100", 100)).toHaveLength(2);
+      const sentBody = client.sendMessage.mock.calls.at(-1)?.[0];
+      expect(sentBody.text).toContain("Compaction failed");
+      expect(db.getSetting("compact_in_progress:100")).toBeNull();
     });
 
-    it("compact handler falls back to tombstone when the CLI returns non-JSON or JSON missing summary_md", async () => {
+    it("compact failure is non-destructive when the CLI returns non-JSON or JSON missing summary_md", async () => {
       const { BridgeEngine } = await import("../src/engine.js");
       const client = makeMockClient();
 
@@ -1434,11 +1436,11 @@ describe("BridgeEngine", () => {
 
       await engine.handleMessages([makeMessage("/compact")]);
 
-      const summary = db.getLatestConvSummary("100");
-      expect(summary).not.toBeNull();
-      // Falls back to the tombstone rather than storing the raw non-JSON prose as the summary.
-      expect(summary!.summary_md).toContain("turns captured");
-      expect(summary!.summary_md).not.toContain("Here is a summary");
+      // Non-JSON output is a failure, not a stored result — no summary, turns preserved.
+      expect(db.getLatestConvSummary("100")).toBeNull();
+      expect(db.getRecentConvTurns("100", 100)).toHaveLength(2);
+      const sentBody = client.sendMessage.mock.calls.at(-1)?.[0];
+      expect(sentBody.text).toContain("Compaction failed");
     });
 
     it("uses the companion compact profile when configured", async () => {

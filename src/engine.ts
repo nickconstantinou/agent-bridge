@@ -40,6 +40,7 @@ import { getCodexUsageText } from "./codexUsage.js";
 import { chunkCompactTurns, type CompactProfile } from "./compactSummary.js";
 import { compactConversation } from "./compactConversation.js";
 import { consumeHandoffRequired, isHandoffRequired } from "./handoffState.js";
+import { contextInjectionPolicy, preseedCompactMode, preseedCompactCharThreshold, type ContextInjectionPolicy } from "./contextPolicy.js";
 import type { BridgeEvent } from "./events/types.js";
 import { EventStore } from "./events/store.js";
 import type { BridgeConfig, BotKind, BotConfig, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult, CliOptions } from "./types.js";
@@ -102,33 +103,7 @@ const MAX_QUEUE_DEPTH = 5;
 const ENGINE_CONTEXT_MAX_CHARS = parseInt(process.env.BRIDGE_CONTEXT_MAX_CHARS ?? "") || DEFAULT_CONTEXT_MAX_CHARS;
 const ENGINE_TURN_TEXT_LIMIT = 1_200;
 
-export type ContextInjectionPolicy = "always" | "handoff_once";
-
-/**
- * "always" (default, current OSS behavior): inject full Agent Bridge context
- * on every turn regardless of session/handoff state.
- * "handoff_once" (recommended for platform-managed deployments): inject only
- * when there is no native CLI session, a handoff is pending, or /compact /
- * invalid-session recovery just reset the session — then rely on the
- * provider-native session for continuity until the next such event.
- * Read live (not cached) so it can change per-test/per-process without a
- * module reload.
- */
-function contextInjectionPolicy(): ContextInjectionPolicy {
-  return process.env.BRIDGE_CONTEXT_INJECTION_POLICY === "handoff_once" ? "handoff_once" : "always";
-}
-
-const PRESEED_COMPACT_CHARS_DEFAULT = 30_000;
-
-/** BRIDGE_PRESEED_COMPACT_MODE=auto enables minimal pre-seed compaction ahead of a
- * fresh-seed handoff_once turn; default "off" leaves fresh-seed context untouched. */
-function preseedCompactMode(): "off" | "auto" {
-  return process.env.BRIDGE_PRESEED_COMPACT_MODE === "auto" ? "auto" : "off";
-}
-
-function preseedCompactCharThreshold(): number {
-  return parseInt(process.env.BRIDGE_PRESEED_COMPACT_CHARS ?? "") || PRESEED_COMPACT_CHARS_DEFAULT;
-}
+export type { ContextInjectionPolicy };
 
 const AGENT_KINDS = new Set<string>(["codex", "antigravity", "claude", "kimchi"]);
 function isAgentKind(kind: string): kind is BotKind {

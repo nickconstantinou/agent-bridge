@@ -10,7 +10,7 @@ last_validated_against: issue-69
 
 ## Implementation Status
 
-PRs 1-6 and 6.1 are merged to `main`. PR 7 has not started.
+PRs 1-6, 6.1, and 6.2 are merged to `main`. PR 7 is implemented locally, pending PR/review.
 
 | PR | Scope | Status |
 |---|---|---|
@@ -22,7 +22,7 @@ PRs 1-6 and 6.1 are merged to `main`. PR 7 has not started.
 | 6 | Wire manual switch + fallback to compaction/handoff state | merged (#76) |
 | 6.1 | Configurable context injection policy (`BRIDGE_CONTEXT_INJECTION_POLICY`) — closes the PR 6 scope reduction below | merged |
 | 6.2 | Minimal pre-seed compaction (`BRIDGE_PRESEED_COMPACT_MODE`) ahead of a fresh-seed `handoff_once` turn | merged |
-| 7 | Operator visibility (`/context`, `/memory` commands, docs) | not started |
+| 7 | Operator diagnostics for context/memory health (`/context` only — no `/memory` command) | not yet merged |
 
 **PR 6 scope reduction, resolved by PR 6.1:** PR 6 left context injected on every turn for every CLI kind regardless of session/handoff state (the handoff flag was consumed for audit/logging only). PR 6.1 adds `BRIDGE_CONTEXT_INJECTION_POLICY`:
 
@@ -531,7 +531,7 @@ Actual PR sequence used (see Implementation Status above for merge state):
 4. **PR 4 — Latest-N Context Retrieval.** Split prompt-context retrieval from compaction backlog retrieval; add latest-N turn retrieval; add tests for more than 200 turns after latest summary. Rationale: prevents newest-turn loss before relying on handoff context.
 5. **PR 5 — One-Time Handoff State.** Add handoff-required state per chat/thread and CLI, in isolation (not yet wired into any dispatch path). Rationale: this changes runtime behavior and should be isolated from the wiring PR, given this exact code path already produced one duplicate-injection bug.
 6. **PR 6 — Manual Switch and Fallback Handoff.** Wire manual switch to clear target session and mark handoff; wire fallback to compact, promote, clear target session, mark handoff, and replay current update; add fallback compact cooldown. Rationale: completes the cross-provider continuity behavior. Scoped down from the original Phase 6-8 vision — see Implementation Status above.
-7. **PR 7 — Operator Visibility and Memory Commands.** Improve `/context` status; add or update `/memory` commands if accepted; update user-facing docs. Rationale: can follow after the core behavior is stable.
+7. **PR 7 — Operator Diagnostics for Context/Memory Health.** Improve `/context` with injection policy, pre-seed compact mode/threshold, uncompacted turn/char counts, and a memory *count*; update architecture docs. Explicit decision: no `/memory` Telegram command. Memory is an agent-facing substrate (subprocess CLIs read it via `agent-bridge-context --memory*`), not a human-facing chat feature — the operator gets health signals via `/context`, never memory contents or mutation. Rationale: can follow after the core behavior is stable; keeps the human-facing surface to diagnostics only.
 
 ## Open Follow-Up Questions
 
@@ -544,7 +544,7 @@ Two of the four original open questions are resolved and implemented; two remain
 
 **Still open:**
 
-3. *Should memory promotion be automatic or reviewed?* Current direction: automatic promotion from compaction, but only after validation through `storeProjectMemoryCandidate()`. Possible follow-up: add `/memory review` if automatic promotion proves noisy, and `/memory forget <id>` for operator/user correction. Candidate for PR 7.
+3. *Should memory promotion be automatic or reviewed?* Current direction: automatic promotion from compaction, but only after validation through `storeProjectMemoryCandidate()`. Decided in PR 7: no Telegram-facing `/memory review` or `/memory forget <id>` — memory stays agent-facing only, consumed via `agent-bridge-context`. If automatic promotion proves noisy, correction happens through that same agent-facing surface (e.g. an agent-invoked forget), not a human Telegram command.
 4. *Should individual (non-companion) CLI bots get one-time handoff context too?* Recommendation, not yet implemented: individual bots may rely primarily on native CLI session continuity; inject Agent Bridge context only when no native session exists, after `/compact`, or after invalid-session retry. The interactive/companion bot is the one that must use one-time handoff context for provider switching/fallback — that's PR 6's scope.
 
 ## Risks

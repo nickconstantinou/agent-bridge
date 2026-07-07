@@ -11,6 +11,7 @@ import type { BridgeDb } from "./db.js";
 import { buildModelKeyboard, buildModelsText } from "./bridge.js";
 import { listLocalCatalog } from "./skills.js";
 import { buildEffortKeyboard, buildEffortText, resolveEffort } from "./effort.js";
+import { contextInjectionPolicy, preseedCompactMode, preseedCompactCharThreshold } from "./contextPolicy.js";
 
 const CONTEXT_COMPACT_NUDGE_TURNS = 100;
 
@@ -180,6 +181,19 @@ export function handleCommand(
     if (status.turnCount > CONTEXT_COMPACT_NUDGE_TURNS) {
       lines.push("High turn count - consider /compact");
     }
+
+    const policy = contextInjectionPolicy();
+    const preseedMode = preseedCompactMode();
+    const uncompacted = db.getUncompactedConvStats(chatId);
+    const memoryCount = db.getMemoryCount();
+    lines.push(
+      "",
+      `Injection policy: ${policy}`,
+      `Pre-seed compact: ${preseedMode === "auto" ? `auto (threshold ${preseedCompactCharThreshold()} chars)` : "off"}`,
+      `Uncompacted: ${uncompacted.turnCount} turns, ${uncompacted.charCount} chars`,
+      `Memory count: ${memoryCount}`,
+    );
+
     return { kind: "message", text: lines.join("\n") };
   }
 

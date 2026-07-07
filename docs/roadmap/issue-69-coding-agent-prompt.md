@@ -1,5 +1,7 @@
 # Coding Agent Prompt: Issue #69 Compact Memory and Handoff
 
+**Subordinate to `docs/architecture/memory-and-handoff.md` (canonical architecture) and `docs/roadmap/issue-69-compact-memory-handoff.md` (canonical implementation plan, including current PR-by-PR status). If this prompt ever disagrees with either of those, they win.**
+
 Use this prompt for the implementation PR after the documentation PR lands.
 
 ```text
@@ -8,11 +10,10 @@ You are implementing Agent Bridge issue #69 in `nickconstantinou/agent-bridge`.
 Read these documents first and treat them as source of truth:
 
 1. `docs/architecture/memory-and-handoff.md`
-2. `docs/roadmap/issue-69-compact-memory-handoff.md`
-3. `docs/roadmap/issue-69-change-impact.md`
-4. `docs/architecture/companion-runtime.md`
-5. `docs/architecture/shared-runtime-memory-handoff-note.md`
-6. `docs/README.md`
+2. `docs/roadmap/issue-69-compact-memory-handoff.md` (includes current implementation status, file impact summary, and open follow-up questions)
+3. `docs/architecture/companion-runtime.md`
+4. `docs/architecture/shared-runtime.md` (see "Memory and Handoff Seams")
+5. `docs/README.md`
 
 Goal:
 

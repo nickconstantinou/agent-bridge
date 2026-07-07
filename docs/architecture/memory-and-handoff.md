@@ -2,7 +2,7 @@
 status: authoritative
 type: architecture
 authority: canonical
-implementation_status: planned
+implementation_status: partially-implemented
 last_validated_against: issue-69
 ---
 
@@ -13,6 +13,8 @@ last_validated_against: issue-69
 This document defines the intended memory and provider-handoff architecture for Agent Bridge.
 
 It supersedes the post-turn memory extractor direction and makes compaction the single durable-memory distillation point for both the Companion Runtime and Engineering Worker.
+
+**Implementation status:** the post-turn extractor removal, structured compact output, compact profiles, shared compaction service, and latest-N recent-turn fix are implemented on `main`. Manual-switch/fallback handoff wiring is open for review. The one-time (first-turn-only) context injection described in this document is not yet implemented — context is currently injected on every turn regardless of handoff state. See `docs/roadmap/issue-69-compact-memory-handoff.md` for the current PR-by-PR status and the specific scope reduction.
 
 ## Decision Summary
 

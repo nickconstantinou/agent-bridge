@@ -2,11 +2,27 @@
 status: active-roadmap
 type: roadmap
 authority: canonical
-implementation_status: planned
+implementation_status: partially-implemented
 last_validated_against: issue-69
 ---
 
 # Issue #69 Implementation Plan: Compact Memory and CLI Handoff
+
+## Implementation Status
+
+PRs 1-5 are merged to `main`. PR 6 is open for review. PR 7 has not started.
+
+| PR | Scope | Status |
+|---|---|---|
+| 1 | Characterisation tests + post-turn extractor removal | merged (#71) |
+| 2 | Structured compact JSON output + companion/engineering profiles | merged (#72) |
+| 3 | Shared `compactConversation()` service + memory promotion + non-destructive failure | merged (#73) |
+| 4 | Latest-N context retrieval fix (was returning oldest-N, a real bug) | merged (#74) |
+| 5 | One-time handoff state primitive (`src/handoffState.ts`), added in isolation | merged (#75) |
+| 6 | Wire manual switch + fallback to compaction/handoff state | open for review (#76) |
+| 7 | Operator visibility (`/context`, `/memory` commands, docs) | not started |
+
+**Known deliberate scope reduction in PR 6:** context is still injected on every turn for every CLI kind (existing behavior, unchanged) rather than only on the first turn of a fresh session. The handoff flag is consumed for audit/logging but does not currently gate injection. This is documented as a deferred follow-up in `docs/architecture/companion-runtime.md`, not a correctness gap — every-turn injection is redundant with the new handoff mechanism but not incorrect. See Phase 6 below for the original target design.
 
 ## Scope
 
@@ -22,48 +38,54 @@ It is a TDD-first plan for issue #69:
 - inject Agent Bridge context once when starting a fresh provider session;
 - fix recent-turn handling when more than 200 turns exist after the latest summary.
 
-## Current Implementation Areas
+## File Impact Summary
 
-Expected files to change or remove:
+### `src/engine.ts`
 
-```text
-src/engine.ts
-src/compactSummary.ts
-src/projectMemory.ts
-src/repositories/memoryRepository.ts
-src/repositories/sessionRepository.ts
-src/contextCommand.ts
-src/interactiveBot.ts
-src/index-interactive.ts
-src/index.ts
-src/index-worker.ts
-src/db.ts
-src/memoryExtractor.ts              # remove
-```
+- Post-turn extraction calls removed from sync/async execution paths (PR 1, done).
+- `/compact` handler delegates to the shared `compactConversation()` service instead of inline summarize/store/prune logic (PR 3, done).
+- One-time handoff flag consumption wired into `_buildRecentContextPrompt` (PR 6) — logging/audit only; does not yet gate injection (see Implementation Status above).
 
-Expected test areas:
+### `src/compactSummary.ts`
 
-```text
-test/ or src/**/*.test.ts around:
-- compact summary prompt construction
-- BridgeEngine prompt construction
-- interactive fallback dispatch
-- session persistence
-- project memory candidate storage
-- context command rendering/search
-```
+- Structured `{ summary_md, memory_candidates }` JSON output contract, `CompactProfile` (`"engineering" | "companion"`), and `parseCompactOutput()` parser (PR 2, done).
+- `chunkCompactTurns`/`buildCompactSummaryPrompt`/`buildCompactReducePrompt` retained; `buildTombstone()` removed once failure became non-destructive (PR 3, done).
 
-Expected docs to update:
+### `src/compactConversation.ts` (new module, PR 3, done)
 
-```text
-README.md
-docs/README.md
-docs/architecture/memory-and-handoff.md
-docs/architecture/companion-runtime.md
-docs/architecture/shared-runtime.md
-docs/roadmap/issue-69-compact-memory-handoff.md
-AGENTS.md or agents.md if it contains memory guidance
-```
+- `compactConversation(chatKey, deps)`: summarise, promote memory candidates through `storeProjectMemoryCandidate()`, prune only on success. Non-destructive on any failure.
+
+### `src/handoffState.ts` (new module, PR 5, done)
+
+- `markHandoffRequired` / `isHandoffRequired` / `clearHandoffRequired` / `consumeHandoffRequired`, keyed by `handoff_required:<chatKey>:<cliKind>` in `settings`.
+
+### `src/fallbackCompactCooldown.ts` (new module, PR 6)
+
+- Rate-limits compact-before-fallback so a cascading multi-hop fallback doesn't trigger a compaction CLI call before every single hop. Default 5 min, override `BRIDGE_FALLBACK_COMPACT_COOLDOWN_MS`.
+
+### `src/db.ts`
+
+- `getRecentConvTurns`'s `sinceId` branch fixed to fetch newest-first (was oldest-first — a real bug that silently dropped the newest messages once a chat crossed the candidate cap) (PR 4, done).
+- `getConvTurnsForCompaction` already had no `LIMIT` and processes the full backlog regardless — unaffected, confirmed by existing >1000-turn chunking tests.
+- Candidate-fetch cap configurable via `BRIDGE_CONTEXT_RECENT_TURN_LIMIT` (default 200) (PR 4, done).
+
+### `src/interactiveBot.ts`
+
+- `dispatchInteractiveWithFallback` gained `compactBeforeSwitch` dep, cooldown-gated, non-blocking on failure. Target session cleared + handoff marked before advancing the chain (PR 6).
+- `applyManualCliSwitchHandoff()` — shared helper for manual switch, also used by fallback via `prepareCliHandoff`.
+
+### `src/index-interactive.ts`, `src/index-discord-interactive.ts`, `src/index-worker.ts`
+
+- Manual `/cli` switch call sites wired to `applyManualCliSwitchHandoff` (PR 6).
+- `dispatchInteractiveWithFallback` call sites wired with `compactBeforeSwitch` (companion profile for interactive/discord, engineering profile for worker) (PR 6).
+
+### `src/projectMemory.ts`
+
+- Unchanged. `storeProjectMemoryCandidate()` is reused as-is by both the old sidecar path and the new compaction-promotion path.
+
+### Not yet touched
+
+- `src/contextCommand.ts` — `/context` status and `/memory` command surface improvements are PR 7 scope, not started.
 
 ## Implementation Principles
 
@@ -494,11 +516,29 @@ If `/memory` commands are too large for this issue, defer them to a follow-up is
 
 ## Rollout Plan
 
-1. Merge docs/plan PR.
-2. Implement Phase 0 tests in a new PR.
-3. Implement Phases 1-5 in one PR if manageable.
-4. Implement Phases 6-8 in a second PR if the handoff changes become large.
-5. Implement Phase 9 commands as follow-up if scope grows.
+Actual PR sequence used (see Implementation Status above for merge state):
+
+1. **PR 1 — Characterisation and Extractor Removal.** Add failing tests for the desired no-post-turn-extractor behavior; remove the extractor code and env flag; keep manual/sidecar memory storage intact. Rationale: reduces memory-system complexity before adding the compact-first path.
+2. **PR 2 — Structured Compact Output and Profiles.** Add compact JSON output contract; add companion and engineering profiles; add parser and validation tests; keep current `/compact` command behavior as close as possible except for output parsing and safe failure semantics. Rationale: creates the foundation for memory promotion.
+3. **PR 3 — Shared Compaction Service and Memory Promotion.** Extract `compactConversation()` service; promote memory candidates through `storeProjectMemoryCandidate()`; make compaction failure non-destructive; make `/compact` use the shared service. Rationale: creates one compaction path before handoff/fallback starts using it.
+4. **PR 4 — Latest-N Context Retrieval.** Split prompt-context retrieval from compaction backlog retrieval; add latest-N turn retrieval; add tests for more than 200 turns after latest summary. Rationale: prevents newest-turn loss before relying on handoff context.
+5. **PR 5 — One-Time Handoff State.** Add handoff-required state per chat/thread and CLI, in isolation (not yet wired into any dispatch path). Rationale: this changes runtime behavior and should be isolated from the wiring PR, given this exact code path already produced one duplicate-injection bug.
+6. **PR 6 — Manual Switch and Fallback Handoff.** Wire manual switch to clear target session and mark handoff; wire fallback to compact, promote, clear target session, mark handoff, and replay current update; add fallback compact cooldown. Rationale: completes the cross-provider continuity behavior. Scoped down from the original Phase 6-8 vision — see Implementation Status above.
+7. **PR 7 — Operator Visibility and Memory Commands.** Improve `/context` status; add or update `/memory` commands if accepted; update user-facing docs. Rationale: can follow after the core behavior is stable.
+
+## Open Follow-Up Questions
+
+Two of the four original open questions are resolved and implemented; two remain open follow-ups.
+
+**Resolved (implemented in PR 3 and PR 4):**
+
+1. *Should normal `/compact` use the fallback compact path?* Yes — one shared `compactConversation()` service is used by manual `/compact` and fallback handoff.
+2. *What happens when more than 200 turns exist after the latest summary?* Prompt/handoff context uses the latest N turns (not the first N); compaction always processes the full un-compacted backlog via chunking, independent of the prompt-context cap.
+
+**Still open:**
+
+3. *Should memory promotion be automatic or reviewed?* Current direction: automatic promotion from compaction, but only after validation through `storeProjectMemoryCandidate()`. Possible follow-up: add `/memory review` if automatic promotion proves noisy, and `/memory forget <id>` for operator/user correction. Candidate for PR 7.
+4. *Should individual (non-companion) CLI bots get one-time handoff context too?* Recommendation, not yet implemented: individual bots may rely primarily on native CLI session continuity; inject Agent Bridge context only when no native session exists, after `/compact`, or after invalid-session retry. The interactive/companion bot is the one that must use one-time handoff context for provider switching/fallback — that's PR 6's scope.
 
 ## Risks
 
@@ -536,16 +576,50 @@ Mitigation:
 
 ## Acceptance Criteria
 
-- [ ] Post-turn extractor removed.
-- [ ] Compact returns structured summary + memory candidates.
-- [ ] Compact profiles implemented and tested.
-- [ ] `/compact` and fallback use one compaction service.
-- [ ] Compaction failure is non-destructive.
-- [ ] Persistent memory candidates are promoted through validation.
-- [ ] Handoff context is injected once for fresh interactive provider sessions.
-- [ ] Continuing the same provider session does not repeatedly inject full context.
-- [ ] Manual switch clears target session and marks handoff required.
-- [ ] Fallback compacts, promotes, clears target session, and injects once.
-- [ ] Handoff uses latest summary + latest N recent turns.
-- [ ] Compaction processes all un-compacted turns, including >200-turn backlogs.
-- [ ] Docs no longer recommend the post-turn extractor.
+Use this checklist during implementation PR review. Status reflects `main` plus PR #76 (open for review).
+
+### Extractor Removal
+
+- [x] `src/memoryExtractor.ts` deleted.
+- [x] `BRIDGE_MEMORY_EXTRACTOR_ENABLED` removed from active docs and runtime config.
+- [x] `BridgeEngine` no longer calls a post-turn extractor after successful responses.
+- [x] Normal successful turns do not perform a second model/CLI call for memory extraction.
+
+### Compaction
+
+- [x] Compaction returns structured output: `summary_md` and `memory_candidates`.
+- [x] `summary_md` is stored only when valid and non-empty.
+- [x] Memory candidates are promoted only through validation.
+- [x] Duplicate/rejected memory candidates do not fail compaction.
+- [x] Companion and engineering profiles are implemented.
+- [x] `/compact` and fallback share the same compaction service (PR #76).
+- [x] Failed compaction is non-destructive.
+- [x] Raw turns are pruned only after a useful summary is stored successfully.
+
+### Recent Turns
+
+- [x] Handoff context uses latest summary + latest N turns.
+- [x] More than 200 turns after latest summary does not omit the newest turns.
+- [x] Compaction processes all un-compacted turns, regardless of prompt-context limits.
+
+### Handoff
+
+- [x] Handoff state exists per chat/thread and CLI (`src/handoffState.ts`).
+- [x] Manual switch clears the target CLI session and marks handoff required (PR #76).
+- [x] Fallback clears the next CLI session and marks handoff required (PR #76).
+- [ ] Handoff context is injected once into a fresh target CLI session — **not done**; context is still injected every turn regardless of handoff state (deliberate scope reduction, see Implementation Status above).
+- [ ] Continuing the same CLI session does not reinject the full handoff context — **not done**, same reason.
+- [ ] Invalid native session retry seeds context once without double injection — unaffected by this issue; existing retry behavior unchanged.
+
+### Fallback
+
+- [x] Fallback attempts compaction before switching provider (PR #76).
+- [x] Fallback continues even if compaction fails (PR #76).
+- [x] Fallback has compaction cooldown (PR #76, `fallbackCompactCooldown.ts`).
+- [x] Current user update is replayed into the next CLI after handoff state is prepared (pre-existing recursive dispatch behavior, unchanged).
+
+### Docs
+
+- [x] `README.md` and docs are aligned with compact-first memory.
+- [x] No active docs recommend post-turn extractor usage.
+- [x] Architecture docs and implementation plan agree (this consolidation).

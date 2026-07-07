@@ -56,19 +56,16 @@ The Companion Runtime should support domain-agnostic requests such as:
 
 The Companion Runtime should preserve continuity across provider switching without repeatedly injecting full Agent Bridge context into every turn.
 
-**Current implementation (issue #69 PR 6):**
+**Current implementation (issue #69 PR 6 + context injection policy):**
 
 - manual provider switching and capacity fallback both clear the target CLI's session (`db.setSession(chatKey, targetCli, null)`) so it starts fresh rather than resuming a possibly stale, long-abandoned native session;
 - fallback additionally compacts the outgoing CLI's conversation first (rate-limited by `fallbackCompactCooldown.ts`) and promotes durable memory candidates, so the target CLI's context is a fresh summary rather than raw un-compacted turns; compaction failure never blocks the fallback itself;
-- a one-time `handoff_required:<chatKey>:<cliKind>` flag (`src/handoffState.ts`) is set on the target and consumed (cleared, logged) on its first turn.
-
-**Deferred, not yet implemented:** `_buildRecentContextPrompt` still injects `buildConvContext` on *every* turn for every CLI kind (bounded by `BRIDGE_CONTEXT_MAX_CHARS`), not only on the first turn of a fresh session. The handoff flag is consumed for audit/logging, but does not currently gate whether context is injected — the aspirational "stop injecting full context once the native session takes over" optimization below was judged too large a behavior change to bundle into the handoff-state PR, given this exact code path already produced one duplicate-injection bug earlier. It remains a candidate follow-up, not a correctness gap: every-turn injection is redundant but not wrong.
-
-Target end-state (not yet built):
-
-- native CLI session IDs maintain continuity while the same provider session is active;
-- Agent Bridge injects handoff context only on the first turn of a fresh target CLI session;
-- after a successful first target response, Agent Bridge stops injecting the full handoff context on every turn, relying on the native session instead.
+- a one-time `handoff_required:<chatKey>:<cliKind>` flag (`src/handoffState.ts`) is set on the target;
+- `BridgeEngine._shouldInjectContext()` gates full context injection on a configurable policy, `BRIDGE_CONTEXT_INJECTION_POLICY`:
+  - `always` (default): inject on every turn regardless of session/handoff state — preserves the original OSS behavior exactly, so existing self-hosted deployments see no change.
+  - `handoff_once`: inject only when there is no native CLI session for this chat+CLI (covers first-ever turn, `/compact` reset, and invalid-session retry, since all three clear the session and retry with `sessionId: null`), or when the handoff flag is pending. Consumed (cleared, logged) on the turn that actually receives it — never consumed on a turn the policy suppresses (e.g. `/reset`'s `ctx_suppress` always wins over a pending handoff mark).
+  - `AGENT_BRIDGE_CONTEXT_COMMAND`/`AGENT_BRIDGE_CONTEXT_DB`/`AGENT_BRIDGE_CHAT_KEY`/`AGENT_BRIDGE_CLI_KIND` env vars remain available under both policies regardless of whether the prompt preamble is injected, so the CLI can always self-serve query context via `agent-bridge-context`.
+- Platform-managed workspaces should set `handoff_once` — see `docs/architecture/platform-boundary.md`.
 
 Handoff context should be built from:
 

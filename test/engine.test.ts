@@ -7,6 +7,7 @@ import { openDb } from "../src/db.js";
 import type { BridgeConfig, TelegramMessage } from "../src/types.js";
 import { type as eventType } from "../src/events/types.js";
 import { markHandoffRequired, isHandoffRequired } from "../src/handoffState.js";
+import { compactInProgressSettingKey } from "../src/commands.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -70,6 +71,8 @@ describe("BridgeEngine", () => {
     delete process.env.BRIDGE_COMPACT_PARALLELISM;
     delete process.env.BRIDGE_MEMORY_EXTRACTOR_ENABLED;
     delete process.env.BRIDGE_CONTEXT_INJECTION_POLICY;
+    delete process.env.BRIDGE_PRESEED_COMPACT_MODE;
+    delete process.env.BRIDGE_PRESEED_COMPACT_CHARS;
     db.close();
     try { rmSync(dbPath); } catch {}
   });
@@ -339,6 +342,172 @@ describe("BridgeEngine", () => {
         AGENT_BRIDGE_CHAT_KEY: "100",
       });
       expect(capturedContextEnv?.AGENT_BRIDGE_CONTEXT_COMMAND).toContain("agent-bridge-context");
+    });
+  });
+
+  describe("pre-seed compaction (BRIDGE_PRESEED_COMPACT_MODE)", () => {
+    function seedLongTurns(chatKey: string, count = 5) {
+      for (let i = 0; i < count; i++) {
+        db.addConvTurn(chatKey, "user", `turn-${i}-${"x".repeat(50)}`);
+      }
+    }
+
+    it("does not compact when mode is off (default) even past the char threshold", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      process.env.BRIDGE_PRESEED_COMPACT_CHARS = "10";
+      const { BridgeEngine } = await import("../src/engine.js");
+      seedLongTurns("100");
+
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        const prompt = args[args.length - 1];
+        if (prompt.includes("Summarise now:")) throw new Error("compaction must not run when mode is off");
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(db.getLatestConvSummary("100")).toBeNull();
+    });
+
+    it("compacts before injecting context when mode=auto and the char threshold is exceeded on a fresh-seed turn", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      process.env.BRIDGE_PRESEED_COMPACT_MODE = "auto";
+      process.env.BRIDGE_PRESEED_COMPACT_CHARS = "10";
+      const { BridgeEngine } = await import("../src/engine.js");
+      seedLongTurns("100");
+
+      let mainPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        const prompt = args[args.length - 1];
+        if (prompt.includes("Summarise now:")) {
+          return compactJson("Current objective:\n- preseeded\n\nDurable facts:\n- none\n\nOpen state:\n- none");
+        }
+        mainPrompt = prompt;
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(db.getLatestConvSummary("100")).not.toBeNull();
+      expect(mainPrompt).toContain("preseeded");
+    });
+
+    it("does not compact when there are zero uncompacted turns", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      process.env.BRIDGE_PRESEED_COMPACT_MODE = "auto";
+      process.env.BRIDGE_PRESEED_COMPACT_CHARS = "10";
+      const { BridgeEngine } = await import("../src/engine.js");
+      // No addConvTurn calls — chat has no history at all.
+
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        const prompt = args[args.length - 1];
+        if (prompt.includes("Summarise now:")) throw new Error("compaction must not run with zero turns");
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await expect(engine.handleMessages([makeMessage("hello")])).resolves.not.toThrow();
+      expect(db.getLatestConvSummary("100")).toBeNull();
+    });
+
+    it("respects the compact-in-progress guard and skips pre-seed compaction", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      process.env.BRIDGE_PRESEED_COMPACT_MODE = "auto";
+      process.env.BRIDGE_PRESEED_COMPACT_CHARS = "10";
+      const { BridgeEngine } = await import("../src/engine.js");
+      seedLongTurns("100");
+      db.setSetting(compactInProgressSettingKey("100"), new Date().toISOString());
+
+      let mainPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        const prompt = args[args.length - 1];
+        if (prompt.includes("Summarise now:")) throw new Error("compaction must not run while already in progress");
+        mainPrompt = prompt;
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(db.getLatestConvSummary("100")).toBeNull();
+      expect(mainPrompt).toContain("hello");
+      expect(runCli).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not block execution when pre-seed compaction fails", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      process.env.BRIDGE_PRESEED_COMPACT_MODE = "auto";
+      process.env.BRIDGE_PRESEED_COMPACT_CHARS = "10";
+      const { BridgeEngine } = await import("../src/engine.js");
+      seedLongTurns("100");
+
+      let mainPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        const prompt = args[args.length - 1];
+        if (prompt.includes("Summarise now:")) throw new Error("simulated compaction LLM failure");
+        mainPrompt = prompt;
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await expect(engine.handleMessages([makeMessage("hello")])).resolves.not.toThrow();
+      expect(db.getLatestConvSummary("100")).toBeNull();
+      expect(mainPrompt).toContain("hello");
+      expect(db.getSetting(compactInProgressSettingKey("100"))).toBeNull();
+    });
+
+    it("runs on the async execution path as well", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      process.env.BRIDGE_PRESEED_COMPACT_MODE = "auto";
+      process.env.BRIDGE_PRESEED_COMPACT_CHARS = "10";
+      const { BridgeEngine } = await import("../src/engine.js");
+      seedLongTurns("100");
+
+      const runCliAsync = vi.fn().mockImplementation(async (_cmd: string, args: string[], _cwd: string, options: any) => {
+        const prompt = args[args.length - 1];
+        const rawOutput = JSON.stringify({ result: "ok", session_id: "async-session-preseed" });
+        const ctx = options.eventContext;
+        options.onEvent?.(eventType.runCompleted({ ...ctx, text: rawOutput, sessionId: null }));
+        return { text: rawOutput };
+      });
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        const prompt = args[args.length - 1];
+        if (prompt.includes("Summarise now:")) {
+          return compactJson("Current objective:\n- preseeded-async\n\nDurable facts:\n- none\n\nOpen state:\n- none");
+        }
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: true, pollIntervalMs: 1000 },
+        db, client, { runCli, runCliAsync },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(db.getLatestConvSummary("100")).not.toBeNull();
     });
   });
 

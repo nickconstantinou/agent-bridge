@@ -118,6 +118,18 @@ function contextInjectionPolicy(): ContextInjectionPolicy {
   return process.env.BRIDGE_CONTEXT_INJECTION_POLICY === "handoff_once" ? "handoff_once" : "always";
 }
 
+const PRESEED_COMPACT_CHARS_DEFAULT = 30_000;
+
+/** BRIDGE_PRESEED_COMPACT_MODE=auto enables minimal pre-seed compaction ahead of a
+ * fresh-seed handoff_once turn; default "off" leaves fresh-seed context untouched. */
+function preseedCompactMode(): "off" | "auto" {
+  return process.env.BRIDGE_PRESEED_COMPACT_MODE === "auto" ? "auto" : "off";
+}
+
+function preseedCompactCharThreshold(): number {
+  return parseInt(process.env.BRIDGE_PRESEED_COMPACT_CHARS ?? "") || PRESEED_COMPACT_CHARS_DEFAULT;
+}
+
 const AGENT_KINDS = new Set<string>(["codex", "antigravity", "claude", "kimchi"]);
 function isAgentKind(kind: string): kind is BotKind {
   return AGENT_KINDS.has(kind);
@@ -688,7 +700,45 @@ export class BridgeEngine {
     };
   }
 
-  private _buildPromptForCli(chatKey: string, prompt: string, sessionId: string | null): { prompt: string; contextEnv?: Record<string, string> } {
+  /**
+   * Minimal pre-seed compaction: when a handoff_once turn is about to inject
+   * full context into a fresh provider session and the un-compacted backlog
+   * exceeds BRIDGE_PRESEED_COMPACT_CHARS, compact it first so the injected
+   * context is a summary rather than a large raw-turn dump. Off by default
+   * (BRIDGE_PRESEED_COMPACT_MODE=auto opts in). Never blocks the user's turn:
+   * skipped when a compaction is already in progress, a no-op with zero
+   * un-compacted turns, and any failure is logged and swallowed.
+   */
+  private async _maybePreseedCompact(chatKey: string, sessionId: string | null): Promise<void> {
+    if (contextInjectionPolicy() !== "handoff_once") return;
+    if (preseedCompactMode() !== "auto") return;
+    if (!this._shouldInjectContext(chatKey, sessionId)) return;
+
+    const inProgressKey = compactInProgressSettingKey(chatKey);
+    if (this.db.getSetting(inProgressKey)) return;
+
+    const stats = this.db.getUncompactedConvStats(chatKey);
+    if (stats.turnCount === 0) return;
+    if (stats.charCount <= preseedCompactCharThreshold()) return;
+
+    this.db.setSetting(inProgressKey, new Date().toISOString());
+    try {
+      await compactConversation(chatKey, {
+        db: this.db,
+        runCli: (command, args, cwd, options) => this.exec.runCli(command, args, cwd, options),
+        botConfig: this.opts.botConfig,
+        cliKind: this.kind,
+        compactProfile: this.opts.compactProfile ?? "engineering",
+      });
+    } catch (error) {
+      console.warn(`[preseed-compact] failed chatKey=${chatKey} cliKind=${this.kind}`, error);
+    } finally {
+      this.db.setSetting(inProgressKey, null);
+    }
+  }
+
+  private async _buildPromptForCli(chatKey: string, prompt: string, sessionId: string | null): Promise<{ prompt: string; contextEnv?: Record<string, string> }> {
+    await this._maybePreseedCompact(chatKey, sessionId);
     const shouldInject = this._shouldInjectContext(chatKey, sessionId);
     const contextPrompt = this._buildRecentContextPrompt(chatKey, prompt, sessionId);
     const access = this._buildContextAccess(chatKey);
@@ -728,7 +778,7 @@ export class BridgeEngine {
     const cwd = getCliWorkingDir(executionKind);
     const startedAtMs = Date.now();
     if (executionKind === "antigravity") setAntigravityModel(model);
-    const promptForCli = this._buildPromptForCli(chatKey, prompt, sessionId);
+    const promptForCli = await this._buildPromptForCli(chatKey, prompt, sessionId);
     const invocation = buildCliInvocation({
       bot: executionKind,
       command: this.opts.botConfig.command,
@@ -853,7 +903,7 @@ export class BridgeEngine {
     const cwd = getCliWorkingDir(executionKind);
     const startedAtMs = Date.now();
     if (executionKind === "antigravity") setAntigravityModel(model);
-    const promptForCli = this._buildPromptForCli(chatKey, prompt, sessionId);
+    const promptForCli = await this._buildPromptForCli(chatKey, prompt, sessionId);
     const invocation = buildCliInvocation({
       bot: executionKind,
       command: this.opts.botConfig.command,

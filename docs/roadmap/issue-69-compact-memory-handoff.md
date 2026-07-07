@@ -21,12 +21,15 @@ PRs 1-6 and 6.1 are merged to `main`. PR 7 has not started.
 | 5 | One-time handoff state primitive (`src/handoffState.ts`), added in isolation | merged (#75) |
 | 6 | Wire manual switch + fallback to compaction/handoff state | merged (#76) |
 | 6.1 | Configurable context injection policy (`BRIDGE_CONTEXT_INJECTION_POLICY`) — closes the PR 6 scope reduction below | merged |
+| 6.2 | Minimal pre-seed compaction (`BRIDGE_PRESEED_COMPACT_MODE`) ahead of a fresh-seed `handoff_once` turn | merged |
 | 7 | Operator visibility (`/context`, `/memory` commands, docs) | not started |
 
 **PR 6 scope reduction, resolved by PR 6.1:** PR 6 left context injected on every turn for every CLI kind regardless of session/handoff state (the handoff flag was consumed for audit/logging only). PR 6.1 adds `BRIDGE_CONTEXT_INJECTION_POLICY`:
 
 - `always` (default): unchanged every-turn injection — existing self-hosted OSS deployments see no behavior change.
 - `handoff_once` (recommended for platform-managed workspaces, see `docs/architecture/platform-boundary.md`): inject only when there is no native CLI session, a handoff is pending, or `/compact`/invalid-session recovery just reset the session (all three clear the session and retry with `sessionId: null`); otherwise rely on the native session. `AGENT_BRIDGE_CONTEXT_COMMAND` and related env vars remain available under both policies regardless of whether the prompt preamble is injected. The handoff flag is now consumed only on a turn that actually receives injected context — never on a turn the policy (or `/reset`'s `ctx_suppress`) suppresses.
+
+**PR 6.2, minimal pre-seed compaction:** adds `getUncompactedConvStats(chatKey)` (`src/db.ts`) and `BridgeEngine._maybePreseedCompact()` (`src/engine.ts`). Under `handoff_once`, on a turn that will inject full context into a fresh provider session, checks the un-compacted turn/char count first. `BRIDGE_PRESEED_COMPACT_MODE=off` (default) is a no-op — unchanged behavior. `BRIDGE_PRESEED_COMPACT_MODE=auto` compacts via the existing `compactConversation()` service before injection when the char count exceeds `BRIDGE_PRESEED_COMPACT_CHARS` (default `30000`); skipped at zero un-compacted turns or when `compact_in_progress:<chatKey>` is already set; any compaction failure is logged and swallowed, never blocking the turn. Recommended platform defaults: `BRIDGE_CONTEXT_INJECTION_POLICY=handoff_once`, `BRIDGE_PRESEED_COMPACT_MODE=auto`, `BRIDGE_PRESEED_COMPACT_CHARS=30000`. Non-goals for this PR: `/memory` commands, semantic milestone detection, idle/background compaction, tokenizer-based accounting, and changes to memory promotion or compact summary format.
 
 ## Scope
 
@@ -614,6 +617,7 @@ Use this checklist during implementation PR review. Status reflects `main` plus 
 - [x] Handoff context is injected once into a fresh target CLI session — implemented behind `BRIDGE_CONTEXT_INJECTION_POLICY=handoff_once` (PR 6.1); default `always` preserves every-turn injection for existing self-hosted deployments.
 - [x] Continuing the same CLI session does not reinject the full handoff context — same flag, `handoff_once` policy (PR 6.1).
 - [x] Invalid native session retry seeds context once without double injection — the retry clears the session and recurses with `sessionId: null`, which `handoff_once` treats as a fresh-session condition (PR 6.1); unaffected under `always`.
+- [x] Minimal pre-seed compaction ahead of a fresh-seed `handoff_once` turn, opt-in via `BRIDGE_PRESEED_COMPACT_MODE=auto` and `BRIDGE_PRESEED_COMPACT_CHARS` (PR 6.2); off by default, non-blocking on failure.
 
 ### Fallback
 

@@ -953,6 +953,16 @@ export class BridgeDb {
       .all(chatKey, summary?.range_end_turn_id ?? 0) as any;
   }
 
+  getUncompactedConvStats(chatKey: string): { turnCount: number; charCount: number } {
+    const summary = this.getLatestConvSummary(chatKey);
+    return this.raw
+      .prepare(
+        `SELECT COUNT(*) AS turnCount, COALESCE(SUM(LENGTH(text)), 0) AS charCount
+         FROM conversation_turns WHERE chat_key = ? AND id > ?`
+      )
+      .get(chatKey, summary?.range_end_turn_id ?? 0) as { turnCount: number; charCount: number };
+  }
+
   pruneConvTurns(chatKey: string, upToTurnId: number): void {
     this.raw
       .prepare(`DELETE FROM conversation_turns WHERE chat_key = ? AND id <= ?`)

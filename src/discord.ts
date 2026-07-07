@@ -185,12 +185,12 @@ export class DiscordClient implements MessagingPlatform {
   }
 
   /** Sends a file to a Discord channel as an attachment. */
-  async sendDocument(chatId: number | string, filePath: string, caption?: string): Promise<void> {
+  async sendDocument(chatId: number | string, filePath: string, caption?: string, _options?: unknown): Promise<void> {
     await this._sendFile(String(chatId), filePath, caption);
   }
 
   /** Sends an image to a Discord channel as an attachment. */
-  async sendPhoto(chatId: number | string, filePath: string, caption?: string): Promise<void> {
+  async sendPhoto(chatId: number | string, filePath: string, caption?: string, _options?: unknown): Promise<void> {
     await this._sendFile(String(chatId), filePath, caption);
   }
 

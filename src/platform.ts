@@ -15,7 +15,7 @@ export interface MessagingPlatform {
   // Bot metadata
   setMyCommands(body: any): Promise<any>;
   // File delivery
-  sendDocument(chatId: number, filePath: string, caption?: string): Promise<void>;
+  sendDocument(chatId: number | string, filePath: string, caption?: string, options?: FileSendOptions): Promise<void>;
   sendDocumentBuffer?(body: {
     chat_id: number | string;
     bytes: Buffer;
@@ -24,8 +24,12 @@ export interface MessagingPlatform {
     caption?: string;
     [key: string]: any;
   }): Promise<any>;
-  sendPhoto(chatId: number, filePath: string, caption?: string): Promise<void>;
+  sendPhoto(chatId: number | string, filePath: string, caption?: string, options?: FileSendOptions): Promise<void>;
   // Attachment download (Telegram-specific; Discord stubs may throw or no-op)
   getFilePath(fileId: string): Promise<string>;
   downloadFile(filePath: string, destPath: string): Promise<void>;
+}
+
+export interface FileSendOptions {
+  message_thread_id?: number;
 }

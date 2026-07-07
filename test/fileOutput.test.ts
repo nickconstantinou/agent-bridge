@@ -103,6 +103,23 @@ describe("uploadOutputFiles", () => {
     expect(await dirExists(dir)).toBe(false);
   });
 
+  it("passes thread options through to uploaded files", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "bridge-upload-thread-"));
+    const png = join(dir, "chart.png");
+    const pdf = join(dir, "report.pdf");
+    await writeFile(png, "PNG");
+    await writeFile(pdf, "PDF");
+
+    const sendPhoto = vi.fn().mockResolvedValue(undefined);
+    const sendDocument = vi.fn().mockResolvedValue(undefined);
+    const client = { sendPhoto, sendDocument } as any;
+
+    await uploadOutputFiles(dir, 42, client, { message_thread_id: 99 });
+
+    expect(sendPhoto).toHaveBeenCalledWith(42, png, undefined, { message_thread_id: 99 });
+    expect(sendDocument).toHaveBeenCalledWith(42, pdf, undefined, { message_thread_id: 99 });
+  });
+
   it("continues uploading remaining files if one upload throws", async () => {
     const dir = await mkdtemp(join(tmpdir(), "bridge-upload-err-"));
     await writeFile(join(dir, "a.png"), "x");

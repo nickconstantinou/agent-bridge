@@ -211,6 +211,32 @@ describe("TelegramClient", () => {
     }
   });
 
+  it("sendDocument includes message_thread_id when provided", async () => {
+    const calls: { url: string; body: FormData }[] = [];
+    const fakeFetch = (async (url: string, opts: any) => {
+      calls.push({ url, body: opts.body });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, result: { message_id: 99 } }),
+      };
+    }) as any;
+
+    const dir = await mkdtemp(join(tmpdir(), "bridge-test-"));
+    const filePath = join(dir, "report.pdf");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(filePath, "PDF content");
+    try {
+      const client = new TelegramClient("mytoken", fakeFetch);
+      await client.sendDocument(42, filePath, undefined, { message_thread_id: 99 });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body.get("message_thread_id")).toBe("99");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("sendDocumentBuffer makes an in-memory multipart POST to /sendDocument", async () => {
     const calls: { url: string; body: FormData }[] = [];
     const fakeFetch = (async (url: string, opts: any) => {
@@ -268,6 +294,32 @@ describe("TelegramClient", () => {
       const fd = calls[0].body as FormData;
       expect(fd.get("chat_id")).toBe("42");
       expect(fd.get("photo")).toBeTruthy();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("sendPhoto includes message_thread_id when provided", async () => {
+    const calls: { url: string; body: FormData }[] = [];
+    const fakeFetch = (async (url: string, opts: any) => {
+      calls.push({ url, body: opts.body });
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, result: { message_id: 100 } }),
+      };
+    }) as any;
+
+    const dir = await mkdtemp(join(tmpdir(), "bridge-test-"));
+    const filePath = join(dir, "chart.png");
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(filePath, Buffer.from([137, 80, 78, 71]));
+    try {
+      const client = new TelegramClient("mytoken", fakeFetch);
+      await client.sendPhoto(42, filePath, undefined, { message_thread_id: 99 });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0].body.get("message_thread_id")).toBe("99");
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

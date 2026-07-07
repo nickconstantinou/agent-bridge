@@ -122,11 +122,11 @@ class DiscordEngineClient implements MessagingPlatform {
     return this.inner.setMyCommands(body);
   }
 
-  sendDocument(chatId: number, filePath: string, caption?: string): Promise<void> {
+  sendDocument(chatId: number, filePath: string, caption?: string, options?: unknown): Promise<void> {
     return this.inner.sendDocument(this.resolveSnowflake(chatId), filePath, caption);
   }
 
-  sendPhoto(chatId: number, filePath: string, caption?: string): Promise<void> {
+  sendPhoto(chatId: number, filePath: string, caption?: string, options?: unknown): Promise<void> {
     return this.inner.sendPhoto(this.resolveSnowflake(chatId), filePath, caption);
   }
 

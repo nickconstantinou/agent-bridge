@@ -69,6 +69,7 @@ describe("BridgeEngine", () => {
     delete process.env.BRIDGE_COMPACT_CHUNK_MAX_CHARS;
     delete process.env.BRIDGE_COMPACT_PARALLELISM;
     delete process.env.BRIDGE_MEMORY_EXTRACTOR_ENABLED;
+    delete process.env.BRIDGE_CONTEXT_INJECTION_POLICY;
     db.close();
     try { rmSync(dbPath); } catch {}
   });
@@ -122,6 +123,222 @@ describe("BridgeEngine", () => {
 
       await expect(engine.handleMessages([makeMessage("hello")])).resolves.not.toThrow();
       expect(isHandoffRequired(db, "100", "claude")).toBe(false);
+    });
+  });
+
+  describe("context injection policy (BRIDGE_CONTEXT_INJECTION_POLICY)", () => {
+    const MARKER = "earlier-turn-marker-XYZ123";
+
+    it("always policy (explicit) injects context every turn even when a native session already exists", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "always";
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+      db.setSession("100", "claude", "existing-session-continuing");
+
+      let capturedPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompt = args[args.length - 1];
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("continue please")]);
+
+      expect(capturedPrompt).toContain(MARKER);
+    });
+
+    it("default (no env set) behaves like always — preserves current OSS behavior", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+      db.setSession("100", "claude", "existing-session-continuing");
+
+      let capturedPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompt = args[args.length - 1];
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("continue please")]);
+
+      expect(capturedPrompt).toContain(MARKER);
+    });
+
+    it("handoff_once injects on the first turn when no native session exists", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+      // No db.setSession call — sessionId is null for this chat+CLI.
+
+      let capturedPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompt = args[args.length - 1];
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(capturedPrompt).toContain(MARKER);
+    });
+
+    it("handoff_once suppresses context on a second same-provider turn once a native session exists (sync path)", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+
+      const capturedPrompts: string[] = [];
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompts.push(args[args.length - 1]);
+        return JSON.stringify({ result: "ok", session_id: "sync-session-abc" });
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("first message")]);
+      expect(capturedPrompts[0]).toContain(MARKER);
+      expect(db.getSession("100", "claude")).toBe("sync-session-abc");
+
+      await engine.handleMessages([makeMessage("second message, same session")]);
+      expect(capturedPrompts[1]).not.toContain(MARKER);
+      expect(capturedPrompts[1]).not.toContain("[Context from previous conversation]");
+    });
+
+    it("handoff_once suppresses context on a second same-provider turn once a native session exists (async path)", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+
+      const capturedPrompts: string[] = [];
+      const runCliAsync = vi.fn().mockImplementation(async (_cmd: string, args: string[], _cwd: string, options: any) => {
+        capturedPrompts.push(args[args.length - 1]);
+        const rawOutput = JSON.stringify({ result: "ok", session_id: "async-session-abc" });
+        const ctx = options.eventContext;
+        options.onEvent?.(eventType.runCompleted({ ...ctx, text: rawOutput, sessionId: null }));
+        return { text: rawOutput };
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: true, pollIntervalMs: 1000 },
+        db, client, { runCliAsync },
+      );
+
+      await engine.handleMessages([makeMessage("first message")]);
+      expect(capturedPrompts[0]).toContain(MARKER);
+      expect(db.getSession("100", "claude")).toBe("async-session-abc");
+
+      await engine.handleMessages([makeMessage("second message, same session")]);
+      expect(capturedPrompts[1]).not.toContain(MARKER);
+    });
+
+    it("handoff_once injects when handoff_required is set even though a native session already exists", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+      db.setSession("100", "claude", "stale-session-before-handoff-mark");
+      markHandoffRequired(db, "100", "claude", "manual_switch");
+
+      let capturedPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompt = args[args.length - 1];
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello after switch")]);
+
+      expect(capturedPrompt).toContain(MARKER);
+      expect(isHandoffRequired(db, "100", "claude")).toBe(false);
+    });
+
+    it("handoff flag is only consumed on a turn where context was actually injected", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+      db.setSession("100", "claude", "session-continuing");
+      db.setSetting("ctx_suppress:100", "1"); // forces suppression regardless of handoff mark
+      markHandoffRequired(db, "100", "claude", "manual_switch");
+
+      const capturedPrompts: string[] = [];
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompts.push(args[args.length - 1]);
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("suppressed turn")]);
+      expect(capturedPrompts[0]).not.toContain(MARKER);
+      // Suppressed by ctx_suppress even though handoff was marked — flag must survive uncomsumed.
+      expect(isHandoffRequired(db, "100", "claude")).toBe(true);
+
+      db.setSetting("ctx_suppress:100", null);
+      await engine.handleMessages([makeMessage("now it should inject")]);
+      expect(capturedPrompts[1]).toContain(MARKER);
+      expect(isHandoffRequired(db, "100", "claude")).toBe(false);
+    });
+
+    it("keeps Agent Bridge context env available under handoff_once even when the prompt preamble is suppressed", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+      db.setSession("100", "claude", "session-continuing");
+
+      let capturedPrompt = "";
+      let capturedContextEnv: Record<string, string> | undefined;
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[], _cwd: string, options: any) => {
+        capturedPrompt = args[args.length - 1];
+        capturedContextEnv = options.contextEnv;
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          fullConfig: makeFullConfig(dbPath),
+        },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("continuing session")]);
+
+      // Prompt preamble (both the recent-turn context and the "[Agent Bridge context]"
+      // usage-instructions block) must be suppressed...
+      expect(capturedPrompt).not.toContain(MARKER);
+      expect(capturedPrompt).not.toContain("[Agent Bridge context]");
+      // ...but the env vars must remain available so the CLI can self-serve query it.
+      expect(capturedContextEnv).toMatchObject({
+        AGENT_BRIDGE_CONTEXT_AVAILABLE: "1",
+        AGENT_BRIDGE_CHAT_KEY: "100",
+      });
+      expect(capturedContextEnv?.AGENT_BRIDGE_CONTEXT_COMMAND).toContain("agent-bridge-context");
     });
   });
 
@@ -696,6 +913,46 @@ describe("BridgeEngine", () => {
       // Regression: retry must not wrap the prompt in a second context block
       const contextBlocks = promptArg.match(/\[Context from previous conversation\]/g) ?? [];
       expect(contextBlocks).toHaveLength(1);
+    });
+
+    it("injects context on invalid-session retry under handoff_once, even though a valid-looking session existed beforehand", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      const { BridgeEngine } = await import("../src/engine.js");
+
+      const runCli = vi.fn()
+        .mockResolvedValueOnce("Hello there! I am Claude.")
+        .mockRejectedValueOnce(new Error("CLI exited with code 1: No conversation found with session ID: invalid-session-id-123"))
+        .mockResolvedValueOnce("Successful fresh retry result");
+
+      const client = makeMockClient();
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+      db.setSession("100", "claude", "invalid-session-id-123");
+
+      await engine.handleMessages([makeMessage("help me")]);
+
+      expect(db.getSession("100", "claude")).toBeNull();
+      const thirdCallArgs = runCli.mock.calls[2][1];
+      const promptArg = thirdCallArgs[thirdCallArgs.length - 1];
+      // The invalid-session catch block clears the session and recurses with
+      // sessionId: null — under handoff_once that null session is exactly the
+      // condition that forces injection, independent of any handoff mark.
+      expect(promptArg).toContain("[Context from previous conversation]");
+      expect(promptArg).toContain("help me");
     });
     it("falls back to the next model in preference list and retries with context and null sessionId on capacity error", async () => {
       const { BridgeEngine } = await import("../src/engine.js");

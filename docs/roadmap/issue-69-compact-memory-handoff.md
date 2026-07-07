@@ -10,7 +10,7 @@ last_validated_against: issue-69
 
 ## Implementation Status
 
-PRs 1-5 are merged to `main`. PR 6 is open for review. PR 7 has not started.
+PRs 1-6 and 6.1 are merged to `main`. PR 7 has not started.
 
 | PR | Scope | Status |
 |---|---|---|
@@ -19,10 +19,14 @@ PRs 1-5 are merged to `main`. PR 6 is open for review. PR 7 has not started.
 | 3 | Shared `compactConversation()` service + memory promotion + non-destructive failure | merged (#73) |
 | 4 | Latest-N context retrieval fix (was returning oldest-N, a real bug) | merged (#74) |
 | 5 | One-time handoff state primitive (`src/handoffState.ts`), added in isolation | merged (#75) |
-| 6 | Wire manual switch + fallback to compaction/handoff state | open for review (#76) |
+| 6 | Wire manual switch + fallback to compaction/handoff state | merged (#76) |
+| 6.1 | Configurable context injection policy (`BRIDGE_CONTEXT_INJECTION_POLICY`) — closes the PR 6 scope reduction below | merged |
 | 7 | Operator visibility (`/context`, `/memory` commands, docs) | not started |
 
-**Known deliberate scope reduction in PR 6:** context is still injected on every turn for every CLI kind (existing behavior, unchanged) rather than only on the first turn of a fresh session. The handoff flag is consumed for audit/logging but does not currently gate injection. This is documented as a deferred follow-up in `docs/architecture/companion-runtime.md`, not a correctness gap — every-turn injection is redundant with the new handoff mechanism but not incorrect. See Phase 6 below for the original target design.
+**PR 6 scope reduction, resolved by PR 6.1:** PR 6 left context injected on every turn for every CLI kind regardless of session/handoff state (the handoff flag was consumed for audit/logging only). PR 6.1 adds `BRIDGE_CONTEXT_INJECTION_POLICY`:
+
+- `always` (default): unchanged every-turn injection — existing self-hosted OSS deployments see no behavior change.
+- `handoff_once` (recommended for platform-managed workspaces, see `docs/architecture/platform-boundary.md`): inject only when there is no native CLI session, a handoff is pending, or `/compact`/invalid-session recovery just reset the session (all three clear the session and retry with `sessionId: null`); otherwise rely on the native session. `AGENT_BRIDGE_CONTEXT_COMMAND` and related env vars remain available under both policies regardless of whether the prompt preamble is injected. The handoff flag is now consumed only on a turn that actually receives injected context — never on a turn the policy (or `/reset`'s `ctx_suppress`) suppresses.
 
 ## Scope
 
@@ -607,9 +611,9 @@ Use this checklist during implementation PR review. Status reflects `main` plus 
 - [x] Handoff state exists per chat/thread and CLI (`src/handoffState.ts`).
 - [x] Manual switch clears the target CLI session and marks handoff required (PR #76).
 - [x] Fallback clears the next CLI session and marks handoff required (PR #76).
-- [ ] Handoff context is injected once into a fresh target CLI session — **not done**; context is still injected every turn regardless of handoff state (deliberate scope reduction, see Implementation Status above).
-- [ ] Continuing the same CLI session does not reinject the full handoff context — **not done**, same reason.
-- [ ] Invalid native session retry seeds context once without double injection — unaffected by this issue; existing retry behavior unchanged.
+- [x] Handoff context is injected once into a fresh target CLI session — implemented behind `BRIDGE_CONTEXT_INJECTION_POLICY=handoff_once` (PR 6.1); default `always` preserves every-turn injection for existing self-hosted deployments.
+- [x] Continuing the same CLI session does not reinject the full handoff context — same flag, `handoff_once` policy (PR 6.1).
+- [x] Invalid native session retry seeds context once without double injection — the retry clears the session and recurses with `sessionId: null`, which `handoff_once` treats as a fresh-session condition (PR 6.1); unaffected under `always`.
 
 ### Fallback
 

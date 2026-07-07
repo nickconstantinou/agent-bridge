@@ -14,7 +14,7 @@ This document defines the intended memory and provider-handoff architecture for 
 
 It supersedes the post-turn memory extractor direction and makes compaction the single durable-memory distillation point for both the Companion Runtime and Engineering Worker.
 
-**Implementation status:** the post-turn extractor removal, structured compact output, compact profiles, shared compaction service, and latest-N recent-turn fix are implemented on `main`. Manual-switch/fallback handoff wiring is open for review. The one-time (first-turn-only) context injection described in this document is not yet implemented — context is currently injected on every turn regardless of handoff state. See `docs/roadmap/issue-69-compact-memory-handoff.md` for the current PR-by-PR status and the specific scope reduction.
+**Implementation status:** the post-turn extractor removal, structured compact output, compact profiles, shared compaction service, latest-N recent-turn fix, and manual-switch/fallback handoff wiring are implemented on `main`. The one-time (first-turn-only) context injection described in this document is now implemented behind a configurable policy: `BRIDGE_CONTEXT_INJECTION_POLICY=always` (default, preserves the original OSS every-turn behavior) or `handoff_once` (recommended for platform-managed deployments — see `docs/architecture/platform-boundary.md`). See `docs/roadmap/issue-69-compact-memory-handoff.md` for the current PR-by-PR status.
 
 ## Decision Summary
 

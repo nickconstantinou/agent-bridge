@@ -39,7 +39,7 @@ import { buildEffortKeyboard, buildEffortText, effortSettingKey, resolveDefaultE
 import { getCodexUsageText } from "./codexUsage.js";
 import { chunkCompactTurns, type CompactProfile } from "./compactSummary.js";
 import { compactConversation } from "./compactConversation.js";
-import { consumeHandoffRequired } from "./handoffState.js";
+import { consumeHandoffRequired, isHandoffRequired } from "./handoffState.js";
 import type { BridgeEvent } from "./events/types.js";
 import { EventStore } from "./events/store.js";
 import type { BridgeConfig, BotKind, BotConfig, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult, CliOptions } from "./types.js";
@@ -101,6 +101,22 @@ export interface ExecFns {
 const MAX_QUEUE_DEPTH = 5;
 const ENGINE_CONTEXT_MAX_CHARS = parseInt(process.env.BRIDGE_CONTEXT_MAX_CHARS ?? "") || DEFAULT_CONTEXT_MAX_CHARS;
 const ENGINE_TURN_TEXT_LIMIT = 1_200;
+
+export type ContextInjectionPolicy = "always" | "handoff_once";
+
+/**
+ * "always" (default, current OSS behavior): inject full Agent Bridge context
+ * on every turn regardless of session/handoff state.
+ * "handoff_once" (recommended for platform-managed deployments): inject only
+ * when there is no native CLI session, a handoff is pending, or /compact /
+ * invalid-session recovery just reset the session — then rely on the
+ * provider-native session for continuity until the next such event.
+ * Read live (not cached) so it can change per-test/per-process without a
+ * module reload.
+ */
+function contextInjectionPolicy(): ContextInjectionPolicy {
+  return process.env.BRIDGE_CONTEXT_INJECTION_POLICY === "handoff_once" ? "handoff_once" : "always";
+}
 
 const AGENT_KINDS = new Set<string>(["codex", "antigravity", "claude", "kimchi"]);
 function isAgentKind(kind: string): kind is BotKind {
@@ -608,11 +624,31 @@ export class BridgeEngine {
     return extracted.cleanText;
   }
 
-  private _buildRecentContextPrompt(chatKey: string, prompt: string): string {
-    if (this.db.getSetting(`ctx_suppress:${chatKey}`)) return prompt;
-    // Context is injected on every turn regardless (bounded by ENGINE_CONTEXT_MAX_CHARS),
-    // so a pending handoff mark doesn't change what gets sent — it's consumed here purely
-    // to clear the flag and log that the target CLI's first post-switch turn happened.
+  /**
+   * Decides whether full Agent Bridge prompt context (recent-turn preamble
+   * plus the context-access usage instructions) should be injected this turn.
+   *
+   * "always" (default): every turn, matching current OSS behavior exactly.
+   * "handoff_once": only on a fresh-session/handoff turn — no native session
+   * for this chat+CLI (covers first-ever turn, /compact reset, and
+   * invalid-session retry, all of which clear the session before retrying
+   * with sessionId: null), or a pending handoff mark (manual switch/fallback).
+   * ctx_suppress (/reset) always wins regardless of policy.
+   */
+  private _shouldInjectContext(chatKey: string, sessionId: string | null): boolean {
+    if (this.db.getSetting(`ctx_suppress:${chatKey}`)) return false;
+    if (contextInjectionPolicy() !== "handoff_once") return true;
+    if (sessionId == null) return true;
+    if (isHandoffRequired(this.db, chatKey, this.kind)) return true;
+    return false;
+  }
+
+  private _buildRecentContextPrompt(chatKey: string, prompt: string, sessionId: string | null): string {
+    if (!this._shouldInjectContext(chatKey, sessionId)) return prompt;
+    // Consumed only on a turn where context is actually injected — see
+    // _shouldInjectContext. Under "always" this fires every turn (a no-op
+    // when nothing was marked); under "handoff_once" it clears the flag
+    // exactly once, on the turn that delivers it.
     if (consumeHandoffRequired(this.db, chatKey, this.kind)) {
       console.log(`[handoff] consumed chatKey=${chatKey} cliKind=${this.kind}`);
     }
@@ -652,12 +688,16 @@ export class BridgeEngine {
     };
   }
 
-  private _buildPromptForCli(chatKey: string, prompt: string): { prompt: string; contextEnv?: Record<string, string> } {
-    const contextPrompt = this._buildRecentContextPrompt(chatKey, prompt);
+  private _buildPromptForCli(chatKey: string, prompt: string, sessionId: string | null): { prompt: string; contextEnv?: Record<string, string> } {
+    const shouldInject = this._shouldInjectContext(chatKey, sessionId);
+    const contextPrompt = this._buildRecentContextPrompt(chatKey, prompt, sessionId);
     const access = this._buildContextAccess(chatKey);
     if (!access) return { prompt: contextPrompt };
+    // Context env (AGENT_BRIDGE_CONTEXT_COMMAND, etc.) stays available regardless of
+    // policy so the CLI can always self-serve query it; only the usage-instructions
+    // text block is gated by the same injection decision as the recent-turn preamble.
     return {
-      prompt: `${access.prompt}${contextPrompt}`,
+      prompt: shouldInject ? `${access.prompt}${contextPrompt}` : contextPrompt,
       contextEnv: access.env,
     };
   }
@@ -688,7 +728,7 @@ export class BridgeEngine {
     const cwd = getCliWorkingDir(executionKind);
     const startedAtMs = Date.now();
     if (executionKind === "antigravity") setAntigravityModel(model);
-    const promptForCli = this._buildPromptForCli(chatKey, prompt);
+    const promptForCli = this._buildPromptForCli(chatKey, prompt, sessionId);
     const invocation = buildCliInvocation({
       bot: executionKind,
       command: this.opts.botConfig.command,
@@ -813,7 +853,7 @@ export class BridgeEngine {
     const cwd = getCliWorkingDir(executionKind);
     const startedAtMs = Date.now();
     if (executionKind === "antigravity") setAntigravityModel(model);
-    const promptForCli = this._buildPromptForCli(chatKey, prompt);
+    const promptForCli = this._buildPromptForCli(chatKey, prompt, sessionId);
     const invocation = buildCliInvocation({
       bot: executionKind,
       command: this.opts.botConfig.command,
@@ -1010,7 +1050,8 @@ export class BridgeEngine {
     bodyThreadId?: number | string,
   ): Promise<CliResult> {
     if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
-    const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt);
+    // Fresh-session retry: sessionId is null, so this always injects under handoff_once too.
+    const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt, null);
     const retryResult = await this._runFreshAntigravityRetry(
       retryPrompt,
       chatId,
@@ -1059,7 +1100,8 @@ export class BridgeEngine {
       command: this.opts.botConfig.command,
       model: fallbackModel,
       effort: resolveEffort(executionKind, this.db),
-      prompt: this._buildRecentContextPrompt(chatKey, prompt),
+      // Fresh-session fallback retry: sessionId is null, so this always injects under handoff_once too.
+      prompt: this._buildRecentContextPrompt(chatKey, prompt, null),
       sessionId: null,
       sessionMode: "resume",
       executionMode: this.opts.executionMode,

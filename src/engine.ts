@@ -37,7 +37,7 @@ import { buildModelKeyboard, buildModelsText, getCliWorkingDir, extractPromptTex
 import { handleCommand, isBridgeCommand, buildTelegramCommands, isAntigravityNarrationVisible, compactInProgressSettingKey } from "./commands.js";
 import { buildEffortKeyboard, buildEffortText, effortSettingKey, resolveDefaultEffort, resolveEffort, isEffortLevel } from "./effort.js";
 import { getCodexUsageText } from "./codexUsage.js";
-import { buildCompactReducePrompt, buildCompactSummaryPrompt, buildTombstone, chunkCompactTurns, compactParallelism, COMPACT_TIMEOUT_MS } from "./compactSummary.js";
+import { buildCompactReducePrompt, buildCompactSummaryPrompt, buildTombstone, chunkCompactTurns, compactParallelism, parseCompactOutput, COMPACT_TIMEOUT_MS, type CompactProfile } from "./compactSummary.js";
 import type { BridgeEvent } from "./events/types.js";
 import { EventStore } from "./events/store.js";
 import type { BridgeConfig, BotKind, BotConfig, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult, CliOptions } from "./types.js";
@@ -84,6 +84,8 @@ export interface BridgeEngineOptions {
   /** Required for built-in /models command on agent bot kinds */
   fullConfig?: BridgeConfig;
   hooks?: BridgeEngineHooks;
+  /** Compact summary profile: "engineering" (default) for coding-agent bots, "companion" for the interactive/companion bot. */
+  compactProfile?: CompactProfile;
 }
 
 /** Injected execution functions — replace real CLI for unit tests. */
@@ -401,6 +403,7 @@ export class BridgeEngine {
             this.db.setSetting(inProgressKey, startedAt);
             console.log(`[compact] start chatKey=${ck} bot=${this.kind} turns=${turns.length} chunks=${chunks.length} startId=${startId} endId=${endId}`);
 
+            const compactProfile = this.opts.compactProfile ?? "engineering";
             let summaryMd: string;
             const summarizePrompt = async (summaryPrompt: string): Promise<string> => {
               const model = this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null;
@@ -422,9 +425,17 @@ export class BridgeEngine {
               if (typeof raw === "string" && raw.trim().length > 0) return raw.trim();
               throw new Error("empty compact summary");
             };
+            // Structured JSON output only; a missing/invalid summary_md is treated as a
+            // failure (falls back to tombstone below) rather than storing a broken result.
+            const summarizeToMarkdown = async (summaryPrompt: string): Promise<string> => {
+              const raw = await summarizePrompt(summaryPrompt);
+              const parsed = parseCompactOutput(raw);
+              if (!parsed) throw new Error("invalid compact JSON output");
+              return parsed.summaryMd;
+            };
             try {
               if (chunks.length === 1 && !previousSummary) {
-                summaryMd = await summarizePrompt(buildCompactSummaryPrompt(turns));
+                summaryMd = await summarizeToMarkdown(buildCompactSummaryPrompt(turns, compactProfile));
               } else {
                 const parallelism = compactParallelism();
                 console.log(`[compact] summarizing chatKey=${ck} chunks=${chunks.length} parallelism=${parallelism}`);
@@ -432,10 +443,10 @@ export class BridgeEngine {
                   return {
                     startId: chunk[0].id!,
                     endId: chunk[chunk.length - 1].id!,
-                    summary: await summarizePrompt(buildCompactSummaryPrompt(chunk)),
+                    summary: await summarizeToMarkdown(buildCompactSummaryPrompt(chunk, compactProfile)),
                   };
                 });
-                summaryMd = await summarizePrompt(buildCompactReducePrompt(previousSummary?.summary_md ?? null, chunkSummaries));
+                summaryMd = await summarizeToMarkdown(buildCompactReducePrompt(previousSummary?.summary_md ?? null, chunkSummaries, compactProfile));
               }
             } catch {
               console.warn(`[compact] summarization fallback chatKey=${ck} bot=${this.kind} turns=${turns.length}`);

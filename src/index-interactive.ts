@@ -138,6 +138,7 @@ const engines = Object.fromEntries(
           pollIntervalMs,
           soulContext,
           fullConfig: config,
+          compactProfile: "companion",
           hooks: {
             onCapacityExhausted: async (chatKey: string) => {
               exhaustedChats.add(chatKey);

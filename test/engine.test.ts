@@ -31,6 +31,11 @@ function makeMockClient() {
   } as any;
 }
 
+/** Wraps a compact markdown summary in the structured JSON output the compact prompt now requires. */
+function compactJson(summaryMd: string, memoryCandidates: unknown[] = []): string {
+  return JSON.stringify({ summary_md: summaryMd, memory_candidates: memoryCandidates });
+}
+
 function makeFullConfig(dbPath: string): BridgeConfig {
   return {
     allowedUserIds: new Set(["42"]),
@@ -1270,7 +1275,7 @@ describe("BridgeEngine", () => {
       const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
         // For claude bot, the prompt is the last argument
         capturedPrompt = args[args.length - 1];
-        return "Current objective:\n- fix auth bug\n\nDurable facts:\n- none\n\nOpen state:\n- none";
+        return compactJson("Current objective:\n- fix auth bug\n\nDurable facts:\n- none\n\nOpen state:\n- none");
       });
 
       const engine = new BridgeEngine(
@@ -1349,9 +1354,9 @@ describe("BridgeEngine", () => {
         active -= 1;
         const prompt = args[args.length - 1];
         if (prompt.includes("Merge these compact summaries")) {
-          return "Current objective:\n- reduced\n\nDurable facts:\n- none\n\nOpen state:\n- none";
+          return compactJson("Current objective:\n- reduced\n\nDurable facts:\n- none\n\nOpen state:\n- none");
         }
-        return "Current objective:\n- chunk\n\nDurable facts:\n- none\n\nOpen state:\n- none";
+        return compactJson("Current objective:\n- chunk\n\nDurable facts:\n- none\n\nOpen state:\n- none");
       });
 
       const engine = new BridgeEngine(
@@ -1404,6 +1409,73 @@ describe("BridgeEngine", () => {
       expect(summary!.summary_md).toContain("turns captured");
     });
 
+    it("compact handler falls back to tombstone when the CLI returns non-JSON or JSON missing summary_md", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      db.addConvTurn("100", "user", "malformed response test");
+      db.addConvTurn("100", "assistant", "ack");
+
+      const runCli = vi.fn().mockResolvedValue("Sure! Here is a summary of the conversation in prose form.");
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("/compact")]);
+
+      const summary = db.getLatestConvSummary("100");
+      expect(summary).not.toBeNull();
+      // Falls back to the tombstone rather than storing the raw non-JSON prose as the summary.
+      expect(summary!.summary_md).toContain("turns captured");
+      expect(summary!.summary_md).not.toContain("Here is a summary");
+    });
+
+    it("uses the companion compact profile when configured", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      db.addConvTurn("100", "user", "remind me about my training plan");
+      db.addConvTurn("100", "assistant", "sure, noted");
+
+      let capturedPrompt: string | undefined;
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompt = args[args.length - 1];
+        return compactJson("Current objective:\n- track training plan\n\nDurable facts:\n- none\n\nOpen state:\n- none");
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          compactProfile: "companion",
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("/compact")]);
+
+      expect(capturedPrompt).toContain("preferences");
+      const summary = db.getLatestConvSummary("100");
+      expect(summary?.summary_md).toContain("track training plan");
+    });
+
     it("compact prunes raw turns up to endId after storing the summary", async () => {
       const { BridgeEngine } = await import("../src/engine.js");
       const client = makeMockClient();
@@ -1412,7 +1484,7 @@ describe("BridgeEngine", () => {
       db.addConvTurn("100", "assistant", "second");
       db.addConvTurn("100", "user", "third");
 
-      const runCli = vi.fn().mockResolvedValue("Current objective:\n- done\n\nDurable facts:\n- none\n\nOpen state:\n- none");
+      const runCli = vi.fn().mockResolvedValue(compactJson("Current objective:\n- done\n\nDurable facts:\n- none\n\nOpen state:\n- none"));
 
       const engine = new BridgeEngine(
         {
@@ -1450,9 +1522,9 @@ describe("BridgeEngine", () => {
         const prompt = args[args.length - 1];
         capturedPrompts.push(prompt);
         if (prompt.includes("Merge these compact summaries")) {
-          return "Current objective:\n- reduced all chunks\n\nDurable facts:\n- all 1005 turns covered\n\nOpen state:\n- none";
+          return compactJson("Current objective:\n- reduced all chunks\n\nDurable facts:\n- all 1005 turns covered\n\nOpen state:\n- none");
         }
-        return `Current objective:\n- chunk ${capturedPrompts.length}\n\nDurable facts:\n- ${prompt.includes("turn-0") ? "includes first turn" : "later chunk"}\n\nOpen state:\n- none`;
+        return compactJson(`Current objective:\n- chunk ${capturedPrompts.length}\n\nDurable facts:\n- ${prompt.includes("turn-0") ? "includes first turn" : "later chunk"}\n\nOpen state:\n- none`);
       });
 
       const engine = new BridgeEngine(
@@ -1489,7 +1561,7 @@ describe("BridgeEngine", () => {
       db.addConvTurn("100", "assistant", "understood, continuing");
       db.setSession("100", "claude", "existing-session-abc");
 
-      const runCli = vi.fn().mockResolvedValue("Current objective:\n- big refactor\n\nDurable facts:\n- none\n\nOpen state:\n- none");
+      const runCli = vi.fn().mockResolvedValue(compactJson("Current objective:\n- big refactor\n\nDurable facts:\n- none\n\nOpen state:\n- none"));
 
       const engine = new BridgeEngine(
         {

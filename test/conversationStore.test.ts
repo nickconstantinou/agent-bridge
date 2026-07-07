@@ -1,11 +1,15 @@
 // test/conversationStore.test.ts
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { openDb, BridgeDb } from "../src/db.js";
 
 let db: BridgeDb;
 
 beforeEach(() => {
   db = openDb(":memory:");
+});
+
+afterEach(() => {
+  delete process.env.BRIDGE_CONTEXT_RECENT_TURN_LIMIT;
 });
 
 describe("conversation turns", () => {
@@ -51,6 +55,27 @@ describe("conversation turns", () => {
     const turns = db.getRecentConvTurns("chat:1", 10, before.id);
     expect(turns).toHaveLength(1);
     expect(turns[0].text).toBe("after");
+  });
+
+  it("returns the NEWEST N turns after sinceId, not the oldest N, when more than the limit exist", () => {
+    const [marker] = (() => {
+      db.addConvTurn("chat:1", "user", "summary marker");
+      return db.getRecentConvTurns("chat:1", 1);
+    })();
+    // 250 turns after the summary marker, well beyond a 200-item candidate limit.
+    for (let i = 0; i < 250; i++) db.addConvTurn("chat:1", "user", `turn-${i}`);
+
+    const turns = db.getRecentConvTurns("chat:1", 200, marker.id);
+    expect(turns).toHaveLength(200);
+    // Must be the newest 200 (turn-50..turn-249), not the oldest 200 (turn-0..turn-199).
+    expect(turns[0].text).toBe("turn-50");
+    expect(turns[turns.length - 1].text).toBe("turn-249");
+    // Still returned oldest-first for chronological prompt rendering.
+    expect(turns.map((t) => t.text)).toEqual(turns.map((t) => t.text).slice().sort((a, b) => {
+      const ai = Number(a.split("-")[1]);
+      const bi = Number(b.split("-")[1]);
+      return ai - bi;
+    }));
   });
 });
 
@@ -105,6 +130,31 @@ describe("buildConvContext", () => {
     const ctx = db.buildConvContext("chat:1", 120);
     expect(ctx).toContain("turn_number_10_end");
     expect(ctx).not.toContain("turn_number_1_end");
+  });
+
+  it("preserves the newest turns when more than 200 turns exist after the latest summary", () => {
+    db.addConvTurn("chat:1", "user", "marker");
+    const [marker] = db.getRecentConvTurns("chat:1", 1);
+    db.addConvSummary("chat:1", marker.id, marker.id, "Current objective:\n- ongoing work");
+    for (let i = 0; i < 250; i++) db.addConvTurn("chat:1", "user", `turn-${i}`);
+
+    // Generous budget so the candidate-fetch cap (not the char budget) is what's under test.
+    const ctx = db.buildConvContext("chat:1", 50_000);
+    expect(ctx).toContain("turn-249"); // newest turn must survive
+    expect(ctx).not.toContain("turn-0\n"); // oldest turn beyond the 200 candidate cap must not
+  });
+
+  it("respects BRIDGE_CONTEXT_RECENT_TURN_LIMIT to widen or narrow the candidate cap", () => {
+    for (let i = 0; i < 10; i++) db.addConvTurn("chat:1", "user", `turn-${i}`);
+
+    process.env.BRIDGE_CONTEXT_RECENT_TURN_LIMIT = "3";
+    const narrow = db.buildConvContext("chat:1", 50_000);
+    expect(narrow).toContain("turn-9");
+    expect(narrow).not.toContain("turn-6\n");
+
+    process.env.BRIDGE_CONTEXT_RECENT_TURN_LIMIT = "10";
+    const wide = db.buildConvContext("chat:1", 50_000);
+    expect(wide).toContain("turn-0");
   });
 });
 

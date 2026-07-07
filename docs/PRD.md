@@ -197,11 +197,14 @@ context/history.
 
 ### 4.5 Interactive Bot CLI-to-CLI Fallback
 
-In the unified interactive bot (switchable CLI), if all model fallbacks of the user's preferred CLI are exhausted and the bot encounters a capacity/rate-limit error (e.g. `session limit` or `resets`), it automatically:
-1. Advances to the next CLI in the preference chain (default order: `codex` → `claude` → `antigravity`, configurable via `INTERACTIVE_CLI_CHAIN` in environment variables).
-2. Notifies the user of the switch and updates the Telegram commands menu to match the active CLI.
-3. Prepends a context preamble (latest compact summary + recent turns from SQLite) to the prompt and retries the execution on the fallback CLI engine.
-4. After a fallback CLI successfully completes the turn, promotes that CLI into the user's SQLite preference (`interactive_cli_preference` column in `bridge_state`) so the next message starts there instead of repeatedly retrying the exhausted CLI. If every CLI is exhausted, the stored preference is left unchanged.
+In the unified interactive bot (switchable CLI), if all model fallbacks of the user's preferred CLI are exhausted and the bot encounters a capacity/rate-limit error (e.g. `session limit` or `resets`), `dispatchInteractiveWithFallback` (`src/interactiveBot.ts`) automatically:
+1. Attempts to compact the outgoing CLI's conversation first (`compactBeforeSwitch`, wired to the shared `compactConversation()` service, `compactProfile: "companion"`), rate-limited by `fallbackCompactCooldown.ts` (default 5 min, override `BRIDGE_FALLBACK_COMPACT_COOLDOWN_MS`) so a cascading multi-hop fallback doesn't trigger a compaction CLI call before every single hop. Compaction failure never blocks the fallback.
+2. Clears the target CLI's own stored session (`db.setSession(chatKey, targetCli, null)`) and marks a one-time handoff flag for it (`src/handoffState.ts`) — so the target starts fresh rather than resuming a possibly stale, long-abandoned native session.
+3. Advances to the next CLI in the preference chain (default order: `codex` → `claude` → `antigravity`, configurable via `INTERACTIVE_CLI_CHAIN` in environment variables), notifies the user, updates the Telegram commands menu, and replays the same update into the new CLI engine.
+4. The engine's `_buildRecentContextPrompt` (unchanged from normal-turn behavior) injects the latest compact summary + recent turns on this turn as on every turn; the handoff flag is consumed (cleared, logged) at that point but does not currently gate injection — see `docs/architecture/companion-runtime.md` for the deferred first-turn-only optimization.
+5. After a fallback CLI successfully completes the turn, promotes that CLI into the user's SQLite preference (`interactive_cli_preference` column in `bridge_state`) so the next message starts there instead of repeatedly retrying the exhausted CLI. If every CLI is exhausted, the stored preference is left unchanged.
+
+Manual `/cli` switching applies the same target-session-clear + handoff-mark (`applyManualCliSwitchHandoff`), without the compact step (compaction is fallback-only, since manual switches are user-initiated and infrequent).
 
 ### 4.6 Concurrency Lock & Message Queue
 

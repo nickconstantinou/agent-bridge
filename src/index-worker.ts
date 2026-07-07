@@ -31,8 +31,10 @@ import {
   isCliCommandText,
   buildCliStatusText,
   buildCliKeyboard,
+  applyManualCliSwitchHandoff,
   type CliKind,
 } from "./interactiveBot.js";
+import { compactConversation } from "./compactConversation.js";
 import { startJobExecutorLoop } from "./jobExecutorLoop.js";
 import { createDefectScanHandler } from "./handlers/defectScan.js";
 import { createFeaturePlanHandler } from "./handlers/featurePlan.js";
@@ -353,6 +355,7 @@ for (;;) {
               if (cbqChatKey) {
                 setUserCliPreference(db, cbqChatKey, cliSwitch);
                 fallbackChain.setActiveCli(cbqChatKey, cliSwitch);
+                applyManualCliSwitchHandoff(db, cbqChatKey, cliSwitch);
                 await client.answerCallbackQuery({ callback_query_id: callbackQuery.id });
                 if (callbackQuery.message?.message_id && cbqChatId) {
                   await client.editMessageText({
@@ -480,6 +483,17 @@ for (;;) {
           },
           onCliSwitched: async (newCli: CliKind) => {
             setUserCliPreference(db, chatKey, newCli);
+          },
+          compactBeforeSwitch: async (ck, fromCli) => {
+            const botConfig = config.bots[fromCli as BotKind];
+            if (!botConfig) return;
+            await compactConversation(ck, {
+              db,
+              runCli,
+              botConfig,
+              cliKind: fromCli,
+              compactProfile: "engineering",
+            });
           },
         });
       } catch (err) {

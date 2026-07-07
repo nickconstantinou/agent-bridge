@@ -8,6 +8,8 @@ import type { BridgeDb } from "./db.js";
 import type { TelegramUpdate } from "./types.js";
 import { buildTelegramCommands } from "./commands.js";
 import { WorkerFallbackChain } from "./workerFallback.js";
+import { markHandoffRequired } from "./handoffState.js";
+import { shouldCompactBeforeFallback, recordFallbackCompactAttempt } from "./fallbackCompactCooldown.js";
 
 export type CliKind = "codex" | "claude" | "antigravity" | "kimchi";
 export type InteractiveCommandRegistration = {
@@ -270,6 +272,25 @@ export interface InteractiveDispatchDeps {
   db: BridgeDb;
   notify: (msg: string) => Promise<void> | void;
   onCliSwitched?: (newCli: CliKind) => Promise<void> | void;
+  /**
+   * Called with the outgoing CLI kind right before a capacity fallback
+   * switches to the next CLI, so the conversation gets compacted (summary +
+   * memory promotion) using whatever context the outgoing CLI can still
+   * summarise. Rate-limited by fallbackCompactCooldown.ts. A rejection here
+   * must never block the fallback itself — it is always caught and ignored.
+   */
+  compactBeforeSwitch?: (chatKey: string, fromCli: string) => Promise<void>;
+}
+
+/** Clears the target CLI's session and marks one-time handoff for it. Used by both manual /cli switch and capacity fallback. */
+function prepareCliHandoff(db: BridgeDb, chatKey: string, targetCli: CliKind, reason: string): void {
+  db.setSession(chatKey, targetCli, null);
+  markHandoffRequired(db, chatKey, targetCli, reason);
+}
+
+/** Manual /cli switch: starts the target CLI fresh instead of resuming a possibly stale, long-abandoned session. */
+export function applyManualCliSwitchHandoff(db: BridgeDb, chatKey: string, newCli: CliKind): void {
+  prepareCliHandoff(db, chatKey, newCli, "manual_switch");
 }
 
 export async function dispatchInteractiveWithFallback(
@@ -278,7 +299,7 @@ export async function dispatchInteractiveWithFallback(
   deps: InteractiveDispatchDeps,
   tried = new Set<string>(),
 ): Promise<void> {
-  const { engines, fallbackChain, exhaustedChats, db, notify, onCliSwitched } = deps;
+  const { engines, fallbackChain, exhaustedChats, db, notify, onCliSwitched, compactBeforeSwitch } = deps;
 
   exhaustedChats.delete(chatKey);
 
@@ -302,6 +323,15 @@ export async function dispatchInteractiveWithFallback(
       }
     }
     if (next) {
+      if (compactBeforeSwitch && shouldCompactBeforeFallback(db, chatKey)) {
+        recordFallbackCompactAttempt(db, chatKey);
+        try {
+          await compactBeforeSwitch(chatKey, activeCli);
+        } catch (err) {
+          console.warn(`[fallback] compact-before-switch failed chatKey=${chatKey} fromCli=${activeCli}`, err);
+        }
+      }
+      prepareCliHandoff(db, chatKey, next, `fallback_from_${activeCli}`);
       fallbackChain.setActiveCli(chatKey, next);
       await notify(`Switching to ${next} (${activeCli} at capacity)`);
       if (onCliSwitched) {

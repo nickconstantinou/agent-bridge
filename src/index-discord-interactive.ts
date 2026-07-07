@@ -32,8 +32,11 @@ import {
   buildCliStatusText,
   handleCliSwitchCallback,
   dispatchInteractiveWithFallback,
+  applyManualCliSwitchHandoff,
   type CliKind,
 } from "./interactiveBot.js";
+import { runCli } from "./cli.js";
+import { compactConversation } from "./compactConversation.js";
 import type { BridgeConfig, BotKind, TelegramUpdate, TelegramMessage } from "./types.js";
 
 dotenv.config({
@@ -324,6 +327,17 @@ async function handleMessage(d: any): Promise<void> {
     onCliSwitched: async (_newCli) => {
       // Slash command list doesn't change per-CLI on Discord — no-op
     },
+    compactBeforeSwitch: async (ck, fromCli) => {
+      const botConfig = config.bots[fromCli as BotKind];
+      if (!botConfig) return;
+      await compactConversation(ck, {
+        db,
+        runCli,
+        botConfig,
+        cliKind: fromCli,
+        compactProfile: "companion",
+      });
+    },
   });
 }
 
@@ -344,6 +358,7 @@ async function handleInteraction(d: any): Promise<void> {
     const channelId = String(d.channel_id ?? "");
     setUserCliPreference(db, channelId, newCli);
     fallbackChain.setActiveCli(channelId, newCli);
+    applyManualCliSwitchHandoff(db, channelId, newCli);
 
     // UPDATE_MESSAGE (type 7) — edit the /cli message in-place
     await client.answerCallbackQuery({
@@ -373,6 +388,7 @@ async function handleInteraction(d: any): Promise<void> {
         if (newCli) {
           setUserCliPreference(db, channelId, newCli);
           fallbackChain.setActiveCli(channelId, newCli);
+          applyManualCliSwitchHandoff(db, channelId, newCli);
         }
       }
       const pref = getUserCliPreference(db, channelId);

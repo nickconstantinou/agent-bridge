@@ -36,8 +36,11 @@ import {
   isGroupInteractiveUpdate,
   dispatchInteractiveWithFallback,
   resolveAvailableCliPreference,
+  applyManualCliSwitchHandoff,
   type CliKind,
 } from "./interactiveBot.js";
+import { runCli } from "./cli.js";
+import { compactConversation } from "./compactConversation.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 
 dotenv.config({
@@ -248,6 +251,7 @@ for (;;) {
             if (chatKey) {
               setUserCliPreference(db, chatKey, newCli);
               fallbackChain.setActiveCli(chatKey, newCli);
+              applyManualCliSwitchHandoff(db, chatKey, newCli);
             }
             await client.answerCallbackQuery({ callback_query_id: cbq.id, text: `Switched to ${newCli}` });
             if (chatId && messageId) {
@@ -299,6 +303,17 @@ for (;;) {
                 if (isGroupInteractiveUpdate(typedUpdate)) {
                   await registerGroupChatCommands(newCli, chatId);
                 }
+              },
+              compactBeforeSwitch: async (ck, fromCli) => {
+                const botConfig = config.bots[fromCli as BotKind];
+                if (!botConfig) return;
+                await compactConversation(ck, {
+                  db,
+                  runCli,
+                  botConfig,
+                  cliKind: fromCli,
+                  compactProfile: "companion",
+                });
               },
             }).catch((err: unknown) => console.error("[interactive] dispatch error", err));
           } else {

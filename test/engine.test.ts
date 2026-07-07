@@ -6,6 +6,7 @@ import Database from "better-sqlite3";
 import { openDb } from "../src/db.js";
 import type { BridgeConfig, TelegramMessage } from "../src/types.js";
 import { type as eventType } from "../src/events/types.js";
+import { markHandoffRequired, isHandoffRequired } from "../src/handoffState.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -70,6 +71,58 @@ describe("BridgeEngine", () => {
     delete process.env.BRIDGE_MEMORY_EXTRACTOR_ENABLED;
     db.close();
     try { rmSync(dbPath); } catch {}
+  });
+
+  describe("handoff consumption", () => {
+    it("clears a pending handoff mark after the first turn for that chat+CLI", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const runCli = vi.fn().mockResolvedValue("Hello there!");
+      const client = makeMockClient();
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      markHandoffRequired(db, "100", "claude", "manual_switch");
+      expect(isHandoffRequired(db, "100", "claude")).toBe(true);
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(isHandoffRequired(db, "100", "claude")).toBe(false);
+    });
+
+    it("does not error when no handoff is pending", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const runCli = vi.fn().mockResolvedValue("Hello there!");
+      const client = makeMockClient();
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await expect(engine.handleMessages([makeMessage("hello")])).resolves.not.toThrow();
+      expect(isHandoffRequired(db, "100", "claude")).toBe(false);
+    });
   });
 
   describe("onCommand hook", () => {

@@ -1184,6 +1184,74 @@ describe("BridgeEngine", () => {
     };
   }
 
+  describe("topic-routed generated files and callbacks", () => {
+    it("uses the topic-aware chatKey for output dirs and uploads files back to the originating thread", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+      const runCli = vi.fn().mockImplementation(async (_command: string, args: string[]) => {
+        const promptArg = args[args.length - 1];
+        const match = String(promptArg).match(/save it to (\/tmp\/bridge-out\/\S+)/);
+        expect(match?.[1]).toBe("/tmp/bridge-out/claude-100:7");
+        await import("node:fs/promises").then(({ writeFile }) => writeFile(join(match![1], "chart.png"), "PNG"));
+        return "done";
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeGroupMessage("make a chart")]);
+
+      expect(client.sendPhoto).toHaveBeenCalledOnce();
+      expect(client.sendPhoto.mock.calls[0][0]).toBe(100);
+      expect(client.sendPhoto.mock.calls[0][1]).toBe("/tmp/bridge-out/claude-100:7/chart.png");
+      expect(client.sendPhoto.mock.calls[0][3]).toEqual({ message_thread_id: 7 });
+    });
+
+    it("sends callback confirmation messages to the callback's source thread", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        {
+          kind: "codex",
+          botConfig: { command: "codex", modelPreference: ["gpt-5.5"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          fullConfig: makeFullConfig(dbPath),
+        },
+        db,
+        client,
+        {},
+      );
+
+      await engine.handleCallback({
+        id: "cb-1",
+        from: { id: 42, first_name: "Test" },
+        message: {
+          message_id: 123,
+          chat: { id: 100, type: "supergroup" },
+          message_thread_id: 7,
+        },
+        data: "model:codex:gpt-5.5",
+      });
+
+      const confirmation = client.sendMessage.mock.calls.find((call: any[]) => call[0]?.text?.includes("Model set"));
+      expect(confirmation?.[0]).toMatchObject({ chat_id: 100, message_thread_id: 7 });
+    });
+  });
+
   describe("/stop in a supergroup thread", () => {
     it("clears the pending queue for the thread-aware key so the next queued message gets position 1", async () => {
       const { BridgeEngine } = await import("../src/engine.js");

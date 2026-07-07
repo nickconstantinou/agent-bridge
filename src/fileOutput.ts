@@ -1,6 +1,6 @@
 import { mkdir, readdir, unlink, rm } from "node:fs/promises";
 import { join, extname, basename } from "node:path";
-import type { MessagingPlatform } from "./platform.js";
+import type { FileSendOptions, MessagingPlatform } from "./platform.js";
 
 const BRIDGE_OUT_BASE = "/tmp/bridge-out";
 
@@ -31,6 +31,7 @@ export async function uploadOutputFiles(
   outDir: string,
   chatId: number,
   client: Pick<MessagingPlatform, "sendPhoto" | "sendDocument">,
+  options?: FileSendOptions,
 ): Promise<void> {
   const files = await collectOutputFiles(outDir);
   if (files.length > 0) {
@@ -40,9 +41,9 @@ export async function uploadOutputFiles(
     const ext = extname(filePath).toLowerCase();
     try {
       if (IMAGE_EXTENSIONS.has(ext)) {
-        await client.sendPhoto(chatId, filePath);
+        await client.sendPhoto(chatId, filePath, undefined, options);
       } else {
-        await client.sendDocument(chatId, filePath);
+        await client.sendDocument(chatId, filePath, undefined, options);
       }
       console.log(`[fileOutput] uploaded ${basename(filePath)}`);
       await unlink(filePath).catch(() => {/* ignore if already gone */});

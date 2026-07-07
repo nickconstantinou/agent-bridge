@@ -749,7 +749,9 @@ export class BridgeEngine {
       logFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
     }
 
-    const outDir = await prepareOutputDir(chatId, this.kind);
+    const threadId = body.message_thread_id;
+    const fileSendOptions = threadId != null ? { message_thread_id: threadId } : undefined;
+    const outDir = await prepareOutputDir(chatKey, this.kind);
     const cwd = getCliWorkingDir(executionKind);
     const startedAtMs = Date.now();
     if (executionKind === "antigravity") setAntigravityModel(model);
@@ -807,7 +809,7 @@ export class BridgeEngine {
       if (this.hooks.onAfterExecute) {
         await this.hooks.onAfterExecute(prompt, result.text, hookContext(chatId, chatKey, body.message_thread_id));
       }
-      await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
+      await uploadOutputFiles(outDir, chatId, this.client, fileSendOptions).catch((err) =>
         console.error(`[${this.kind}] output file upload failed`, err)
       );
       // Emit a richer run.completed with the real sessionId for downstream
@@ -831,7 +833,7 @@ export class BridgeEngine {
       return result;
     } catch (error) {
       if (logFile) { try { rmSync(logFile); } catch {} }
-      await uploadOutputFiles(outDir, chatId, this.client).catch(() => {});
+      await uploadOutputFiles(outDir, chatId, this.client, fileSendOptions).catch(() => {});
       if (sessionId && /No conversation found with session ID|thread not found|session not found|conversation not found/i.test((error as Error).message ?? "")) {
         console.warn(`[${this.kind}] session ID invalid, retrying with fresh session...`);
         if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
@@ -874,7 +876,8 @@ export class BridgeEngine {
       logFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
     }
 
-    const outDir = await prepareOutputDir(chatId, this.kind);
+    const fileSendOptions = threadId != null ? { message_thread_id: threadId } : undefined;
+    const outDir = await prepareOutputDir(chatKey, this.kind);
     const cwd = getCliWorkingDir(executionKind);
     const startedAtMs = Date.now();
     if (executionKind === "antigravity") setAntigravityModel(model);
@@ -933,7 +936,7 @@ export class BridgeEngine {
       if (this.hooks.onAfterExecute) {
         await this.hooks.onAfterExecute(prompt, result.text, hookContext(chatId, chatKey, body.message_thread_id));
       }
-      await uploadOutputFiles(outDir, chatId, this.client).catch((err) =>
+      await uploadOutputFiles(outDir, chatId, this.client, fileSendOptions).catch((err) =>
         console.error(`[${this.kind}] output file upload failed`, err)
       );
       if (collect && runId && eventContext) {
@@ -953,7 +956,7 @@ export class BridgeEngine {
       return result;
     } catch (error) {
       if (logFile) { try { rmSync(logFile); } catch {} }
-      await uploadOutputFiles(outDir, chatId, this.client).catch(() => {});
+      await uploadOutputFiles(outDir, chatId, this.client, fileSendOptions).catch(() => {});
       if (sessionId && /No conversation found with session ID|thread not found|session not found|conversation not found/i.test((error as Error).message ?? "")) {
         console.warn(`[${this.kind}] session ID invalid, retrying with fresh session...`);
         if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
@@ -1217,6 +1220,7 @@ export class BridgeEngine {
     const value = rest.join(":").trim();
     const messageId = callbackQuery.message?.message_id;
     const chatId = callbackQuery.message?.chat?.id;
+    const threadId = callbackQuery.message?.message_thread_id;
     if (!chatId || !messageId) return;
 
     if (action === "effort") {
@@ -1233,7 +1237,7 @@ export class BridgeEngine {
         text: buildEffortText(this.kind, next),
         reply_markup: buildEffortKeyboard(this.kind, next),
       });
-      await this.sendText(chatId, { text: `✓ Effort set to ${next}` });
+      await this.sendText(chatId, { text: `✓ Effort set to ${next}`, message_thread_id: threadId });
       return;
     }
 
@@ -1262,7 +1266,7 @@ export class BridgeEngine {
       text: buildModelsText(this.kind, { db: this.db, config: this.opts.fullConfig }),
       reply_markup: buildModelKeyboard(this.kind, this.opts.botConfig.modelPreference, value),
     });
-    await this.sendText(chatId, { text: `✓ Model set to ${value}` });
+    await this.sendText(chatId, { text: `✓ Model set to ${value}`, message_thread_id: threadId });
   }
 
   async sendText(chatId: number, body: any): Promise<void> {

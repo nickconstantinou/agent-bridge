@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
 import type { TelegramMessage } from "./types.js";
-import type { MessagingPlatform } from "./platform.js";
+import type { FileSendOptions, MessagingPlatform } from "./platform.js";
 
 const TELEGRAM_FILE_BASE_URL = "https://api.telegram.org/file/bot";
 
@@ -159,9 +159,10 @@ export class TelegramClient implements MessagingPlatform {
   private async sendFile(
     endpoint: string,
     fieldName: string,
-    chatId: number,
+    chatId: number | string,
     filePath: string,
     caption?: string,
+    options?: FileSendOptions,
   ): Promise<void> {
     const fileBytes = readFileSync(filePath);
     const mimeType = mimeTypeFromExtension(filePath);
@@ -170,6 +171,7 @@ export class TelegramClient implements MessagingPlatform {
     fd.set("chat_id", String(chatId));
     fd.set(fieldName, blob, basename(filePath));
     if (caption) fd.set("caption", caption);
+    if (options?.message_thread_id != null) fd.set("message_thread_id", String(options.message_thread_id));
 
     const url = `${this.baseUrl}/${endpoint}`;
     const ac = new AbortController();
@@ -187,8 +189,8 @@ export class TelegramClient implements MessagingPlatform {
     }
   }
 
-  async sendDocument(chatId: number, filePath: string, caption?: string): Promise<void> {
-    return this.sendFile("sendDocument", "document", chatId, filePath, caption);
+  async sendDocument(chatId: number | string, filePath: string, caption?: string, options?: FileSendOptions): Promise<void> {
+    return this.sendFile("sendDocument", "document", chatId, filePath, caption, options);
   }
 
   async sendDocumentBuffer(body: {
@@ -226,8 +228,8 @@ export class TelegramClient implements MessagingPlatform {
     return data;
   }
 
-  async sendPhoto(chatId: number, filePath: string, caption?: string): Promise<void> {
-    return this.sendFile("sendPhoto", "photo", chatId, filePath, caption);
+  async sendPhoto(chatId: number | string, filePath: string, caption?: string, options?: FileSendOptions): Promise<void> {
+    return this.sendFile("sendPhoto", "photo", chatId, filePath, caption, options);
   }
 
 }

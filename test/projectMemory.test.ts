@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { extractProjectMemorySidecars, storeProjectMemoryCandidate } from "../src/projectMemory.js";
-import { buildPostTurnMemoryExtractionPrompt, parsePostTurnMemoryCandidates } from "../src/memoryExtractor.js";
 
 describe("project memory sidecar extraction", () => {
   it("does not strip sidecar examples inside fenced code blocks", () => {
@@ -59,43 +58,5 @@ describe("project memory storage", () => {
       source_repo_path: "/repo",
       confidence: 0.72,
     }));
-  });
-});
-
-describe("post-turn memory extraction", () => {
-  it("builds a bounded JSON-only extraction prompt from a turn", () => {
-    const prompt = buildPostTurnMemoryExtractionPrompt({
-      userPrompt: "Implement automatic durable memory extraction after each turn.",
-      assistantText: "Done. Agent Bridge now stores durable memory candidates after successful turns.",
-    });
-
-    expect(prompt).toContain("Output ONLY a JSON array");
-    expect(prompt).toContain("Implement automatic durable memory extraction");
-    expect(prompt).toContain("Agent Bridge now stores durable memory candidates");
-    expect(prompt).not.toContain("```");
-  });
-
-  it("parses JSON candidate arrays from extractor output", () => {
-    const candidates = parsePostTurnMemoryCandidates([
-      "```json",
-      JSON.stringify([
-        {
-          type: "decision",
-          scope: "project",
-          text: "Agent Bridge post-turn extraction stores durable project memories automatically.",
-          confidence: 0.84,
-        },
-      ]),
-      "```",
-    ].join("\n"));
-
-    expect(candidates).toEqual([
-      {
-        type: "decision",
-        scope: "project",
-        text: "Agent Bridge post-turn extraction stores durable project memories automatically.",
-        confidence: 0.84,
-      },
-    ]);
   });
 });

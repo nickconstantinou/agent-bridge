@@ -4,6 +4,12 @@ Research plus implementation plan. Phases 1-4 are implemented as of
 2026-06-26. Agent Bridge has moved from the external memory CLI to a
 bridge-owned, agent-driven memory broker.
 
+**Superseded (2026-07-07):** the opt-in post-turn extractor described below
+(`BRIDGE_MEMORY_EXTRACTOR_ENABLED`) has been removed. `/compact` is now the
+single automatic durable-memory distillation path. See
+`docs/architecture/memory-and-handoff.md` and issue #69 for the current
+design; this document is kept for historical context only.
+
 ## Goal
 
 Give Codex, Claude, and Antigravity shared durable memory without making the

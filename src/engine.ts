@@ -45,7 +45,6 @@ import type { BridgeDb } from "./db.js";
 import { DEFAULT_CONTEXT_MAX_CHARS } from "./db.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { extractProjectMemorySidecars, storeProjectMemoryCandidate } from "./projectMemory.js";
-import { buildPostTurnMemoryExtractionPrompt, parsePostTurnMemoryCandidates } from "./memoryExtractor.js";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -148,10 +147,6 @@ function trimTurnText(text: string): string {
   const normalized = text.replace(/\s+/g, " ").trim();
   if (normalized.length <= ENGINE_TURN_TEXT_LIMIT) return normalized;
   return `${normalized.slice(0, ENGINE_TURN_TEXT_LIMIT - 15).trimEnd()}... [truncated]`;
-}
-
-function isPostTurnMemoryExtractorEnabled(): boolean {
-  return process.env.BRIDGE_MEMORY_EXTRACTOR_ENABLED === "1";
 }
 
 function createTypingTracker(client: MessagingPlatform, chatId: number, kind: string, body: any = {}) {
@@ -653,56 +648,6 @@ export class BridgeEngine {
     return extracted.cleanText;
   }
 
-  private async _extractPostTurnMemories(
-    chatKey: string,
-    userPrompt: string,
-    assistantText: string,
-    mode: "async" | "sync",
-  ): Promise<void> {
-    if (!isAgentKind(this.kind) || !isPostTurnMemoryExtractorEnabled()) return;
-    const executionKind = this._executionKind();
-    const model = isAgentKind(this.kind)
-      ? (this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null)
-      : (this.opts.botConfig.modelPreference[0] || null);
-    const cwd = getCliWorkingDir(executionKind);
-    const prompt = buildPostTurnMemoryExtractionPrompt({ userPrompt, assistantText });
-    const invocation = buildCliInvocation({
-      bot: executionKind,
-      command: this.opts.botConfig.command,
-      model,
-      effort: resolveEffort(executionKind, this.db),
-      prompt,
-      sessionId: null,
-      executionMode: this.opts.executionMode,
-      outputFormat: executionKind === "antigravity" ? undefined : "json",
-      soulContext: this.opts.soulContext,
-    });
-
-    try {
-      const raw = mode === "async"
-        ? (await this.exec.runCliAsync(invocation.command, invocation.args, cwd, {
-            ...buildExecutionOptions(executionKind),
-            stdin: invocation.stdin,
-            chatId: chatKey,
-          })).text
-        : await this.exec.runCli(invocation.command, invocation.args, cwd, {
-            ...buildExecutionOptions(executionKind),
-            stdin: invocation.stdin,
-            chatId: chatKey,
-          });
-      const parsed = parseCliResult({ bot: executionKind, stdout: raw });
-      for (const candidate of parsePostTurnMemoryCandidates(parsed.text || raw)) {
-        storeProjectMemoryCandidate(this.db, candidate, {
-          chatKey,
-          cliKind: this.kind,
-          repoPath: process.cwd(),
-        });
-      }
-    } catch (error) {
-      console.warn(`[${this.kind}] post-turn memory extraction failed`, error);
-    }
-  }
-
   private _buildRecentContextPrompt(chatKey: string, prompt: string): string {
     if (this.db.getSetting(`ctx_suppress:${chatKey}`)) return prompt;
     const ctx = this.db.buildConvContext(chatKey, ENGINE_CONTEXT_MAX_CHARS);
@@ -827,7 +772,6 @@ export class BridgeEngine {
       result.text = this._applyMemorySidecars(chatKey, result.text);
       if (isAgentKind(this.kind)) {
         this._rememberTurn(chatKey, prompt, result.text);
-        await this._extractPostTurnMemories(chatKey, prompt, result.text, "async");
       }
       if (this.hooks.onAfterExecute) {
         await this.hooks.onAfterExecute(prompt, result.text, hookContext(chatId, chatKey, body.message_thread_id));
@@ -954,7 +898,6 @@ export class BridgeEngine {
       result.text = this._applyMemorySidecars(chatKey, result.text);
       if (isAgentKind(this.kind)) {
         this._rememberTurn(chatKey, prompt, result.text);
-        await this._extractPostTurnMemories(chatKey, prompt, result.text, "sync");
       }
       if (this.hooks.onAfterExecute) {
         await this.hooks.onAfterExecute(prompt, result.text, hookContext(chatId, chatKey, body.message_thread_id));
@@ -1116,7 +1059,6 @@ export class BridgeEngine {
     );
     retryResult.text = this._applyMemorySidecars(chatKey, retryResult.text);
     this._rememberTurn(chatKey, prompt, retryResult.text);
-    await this._extractPostTurnMemories(chatKey, prompt, retryResult.text, mode);
     if (this.hooks.onAfterExecute) {
       await this.hooks.onAfterExecute(prompt, retryResult.text, hookContext(chatId, chatKey, bodyThreadId));
     }
@@ -1202,7 +1144,6 @@ export class BridgeEngine {
       finalResult.text = this._applyMemorySidecars(chatKey, finalResult.text);
       if (isAgentKind(this.kind)) {
         this._rememberTurn(chatKey, prompt, finalResult.text);
-        await this._extractPostTurnMemories(chatKey, prompt, finalResult.text, mode);
       }
       if (this.hooks.onAfterExecute) {
         await this.hooks.onAfterExecute(prompt, finalResult.text, hookContext(chatId, chatKey, eventContext?.threadId));

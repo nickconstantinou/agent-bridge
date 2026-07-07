@@ -183,12 +183,12 @@ text. This gives CLI agents queryable access to bridge conversation history and
 shared project memory without any MCP server. The bridge prompt preamble tells
 agents when `AGENT_BRIDGE_CONTEXT_AVAILABLE=1` and how to invoke it.
 
-Post-turn automatic extraction is opt-in with
-`BRIDGE_MEMORY_EXTRACTOR_ENABLED=1`. When enabled, successful agent replies run
-a bounded JSON-only extractor through the configured CLI with no Telegram
-progress output and no session reuse. Parsed candidates are passed through the
-same project-memory validator; extractor failures are logged as warnings and do
-not block the user-facing reply.
+`/compact` is the single automatic durable-memory distillation path. It
+produces both a conversation summary and validated memory candidates in one
+step; the former post-turn extractor (`BRIDGE_MEMORY_EXTRACTOR_ENABLED`),
+which ran a bounded JSON-only extraction call after every successful agent
+reply, has been removed in favor of this deliberate compaction point. See
+`docs/architecture/memory-and-handoff.md` for the current design.
 
 Project memories live in `project_memories` with an FTS5 index. Retrieval
 normalizes punctuation, hyphens, simple plural/singular variants, and bridge

@@ -182,7 +182,6 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `POLL_INTERVAL_MS` | All | `1000` | Telegram long-poll interval (ms) |
 | `AGENT_BRIDGE_SOUL_PATH` | All | `$BRIDGE_PROJECT_DIR/SOUL.md` | Optional SOUL.md persona contract injected into each CLI prompt |
 | `AGENT_BRIDGE_SOUL_MODE` | All | `summary` | `summary`, `full`, or `off` persona injection mode |
-| `BRIDGE_MEMORY_EXTRACTOR_ENABLED` | Agent bots | `false` | Opt in to post-turn durable memory extraction after successful agent replies |
 | `TELEGRAM_DOCUMENT_FALLBACK_ENABLED` | Telegram bots | `false` | Opt in to in-memory `response.md` attachments for exceptional oversized/code-heavy final responses |
 | `TELEGRAM_LAYOUT_DOCUMENT_THRESHOLD` | Telegram bots | `3500` | Attachment threshold used only when `TELEGRAM_DOCUMENT_FALLBACK_ENABLED=true` |
 | `TELEGRAM_LAYOUT_CODE_BLOCK_THRESHOLD` | Telegram bots | `3` | Code-block attachment threshold used only when `TELEGRAM_DOCUMENT_FALLBACK_ENABLED=true` |
@@ -284,10 +283,11 @@ can retrieve or write guarded memories with:
 Successful responses may also include a hidden `agent-bridge-memory` sidecar;
 the bridge strips it before delivery/history and stores valid candidates.
 
-Set `BRIDGE_MEMORY_EXTRACTOR_ENABLED=1` to also run a bounded post-turn
-extractor after successful agent replies. The extractor asks the configured CLI
-for a JSON array of durable memory candidates, then stores only candidates that
-pass the same validation, dedupe, and secret checks as `--memory-add-json`.
+`/compact` is the single automatic durable-memory distillation path. The
+former post-turn extractor (`BRIDGE_MEMORY_EXTRACTOR_ENABLED`) has been
+removed; compaction produces both a conversation summary and validated
+memory candidates in one deliberate step instead of running an extra CLI
+call after every successful reply.
 
 ## Shared skills
 

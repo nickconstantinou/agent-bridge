@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -20,6 +20,7 @@ import {
   readAntigravityLastConversation,
   readLatestAntigravityConversationFromLogs,
   resolveAntigravityConversationId,
+  ensureAntigravityStateDirs,
 } from "../src/bridge.js";
 import { openDb, BridgeDb } from "../src/db.js";
 import { runCli } from "../src/cli.js";
@@ -542,6 +543,35 @@ describe("agent bridge MVP", () => {
         "/repo": "c107dfbd-181e-4cf0-a840-894662adee43",
       }));
       expect(readAntigravityLastConversation({ cwd: "/repo", homeDir: home })).toBe("c107dfbd-181e-4cf0-a840-894662adee43");
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("pre-creates the antigravity worktrees state dir", () => {
+    const home = mkdtempSync(join(tmpdir(), "agy-home-"));
+    try {
+      ensureAntigravityStateDirs(home);
+      expect(existsSync(join(home, ".gemini", "antigravity-cli", "worktrees"))).toBe(true);
+      // Idempotent: second call must not throw.
+      ensureAntigravityStateDirs(home);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("creates the antigravity worktrees dir when building an agy invocation", () => {
+    const home = mkdtempSync(join(tmpdir(), "agy-home-"));
+    try {
+      buildCliInvocation({
+        bot: "antigravity",
+        prompt: "hello",
+        sessionId: null,
+        command: "agy",
+        model: null,
+        homeDir: home,
+      });
+      expect(existsSync(join(home, ".gemini", "antigravity-cli", "worktrees"))).toBe(true);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }

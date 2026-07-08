@@ -192,6 +192,7 @@ export function buildCliInvocation({
   attachments = [],
   outputDir = null,
   effort = null,
+  homeDir = homedir(),
 }: {
   bot: string;
   prompt: string;
@@ -206,6 +207,7 @@ export function buildCliInvocation({
   attachments?: string[];
   outputDir?: string | null;
   effort?: EffortLevel | null;
+  homeDir?: string;
 }): { command: string; args: string[]; stdin?: string } {
   const args = [];
 
@@ -263,6 +265,9 @@ export function buildCliInvocation({
     if (outputFormat === "json") args.push("--output-format", "json");
     args.push(finalPrompt);
   } else if (bot === "antigravity") {
+    // Agy fatally aborts a cascade if it lists its own worktrees state dir before
+    // ever creating it, so guarantee the dir exists ahead of every invocation.
+    ensureAntigravityStateDirs(homeDir);
     // Agy's --print flag takes the prompt as its value, so all other flags must come first.
     // Agy does not expose a --model CLI flag; model selection is applied by writing to
     // ~/.gemini/antigravity-cli/settings.json before spawning (see setAntigravityModel).
@@ -546,6 +551,15 @@ export function toAntigravityModelLabel(model: string): string {
   }
 
   return model;
+}
+
+/**
+ * Ensures Agy's mutable state dirs exist before a spawn. Agy's cascade engine
+ * treats listing a missing directory as a fatal step error (observed with
+ * ~/.gemini/antigravity-cli/worktrees), which aborts the whole run.
+ */
+export function ensureAntigravityStateDirs(homeDir: string = homedir()): void {
+  mkdirSync(join(homeDir, ".gemini", "antigravity-cli", "worktrees"), { recursive: true });
 }
 
 /**

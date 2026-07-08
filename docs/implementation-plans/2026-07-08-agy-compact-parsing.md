@@ -1,7 +1,7 @@
 # Agy Compact Parsing Fix Implementation Plan
 
 Date: 2026-07-08
-Issue: TBD
+Issue: #89
 
 ## Problem
 
@@ -182,7 +182,7 @@ npm run typecheck
 ## Coding-agent prompt
 
 ```text
-Implement issue #TBD in nickconstantinou/agent-bridge.
+Implement issue #89 in nickconstantinou/agent-bridge.
 
 Problem:
 /compact fails with Antigravity/Agy because compactConversation parses raw CLI stdout directly with parseCompactOutput. Agy stdout is wrapped as {"reasoning":"...","response":"..."}; the compact JSON is inside response. Normal prompt execution already uses parseCliResult to extract that response, but compaction bypasses it.
@@ -212,5 +212,5 @@ Run:
 - npm test
 - npm run typecheck
 
-Open a PR that closes the linked issue and includes the exact failing scenario in the PR body.
+Open a PR that closes #89 and includes the exact failing scenario in the PR body.
 ```

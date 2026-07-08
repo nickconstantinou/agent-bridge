@@ -62,7 +62,7 @@ describe("BridgeEngine", () => {
   let db: ReturnType<typeof openDb>;
 
   beforeEach(() => {
-    dbPath = join(tmpdir(), `engine-test-${Date.now()}.sqlite`);
+    dbPath = join(tmpdir(), `engine-test-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`);
     db = openDb(dbPath);
   });
 

@@ -824,6 +824,46 @@ describe("BridgeEngine", () => {
       expect(capturedPrompts[2]).toContain("second question");
       expect(client.sendMessage.mock.calls.at(-1)?.[0].text).toBe("Recovered from stall");
     });
+
+    it("retries Agy cascade command status not found errors once with a fresh conversation", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+
+      const capturedPrompts: string[] = [];
+      const capturedArgs: string[][] = [];
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedArgs.push(args);
+        capturedPrompts.push(args[args.length - 1]);
+        if (runCli.mock.calls.length === 1) return "***\nPrior answer";
+        if (runCli.mock.calls.length === 2) {
+          throw new Error("error executing cascade step: CORTEX_STEP_TYPE_COMMAND_STATUS: command abc/task-22 not Found");
+        }
+        return "***\nRecovered command status error";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        {
+          kind: "antigravity",
+          botConfig: { command: "agy", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      db.setSession("100", "antigravity", "stale-conversation");
+
+      await engine.handleMessages([makeMessage("first question")]);
+      await engine.handleMessages([makeMessage("second question")]);
+
+      expect(runCli).toHaveBeenCalledTimes(3);
+      expect(capturedArgs[2]).not.toContain("--conversation");
+      expect(capturedPrompts[2]).toContain("first question");
+      expect(client.sendMessage.mock.calls.at(-1)?.[0].text).toBe("Recovered command status error");
+    });
   });
 
   describe("authorization", () => {

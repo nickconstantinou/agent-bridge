@@ -8,7 +8,7 @@
  */
 
 import type { BridgeDb } from "./db.js";
-import { buildCliInvocation } from "./cli.js";
+import { buildCliInvocation, parseCliResult } from "./cli.js";
 import { resolveEffort } from "./effort.js";
 import type { BotKind } from "./types.js";
 import { mapWithConcurrency } from "./concurrency.js";
@@ -81,7 +81,8 @@ export async function compactConversation(
 
   const summarizeToOutput = async (prompt: string) => {
     const raw = await summarizePrompt(prompt);
-    const parsed = parseCompactOutput(raw);
+    const cliResult = parseCliResult({ bot: cliKind, stdout: raw });
+    const parsed = parseCompactOutput(cliResult.text);
     if (!parsed) throw new Error("invalid compact JSON output");
     return parsed;
   };

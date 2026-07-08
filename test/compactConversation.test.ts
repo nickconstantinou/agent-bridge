@@ -132,4 +132,53 @@ describe("compactConversation", () => {
     expect(result.outcome).toBe("compacted");
     expect(capturedPrompt).toContain("preferences");
   });
+
+  it("succeeds when antigravity wrapped output has valid compact JSON", async () => {
+    db.addConvTurn("chat:1", "user", "fix the bug");
+    db.addConvTurn("chat:1", "assistant", "fixed");
+
+    const innerJson = compactJson("Current objective:\n- antigravity fixed bug");
+    const rawOutput = JSON.stringify({
+      reasoning: "thinking about the turns",
+      response: innerJson,
+    });
+
+    const runCli = vi.fn().mockResolvedValue(rawOutput);
+    const result = await compactConversation("chat:1", {
+      db,
+      runCli,
+      botConfig: { command: "agy", modelPreference: ["gemini-3.5-flash-high"] },
+      cliKind: "antigravity",
+    });
+
+    expect(result.outcome).toBe("compacted");
+    expect(result.summaryMd).toBe("Current objective:\n- antigravity fixed bug");
+    expect(result.turnCount).toBe(2);
+
+    const summary = db.getLatestConvSummary("chat:1");
+    expect(summary?.summary_md).toBe("Current objective:\n- antigravity fixed bug");
+    expect(db.getRecentConvTurns("chat:1", 100)).toEqual([]);
+  });
+
+  it("fails safely without pruning turns when antigravity wrapped output response has invalid compact JSON", async () => {
+    db.addConvTurn("chat:1", "user", "hello");
+    db.addConvTurn("chat:1", "assistant", "hi");
+
+    const rawOutput = JSON.stringify({
+      reasoning: "bad output",
+      response: "not compact json at all",
+    });
+
+    const runCli = vi.fn().mockResolvedValue(rawOutput);
+    const result = await compactConversation("chat:1", {
+      db,
+      runCli,
+      botConfig: { command: "agy", modelPreference: ["gemini-3.5-flash-high"] },
+      cliKind: "antigravity",
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(db.getLatestConvSummary("chat:1")).toBeNull();
+    expect(db.getRecentConvTurns("chat:1", 100)).toHaveLength(2);
+  });
 });

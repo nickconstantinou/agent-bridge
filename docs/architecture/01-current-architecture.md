@@ -44,7 +44,7 @@ A second, separate **appliance** deployment lives outside this repo at `/opt/age
 - `src/db.ts` (1,103) — BridgeDb monolith: schema DDL + migrations inline; session/lock/settings/queue/memory methods implemented directly.
 - `src/repositories/` — 6 repository classes (session, lock, settings, runRepository, workQueue, memory). Partially wired: `settingsRepository` and `sessionRepository` are delegated to; `BridgeDb` still owns most SQL directly (`openDb()` returns `new BridgeDb(raw)`).
 - `src/events/` — `types.ts` (BridgeEvent union: run.started, text.delta, run.completed, run.failed, run.cancelled), `store.ts` (EventStore persisting to `bridge_runs`/`bridge_events`), `reducer.ts`, `telegramAdapter.ts`.
-- `src/projectMemory.ts`, `src/memoryExtractor.ts`, `src/contextCommand.ts`, `src/compactSummary.ts` — memory capture, retrieval, /compact, context command CLI.
+- `src/projectMemory.ts`, `src/contextCommand.ts`, `src/compactSummary.ts` — memory capture, retrieval, /compact, context command CLI. `/compact` is the single automatic durable-memory distillation path; the former post-turn extractor (`src/memoryExtractor.ts`, `BRIDGE_MEMORY_EXTRACTOR_ENABLED`) has been removed.
 
 ### Tables (from `src/db.ts` DDL)
 `bridge_state`, `settings`, `bridge_runs`, `bridge_events`, `work_items`, `work_jobs`, `approvals`, `github_links`, `feature_plans`, `work_item_plans`, `prompts`, `conversation_turns`, `pending_messages`, `conversation_summaries`, `project_memories`.

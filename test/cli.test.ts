@@ -960,4 +960,30 @@ Done.
 
     rmSync(tempHome, { recursive: true, force: true });
   });
+
+  it("buildCliInvocation adds --yolo for Kimchi in trusted mode", () => {
+    const { args } = buildCliInvocation({
+      bot: "kimchi",
+      command: "kimchi",
+      prompt: "hello",
+      sessionId: null,
+      model: null,
+      executionMode: "trusted",
+    });
+    expect(args).toContain("--yolo");
+    expect(args).toContain("--print");
+  });
+
+  it("buildCliInvocation omits --yolo for Kimchi in safe mode", () => {
+    const { args } = buildCliInvocation({
+      bot: "kimchi",
+      command: "kimchi",
+      prompt: "hello",
+      sessionId: null,
+      model: null,
+      executionMode: "safe",
+    });
+    expect(args).not.toContain("--yolo");
+    expect(args).toContain("--print");
+  });
 });

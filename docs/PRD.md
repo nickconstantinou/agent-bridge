@@ -104,16 +104,18 @@ Sessions are stored per chat in SQLite and restored across service restarts. Eve
 
 Every user message and assistant response is persisted to SQLite in `conversation_turns`. The table survives service restarts and CLI switches — replacing the previous in-memory `recentTurns` / `chatTurns` Maps.
 
-`buildConvContext(chatKey, maxChars)` composes the latest compact summary (if any) plus recent raw turns into a context preamble prepended to CLI prompts. It walks turns newest-first, accumulating character count, and stops when the char budget is exhausted. The summary always takes priority and is included even if it alone exceeds the budget. Default budget: `BRIDGE_CONTEXT_MAX_CHARS = 8_000` (~2K tokens); override via env var.
+`buildConvContext(chatKey, maxChars)` composes the latest compact summary (if any) plus recent raw turns into a context preamble prepended to CLI prompts. It fetches the newest `BRIDGE_CONTEXT_RECENT_TURN_LIMIT` turns after the summary (default 200; the *newest* N, not the first N — a chat with more un-compacted turns than this candidate cap never silently drops its most recent messages), then walks them newest-first, accumulating character count, and stops when the char budget is exhausted. The summary always takes priority and is included even if it alone exceeds the budget. Default budget: `BRIDGE_CONTEXT_MAX_CHARS = 8_000` (~2K tokens); override via env var. This prompt-context cap is independent of compaction — `getConvTurnsForCompaction` always processes the full un-compacted backlog regardless of either limit.
 
-**`/compact`** — Creates a semantic checkpoint and starts a fresh CLI session. The engine:
+**Context injection policy (`BRIDGE_CONTEXT_INJECTION_POLICY`):** `BridgeEngine._shouldInjectContext(chatKey, sessionId)` decides whether the recent-turn preamble and the `[Agent Bridge context]` usage-instructions block are injected for a given turn. `always` (default) injects on every turn, matching the behavior above unconditionally — no change for existing self-hosted deployments. `handoff_once` injects only when: there is no native CLI session for this chat+CLI (`sessionId == null`, which covers the first-ever turn, `/compact` resetting the session, and invalid-session retry recursing with a null session), or `handoffState.isHandoffRequired()` is true for this chat+CLI (set by manual `/cli` switch or capacity fallback, see `applyManualCliSwitchHandoff`/`prepareCliHandoff` in `src/interactiveBot.ts`). `/reset`'s `ctx_suppress` flag always wins over both. The handoff flag is consumed (cleared, logged) only on the turn that actually receives injected context — never on a turn the policy or `ctx_suppress` suppresses. The `AGENT_BRIDGE_CONTEXT_COMMAND`/`AGENT_BRIDGE_CONTEXT_DB`/`AGENT_BRIDGE_CHAT_KEY`/`AGENT_BRIDGE_CLI_KIND` env vars are set regardless of policy or injection decision — only the prompt text is gated. Recommended for platform-managed workspaces (`docs/architecture/platform-boundary.md`); default is unchanged for OSS.
+
+**`/compact`** — Creates a semantic checkpoint and starts a fresh CLI session, via the shared `compactConversation()` service (`src/compactConversation.ts`):
 1. Loads all un-compacted turns for the chat key via `getConvTurnsForCompaction` (`id > latest_summary.range_end_turn_id`).
 2. Sends an immediate `Compacting context...` acknowledgement, records `compact_in_progress:<chatKey>` in `settings`, and logs compact lifecycle events.
 3. Chunks the loaded turns by prompt budget (`COMPACT_CHUNK_MAX_CHARS = 16_000`, override with `BRIDGE_COMPACT_CHUNK_MAX_CHARS`).
-4. Summarises each chunk with `buildCompactSummaryPrompt` in single-shot print mode (`sessionId: null`) with a 60s `Promise.race` timeout. Chunk summaries run with bounded parallelism (`COMPACT_PARALLELISM = 2`, override with `BRIDGE_COMPACT_PARALLELISM`, max 8).
+4. Summarises each chunk with `buildCompactSummaryPrompt` (profile-aware: `engineering` or `companion`) in single-shot print mode (`sessionId: null`) with a 60s `Promise.race` timeout. Each call requests a single JSON object `{ summary_md, memory_candidates }`, parsed by `parseCompactOutput`. Chunk summaries run with bounded parallelism (`COMPACT_PARALLELISM = 2`, override with `BRIDGE_COMPACT_PARALLELISM`, max 8).
 5. If multiple chunks or a previous summary exists, reduce-merges the previous compact summary plus chunk summaries into one durable `summary_md`.
-6. If any summariser call fails or returns empty output, stores a tombstone covering the exact loaded turn range instead of pruning uncovered turns.
-7. Stores the final summary via `addConvSummary`, then prunes raw turns up to `endId` via `pruneConvTurns`.
+6. **Non-destructive failure:** if any summariser call fails, times out, or returns output that isn't valid `{ summary_md, memory_candidates }` JSON, compaction stops there — no summary is stored and no turns are pruned. The previous summary and raw turns remain exactly as they were, and the user is told compaction failed so the conversation can continue uninterrupted.
+7. On success, stores the final summary via `addConvSummary`, promotes `memory_candidates` through `storeProjectMemoryCandidate()` into `project_memories`, then prunes raw turns up to `endId` via `pruneConvTurns`.
 8. Clears the `compact_in_progress` / `ctx_suppress` flags and the CLI session — next prompt starts a fresh CLI seeded with the new summary.
 
 **`/context`** — Reports current conversation state: turn count, pending queue depth, last turn timestamp, last compact time, and any active `compact_in_progress:<chatKey>` marker. Reads from `getConvStatus` and `getLatestConvSummary`. If stored turns exceed 100, it appends `High turn count - consider /compact`.
@@ -183,12 +185,12 @@ text. This gives CLI agents queryable access to bridge conversation history and
 shared project memory without any MCP server. The bridge prompt preamble tells
 agents when `AGENT_BRIDGE_CONTEXT_AVAILABLE=1` and how to invoke it.
 
-Post-turn automatic extraction is opt-in with
-`BRIDGE_MEMORY_EXTRACTOR_ENABLED=1`. When enabled, successful agent replies run
-a bounded JSON-only extractor through the configured CLI with no Telegram
-progress output and no session reuse. Parsed candidates are passed through the
-same project-memory validator; extractor failures are logged as warnings and do
-not block the user-facing reply.
+`/compact` is the single automatic durable-memory distillation path. It
+produces both a conversation summary and validated memory candidates in one
+step; the former post-turn extractor (`BRIDGE_MEMORY_EXTRACTOR_ENABLED`),
+which ran a bounded JSON-only extraction call after every successful agent
+reply, has been removed in favor of this deliberate compaction point. See
+`docs/architecture/memory-and-handoff.md` for the current design.
 
 Project memories live in `project_memories` with an FTS5 index. Retrieval
 normalizes punctuation, hyphens, simple plural/singular variants, and bridge
@@ -197,11 +199,14 @@ context/history.
 
 ### 4.5 Interactive Bot CLI-to-CLI Fallback
 
-In the unified interactive bot (switchable CLI), if all model fallbacks of the user's preferred CLI are exhausted and the bot encounters a capacity/rate-limit error (e.g. `session limit` or `resets`), it automatically:
-1. Advances to the next CLI in the preference chain (default order: `codex` → `claude` → `antigravity`, configurable via `INTERACTIVE_CLI_CHAIN` in environment variables).
-2. Notifies the user of the switch and updates the Telegram commands menu to match the active CLI.
-3. Prepends a context preamble (latest compact summary + recent turns from SQLite) to the prompt and retries the execution on the fallback CLI engine.
-4. After a fallback CLI successfully completes the turn, promotes that CLI into the user's SQLite preference (`interactive_cli_preference` column in `bridge_state`) so the next message starts there instead of repeatedly retrying the exhausted CLI. If every CLI is exhausted, the stored preference is left unchanged.
+In the unified interactive bot (switchable CLI), if all model fallbacks of the user's preferred CLI are exhausted and the bot encounters a capacity/rate-limit error (e.g. `session limit` or `resets`), `dispatchInteractiveWithFallback` (`src/interactiveBot.ts`) automatically:
+1. Attempts to compact the outgoing CLI's conversation first (`compactBeforeSwitch`, wired to the shared `compactConversation()` service, `compactProfile: "companion"`), rate-limited by `fallbackCompactCooldown.ts` (default 5 min, override `BRIDGE_FALLBACK_COMPACT_COOLDOWN_MS`) so a cascading multi-hop fallback doesn't trigger a compaction CLI call before every single hop. Compaction failure never blocks the fallback.
+2. Clears the target CLI's own stored session (`db.setSession(chatKey, targetCli, null)`) and marks a one-time handoff flag for it (`src/handoffState.ts`) — so the target starts fresh rather than resuming a possibly stale, long-abandoned native session.
+3. Advances to the next CLI in the preference chain (default order: `codex` → `claude` → `antigravity`, configurable via `INTERACTIVE_CLI_CHAIN` in environment variables), notifies the user, updates the Telegram commands menu, and replays the same update into the new CLI engine.
+4. The engine's `_buildRecentContextPrompt` (unchanged from normal-turn behavior) injects the latest compact summary + recent turns on this turn as on every turn; the handoff flag is consumed (cleared, logged) at that point but does not currently gate injection — see `docs/architecture/companion-runtime.md` for the deferred first-turn-only optimization.
+5. After a fallback CLI successfully completes the turn, promotes that CLI into the user's SQLite preference (`interactive_cli_preference` column in `bridge_state`) so the next message starts there instead of repeatedly retrying the exhausted CLI. If every CLI is exhausted, the stored preference is left unchanged.
+
+Manual `/cli` switching applies the same target-session-clear + handoff-mark (`applyManualCliSwitchHandoff`), without the compact step (compaction is fallback-only, since manual switches are user-initiated and infrequent).
 
 ### 4.6 Concurrency Lock & Message Queue
 
@@ -320,7 +325,7 @@ CREATE TABLE conversation_summaries (
 );
 ```
 
-> Note: `conversation_turns` are pruned after `/compact` only after a final summary or tombstone is stored for the exact loaded range (rows up to `range_end_turn_id` deleted). Startup also performs the same summary-gated cleanup for any already-summarized turns left behind by an interrupted process. Unsummarized turns are never TTL-deleted. `conversation_summaries` are small and kept indefinitely.
+> Note: `conversation_turns` are pruned after `/compact` only after a final summary is successfully stored for the exact loaded range (rows up to `range_end_turn_id` deleted). Compaction failure prunes nothing. Startup also performs the same summary-gated cleanup for any already-summarized turns left behind by an interrupted process. Unsummarized turns are never TTL-deleted. `conversation_summaries` are small and kept indefinitely.
 
 ---
 
@@ -337,7 +342,8 @@ src/
 ├── db.ts               — BridgeDb (SQLite via better-sqlite3); conversation_turns/summaries/pending
 ├── types.ts            — TypeScript interfaces
 ├── commands.ts         — /reset, /models, /compact, /context (synchronous, returns string | null)
-├── compactSummary.ts   — chunkCompactTurns, buildCompactSummaryPrompt, buildCompactReducePrompt, buildTombstone, compact constants
+├── compactSummary.ts   — chunkCompactTurns, buildCompactSummaryPrompt, buildCompactReducePrompt, parseCompactOutput, compact constants
+├── compactConversation.ts — shared compaction service: summarise, promote memory candidates, prune (non-destructive on failure)
 ├── contextCommand.ts   — renderAgentBridgeContext: read-only DB helper for agent CLI access
 ├── timeouts.ts         — Timeout resolution (per-bot prefix → global → default)
 └── projectMemory.ts    — guarded bridge-owned project memory validation

@@ -7,6 +7,8 @@
 
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
 import { isCodeCliAllowed } from "../workerCliPolicy.js";
+import { createWorkerPromptFileReader } from "../workerPromptFileReader.js";
+import { loadWorkerPrompt } from "../workerPrompts.js";
 
 type CliKind = "codex" | "claude" | "antigravity";
 type RunCli = (command: string, args: string[], cwd?: string) => Promise<string>;
@@ -23,6 +25,8 @@ interface OrchestratedTaskDeps {
   prepareWorkspace?: (repository: string, workItemId: number, opts?: { reuseExisting?: boolean }) => Promise<string>;
   cleanupWorkspace?: (dir: string) => void;
 }
+
+const promptReader = createWorkerPromptFileReader();
 
 function notifyFields(input: JobHandlerInput): Record<string, number> {
   return {
@@ -54,23 +58,30 @@ function commandFor(deps: OrchestratedTaskDeps, cli: CliKind | null): string {
   return deps.command || "claude";
 }
 
-function buildPlanPrompt(title: string, body: string | null): string {
-  return `Plan this implementation job before editing.
-
-Title: ${title}
-${body ? `Details: ${body}\n` : ""}
-Return a concise numbered plan with verification steps. Do not edit files.`;
+async function buildPlanPrompt(ctx: JobHandlerContext, item: { repository: string | null; title: string; body: string | null }): Promise<string> {
+  return loadWorkerPrompt(
+    "orchestrated_task:plan",
+    {
+      repository: item.repository ?? "(unknown)",
+      title: item.title,
+      body: item.body ?? "",
+    },
+    promptReader,
+    { dbTemplate: ctx.db.getPrompt("orchestrated_task:plan", "") },
+  );
 }
 
-function buildExecutePrompt(title: string, body: string | null, plan: string): string {
-  return `Execute this implementation plan.
-
-Title: ${title}
-${body ? `Details: ${body}\n` : ""}
-Plan:
-${plan}
-
-Make the smallest coherent code changes needed. Stage changed files with git add -A. Do not commit.`;
+async function buildExecutePrompt(ctx: JobHandlerContext, title: string, plan: string): Promise<string> {
+  return loadWorkerPrompt(
+    "orchestrated_task:execute",
+    {
+      title,
+      plan_text: plan,
+      execution_contract: "",
+    },
+    promptReader,
+    { dbTemplate: ctx.db.getPrompt("orchestrated_task:execute", "") },
+  );
 }
 
 export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHandler {
@@ -114,7 +125,8 @@ export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHa
       }
       await runGit(["checkout", "-b", branchName], repoPath);
 
-      const plan = await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, buildPlanPrompt(item.title, item.body)], repoPath);
+      const planPrompt = await buildPlanPrompt(ctx, item);
+      const plan = await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, planPrompt], repoPath);
       return {
         status: "continue",
         phase: "executing",
@@ -125,7 +137,8 @@ export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHa
 
     if (ctx.phase === "executing") {
       if (!phaseData.repoPath || !phaseData.plan) throw new Error("orchestrated_task missing execution phase data");
-      await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, buildExecutePrompt(item.title, item.body, phaseData.plan)], phaseData.repoPath);
+      const executePrompt = await buildExecutePrompt(ctx, item.title, phaseData.plan);
+      await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, executePrompt], phaseData.repoPath);
       await runGit(["add", "-A"], phaseData.repoPath);
       const staged = String(await runGit(["diff", "--cached", "--name-only"], phaseData.repoPath)).trim();
       if (!staged) throw new Error("Execution phase staged no changes");

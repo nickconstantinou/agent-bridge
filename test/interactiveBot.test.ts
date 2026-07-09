@@ -22,8 +22,10 @@ import {
   buildGlobalInteractiveCommandRegistrations,
   buildChatInteractiveCommandRegistrations,
   dispatchInteractiveWithFallback,
+  applyManualCliSwitchHandoff,
   type CliKind,
 } from "../src/interactiveBot.js";
+import { isHandoffRequired } from "../src/handoffState.js";
 
 const VALID_CLI_KINDS: CliKind[] = ["codex", "claude", "antigravity"];
 
@@ -504,7 +506,6 @@ describe("dispatchInteractiveWithFallback", () => {
   let antigravity: { handleUpdate: any; handleCount: number };
   let fallbackChain: WorkerFallbackChain;
   let exhaustedChats: Set<string>;
-  let contextPreambles: Map<string, string>;
   let sentMessages: string[];
   let onCliSwitchedCalls: CliKind[];
 
@@ -515,7 +516,6 @@ describe("dispatchInteractiveWithFallback", () => {
     antigravity = { handleCount: 0, handleUpdate: async () => { antigravity.handleCount++; } };
     fallbackChain = new WorkerFallbackChain(["codex", "claude", "antigravity"], db);
     exhaustedChats = new Set();
-    contextPreambles = new Map();
     sentMessages = [];
     onCliSwitchedCalls = [];
   });
@@ -524,7 +524,6 @@ describe("dispatchInteractiveWithFallback", () => {
     engines: { codex, claude, antigravity },
     fallbackChain,
     exhaustedChats,
-    contextPreambles,
     db,
     notify: (msg: string) => { sentMessages.push(msg); },
     onCliSwitched: async (newCli: CliKind) => { onCliSwitchedCalls.push(newCli); },
@@ -551,20 +550,6 @@ describe("dispatchInteractiveWithFallback", () => {
     expect(getUserCliPreference(db, "chat:1")).toBe("claude");
     expect(sentMessages).toContain("Switching to claude (codex at capacity)");
     expect(onCliSwitchedCalls).toContain("claude");
-  });
-
-  it("sets context preamble when falling back", async () => {
-    setUserCliPreference(db, "chat:1", "codex");
-    fallbackChain.addTurn("chat:1", "user", "previous question");
-    codex.handleUpdate = async () => {
-      codex.handleCount++;
-      exhaustedChats.add("chat:1");
-    };
-
-    await dispatchInteractiveWithFallback({ update_id: 1, message: { text: "hello", chat: { id: 1 } } } as any, "chat:1", deps());
-
-    expect(contextPreambles.has("chat:1")).toBe(true);
-    expect(contextPreambles.get("chat:1")).toContain("previous question");
   });
 
   it("auto-fallback promotes the successful fallback CLI into the stored DB preference", async () => {
@@ -598,5 +583,103 @@ describe("dispatchInteractiveWithFallback", () => {
     await dispatchInteractiveWithFallback({ update_id: 2, message: { text: "next", chat: { id: 1 } } } as any, "chat:1", deps());
     expect(codex.handleCount).toBe(1);
     expect(claude.handleCount).toBe(2);
+  });
+
+  it("clears the target CLI's stale session and marks handoff required on fallback", async () => {
+    setUserCliPreference(db, "chat:1", "codex");
+    db.setSession("chat:1", "claude", "stale-claude-session-from-weeks-ago");
+    codex.handleUpdate = async () => {
+      codex.handleCount++;
+      exhaustedChats.add("chat:1");
+    };
+
+    await dispatchInteractiveWithFallback({ update_id: 1, message: { text: "hello", chat: { id: 1 } } } as any, "chat:1", deps());
+
+    expect(db.getSession("chat:1", "claude")).toBeNull();
+    expect(isHandoffRequired(db, "chat:1", "claude")).toBe(true);
+  });
+
+  it("calls compactBeforeSwitch with the outgoing CLI before falling back", async () => {
+    setUserCliPreference(db, "chat:1", "codex");
+    codex.handleUpdate = async () => {
+      codex.handleCount++;
+      exhaustedChats.add("chat:1");
+    };
+    const compactCalls: Array<{ chatKey: string; fromCli: string }> = [];
+
+    await dispatchInteractiveWithFallback(
+      { update_id: 1, message: { text: "hello", chat: { id: 1 } } } as any,
+      "chat:1",
+      { ...deps(), compactBeforeSwitch: async (chatKey, fromCli) => { compactCalls.push({ chatKey, fromCli }); } },
+    );
+
+    expect(compactCalls).toEqual([{ chatKey: "chat:1", fromCli: "codex" }]);
+  });
+
+  it("does not block fallback when compactBeforeSwitch rejects", async () => {
+    setUserCliPreference(db, "chat:1", "codex");
+    codex.handleUpdate = async () => {
+      codex.handleCount++;
+      exhaustedChats.add("chat:1");
+    };
+
+    await dispatchInteractiveWithFallback(
+      { update_id: 1, message: { text: "hello", chat: { id: 1 } } } as any,
+      "chat:1",
+      { ...deps(), compactBeforeSwitch: async () => { throw new Error("CLI down, cannot compact"); } },
+    );
+
+    expect(claude.handleCount).toBe(1);
+    expect(getUserCliPreference(db, "chat:1")).toBe("claude");
+  });
+
+  it("skips compactBeforeSwitch on a second fallback within the cooldown window", async () => {
+    setUserCliPreference(db, "chat:1", "codex");
+    let attempts = 0;
+
+    // First fallback: codex -> claude
+    codex.handleUpdate = async () => { exhaustedChats.add("chat:1"); };
+    await dispatchInteractiveWithFallback(
+      { update_id: 1, message: { text: "hello", chat: { id: 1 } } } as any,
+      "chat:1",
+      { ...deps(), compactBeforeSwitch: async () => { attempts++; } },
+    );
+    expect(attempts).toBe(1);
+
+    // Second fallback happens immediately after (claude -> antigravity): cooldown should skip the compact call.
+    claude.handleUpdate = async () => { exhaustedChats.add("chat:1"); };
+    await dispatchInteractiveWithFallback(
+      { update_id: 2, message: { text: "again", chat: { id: 1 } } } as any,
+      "chat:1",
+      { ...deps(), compactBeforeSwitch: async () => { attempts++; } },
+    );
+    expect(attempts).toBe(1);
+  });
+});
+
+describe("applyManualCliSwitchHandoff", () => {
+  let db: BridgeDb;
+
+  beforeEach(() => {
+    db = openDb(":memory:");
+  });
+
+  it("clears the target CLI's session so it starts fresh", () => {
+    db.setSession("chat:1", "claude", "old-session-id");
+    applyManualCliSwitchHandoff(db, "chat:1", "claude");
+    expect(db.getSession("chat:1", "claude")).toBeNull();
+  });
+
+  it("marks handoff required for the target CLI", () => {
+    applyManualCliSwitchHandoff(db, "chat:1", "claude");
+    expect(isHandoffRequired(db, "chat:1", "claude")).toBe(true);
+  });
+
+  it("does not affect a different chat or a different CLI's session/handoff state", () => {
+    db.setSession("chat:1", "codex", "keep-me");
+    applyManualCliSwitchHandoff(db, "chat:1", "claude");
+    expect(db.getSession("chat:1", "codex")).toBe("keep-me");
+    expect(isHandoffRequired(db, "chat:1", "codex")).toBe(false);
+    expect(isHandoffRequired(db, "chat:2", "claude")).toBe(false);
   });
 });

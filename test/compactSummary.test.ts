@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildCompactSummaryPrompt,
-  buildTombstone,
+  parseCompactOutput,
   COMPACT_PROMPT_MAX_CHARS,
   COMPACT_TIMEOUT_MS,
   COMPACT_CHUNK_MAX_CHARS,
@@ -40,37 +40,85 @@ describe("buildCompactSummaryPrompt", () => {
     expect(prompt.length).toBeGreaterThan(0);
     expect(prompt).toContain("Current objective:");
   });
+
+  it("requests structured JSON output with summary_md and memory_candidates", () => {
+    const prompt = buildCompactSummaryPrompt([{ role: "user", text: "hi" }]);
+    expect(prompt).toContain("summary_md");
+    expect(prompt).toContain("memory_candidates");
+    expect(prompt).toContain("JSON");
+  });
+
+  it("defaults to the engineering profile (repo/PR/file-path oriented guidance)", () => {
+    const prompt = buildCompactSummaryPrompt([{ role: "user", text: "hi" }]);
+    expect(prompt).toContain("repo");
+    expect(prompt).toContain("PR");
+  });
+
+  it("companion profile asks for non-engineering durable facts instead of repo/PR framing", () => {
+    const prompt = buildCompactSummaryPrompt([{ role: "user", text: "hi" }], "companion");
+    expect(prompt).toContain("preferences");
+    expect(prompt).not.toContain("active PR/issue numbers");
+  });
 });
 
-describe("buildTombstone", () => {
-  it("includes turn count", () => {
-    const turns = [
-      { role: "user", text: "hello" },
-      { role: "assistant", text: "world" },
-    ];
-    const t = buildTombstone(turns, "claude");
-    expect(t).toContain("2 turns");
-    expect(t).toContain("1 user");
-    expect(t).toContain("1 assistant");
+describe("parseCompactOutput", () => {
+  it("parses a valid JSON object with summary_md and memory_candidates", () => {
+    const raw = JSON.stringify({
+      summary_md: "Current objective:\n- ship feature",
+      memory_candidates: [
+        { type: "decision", scope: "project", text: "Use compact-first memory.", confidence: 0.9 },
+      ],
+    });
+    const result = parseCompactOutput(raw);
+    expect(result).not.toBeNull();
+    expect(result?.summaryMd).toBe("Current objective:\n- ship feature");
+    expect(result?.memoryCandidates).toHaveLength(1);
+    expect(result?.memoryCandidates[0].text).toBe("Use compact-first memory.");
   });
 
-  it("includes CLI name", () => {
-    const t = buildTombstone([{ role: "user", text: "hi" }], "codex");
-    expect(t).toContain("codex");
+  it("strips a markdown JSON fence before parsing", () => {
+    const raw = [
+      "```json",
+      JSON.stringify({ summary_md: "Current objective:\n- fenced", memory_candidates: [] }),
+      "```",
+    ].join("\n");
+    const result = parseCompactOutput(raw);
+    expect(result?.summaryMd).toBe("Current objective:\n- fenced");
   });
 
-  it("includes last user message", () => {
-    const t = buildTombstone([
-      { role: "assistant", text: "first" },
-      { role: "user", text: "last user" },
-    ], "claude");
-    expect(t).toContain("last user");
+  it("defaults memory_candidates to an empty array when missing", () => {
+    const raw = JSON.stringify({ summary_md: "Current objective:\n- no candidates" });
+    const result = parseCompactOutput(raw);
+    expect(result?.memoryCandidates).toEqual([]);
   });
 
-  it("handles empty turns", () => {
-    const t = buildTombstone([], "claude");
-    expect(t).toContain("0 turns");
-    expect(t).toContain("none");
+  it("filters out non-object entries from memory_candidates", () => {
+    const raw = JSON.stringify({
+      summary_md: "Current objective:\n- mixed",
+      memory_candidates: [{ type: "note", scope: "project", text: "keep me" }, "not an object", 42, null],
+    });
+    const result = parseCompactOutput(raw);
+    expect(result?.memoryCandidates).toHaveLength(1);
+    expect(result?.memoryCandidates[0].text).toBe("keep me");
+  });
+
+  it("returns null when summary_md is missing", () => {
+    const raw = JSON.stringify({ memory_candidates: [] });
+    expect(parseCompactOutput(raw)).toBeNull();
+  });
+
+  it("returns null when summary_md is empty or not a string", () => {
+    expect(parseCompactOutput(JSON.stringify({ summary_md: "" }))).toBeNull();
+    expect(parseCompactOutput(JSON.stringify({ summary_md: 123 }))).toBeNull();
+  });
+
+  it("returns null for unparseable input", () => {
+    expect(parseCompactOutput("not json at all")).toBeNull();
+    expect(parseCompactOutput("")).toBeNull();
+  });
+
+  it("returns null for valid JSON that is not an object (e.g. a bare array)", () => {
+    expect(parseCompactOutput("[]")).toBeNull();
   });
 });
 

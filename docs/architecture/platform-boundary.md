@@ -58,3 +58,9 @@ The Platform should not own autonomous prompt execution, worker planning, TDD im
 Secrets, tokens, and runtime credentials should be scoped to the deployment that needs them.
 
 The Platform may help provision or distribute configuration, but runtime-specific authority should remain explicit and auditable.
+
+## Recommended Configuration for Platform-Managed Workspaces
+
+Set `BRIDGE_CONTEXT_INJECTION_POLICY=handoff_once`, `BRIDGE_PRESEED_COMPACT_MODE=auto`, and `BRIDGE_PRESEED_COMPACT_CHARS=30000`.
+
+Self-hosted OSS deployments default to `always` (inject Agent Bridge context on every turn, the original behavior) and `BRIDGE_PRESEED_COMPACT_MODE=off` (no pre-seed compaction). Platform-managed workspaces need deterministic first-turn seeding instead: inject context into a fresh provider session, then rely on the provider-native session ID until the next handoff/fresh-session event (manual switch, capacity fallback, `/compact`, or invalid-session recovery). Pre-seed compaction keeps that fresh seed a summary rather than a large raw-turn dump when the un-compacted backlog is large. See `docs/architecture/memory-and-handoff.md` and `docs/architecture/companion-runtime.md` for the full mechanism.

@@ -17,7 +17,6 @@ export interface DispatchDeps {
   engines: Record<string, DispatchEngine>;
   fallbackChain: WorkerFallbackChain;
   exhaustedChats: Set<string>;
-  contextPreambles: Map<string, string>;
   /** Called to send a notification message to the user. */
   notify: (message: string) => void | Promise<void>;
 }
@@ -27,7 +26,7 @@ export async function dispatchWithFallback(
   chatKey: string,
   deps: DispatchDeps,
 ): Promise<void> {
-  const { engines, fallbackChain, exhaustedChats, contextPreambles, notify } = deps;
+  const { engines, fallbackChain, exhaustedChats, notify } = deps;
 
   exhaustedChats.delete(chatKey);
   const activeCli = fallbackChain.getActiveCli(chatKey);
@@ -37,7 +36,6 @@ export async function dispatchWithFallback(
     exhaustedChats.delete(chatKey);
     const next = fallbackChain.advance(chatKey);
     if (next) {
-      contextPreambles.set(chatKey, fallbackChain.buildContextPreamble(chatKey));
       await notify(`Switching to ${next} (${activeCli} at capacity)`);
       await dispatchWithFallback(update, chatKey, deps);
     } else {

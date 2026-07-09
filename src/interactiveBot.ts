@@ -8,6 +8,8 @@ import type { BridgeDb } from "./db.js";
 import type { TelegramUpdate } from "./types.js";
 import { buildTelegramCommands } from "./commands.js";
 import { WorkerFallbackChain } from "./workerFallback.js";
+import { markHandoffRequired } from "./handoffState.js";
+import { shouldCompactBeforeFallback, recordFallbackCompactAttempt } from "./fallbackCompactCooldown.js";
 
 export type CliKind = "codex" | "claude" | "antigravity" | "kimchi";
 export type InteractiveCommandRegistration = {
@@ -17,6 +19,7 @@ export type InteractiveCommandRegistration = {
 
 const VALID_CLI_KINDS: CliKind[] = ["codex", "claude", "antigravity", "kimchi"];
 const DEFAULT_CLI: CliKind = "codex";
+const DEFAULT_AUTHENTICATED_CLI_KINDS = new Set<CliKind>(VALID_CLI_KINDS);
 
 export interface InteractiveUpdateLogSummary {
   updateId: number;
@@ -69,12 +72,38 @@ export function handleCliSwitchCallback(data: string): CliKind | null {
   return isValidCliKind(kind) ? kind : null;
 }
 
-export function buildCliStatusText(activeCli: CliKind): string {
-  const others = VALID_CLI_KINDS.filter((k) => k !== activeCli);
+export function getSelectableCliKinds(authenticated: ReadonlySet<CliKind> = DEFAULT_AUTHENTICATED_CLI_KINDS): CliKind[] {
+  return VALID_CLI_KINDS.filter((kind) => authenticated.has(kind));
+}
+
+export function resolveAvailableCliPreference(
+  preferred: CliKind,
+  authenticated: ReadonlySet<CliKind> = DEFAULT_AUTHENTICATED_CLI_KINDS,
+): CliKind | null {
+  const selectable = getSelectableCliKinds(authenticated);
+  if (selectable.length === 0) return null;
+  return selectable.includes(preferred) ? preferred : selectable[0];
+}
+
+export function buildCliStatusText(
+  activeCli: CliKind,
+  authenticated: ReadonlySet<CliKind> = DEFAULT_AUTHENTICATED_CLI_KINDS,
+): string {
+  const selectable = getSelectableCliKinds(authenticated);
+  if (selectable.length === 0) {
+    return [
+      "Active CLI: **none available**",
+      "Available: none",
+      "Switch with: no available CLI",
+    ].join("\n");
+  }
+
+  const resolvedActive = selectable.includes(activeCli) ? activeCli : selectable[0];
+  const others = selectable.filter((k) => k !== resolvedActive);
   return [
-    `Active CLI: **${activeCli}**`,
-    `Available: ${VALID_CLI_KINDS.join(", ")}`,
-    `Switch with: /switch ${others[0]}`,
+    `Active CLI: **${resolvedActive}**`,
+    `Available: ${selectable.join(", ")}`,
+    others.length > 0 ? `Switch with: /switch ${others[0]}` : "Switch with: no other available CLI",
   ].join("\n");
 }
 
@@ -85,10 +114,15 @@ export function isCliCommandText(rawText: string, botUsername?: string | null): 
   return command.slice("/cli@".length) === botUsername.toLowerCase();
 }
 
-export function buildCliKeyboard(activeCli: CliKind): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+export function buildCliKeyboard(
+  activeCli: CliKind,
+  authenticated: ReadonlySet<CliKind> = DEFAULT_AUTHENTICATED_CLI_KINDS,
+): { inline_keyboard: Array<Array<{ text: string; callback_data: string }>> } {
+  const selectable = getSelectableCliKinds(authenticated);
+  const resolvedActive = selectable.includes(activeCli) ? activeCli : selectable[0];
   return {
-    inline_keyboard: VALID_CLI_KINDS.map((cli) => [{
-      text: cli === activeCli ? `✓ ${cli}` : cli,
+    inline_keyboard: selectable.map((cli) => [{
+      text: cli === resolvedActive ? `✓ ${cli}` : cli,
       callback_data: `cli:${cli}`,
     }]),
   };
@@ -235,10 +269,28 @@ export interface InteractiveDispatchDeps {
   engines: Record<string, InteractiveDispatchEngine>;
   fallbackChain: WorkerFallbackChain;
   exhaustedChats: Set<string>;
-  contextPreambles: Map<string, string>;
   db: BridgeDb;
   notify: (msg: string) => Promise<void> | void;
   onCliSwitched?: (newCli: CliKind) => Promise<void> | void;
+  /**
+   * Called with the outgoing CLI kind right before a capacity fallback
+   * switches to the next CLI, so the conversation gets compacted (summary +
+   * memory promotion) using whatever context the outgoing CLI can still
+   * summarise. Rate-limited by fallbackCompactCooldown.ts. A rejection here
+   * must never block the fallback itself — it is always caught and ignored.
+   */
+  compactBeforeSwitch?: (chatKey: string, fromCli: string) => Promise<void>;
+}
+
+/** Clears the target CLI's session and marks one-time handoff for it. Used by both manual /cli switch and capacity fallback. */
+function prepareCliHandoff(db: BridgeDb, chatKey: string, targetCli: CliKind, reason: string): void {
+  db.setSession(chatKey, targetCli, null);
+  markHandoffRequired(db, chatKey, targetCli, reason);
+}
+
+/** Manual /cli switch: starts the target CLI fresh instead of resuming a possibly stale, long-abandoned session. */
+export function applyManualCliSwitchHandoff(db: BridgeDb, chatKey: string, newCli: CliKind): void {
+  prepareCliHandoff(db, chatKey, newCli, "manual_switch");
 }
 
 export async function dispatchInteractiveWithFallback(
@@ -247,7 +299,7 @@ export async function dispatchInteractiveWithFallback(
   deps: InteractiveDispatchDeps,
   tried = new Set<string>(),
 ): Promise<void> {
-  const { engines, fallbackChain, exhaustedChats, contextPreambles, db, notify, onCliSwitched } = deps;
+  const { engines, fallbackChain, exhaustedChats, db, notify, onCliSwitched, compactBeforeSwitch } = deps;
 
   exhaustedChats.delete(chatKey);
 
@@ -271,9 +323,16 @@ export async function dispatchInteractiveWithFallback(
       }
     }
     if (next) {
+      if (compactBeforeSwitch && shouldCompactBeforeFallback(db, chatKey)) {
+        recordFallbackCompactAttempt(db, chatKey);
+        try {
+          await compactBeforeSwitch(chatKey, activeCli);
+        } catch (err) {
+          console.warn(`[fallback] compact-before-switch failed chatKey=${chatKey} fromCli=${activeCli}`, err);
+        }
+      }
+      prepareCliHandoff(db, chatKey, next, `fallback_from_${activeCli}`);
       fallbackChain.setActiveCli(chatKey, next);
-      contextPreambles.set(chatKey, fallbackChain.buildContextPreamble(chatKey));
-
       await notify(`Switching to ${next} (${activeCli} at capacity)`);
       if (onCliSwitched) {
         await onCliSwitched(next);

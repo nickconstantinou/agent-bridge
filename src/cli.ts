@@ -17,6 +17,7 @@ import { buildClaudeStreamJsonInput, parseClaudeStreamJsonOutput } from "./claud
 import { type as evtType } from "./events/types.js";
 import type { BridgeEvent } from "./events/types.js";
 import { appendEffortArgs, type EffortLevel } from "./effort.js";
+import { isProviderFallbackEligibleError } from "./providers/fallbackEligibility.js";
 
 const activeProcesses = new Map<number | string, ChildProcess>();
 const abortedChildren = new WeakSet<ChildProcess>();
@@ -191,6 +192,7 @@ export function buildCliInvocation({
   attachments = [],
   outputDir = null,
   effort = null,
+  homeDir = homedir(),
 }: {
   bot: string;
   prompt: string;
@@ -205,6 +207,7 @@ export function buildCliInvocation({
   attachments?: string[];
   outputDir?: string | null;
   effort?: EffortLevel | null;
+  homeDir?: string;
 }): { command: string; args: string[]; stdin?: string } {
   const args = [];
 
@@ -262,6 +265,9 @@ export function buildCliInvocation({
     if (outputFormat === "json") args.push("--output-format", "json");
     args.push(finalPrompt);
   } else if (bot === "antigravity") {
+    // Agy fatally aborts a cascade if it lists its own worktrees state dir before
+    // ever creating it, so guarantee the dir exists ahead of every invocation.
+    ensureAntigravityStateDirs(homeDir);
     // Agy's --print flag takes the prompt as its value, so all other flags must come first.
     // Agy does not expose a --model CLI flag; model selection is applied by writing to
     // ~/.gemini/antigravity-cli/settings.json before spawning (see setAntigravityModel).
@@ -280,9 +286,13 @@ export function buildCliInvocation({
   } else if (bot === "kimchi") {
     // Kimchi: --print for non-interactive mode, --model for model selection.
     // Session resume uses --resume <uuid> (UUID extracted from JSONL session filename).
+    // Trusted mode maps to --yolo (no classifier guards).
     // Attachments are not supported; pass text annotations inline.
     args.push("--print");
     if (model) args.push("--model", model);
+    if (executionMode === "trusted") {
+      args.push("--yolo");
+    }
     if (sessionId) {
       args.push("--resume", sessionId);
     } else {
@@ -541,6 +551,15 @@ export function toAntigravityModelLabel(model: string): string {
   }
 
   return model;
+}
+
+/**
+ * Ensures Agy's mutable state dirs exist before a spawn. Agy's cascade engine
+ * treats listing a missing directory as a fatal step error (observed with
+ * ~/.gemini/antigravity-cli/worktrees), which aborts the whole run.
+ */
+export function ensureAntigravityStateDirs(homeDir: string = homedir()): void {
+  mkdirSync(join(homeDir, ".gemini", "antigravity-cli", "worktrees"), { recursive: true });
 }
 
 /**
@@ -824,29 +843,7 @@ export function toUserMessage(err: Error): string {
 }
 
 export function isCapacityExhaustedError(err: Error): boolean {
-  const msg = err.message || "";
-  const lowerMsg = msg.toLowerCase();
-  return (
-    msg.includes("MODEL_CAPACITY_EXHAUSTED") ||
-    msg.includes("No capacity available") ||
-    msg.includes("rateLimitExceeded") ||
-    msg.includes("overloaded_error") ||
-    msg.includes("Overloaded") ||
-    msg.includes("RESOURCE_EXHAUSTED") ||
-    msg.includes("quota reached") ||
-    msg.includes("quota exceeded") ||
-    msg.includes("hit your limit") ||
-    msg.includes("session limit") ||
-    msg.includes("usage limit") ||
-    msg.includes("resets") ||
-    msg.includes("api_error_status\":429") ||
-    // Model-unavailable errors trigger model fallback, but only when the
-    // message is actually about a model — plain "not found" also appears in
-    // session/file/command errors that must surface, not silently fall back.
-    /model\s+"?[\w./-]+"?\s+(not found|does not exist)/.test(lowerMsg) ||
-    lowerMsg.includes("unknown model") ||
-    lowerMsg.includes("unsupported model")
-  );
+  return isProviderFallbackEligibleError(err);
 }
 
 export function getNextFallbackModel(currentModel: string | null, modelPreference: string[]): string | null {

@@ -1,6 +1,6 @@
 /**
  * PURPOSE: Entry point for the autonomous worker bot.
- * Handles /jobs, /issues, /review, /models commands. Routes plain messages
+ * Handles /jobs, /issues, /review, /chain commands. Routes plain messages
  * to the active CLI engine via a fallback chain (codex → claude → antigravity).
  * When a CLI is at capacity, the chain advances and retries with the next CLI,
  * injecting the last 3 turns as context.
@@ -31,8 +31,10 @@ import {
   isCliCommandText,
   buildCliStatusText,
   buildCliKeyboard,
+  applyManualCliSwitchHandoff,
   type CliKind,
 } from "./interactiveBot.js";
+import { compactConversation } from "./compactConversation.js";
 import { startJobExecutorLoop } from "./jobExecutorLoop.js";
 import { createDefectScanHandler } from "./handlers/defectScan.js";
 import { createFeaturePlanHandler } from "./handlers/featurePlan.js";
@@ -92,8 +94,6 @@ function withThread<T extends Record<string, unknown>>(body: T, threadId?: numbe
 
 const fallbackChain = new WorkerFallbackChain(cliChain, db);
 const exhaustedChats = new Set<string>();
-// contextPreambles: set by dispatchWithFallback before retry; consumed + deleted by onBeforeExecute
-const contextPreambles = new Map<string, string>();
 
 // ── Bridge config ─────────────────────────────────────────────────────────────
 
@@ -128,17 +128,6 @@ const engines = Object.fromEntries(
           hooks: {
             onCapacityExhausted: async (chatKey: string) => {
               exhaustedChats.add(chatKey);
-            },
-            onBeforeExecute: async (prompt: string, ctx: { chatKey: string }) => {
-              const preamble = contextPreambles.get(ctx.chatKey);
-              if (preamble) {
-                contextPreambles.delete(ctx.chatKey);
-                return preamble + prompt;
-              }
-              return prompt;
-            },
-            onAfterExecute: async (prompt: string, resultText: string, ctx: { chatKey: string }) => {
-              fallbackChain.addTurn(ctx.chatKey, "assistant", resultText);
             },
           },
         },
@@ -366,6 +355,7 @@ for (;;) {
               if (cbqChatKey) {
                 setUserCliPreference(db, cbqChatKey, cliSwitch);
                 fallbackChain.setActiveCli(cbqChatKey, cliSwitch);
+                applyManualCliSwitchHandoff(db, cbqChatKey, cliSwitch);
                 await client.answerCallbackQuery({ callback_query_id: callbackQuery.id });
                 if (callbackQuery.message?.message_id && cbqChatId) {
                   await client.editMessageText({
@@ -378,6 +368,11 @@ for (;;) {
               }
               continue;
             }
+          }
+          const [action, targetKind] = String(callbackQuery.data || "").split(":");
+          if (action === "model" && targetKind && engines[targetKind]) {
+            await engines[targetKind].handleCallback(callbackQuery);
+            continue;
           }
           await handleWorkerCallback(callbackQuery, db, client, allowedUserIds);
           continue;
@@ -404,7 +399,7 @@ for (;;) {
           continue;
         }
 
-        // Worker commands (/jobs, /issues, /review, /feature, /models) take priority
+        // Worker commands (/jobs, /issues, /review, /feature, /chain) take priority
         if (isWorkerCommand(rawText)) {
           const chatRepo = db?.getChatRepo(chatKey) ?? null;
           const result = await handleWorkerCommand(rawText, {
@@ -482,20 +477,28 @@ for (;;) {
           continue;
         }
 
-        // Plain message — record user turn, route to preferred CLI with interactive fallback
-        fallbackChain.addTurn(chatKey, "user", rawText);
-
+        // Plain message — route to preferred CLI with interactive fallback
         await dispatchInteractiveWithFallback(update as TelegramUpdate, chatKey, {
           engines,
           fallbackChain,
           exhaustedChats,
-          contextPreambles,
           db,
           notify: async (msg: string) => {
             await sendTelegramMessage({ client, kind: "worker-bot", chatId, body: withThread({ text: msg }, threadId) });
           },
           onCliSwitched: async (newCli: CliKind) => {
             setUserCliPreference(db, chatKey, newCli);
+          },
+          compactBeforeSwitch: async (ck, fromCli) => {
+            const botConfig = config.bots[fromCli as BotKind];
+            if (!botConfig) return;
+            await compactConversation(ck, {
+              db,
+              runCli,
+              botConfig,
+              cliKind: fromCli,
+              compactProfile: "engineering",
+            });
           },
         });
       } catch (err) {

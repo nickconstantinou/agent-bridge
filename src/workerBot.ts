@@ -39,7 +39,7 @@ export interface WorkerKeyboardMessageResult {
 export type WorkerCommandResult = WorkerMessageResult | WorkerKeyboardMessageResult;
 
 const WORKER_COMMANDS = new Set([
-  "/jobs", "/issues", "/review", "/models", "/job", "/issue", "/feature",
+  "/jobs", "/issues", "/review", "/chain", "/job", "/issue", "/feature",
   "/approvals", "/refactor", "/github-issues", "/github_issues",
   "/import-issue", "/import_issue", "/repo",
 ]);
@@ -80,7 +80,7 @@ export function buildWorkerCommands(): Array<{ command: string; description: str
     { command: "github_issues", description: "List open GitHub issues: /github-issues [repo]" },
     { command: "import_issue", description: "Import GitHub issue: /import-issue repo#123" },
     { command: "repo",    description: "Switch default repo: /repo" },
-    { command: "models",  description: "Show CLI execution chain" },
+    { command: "chain",   description: "Show worker CLI execution chain" },
   ];
 }
 
@@ -409,7 +409,7 @@ export async function handleWorkerCommand(
     return { kind: "keyboard_message", text: textOut.trim(), reply_markup: { inline_keyboard } };
   }
 
-  if (cmd === "/models") {
+  if (cmd === "/chain") {
     const chain = ctx.cliChain ?? DEFAULT_CLI_CHAIN;
     return {
       kind: "keyboard_message",

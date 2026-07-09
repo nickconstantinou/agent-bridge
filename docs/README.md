@@ -2,7 +2,7 @@
 
 Status: canonical documentation index.
 
-Validated against: `main` at `23d06cfc3e098561ec21ce29880e60d1d146b7cc`.
+Validated against: `main` at `4120575c4bae359a32f29a6bf901c63beda0fa65`.
 
 ## Authority order
 
@@ -58,18 +58,21 @@ last_validated_against: <commit-sha>
 | `docs/architecture/overview.md` | authoritative | canonical | Top-level architecture and documentation hierarchy. |
 | `docs/architecture/companion-runtime.md` | authoritative | canonical | Companion Runtime boundary. |
 | `docs/architecture/engineering-worker.md` | authoritative | canonical | Engineering Worker boundary. |
-| `docs/architecture/shared-runtime.md` | authoritative | canonical | Shared Runtime boundary. |
+| `docs/architecture/shared-runtime.md` | authoritative | canonical | Shared Runtime boundary, including the memory/handoff seam note for issue #69. |
+| `docs/architecture/memory-and-handoff.md` | authoritative | canonical | Compact-first memory, persistent memory promotion, and CLI handoff architecture for issue #69. Partially implemented — see status note in the doc. |
 | `docs/architecture/capability-registry.md` | active architecture | canonical for intended design | Scope controlled by Epic 11 roadmap. |
 | `docs/architecture/platform-boundary.md` | authoritative | canonical | OSS/platform ownership boundary. |
 | `docs/architecture/01-current-architecture.md` | implemented-record | advisory | Snapshot audit; useful evidence, not higher than newer ADRs. |
 | `docs/architecture/02-gap-analysis.md` | partially-implemented | advisory | Backlog/gap list; revalidate before building. |
 | `docs/architecture/03-target-architecture.md` | partially-implemented | advisory | Target architecture, not a rewrite instruction. |
 | `docs/roadmap/epic-11-runtime-hardening.md` | active-roadmap | canonical | Only approved Epic 11 implementation plan. |
+| `docs/roadmap/issue-69-compact-memory-handoff.md` | active-roadmap | canonical | TDD implementation plan for compact-first memory and one-time CLI handoff context, including current PR-by-PR status, file impact summary, and open follow-up questions. |
+| `docs/roadmap/issue-69-coding-agent-prompt.md` | active-roadmap | advisory | Ready-to-use implementation prompt; explicitly subordinate to the architecture and roadmap docs above. |
 | `docs/WORKER-GUIDE.md` | authoritative operations | canonical for worker use | Current worker operator guide. |
 | `docs/SAFE-RESTART.md` | authoritative operations | canonical for safe restart helper | Referenced by `AGENTS.md` restart policy. |
 | `docs/PRD.md` | partially-implemented product reference | advisory | Broad product/architecture reference; defer to ADRs and architecture docs on conflicts. |
 | `docs/soul.md` | runtime-design | advisory/canonical for SOUL.md behavior | Documents root `SOUL.md` runtime injection; the doc itself is not the default loaded file. |
-| `docs/agent-driven-memory-research.md` | implemented-record | advisory | Phases 1-4 implemented; retains research/verification history. |
+| `docs/agent-driven-memory-research.md` | implemented-record | advisory | Historical memory research and verification; current intended memory architecture is `docs/architecture/memory-and-handoff.md`. |
 | `docs/bridge-event-normalization-research.md` | implemented-record plus deferred research | advisory | Phases 1-5 completed; Phase 6 deferred. |
 | `docs/discord-compatibility-research.md` | implemented-record plus follow-up checklist | advisory | Discord baseline implemented; operational hardening remains. |
 | `docs/health-bolt-architecture.md` | implemented-record | advisory | Shared-engine health architecture implemented. |
@@ -89,6 +92,8 @@ last_validated_against: <commit-sha>
 ## Runtime dependency notes
 
 - `docs/soul.md` is a design document. Runtime loading is handled by `src/soul.ts`, which defaults to `<project>/SOUL.md` or `AGENT_BRIDGE_SOUL_PATH`.
+- `docs/architecture/memory-and-handoff.md` is the current intended memory and provider-handoff architecture. Implementation work, current PR status, and open follow-up questions are tracked in `docs/roadmap/issue-69-compact-memory-handoff.md`.
+- The Shared Runtime memory/handoff seam for issue #69 is recorded in `docs/architecture/shared-runtime.md`'s "Memory and Handoff Seams" section, not a separate file.
 - `docs/prompt-optimization-loop-research.md` is referenced by `AGENTS.md` for optimizer methodology. It is not loaded by runtime services.
 - `docs/WORKER-GUIDE.md` and `docs/SAFE-RESTART.md` are operational docs. They are not loaded by services but are authoritative for operator behavior.
 - Superseded pointer files should stay until inbound references are cleaned up, then they can move fully into `docs/archive/`.

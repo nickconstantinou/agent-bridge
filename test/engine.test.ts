@@ -6,6 +6,8 @@ import Database from "better-sqlite3";
 import { openDb } from "../src/db.js";
 import type { BridgeConfig, TelegramMessage } from "../src/types.js";
 import { type as eventType } from "../src/events/types.js";
+import { markHandoffRequired, isHandoffRequired } from "../src/handoffState.js";
+import { compactInProgressSettingKey } from "../src/commands.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -31,6 +33,11 @@ function makeMockClient() {
   } as any;
 }
 
+/** Wraps a compact markdown summary in the structured JSON output the compact prompt now requires. */
+function compactJson(summaryMd: string, memoryCandidates: unknown[] = []): string {
+  return JSON.stringify({ summary_md: summaryMd, memory_candidates: memoryCandidates });
+}
+
 function makeFullConfig(dbPath: string): BridgeConfig {
   return {
     allowedUserIds: new Set(["42"]),
@@ -53,25 +60,455 @@ function makeFullConfig(dbPath: string): BridgeConfig {
 describe("BridgeEngine", () => {
   let dbPath: string;
   let db: ReturnType<typeof openDb>;
-  let originalMemoryExtractorEnabled: string | undefined;
 
   beforeEach(() => {
-    originalMemoryExtractorEnabled = process.env.BRIDGE_MEMORY_EXTRACTOR_ENABLED;
-    delete process.env.BRIDGE_MEMORY_EXTRACTOR_ENABLED;
-    dbPath = join(tmpdir(), `engine-test-${Date.now()}.sqlite`);
+    dbPath = join(tmpdir(), `engine-test-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`);
     db = openDb(dbPath);
   });
 
   afterEach(() => {
     delete process.env.BRIDGE_COMPACT_CHUNK_MAX_CHARS;
     delete process.env.BRIDGE_COMPACT_PARALLELISM;
-    if (originalMemoryExtractorEnabled === undefined) {
-      delete process.env.BRIDGE_MEMORY_EXTRACTOR_ENABLED;
-    } else {
-      process.env.BRIDGE_MEMORY_EXTRACTOR_ENABLED = originalMemoryExtractorEnabled;
-    }
+    delete process.env.BRIDGE_MEMORY_EXTRACTOR_ENABLED;
+    delete process.env.BRIDGE_CONTEXT_INJECTION_POLICY;
+    delete process.env.BRIDGE_PRESEED_COMPACT_MODE;
+    delete process.env.BRIDGE_PRESEED_COMPACT_CHARS;
     db.close();
     try { rmSync(dbPath); } catch {}
+  });
+
+  describe("handoff consumption", () => {
+    it("clears a pending handoff mark after the first turn for that chat+CLI", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const runCli = vi.fn().mockResolvedValue("Hello there!");
+      const client = makeMockClient();
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      markHandoffRequired(db, "100", "claude", "manual_switch");
+      expect(isHandoffRequired(db, "100", "claude")).toBe(true);
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(isHandoffRequired(db, "100", "claude")).toBe(false);
+    });
+
+    it("does not error when no handoff is pending", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const runCli = vi.fn().mockResolvedValue("Hello there!");
+      const client = makeMockClient();
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await expect(engine.handleMessages([makeMessage("hello")])).resolves.not.toThrow();
+      expect(isHandoffRequired(db, "100", "claude")).toBe(false);
+    });
+  });
+
+  describe("context injection policy (BRIDGE_CONTEXT_INJECTION_POLICY)", () => {
+    const MARKER = "earlier-turn-marker-XYZ123";
+
+    it("always policy (explicit) injects context every turn even when a native session already exists", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "always";
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+      db.setSession("100", "claude", "existing-session-continuing");
+
+      let capturedPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompt = args[args.length - 1];
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("continue please")]);
+
+      expect(capturedPrompt).toContain(MARKER);
+    });
+
+    it("default (no env set) behaves like always — preserves current OSS behavior", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+      db.setSession("100", "claude", "existing-session-continuing");
+
+      let capturedPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompt = args[args.length - 1];
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("continue please")]);
+
+      expect(capturedPrompt).toContain(MARKER);
+    });
+
+    it("handoff_once injects on the first turn when no native session exists", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+      // No db.setSession call — sessionId is null for this chat+CLI.
+
+      let capturedPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompt = args[args.length - 1];
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(capturedPrompt).toContain(MARKER);
+    });
+
+    it("handoff_once suppresses context on a second same-provider turn once a native session exists (sync path)", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+
+      const capturedPrompts: string[] = [];
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompts.push(args[args.length - 1]);
+        return JSON.stringify({ result: "ok", session_id: "sync-session-abc" });
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("first message")]);
+      expect(capturedPrompts[0]).toContain(MARKER);
+      expect(db.getSession("100", "claude")).toBe("sync-session-abc");
+
+      await engine.handleMessages([makeMessage("second message, same session")]);
+      expect(capturedPrompts[1]).not.toContain(MARKER);
+      expect(capturedPrompts[1]).not.toContain("[Context from previous conversation]");
+    });
+
+    it("handoff_once suppresses context on a second same-provider turn once a native session exists (async path)", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+
+      const capturedPrompts: string[] = [];
+      const runCliAsync = vi.fn().mockImplementation(async (_cmd: string, args: string[], _cwd: string, options: any) => {
+        capturedPrompts.push(args[args.length - 1]);
+        const rawOutput = JSON.stringify({ result: "ok", session_id: "async-session-abc" });
+        const ctx = options.eventContext;
+        options.onEvent?.(eventType.runCompleted({ ...ctx, text: rawOutput, sessionId: null }));
+        return { text: rawOutput };
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: true, pollIntervalMs: 1000 },
+        db, client, { runCliAsync },
+      );
+
+      await engine.handleMessages([makeMessage("first message")]);
+      expect(capturedPrompts[0]).toContain(MARKER);
+      expect(db.getSession("100", "claude")).toBe("async-session-abc");
+
+      await engine.handleMessages([makeMessage("second message, same session")]);
+      expect(capturedPrompts[1]).not.toContain(MARKER);
+    });
+
+    it("handoff_once injects when handoff_required is set even though a native session already exists", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+      db.setSession("100", "claude", "stale-session-before-handoff-mark");
+      markHandoffRequired(db, "100", "claude", "manual_switch");
+
+      let capturedPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompt = args[args.length - 1];
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello after switch")]);
+
+      expect(capturedPrompt).toContain(MARKER);
+      expect(isHandoffRequired(db, "100", "claude")).toBe(false);
+    });
+
+    it("handoff flag is only consumed on a turn where context was actually injected", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+      db.setSession("100", "claude", "session-continuing");
+      db.setSetting("ctx_suppress:100", "1"); // forces suppression regardless of handoff mark
+      markHandoffRequired(db, "100", "claude", "manual_switch");
+
+      const capturedPrompts: string[] = [];
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompts.push(args[args.length - 1]);
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("suppressed turn")]);
+      expect(capturedPrompts[0]).not.toContain(MARKER);
+      // Suppressed by ctx_suppress even though handoff was marked — flag must survive uncomsumed.
+      expect(isHandoffRequired(db, "100", "claude")).toBe(true);
+
+      db.setSetting("ctx_suppress:100", null);
+      await engine.handleMessages([makeMessage("now it should inject")]);
+      expect(capturedPrompts[1]).toContain(MARKER);
+      expect(isHandoffRequired(db, "100", "claude")).toBe(false);
+    });
+
+    it("keeps Agent Bridge context env available under handoff_once even when the prompt preamble is suppressed", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+      db.setSession("100", "claude", "session-continuing");
+
+      let capturedPrompt = "";
+      let capturedContextEnv: Record<string, string> | undefined;
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[], _cwd: string, options: any) => {
+        capturedPrompt = args[args.length - 1];
+        capturedContextEnv = options.contextEnv;
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          fullConfig: makeFullConfig(dbPath),
+        },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("continuing session")]);
+
+      // Prompt preamble (both the recent-turn context and the "[Agent Bridge context]"
+      // usage-instructions block) must be suppressed...
+      expect(capturedPrompt).not.toContain(MARKER);
+      expect(capturedPrompt).not.toContain("[Agent Bridge context]");
+      // ...but the env vars must remain available so the CLI can self-serve query it.
+      expect(capturedContextEnv).toMatchObject({
+        AGENT_BRIDGE_CONTEXT_AVAILABLE: "1",
+        AGENT_BRIDGE_CHAT_KEY: "100",
+      });
+      expect(capturedContextEnv?.AGENT_BRIDGE_CONTEXT_COMMAND).toContain("agent-bridge-context");
+    });
+  });
+
+  describe("pre-seed compaction (BRIDGE_PRESEED_COMPACT_MODE)", () => {
+    function seedLongTurns(chatKey: string, count = 5) {
+      for (let i = 0; i < count; i++) {
+        db.addConvTurn(chatKey, "user", `turn-${i}-${"x".repeat(50)}`);
+      }
+    }
+
+    it("does not compact when mode is off (default) even past the char threshold", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      process.env.BRIDGE_PRESEED_COMPACT_CHARS = "10";
+      const { BridgeEngine } = await import("../src/engine.js");
+      seedLongTurns("100");
+
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        const prompt = args[args.length - 1];
+        if (prompt.includes("Summarise now:")) throw new Error("compaction must not run when mode is off");
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(db.getLatestConvSummary("100")).toBeNull();
+    });
+
+    it("compacts before injecting context when mode=auto and the char threshold is exceeded on a fresh-seed turn", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      process.env.BRIDGE_PRESEED_COMPACT_MODE = "auto";
+      process.env.BRIDGE_PRESEED_COMPACT_CHARS = "10";
+      const { BridgeEngine } = await import("../src/engine.js");
+      seedLongTurns("100");
+
+      let mainPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        const prompt = args[args.length - 1];
+        if (prompt.includes("Summarise now:")) {
+          return compactJson("Current objective:\n- preseeded\n\nDurable facts:\n- none\n\nOpen state:\n- none");
+        }
+        mainPrompt = prompt;
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(db.getLatestConvSummary("100")).not.toBeNull();
+      expect(mainPrompt).toContain("preseeded");
+    });
+
+    it("does not compact when there are zero uncompacted turns", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      process.env.BRIDGE_PRESEED_COMPACT_MODE = "auto";
+      process.env.BRIDGE_PRESEED_COMPACT_CHARS = "10";
+      const { BridgeEngine } = await import("../src/engine.js");
+      // No addConvTurn calls — chat has no history at all.
+
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        const prompt = args[args.length - 1];
+        if (prompt.includes("Summarise now:")) throw new Error("compaction must not run with zero turns");
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await expect(engine.handleMessages([makeMessage("hello")])).resolves.not.toThrow();
+      expect(db.getLatestConvSummary("100")).toBeNull();
+    });
+
+    it("respects the compact-in-progress guard and skips pre-seed compaction", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      process.env.BRIDGE_PRESEED_COMPACT_MODE = "auto";
+      process.env.BRIDGE_PRESEED_COMPACT_CHARS = "10";
+      const { BridgeEngine } = await import("../src/engine.js");
+      seedLongTurns("100");
+      db.setSetting(compactInProgressSettingKey("100"), new Date().toISOString());
+
+      let mainPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        const prompt = args[args.length - 1];
+        if (prompt.includes("Summarise now:")) throw new Error("compaction must not run while already in progress");
+        mainPrompt = prompt;
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(db.getLatestConvSummary("100")).toBeNull();
+      expect(mainPrompt).toContain("hello");
+      expect(runCli).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not block execution when pre-seed compaction fails", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      process.env.BRIDGE_PRESEED_COMPACT_MODE = "auto";
+      process.env.BRIDGE_PRESEED_COMPACT_CHARS = "10";
+      const { BridgeEngine } = await import("../src/engine.js");
+      seedLongTurns("100");
+
+      let mainPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        const prompt = args[args.length - 1];
+        if (prompt.includes("Summarise now:")) throw new Error("simulated compaction LLM failure");
+        mainPrompt = prompt;
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        db, client, { runCli },
+      );
+
+      await expect(engine.handleMessages([makeMessage("hello")])).resolves.not.toThrow();
+      expect(db.getLatestConvSummary("100")).toBeNull();
+      expect(mainPrompt).toContain("hello");
+      expect(db.getSetting(compactInProgressSettingKey("100"))).toBeNull();
+    });
+
+    it("runs on the async execution path as well", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      process.env.BRIDGE_PRESEED_COMPACT_MODE = "auto";
+      process.env.BRIDGE_PRESEED_COMPACT_CHARS = "10";
+      const { BridgeEngine } = await import("../src/engine.js");
+      seedLongTurns("100");
+
+      const runCliAsync = vi.fn().mockImplementation(async (_cmd: string, args: string[], _cwd: string, options: any) => {
+        const prompt = args[args.length - 1];
+        const rawOutput = JSON.stringify({ result: "ok", session_id: "async-session-preseed" });
+        const ctx = options.eventContext;
+        options.onEvent?.(eventType.runCompleted({ ...ctx, text: rawOutput, sessionId: null }));
+        return { text: rawOutput };
+      });
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        const prompt = args[args.length - 1];
+        if (prompt.includes("Summarise now:")) {
+          return compactJson("Current objective:\n- preseeded-async\n\nDurable facts:\n- none\n\nOpen state:\n- none");
+        }
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: true, pollIntervalMs: 1000 },
+        db, client, { runCli, runCliAsync },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(db.getLatestConvSummary("100")).not.toBeNull();
+    });
   });
 
   describe("onCommand hook", () => {
@@ -387,6 +824,46 @@ describe("BridgeEngine", () => {
       expect(capturedPrompts[2]).toContain("second question");
       expect(client.sendMessage.mock.calls.at(-1)?.[0].text).toBe("Recovered from stall");
     });
+
+    it("retries Agy cascade command status not found errors once with a fresh conversation", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+
+      const capturedPrompts: string[] = [];
+      const capturedArgs: string[][] = [];
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedArgs.push(args);
+        capturedPrompts.push(args[args.length - 1]);
+        if (runCli.mock.calls.length === 1) return "***\nPrior answer";
+        if (runCli.mock.calls.length === 2) {
+          throw new Error("error executing cascade step: CORTEX_STEP_TYPE_COMMAND_STATUS: command abc/task-22 not Found");
+        }
+        return "***\nRecovered command status error";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        {
+          kind: "antigravity",
+          botConfig: { command: "agy", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      db.setSession("100", "antigravity", "stale-conversation");
+
+      await engine.handleMessages([makeMessage("first question")]);
+      await engine.handleMessages([makeMessage("second question")]);
+
+      expect(runCli).toHaveBeenCalledTimes(3);
+      expect(capturedArgs[2]).not.toContain("--conversation");
+      expect(capturedPrompts[2]).toContain("first question");
+      expect(client.sendMessage.mock.calls.at(-1)?.[0].text).toBe("Recovered command status error");
+    });
   });
 
   describe("authorization", () => {
@@ -642,6 +1119,49 @@ describe("BridgeEngine", () => {
       expect(promptArg).toContain("User: hello");
       expect(promptArg).toContain("Assistant: Hello there! I am Claude.");
       expect(promptArg).toContain("help me");
+      // Regression: retry must not wrap the prompt in a second context block
+      const contextBlocks = promptArg.match(/\[Context from previous conversation\]/g) ?? [];
+      expect(contextBlocks).toHaveLength(1);
+    });
+
+    it("injects context on invalid-session retry under handoff_once, even though a valid-looking session existed beforehand", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      const { BridgeEngine } = await import("../src/engine.js");
+
+      const runCli = vi.fn()
+        .mockResolvedValueOnce("Hello there! I am Claude.")
+        .mockRejectedValueOnce(new Error("CLI exited with code 1: No conversation found with session ID: invalid-session-id-123"))
+        .mockResolvedValueOnce("Successful fresh retry result");
+
+      const client = makeMockClient();
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+      db.setSession("100", "claude", "invalid-session-id-123");
+
+      await engine.handleMessages([makeMessage("help me")]);
+
+      expect(db.getSession("100", "claude")).toBeNull();
+      const thirdCallArgs = runCli.mock.calls[2][1];
+      const promptArg = thirdCallArgs[thirdCallArgs.length - 1];
+      // The invalid-session catch block clears the session and recurses with
+      // sessionId: null — under handoff_once that null session is exactly the
+      // condition that forces injection, independent of any handoff mark.
+      expect(promptArg).toContain("[Context from previous conversation]");
+      expect(promptArg).toContain("help me");
     });
     it("falls back to the next model in preference list and retries with context and null sessionId on capacity error", async () => {
       const { BridgeEngine } = await import("../src/engine.js");
@@ -703,6 +1223,74 @@ describe("BridgeEngine", () => {
       text,
     };
   }
+
+  describe("topic-routed generated files and callbacks", () => {
+    it("uses the topic-aware chatKey for output dirs and uploads files back to the originating thread", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+      const runCli = vi.fn().mockImplementation(async (_command: string, args: string[]) => {
+        const promptArg = args[args.length - 1];
+        const match = String(promptArg).match(/save it to (\/tmp\/bridge-out\/\S+)/);
+        expect(match?.[1]).toBe("/tmp/bridge-out/claude-100:7");
+        await import("node:fs/promises").then(({ writeFile }) => writeFile(join(match![1], "chart.png"), "PNG"));
+        return "done";
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeGroupMessage("make a chart")]);
+
+      expect(client.sendPhoto).toHaveBeenCalledOnce();
+      expect(client.sendPhoto.mock.calls[0][0]).toBe(100);
+      expect(client.sendPhoto.mock.calls[0][1]).toBe("/tmp/bridge-out/claude-100:7/chart.png");
+      expect(client.sendPhoto.mock.calls[0][3]).toEqual({ message_thread_id: 7 });
+    });
+
+    it("sends callback confirmation messages to the callback's source thread", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        {
+          kind: "codex",
+          botConfig: { command: "codex", modelPreference: ["gpt-5.5"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          fullConfig: makeFullConfig(dbPath),
+        },
+        db,
+        client,
+        {},
+      );
+
+      await engine.handleCallback({
+        id: "cb-1",
+        from: { id: 42, first_name: "Test" },
+        message: {
+          message_id: 123,
+          chat: { id: 100, type: "supergroup" },
+          message_thread_id: 7,
+        },
+        data: "model:codex:gpt-5.5",
+      });
+
+      const confirmation = client.sendMessage.mock.calls.find((call: any[]) => call[0]?.text?.includes("Model set"));
+      expect(confirmation?.[0]).toMatchObject({ chat_id: 100, message_thread_id: 7 });
+    });
+  });
 
   describe("/stop in a supergroup thread", () => {
     it("clears the pending queue for the thread-aware key so the next queued message gets position 1", async () => {
@@ -1221,7 +1809,7 @@ describe("BridgeEngine", () => {
       expect(db.searchMemories("API_KEY abc123")).toEqual([]);
     });
 
-    it("runs post-turn memory extraction and stores accepted candidates", async () => {
+    it("does not run post-turn memory extraction after a normal turn (compact is the sole distillation path)", async () => {
       process.env.BRIDGE_MEMORY_EXTRACTOR_ENABLED = "1";
       const { BridgeEngine } = await import("../src/engine.js");
       const client = makeMockClient();
@@ -1253,12 +1841,12 @@ describe("BridgeEngine", () => {
 
       await engine.handleMessages([makeMessage("fix memory health")]);
 
-      expect(runCli).toHaveBeenCalledTimes(2);
-      const extractorPrompt = runCli.mock.calls[1][1].at(-1);
-      expect(extractorPrompt).toContain("Output ONLY a JSON array");
+      // Only the primary CLI call should run; no second call for post-turn extraction,
+      // even with the legacy env flag set — the extractor no longer exists.
+      expect(runCli).toHaveBeenCalledTimes(1);
       const sentBody = client.sendMessage.mock.calls.at(-1)?.[0];
       expect(sentBody.text).toBe("Visible answer about fixing memory health.");
-      expect(db.searchMemories("automatically extracts durable project memories").some((m) => m.text.includes("automatically extracts"))).toBe(true);
+      expect(db.searchMemories("automatically extracts durable project memories")).toEqual([]);
     });
   });
 
@@ -1274,7 +1862,7 @@ describe("BridgeEngine", () => {
       const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
         // For claude bot, the prompt is the last argument
         capturedPrompt = args[args.length - 1];
-        return "Current objective:\n- fix auth bug\n\nDurable facts:\n- none\n\nOpen state:\n- none";
+        return compactJson("Current objective:\n- fix auth bug\n\nDurable facts:\n- none\n\nOpen state:\n- none");
       });
 
       const engine = new BridgeEngine(
@@ -1353,9 +1941,9 @@ describe("BridgeEngine", () => {
         active -= 1;
         const prompt = args[args.length - 1];
         if (prompt.includes("Merge these compact summaries")) {
-          return "Current objective:\n- reduced\n\nDurable facts:\n- none\n\nOpen state:\n- none";
+          return compactJson("Current objective:\n- reduced\n\nDurable facts:\n- none\n\nOpen state:\n- none");
         }
-        return "Current objective:\n- chunk\n\nDurable facts:\n- none\n\nOpen state:\n- none";
+        return compactJson("Current objective:\n- chunk\n\nDurable facts:\n- none\n\nOpen state:\n- none");
       });
 
       const engine = new BridgeEngine(
@@ -1378,7 +1966,7 @@ describe("BridgeEngine", () => {
       expect(runCli.mock.calls.length).toBeGreaterThan(2);
     });
 
-    it("compact handler falls back to tombstone when runCli fails", async () => {
+    it("compact failure is non-destructive when runCli fails: no summary stored, turns preserved", async () => {
       const { BridgeEngine } = await import("../src/engine.js");
       const client = makeMockClient();
 
@@ -1403,9 +1991,78 @@ describe("BridgeEngine", () => {
 
       await engine.handleMessages([makeMessage("/compact")]);
 
+      expect(db.getLatestConvSummary("100")).toBeNull();
+      expect(db.getRecentConvTurns("100", 100)).toHaveLength(2);
+      const sentBody = client.sendMessage.mock.calls.at(-1)?.[0];
+      expect(sentBody.text).toContain("Compaction failed");
+      expect(db.getSetting("compact_in_progress:100")).toBeNull();
+    });
+
+    it("compact failure is non-destructive when the CLI returns non-JSON or JSON missing summary_md", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      db.addConvTurn("100", "user", "malformed response test");
+      db.addConvTurn("100", "assistant", "ack");
+
+      const runCli = vi.fn().mockResolvedValue("Sure! Here is a summary of the conversation in prose form.");
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("/compact")]);
+
+      // Non-JSON output is a failure, not a stored result — no summary, turns preserved.
+      expect(db.getLatestConvSummary("100")).toBeNull();
+      expect(db.getRecentConvTurns("100", 100)).toHaveLength(2);
+      const sentBody = client.sendMessage.mock.calls.at(-1)?.[0];
+      expect(sentBody.text).toContain("Compaction failed");
+    });
+
+    it("uses the companion compact profile when configured", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+
+      db.addConvTurn("100", "user", "remind me about my training plan");
+      db.addConvTurn("100", "assistant", "sure, noted");
+
+      let capturedPrompt: string | undefined;
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompt = args[args.length - 1];
+        return compactJson("Current objective:\n- track training plan\n\nDurable facts:\n- none\n\nOpen state:\n- none");
+      });
+
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          compactProfile: "companion",
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("/compact")]);
+
+      expect(capturedPrompt).toContain("preferences");
       const summary = db.getLatestConvSummary("100");
-      expect(summary).not.toBeNull();
-      expect(summary!.summary_md).toContain("turns captured");
+      expect(summary?.summary_md).toContain("track training plan");
     });
 
     it("compact prunes raw turns up to endId after storing the summary", async () => {
@@ -1416,7 +2073,7 @@ describe("BridgeEngine", () => {
       db.addConvTurn("100", "assistant", "second");
       db.addConvTurn("100", "user", "third");
 
-      const runCli = vi.fn().mockResolvedValue("Current objective:\n- done\n\nDurable facts:\n- none\n\nOpen state:\n- none");
+      const runCli = vi.fn().mockResolvedValue(compactJson("Current objective:\n- done\n\nDurable facts:\n- none\n\nOpen state:\n- none"));
 
       const engine = new BridgeEngine(
         {
@@ -1454,9 +2111,9 @@ describe("BridgeEngine", () => {
         const prompt = args[args.length - 1];
         capturedPrompts.push(prompt);
         if (prompt.includes("Merge these compact summaries")) {
-          return "Current objective:\n- reduced all chunks\n\nDurable facts:\n- all 1005 turns covered\n\nOpen state:\n- none";
+          return compactJson("Current objective:\n- reduced all chunks\n\nDurable facts:\n- all 1005 turns covered\n\nOpen state:\n- none");
         }
-        return `Current objective:\n- chunk ${capturedPrompts.length}\n\nDurable facts:\n- ${prompt.includes("turn-0") ? "includes first turn" : "later chunk"}\n\nOpen state:\n- none`;
+        return compactJson(`Current objective:\n- chunk ${capturedPrompts.length}\n\nDurable facts:\n- ${prompt.includes("turn-0") ? "includes first turn" : "later chunk"}\n\nOpen state:\n- none`);
       });
 
       const engine = new BridgeEngine(
@@ -1493,7 +2150,7 @@ describe("BridgeEngine", () => {
       db.addConvTurn("100", "assistant", "understood, continuing");
       db.setSession("100", "claude", "existing-session-abc");
 
-      const runCli = vi.fn().mockResolvedValue("Current objective:\n- big refactor\n\nDurable facts:\n- none\n\nOpen state:\n- none");
+      const runCli = vi.fn().mockResolvedValue(compactJson("Current objective:\n- big refactor\n\nDurable facts:\n- none\n\nOpen state:\n- none"));
 
       const engine = new BridgeEngine(
         {

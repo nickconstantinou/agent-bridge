@@ -10,7 +10,7 @@
 
 import type { BotConfig, BotKind } from "./types.js";
 
-export const KIMCHI_DEFAULT_MODELS = "glm-5.2-fp8,kimi-k2.7,nemotron-3-ultra-fp4,minimax-m3,deepseek-v4-flash";
+export const KIMCHI_DEFAULT_MODELS = "kimi-k2.7,nemotron-3-ultra-fp4,minimax-m3,deepseek-v4-flash";
 
 type Env = Record<string, string | undefined>;
 
@@ -47,6 +47,20 @@ export function loadBotsConfig(env: Env, opts: { withTokens?: boolean } = {}): R
       modelPreference: parseModelPreference(env.KIMCHI_MODEL_PREFERENCE || KIMCHI_DEFAULT_MODELS),
     },
   };
+}
+
+/**
+ * Resolve the execution mode for a specific bot kind.
+ * Per-bot env vars (e.g. KIMCHI_EXECUTION_MODE) override the global
+ * BRIDGE_EXECUTION_MODE. Kimchi defaults to trusted because it has no
+ * interactive approval flow; other kinds default to safe.
+ */
+export function resolveExecutionMode(kind: BotKind, env: Env): "safe" | "trusted" {
+  const perBotRaw = env[`${kind.toUpperCase()}_EXECUTION_MODE`];
+  if (perBotRaw === "safe" || perBotRaw === "trusted") return perBotRaw;
+  const globalRaw = env.BRIDGE_EXECUTION_MODE;
+  if (globalRaw === "safe" || globalRaw === "trusted") return globalRaw;
+  return kind === "kimchi" ? "trusted" : "safe";
 }
 
 /**

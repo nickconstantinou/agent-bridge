@@ -19,6 +19,14 @@ import { WorkQueueRepository } from "./repositories/workQueueRepository.js";
 // Sentinel row keys stored in bridge_state for non-chat state
 const pollingKey = (bot: string) => `$polling:${bot}`;
 export const DEFAULT_CONTEXT_MAX_CHARS = 8_000;
+export const DEFAULT_CONTEXT_RECENT_TURN_LIMIT = 200;
+
+function recentTurnCandidateLimit(): number {
+  const raw = process.env.BRIDGE_CONTEXT_RECENT_TURN_LIMIT;
+  if (!raw) return DEFAULT_CONTEXT_RECENT_TURN_LIMIT;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CONTEXT_RECENT_TURN_LIMIT;
+}
 
 const MEMORY_SYNONYMS: Record<string, string[]> = {
   affordance: ["helper", "command", "context"],
@@ -822,11 +830,17 @@ export class BridgeDb {
     sinceId?: number,
   ): Array<{ id: number; role: string; text: string; cli: string | null; created_at: string }> {
     if (sinceId != null) {
+      // Fetch the newest `limit` turns after sinceId (not the oldest), then
+      // re-sort chronologically — mirrors the no-summary branch below so the
+      // most recent context is never silently dropped once a chat exceeds
+      // the candidate limit.
       return this.raw
         .prepare(
-          `SELECT id, role, text, cli, created_at FROM conversation_turns
-           WHERE chat_key = ? AND id > ?
-           ORDER BY id ASC LIMIT ?`
+          `SELECT id, role, text, cli, created_at FROM (
+             SELECT id, role, text, cli, created_at FROM conversation_turns
+             WHERE chat_key = ? AND id > ?
+             ORDER BY id DESC LIMIT ?
+           ) ORDER BY id ASC`
         )
         .all(chatKey, sinceId, limit) as any;
     }
@@ -844,8 +858,10 @@ export class BridgeDb {
   buildConvContext(chatKey: string, maxChars = DEFAULT_CONTEXT_MAX_CHARS): string {
     const summary = this.getLatestConvSummary(chatKey);
     const sinceId = summary?.range_end_turn_id;
-    // Fetch up to 200 candidates; char budget culls them below
-    const candidates = this.getRecentConvTurns(chatKey, 200, sinceId);
+    // Fetch the newest N candidates (configurable via BRIDGE_CONTEXT_RECENT_TURN_LIMIT);
+    // char budget below further culls them. This is a prompt-context cap only —
+    // compaction (getConvTurnsForCompaction) always processes the full backlog.
+    const candidates = this.getRecentConvTurns(chatKey, recentTurnCandidateLimit(), sinceId);
     if (!summary && candidates.length === 0) return "";
 
     // Walk newest-first, accumulate until char budget is exhausted
@@ -935,6 +951,16 @@ export class BridgeDb {
          ORDER BY id ASC`
       )
       .all(chatKey, summary?.range_end_turn_id ?? 0) as any;
+  }
+
+  getUncompactedConvStats(chatKey: string): { turnCount: number; charCount: number } {
+    const summary = this.getLatestConvSummary(chatKey);
+    return this.raw
+      .prepare(
+        `SELECT COUNT(*) AS turnCount, COALESCE(SUM(LENGTH(text)), 0) AS charCount
+         FROM conversation_turns WHERE chat_key = ? AND id > ?`
+      )
+      .get(chatKey, summary?.range_end_turn_id ?? 0) as { turnCount: number; charCount: number };
   }
 
   pruneConvTurns(chatKey: string, upToTurnId: number): void {

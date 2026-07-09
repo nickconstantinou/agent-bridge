@@ -12,6 +12,12 @@
 
 ## 2. Architecture
 
+Product framing (ADR-008, `docs/architecture/03-target-architecture.md`): the
+conversational surfaces below form the **Companion Runtime**, the worker bot is
+the **Engineering Worker**, and both consume the **Shared Runtime** (SQLite,
+event store, memory, provider adapters, CLI management). No service or env var
+renames accompany this framing.
+
 ```
 ┌─────────────────┐     ┌──────────────────────────────────────────┐
 │   Telegram      │     │           Agent Bridge                    │

@@ -616,6 +616,14 @@ npm test -- test/cli.test.ts  # single file
 
 ## Architecture
 
+Agent Bridge OSS is two products on one shared runtime: the **Companion Runtime**
+(dedicated, interactive, and Discord bots — conversational, domain-agnostic) and
+the **Engineering Worker** (worker bot — software-engineering jobs, Git/PR/CI),
+both built on the **Shared Runtime** (SQLite, event store, memory, provider
+adapters, CLI management, config, notifications). See
+`docs/architecture/03-target-architecture.md` (ADR-008). Service and env var
+names below predate the split and are unchanged.
+
 ```
 Telegram / Discord update
     │

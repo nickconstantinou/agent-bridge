@@ -4,7 +4,10 @@ The worker bot is a second Telegram bot that runs engineering jobs in the
 background: scanning repositories for defects, planning features, implementing
 approved fixes with strict TDD, running resumable orchestrated implementation
 jobs, and opening draft PRs that wait for your merge approval. You talk to it on Telegram; it does the work in disposable git
-workspaces and reports back at each boundary.
+workspaces and reports back at each boundary. In the three-part OSS
+architecture (ADR-008, `docs/architecture/03-target-architecture.md`) the
+worker bot is the **Engineering Worker** product; the conversational bots form
+the **Companion Runtime**, and both sit on the **Shared Runtime**.
 
 **The one invariant: nothing merges without your explicit approval.** The
 worker can scan, plan, branch, commit, push, and open draft PRs on its own.

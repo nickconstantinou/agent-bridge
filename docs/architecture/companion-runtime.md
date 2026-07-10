@@ -26,6 +26,23 @@ The Companion Runtime owns:
 - capability invocation through the Shared Runtime
 - response rendering and delivery
 
+## Frontier Advisor
+
+The optional advisor lets a standard executor consult up to two ordered
+frontier provider/model targets without changing its active provider or native
+session. It is disabled by default.
+
+- `manual`: only `/advisor ask|review|plan|debug` invokes the advisor.
+- `suggest`: complex, risky, or stuck prompts pause for explicit approval.
+- `auto`: those prompts consult the advisor and fold structured guidance into
+  the executor prompt. Operational advisor failure is fail-open.
+
+Fallback occurs only for authentication, capacity, unavailable model/provider,
+timeout, transient failure, or invalid structured output. A valid opinion is
+never retried merely because the executor disagrees. The advisor is trusted for
+reasoning; merge, deploy, approval, deletion, final-message, and session
+authority remain with Agent Bridge and its existing gates.
+
 ## Flow
 
 ```text

@@ -29,6 +29,7 @@ describe("BridgeEngine advisor command", () => {
   afterEach(() => {
     delete process.env.BRIDGE_ADVISOR_ENABLED;
     delete process.env.BRIDGE_ADVISOR_CHAIN;
+    delete process.env.BRIDGE_ADVISOR_MODE;
   });
 
   it("runs the advisor chain and sends a labelled result without replacing the executor session", async () => {
@@ -49,6 +50,62 @@ describe("BridgeEngine advisor command", () => {
     expect(runCli).toHaveBeenCalledOnce();
     expect(messaging.sendMessage.mock.calls.at(-1)?.[0].text).toContain("Advisor view");
     expect(db.getSession("100", "codex")).toBe("executor-session");
+    db.close();
+  });
+
+  it("auto mode folds frontier advice into the cheaper executor prompt", async () => {
+    process.env.BRIDGE_ADVISOR_MODE = "auto";
+    const { BridgeEngine } = await import("../src/engine.js");
+    const db = openDb(":memory:");
+    const messaging = client();
+    const prompts: string[] = [];
+    const runCli = vi.fn().mockImplementation(async (_command: string, args: string[]) => {
+      const prompt = String(args.at(-1));
+      prompts.push(prompt);
+      if (prompt.includes("frontier advisor")) return JSON.stringify({
+        advice_md: "Prefer a registry-owned design.", risks: [], suggested_next_steps: ["Add contracts"], confidence: "high",
+      });
+      return "Executor result";
+    });
+    const engine = new BridgeEngine({
+      kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42"]),
+      executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000, fullConfig: config(),
+    }, db, messaging, { runCli });
+
+    await engine.handleMessages([message("Design the provider architecture")]);
+
+    expect(runCli).toHaveBeenCalledTimes(2);
+    expect(prompts[1]).toContain("Frontier advisor guidance");
+    expect(prompts[1]).toContain("registry-owned design");
+    db.close();
+  });
+
+  it("suggest mode waits for approval before consulting the advisor", async () => {
+    process.env.BRIDGE_ADVISOR_MODE = "suggest";
+    const { BridgeEngine } = await import("../src/engine.js");
+    const db = openDb(":memory:");
+    const messaging = client();
+    const runCli = vi.fn().mockImplementation(async (_command: string, args: string[]) => {
+      const prompt = String(args.at(-1));
+      if (prompt.includes("frontier advisor")) return JSON.stringify({
+        advice_md: "Review complete.", risks: [], suggested_next_steps: [], confidence: "medium",
+      });
+      return "Executor result";
+    });
+    const engine = new BridgeEngine({
+      kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42"]),
+      executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000, fullConfig: config(),
+    }, db, messaging, { runCli });
+
+    await engine.handleMessages([message("Plan the migration architecture")]);
+    expect(runCli).not.toHaveBeenCalled();
+    expect(messaging.sendMessage.mock.calls.at(-1)?.[0].reply_markup).toBeDefined();
+
+    await engine.handleCallback({
+      id: "cb-1", from: { id: 42, first_name: "Test" }, data: "advisor_suggest:codex:approve",
+      message: { message_id: 500, chat: { id: 100, type: "private" }, text: "suggestion" },
+    });
+    expect(runCli).toHaveBeenCalledTimes(2);
     db.close();
   });
 });

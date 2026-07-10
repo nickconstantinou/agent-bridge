@@ -48,6 +48,9 @@ import type { BridgeDb } from "./db.js";
 import { DEFAULT_CONTEXT_MAX_CHARS } from "./db.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { extractProjectMemorySidecars, storeProjectMemoryCandidate } from "./projectMemory.js";
+import { parseAdvisorConfig } from "./advisorConfig.js";
+import { formatAdvisorResult, requestAdvisor } from "./advisor.js";
+import type { AdvisorRequestMode, AdvisorResult } from "./advisorTypes.js";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -139,6 +142,34 @@ function trimTurnText(text: string): string {
   return `${normalized.slice(0, ENGINE_TURN_TEXT_LIMIT - 15).trimEnd()}... [truncated]`;
 }
 
+function advisorModeForPrompt(prompt: string): AdvisorRequestMode | null {
+  if (/\b(auth|authentication|billing|security|secret|migration|deploy|destructive|delete|merge gate)\b/i.test(prompt)) return "risk";
+  if (/\b(stuck|debug|repeated(?:ly)? fail|keeps? failing|cannot reproduce|can't reproduce)\b/i.test(prompt)) return "debug";
+  if (/\b(architecture|architect|design|plan|refactor|multi-module|strategy)\b/i.test(prompt)) return "plan";
+  return null;
+}
+
+function foldAdvisorIntoPrompt(prompt: string, result: AdvisorResult): string {
+  return [
+    "[Frontier advisor guidance for the executor]",
+    result.adviceMd,
+    ...result.risks.map((risk) => `Risk: ${risk}`),
+    ...result.suggestedNextSteps.map((step) => `Suggested next step: ${step}`),
+    `[Advisor confidence: ${result.confidence}; source: ${result.provider}:${result.model}]`,
+    "[End frontier advisor guidance]",
+    "",
+    "Original task:",
+    prompt,
+  ].join("\n");
+}
+
+function promptForMemory(prompt: string): string {
+  const marker = "\nOriginal task:\n";
+  return prompt.startsWith("[Frontier advisor guidance for the executor]") && prompt.includes(marker)
+    ? prompt.slice(prompt.indexOf(marker) + marker.length)
+    : prompt;
+}
+
 function createTypingTracker(client: MessagingPlatform, chatId: number, kind: string, body: any = {}) {
   let timer: NodeJS.Timeout | null = null;
   let active = false;
@@ -180,6 +211,9 @@ export class BridgeEngine {
   private readonly hooks: BridgeEngineHooks;
   private readonly exec: ExecFns;
   private readonly abortedChats = new Set<string>();
+  private readonly advisorSuggestions = new Map<string, {
+    prompt: string; mode: AdvisorRequestMode; messageId: number; chatType: string; userId?: number;
+  }>();
 
   constructor(
     opts: BridgeEngineOptions,
@@ -363,6 +397,34 @@ export class BridgeEngine {
             // Fall through to execution with the overridden prompt
             return this._executeAndSend(commandResponse.prompt, chatId, chatKey, primaryMessage.chat.type, threadId, userId, hookCtx, []);
           }
+          if (commandResponse.kind === "advisor") {
+            const mode = commandResponse.action === "ask" ? "decision" : commandResponse.action;
+            try {
+              await this.sendText(chatId, { text: "Consulting frontier advisor...", message_thread_id: threadId });
+              const result = await requestAdvisor({
+                db: this.db,
+                config: parseAdvisorConfig(),
+                request: {
+                  requestId: randomUUID(),
+                  scopeKey: commandResponse.chatKey,
+                  turnKey: `${commandResponse.chatKey}:${primaryMessage.message_id}`,
+                  origin: "manual",
+                  mode,
+                  task: commandResponse.task,
+                  activeProvider: this.kind,
+                  activeModel: this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null,
+                },
+                bots: this._effectiveConfig().bots,
+                runCli: (command, args, cwd, options) => this.exec.runCli(command, args, cwd, options),
+                cwd: getCliWorkingDir(this._executionKind()),
+              });
+              await this.sendText(chatId, { text: formatAdvisorResult(result), message_thread_id: threadId });
+            } catch (error) {
+              const message = toUserMessage(error instanceof Error ? error : new Error(String(error)));
+              await this.sendText(chatId, { text: `Advisor unavailable: ${message}`, message_thread_id: threadId });
+            }
+            return;
+          }
           if (commandResponse.kind === "compact") {
             const ck = commandResponse.chatKey;
             const inProgressKey = compactInProgressSettingKey(ck);
@@ -441,7 +503,56 @@ export class BridgeEngine {
     }
     const attachments: string[] = attachmentLocalPath ? [attachmentLocalPath] : [];
 
-    return this._executeAndSend(prompt!, chatId, chatKey, primaryMessage.chat.type, threadId, userId, hookCtx, attachments, attachmentLocalPath);
+    const advisorConfig = parseAdvisorConfig();
+    const suggestedMode = advisorModeForPrompt(prompt!);
+    if (advisorConfig.enabled && suggestedMode && advisorConfig.mode === "suggest") {
+      this.advisorSuggestions.set(chatKey, {
+        prompt: prompt!, mode: suggestedMode, messageId: primaryMessage.message_id,
+        chatType: primaryMessage.chat.type, userId,
+      });
+      await this.sendText(chatId, {
+        text: `Frontier advisor suggested for this ${suggestedMode} task.`,
+        message_thread_id: threadId,
+        reply_markup: { inline_keyboard: [[
+          { text: "Consult advisor", callback_data: `advisor_suggest:${this.kind}:approve` },
+          { text: "Continue without", callback_data: `advisor_suggest:${this.kind}:skip` },
+        ]] },
+      });
+      return;
+    }
+    let executionPrompt = prompt!;
+    if (advisorConfig.enabled && suggestedMode && advisorConfig.mode === "auto") {
+      try {
+        const result = await this._requestAdvisor(chatKey, `${chatKey}:${primaryMessage.message_id}`, "auto", suggestedMode, prompt!);
+        executionPrompt = foldAdvisorIntoPrompt(prompt!, result);
+      } catch (error) {
+        console.warn(`[advisor] automatic consultation failed; continuing without advice:`, error);
+      }
+    }
+    return this._executeAndSend(executionPrompt, chatId, chatKey, primaryMessage.chat.type, threadId, userId, hookCtx, attachments, attachmentLocalPath);
+  }
+
+  private _requestAdvisor(
+    chatKey: string,
+    turnKey: string,
+    origin: "manual" | "suggest" | "auto",
+    mode: AdvisorRequestMode,
+    task: string,
+    approved = false,
+  ): Promise<AdvisorResult> {
+    return requestAdvisor({
+      db: this.db,
+      config: parseAdvisorConfig(),
+      request: {
+        requestId: randomUUID(),
+        scopeKey: chatKey, turnKey, origin, approved, mode, task,
+        activeProvider: this.kind,
+        activeModel: this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null,
+      },
+      bots: this._effectiveConfig().bots,
+      runCli: (command, args, cwd, options) => this.exec.runCli(command, args, cwd, options),
+      cwd: getCliWorkingDir(this._executionKind()),
+    });
   }
 
   private async _executeAndSend(
@@ -804,7 +915,7 @@ export class BridgeEngine {
       result.text = scrubOutputDir(result.text, outDir);
       result.text = this._applyMemorySidecars(chatKey, result.text);
       if (isAgentKind(this.kind)) {
-        this._rememberTurn(chatKey, prompt, result.text);
+        this._rememberTurn(chatKey, promptForMemory(prompt), result.text);
       }
       if (this.hooks.onAfterExecute) {
         await this.hooks.onAfterExecute(prompt, result.text, hookContext(chatId, chatKey, body.message_thread_id));
@@ -931,7 +1042,7 @@ export class BridgeEngine {
       result.text = scrubOutputDir(result.text, outDir);
       result.text = this._applyMemorySidecars(chatKey, result.text);
       if (isAgentKind(this.kind)) {
-        this._rememberTurn(chatKey, prompt, result.text);
+        this._rememberTurn(chatKey, promptForMemory(prompt), result.text);
       }
       if (this.hooks.onAfterExecute) {
         await this.hooks.onAfterExecute(prompt, result.text, hookContext(chatId, chatKey, body.message_thread_id));
@@ -1093,7 +1204,7 @@ export class BridgeEngine {
       collect,
     );
     retryResult.text = this._applyMemorySidecars(chatKey, retryResult.text);
-    this._rememberTurn(chatKey, prompt, retryResult.text);
+    this._rememberTurn(chatKey, promptForMemory(prompt), retryResult.text);
     if (this.hooks.onAfterExecute) {
       await this.hooks.onAfterExecute(prompt, retryResult.text, hookContext(chatId, chatKey, bodyThreadId));
     }
@@ -1179,7 +1290,7 @@ export class BridgeEngine {
       };
       finalResult.text = this._applyMemorySidecars(chatKey, finalResult.text);
       if (isAgentKind(this.kind)) {
-        this._rememberTurn(chatKey, prompt, finalResult.text);
+        this._rememberTurn(chatKey, promptForMemory(prompt), finalResult.text);
       }
       if (this.hooks.onAfterExecute) {
         await this.hooks.onAfterExecute(prompt, finalResult.text, hookContext(chatId, chatKey, eventContext?.threadId));
@@ -1215,6 +1326,35 @@ export class BridgeEngine {
 
     const data = String(callbackQuery?.data || "");
     const [action, targetKind, ...rest] = data.split(":");
+    if (action === "advisor_suggest" && targetKind === this.kind) {
+      const decision = rest.join(":");
+      const chatId = callbackQuery.message?.chat?.id;
+      const chatType = callbackQuery.message?.chat?.type ?? "private";
+      const threadId = callbackQuery.message?.message_thread_id;
+      if (!chatId) return;
+      const chatKey = topicChatKey(chatId, chatType, threadId);
+      const pending = this.advisorSuggestions.get(chatKey);
+      this.advisorSuggestions.delete(chatKey);
+      if (!pending) {
+        await this.client.answerCallbackQuery({ callback_query_id: callbackQuery.id, text: "Advisor suggestion expired" });
+        return;
+      }
+      await this.client.answerCallbackQuery({ callback_query_id: callbackQuery.id });
+      let prompt = pending.prompt;
+      if (decision === "approve") {
+        try {
+          const result = await this._requestAdvisor(chatKey, `${chatKey}:${pending.messageId}`, "suggest", pending.mode, pending.prompt, true);
+          prompt = foldAdvisorIntoPrompt(pending.prompt, result);
+        } catch (error) {
+          const message = toUserMessage(error instanceof Error ? error : new Error(String(error)));
+          await this.sendText(chatId, { text: `Advisor unavailable; continuing without advice: ${message}`, message_thread_id: threadId });
+        }
+      }
+      return this._executeAndSend(
+        prompt, chatId, chatKey, pending.chatType, threadId, pending.userId,
+        hookContext(chatId, chatKey, threadId), [],
+      );
+    }
     if (!["model", "effort"].includes(action) || targetKind !== this.kind) return;
 
     const value = rest.join(":").trim();

@@ -128,4 +128,30 @@ describe("advisor request execution", () => {
     expect(runCli).toHaveBeenCalledTimes(1);
     db.close();
   });
+
+  it("uses the secondary target when the primary returns invalid output", async () => {
+    const db = openDb(":memory:");
+    const runCli = vi.fn()
+      .mockResolvedValueOnce("not structured")
+      .mockResolvedValueOnce(JSON.stringify({
+        advice_md: "Recovered advice", risks: [], suggested_next_steps: [], confidence: "medium",
+      }));
+    const result = await requestAdvisor({
+      db,
+      config: parseAdvisorConfig({ BRIDGE_ADVISOR_ENABLED: "true", BRIDGE_ADVISOR_CHAIN: "claude:fable-5,codex:gpt-5.6-luna" }),
+      request: {
+        requestId: "invalid-fallback", scopeKey: "chat", turnKey: "invalid-turn", origin: "manual",
+        mode: "review", task: "Review", activeProvider: "codex", activeModel: null,
+      },
+      bots: {
+        claude: { command: "claude", modelPreference: [] },
+        codex: { command: "codex", modelPreference: [] },
+      },
+      runCli,
+      cwd: "/repo",
+    });
+    expect(result.adviceMd).toBe("Recovered advice");
+    expect(result.provider).toBe("codex");
+    db.close();
+  });
 });

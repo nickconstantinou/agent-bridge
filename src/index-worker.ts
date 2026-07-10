@@ -8,6 +8,7 @@
  */
 
 import dotenv from "dotenv";
+import { randomUUID } from "node:crypto";
 import {
   getBridgeProjectDir,
   openDb,
@@ -54,6 +55,8 @@ import { resolveWorkerCliPolicy } from "./workerCliPolicy.js";
 import { workerEffortForTask } from "./effort.js";
 import { sendApprovalHtmlPack } from "./approvalHtml.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
+import { parseAdvisorConfig } from "./advisorConfig.js";
+import { requestAdvisor } from "./advisor.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env.worker",
@@ -82,6 +85,7 @@ const dbPath = process.env.DB_PATH || `${getBridgeProjectDir()}/.data/bridge.sql
 const pollIntervalMs = Number(process.env.POLL_INTERVAL_MS || 1000);
 const executionMode = (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") || "safe";
 const asyncEnabled = process.env.BRIDGE_ASYNC_ENABLED !== "false";
+const advisorConfig = parseAdvisorConfig(process.env);
 
 const db = openDb(dbPath);
 const client = new TelegramClient(token, fetch, 45_000);
@@ -178,6 +182,35 @@ const runTests = async (cwd: string): Promise<{ ok: boolean; output: string }> =
   }
 };
 
+const advisorCheckpoint = advisorConfig.enabled ? async (input: {
+  mode: "plan" | "pr_ready";
+  taskKey: string;
+  task: string;
+  repoPath: string;
+  diffSummary?: string;
+  testOutput?: string;
+}): Promise<string> => {
+  const result = await requestAdvisor({
+    db,
+    config: advisorConfig,
+    request: {
+      requestId: randomUUID(),
+      scopeKey: `worker:${input.taskKey}`,
+      taskKey: input.taskKey,
+      origin: "worker",
+      mode: input.mode,
+      task: input.task,
+      activeProvider: codeCliChain[0] ?? "codex",
+      activeModel: null,
+      evidence: { diffSummary: input.diffSummary, testOutput: input.testOutput },
+    },
+    bots: config.bots,
+    runCli,
+    cwd: input.repoPath,
+  });
+  return [result.adviceMd, ...result.risks.map((risk) => `Risk: ${risk}`), ...result.suggestedNextSteps.map((step) => `Next: ${step}`)].join("\n");
+} : undefined;
+
 const jobExecutor = startJobExecutorLoop({
   db,
   workerId: `worker-bot-${process.pid}`,
@@ -245,6 +278,7 @@ const jobExecutor = startJobExecutorLoop({
         installDeps: (dir) => runWorkerCommand("npm", ["ci", "--no-audit", "--no-fund", "--include=dev"], { cwd: dir }).then(() => undefined),
       }),
       cleanupWorkspace,
+      advisorCheckpoint,
     }),
     open_github_issue: createGithubIssueHandler({
       runCommand: (binary, args) => runWorkerCommand(binary, args),

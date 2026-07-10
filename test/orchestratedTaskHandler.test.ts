@@ -108,6 +108,19 @@ describe("createOrchestratedTaskHandler", () => {
     }));
   });
 
+  it("fails closed when a job requires an unavailable advisor", async () => {
+    const stubs = makeStubs();
+    const item = db.createWorkItem({
+      kind: "feature", source: "telegram", repository: "owner/repo",
+      title: "Sensitive migration", created_by: "worker",
+    });
+
+    await expect(createOrchestratedTaskHandler(stubs)(
+      { work_item_id: item.id, repository_path: "/tmp/repo", advisor_required: true },
+      { db, workerId: "w", phase: "initial", phaseData: {} },
+    )).rejects.toThrow(/advisor required but disabled/i);
+  });
+
   it("executes from the stored plan, commits changes, then continues to verifying", async () => {
     const stubs = makeStubs();
     const item = db.createWorkItem({

@@ -196,6 +196,37 @@ export function openDb(dbPath: string): BridgeDb {
       created_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
       updated_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE IF NOT EXISTS advisor_calls (
+      request_id        TEXT PRIMARY KEY,
+      scope_key         TEXT NOT NULL,
+      turn_key          TEXT,
+      task_key          TEXT,
+      mode              TEXT NOT NULL,
+      trigger           TEXT NOT NULL,
+      status            TEXT NOT NULL,
+      context_chars     INTEGER NOT NULL DEFAULT 0,
+      selected_provider TEXT,
+      selected_model    TEXT,
+      confidence        TEXT,
+      error_kind        TEXT,
+      created_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at        TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_advisor_calls_turn ON advisor_calls(turn_key, status);
+    CREATE INDEX IF NOT EXISTS idx_advisor_calls_task ON advisor_calls(task_key, status);
+    CREATE TABLE IF NOT EXISTS advisor_attempts (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      request_id  TEXT NOT NULL,
+      ordinal     INTEGER NOT NULL,
+      provider    TEXT NOT NULL,
+      model       TEXT NOT NULL,
+      status      TEXT NOT NULL,
+      error_kind  TEXT,
+      duration_ms INTEGER NOT NULL,
+      created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(request_id, ordinal),
+      FOREIGN KEY(request_id) REFERENCES advisor_calls(request_id)
+    );
   `);
   try {
     raw.exec(`ALTER TABLE bridge_state ADD COLUMN claude_session_id TEXT`);
@@ -568,6 +599,54 @@ export class BridgeDb {
 
   setSetting(key: string, value: string | null): void {
     this.settings.setSetting(key, value);
+  }
+
+  reserveAdvisorCall(input: {
+    requestId: string; scopeKey: string; turnKey?: string; taskKey?: string;
+    mode: string; trigger: string; contextChars: number;
+    maxCallsPerTurn: number; maxCallsPerTask: number;
+  }): boolean {
+    return this.raw.transaction(() => {
+      const existing = this.raw.prepare("SELECT status FROM advisor_calls WHERE request_id = ?").get(input.requestId);
+      if (existing) return false;
+      if (input.turnKey) {
+        const row = this.raw.prepare("SELECT COUNT(*) AS n FROM advisor_calls WHERE turn_key = ? AND status != 'denied'").get(input.turnKey) as { n: number };
+        if (row.n >= input.maxCallsPerTurn) return false;
+      }
+      if (input.taskKey) {
+        const row = this.raw.prepare("SELECT COUNT(*) AS n FROM advisor_calls WHERE task_key = ? AND status != 'denied'").get(input.taskKey) as { n: number };
+        if (row.n >= input.maxCallsPerTask) return false;
+      }
+      this.raw.prepare(`INSERT INTO advisor_calls
+        (request_id, scope_key, turn_key, task_key, mode, trigger, status, context_chars)
+        VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?)`)
+        .run(input.requestId, input.scopeKey, input.turnKey ?? null, input.taskKey ?? null, input.mode, input.trigger, input.contextChars);
+      return true;
+    })();
+  }
+
+  addAdvisorAttempt(input: {
+    requestId: string; ordinal: number; provider: string; model: string;
+    status: string; errorKind?: string; durationMs: number;
+  }): void {
+    this.raw.prepare(`INSERT INTO advisor_attempts
+      (request_id, ordinal, provider, model, status, error_kind, duration_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .run(input.requestId, input.ordinal, input.provider, input.model, input.status, input.errorKind ?? null, input.durationMs);
+  }
+
+  completeAdvisorCall(requestId: string, provider: string, model: string, confidence: string): void {
+    this.raw.prepare(`UPDATE advisor_calls SET status='succeeded', selected_provider=?, selected_model=?, confidence=?, updated_at=CURRENT_TIMESTAMP WHERE request_id=?`)
+      .run(provider, model, confidence, requestId);
+  }
+
+  failAdvisorCall(requestId: string, errorKind: string): void {
+    this.raw.prepare(`UPDATE advisor_calls SET status='failed', error_kind=?, updated_at=CURRENT_TIMESTAMP WHERE request_id=?`)
+      .run(errorKind, requestId);
+  }
+
+  getAdvisorAttempts(requestId: string): Array<Record<string, unknown>> {
+    return this.raw.prepare("SELECT * FROM advisor_attempts WHERE request_id = ? ORDER BY ordinal").all(requestId) as Array<Record<string, unknown>>;
   }
 
   getChatRepo(chatId: string): string | null {

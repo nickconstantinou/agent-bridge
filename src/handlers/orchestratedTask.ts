@@ -24,6 +24,14 @@ interface OrchestratedTaskDeps {
   cliExtraArgs?: string[];
   prepareWorkspace?: (repository: string, workItemId: number, opts?: { reuseExisting?: boolean }) => Promise<string>;
   cleanupWorkspace?: (dir: string) => void;
+  advisorCheckpoint?: (input: {
+    mode: "plan" | "pr_ready";
+    taskKey: string;
+    task: string;
+    repoPath: string;
+    diffSummary?: string;
+    testOutput?: string;
+  }) => Promise<string>;
 }
 
 const promptReader = createWorkerPromptFileReader();
@@ -43,6 +51,8 @@ interface OrchestratedPhaseData {
   plan?: string;
   preferredCli?: CliKind;
   verifyOutput?: string;
+  advisorPlan?: string;
+  advisorPrReady?: string;
 }
 
 function preferredCli(input: JobHandlerInput): CliKind | null {
@@ -71,13 +81,13 @@ async function buildPlanPrompt(ctx: JobHandlerContext, item: { repository: strin
   );
 }
 
-async function buildExecutePrompt(ctx: JobHandlerContext, title: string, plan: string): Promise<string> {
+async function buildExecutePrompt(ctx: JobHandlerContext, title: string, plan: string, advisorPlan?: string): Promise<string> {
   return loadWorkerPrompt(
     "orchestrated_task:execute",
     {
       title,
       plan_text: plan,
-      execution_contract: "",
+      execution_contract: advisorPlan ? `Frontier advisor review:\n${advisorPlan}` : "",
     },
     promptReader,
     { dbTemplate: ctx.db.getPrompt("orchestrated_task:execute", "") },
@@ -85,7 +95,24 @@ async function buildExecutePrompt(ctx: JobHandlerContext, title: string, plan: s
 }
 
 export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHandler {
-  const { runCli, runGit, runTests, cliExtraArgs = [], prepareWorkspace, cleanupWorkspace } = deps;
+  const { runCli, runGit, runTests, cliExtraArgs = [], prepareWorkspace, cleanupWorkspace, advisorCheckpoint } = deps;
+
+  const consultAdvisor = async (
+    input: JobHandlerInput,
+    checkpoint: Parameters<NonNullable<OrchestratedTaskDeps["advisorCheckpoint"]>>[0],
+  ): Promise<string | undefined> => {
+    if (!advisorCheckpoint) {
+      if (input.advisor_required === true) throw new Error("Advisor required but disabled or unavailable");
+      return undefined;
+    }
+    try {
+      return await advisorCheckpoint(checkpoint);
+    } catch (error) {
+      if (input.advisor_required === true) throw error;
+      console.warn(`[advisor] optional worker checkpoint failed mode=${checkpoint.mode}:`, error);
+      return undefined;
+    }
+  };
 
   return async function orchestratedTaskHandler(
     input: JobHandlerInput,
@@ -127,17 +154,24 @@ export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHa
 
       const planPrompt = await buildPlanPrompt(ctx, item);
       const plan = await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, planPrompt], repoPath);
+      const advisorPlan = await consultAdvisor(input, {
+        mode: "plan",
+        taskKey: `work-item:${workItemId}`,
+        task: `Review the implementation plan for: ${item.title}`,
+        repoPath,
+        diffSummary: plan,
+      });
       return {
         status: "continue",
         phase: "executing",
-        phaseData: { workItemId, repoPath, workspaceDir, branchName, plan, preferredCli: selectedCli ?? undefined },
+        phaseData: { workItemId, repoPath, workspaceDir, branchName, plan, advisorPlan, preferredCli: selectedCli ?? undefined },
         summary: `Plan complete for work item #${workItemId}; executing next.`,
       };
     }
 
     if (ctx.phase === "executing") {
       if (!phaseData.repoPath || !phaseData.plan) throw new Error("orchestrated_task missing execution phase data");
-      const executePrompt = await buildExecutePrompt(ctx, item.title, phaseData.plan);
+      const executePrompt = await buildExecutePrompt(ctx, item.title, phaseData.plan, phaseData.advisorPlan);
       await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, executePrompt], phaseData.repoPath);
       await runGit(["add", "-A"], phaseData.repoPath);
       const staged = String(await runGit(["diff", "--cached", "--name-only"], phaseData.repoPath)).trim();
@@ -156,6 +190,14 @@ export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHa
       if (!phaseData.repoPath || !phaseData.branchName) throw new Error("orchestrated_task missing verification phase data");
       const verify = await runTests(phaseData.repoPath);
       if (!verify.ok) throw new Error(`Verification failed:\n${verify.output}`);
+      const advisorPrReady = await consultAdvisor(input, {
+        mode: "pr_ready",
+        taskKey: `work-item:${workItemId}`,
+        task: `Review PR readiness for: ${item.title}`,
+        repoPath: phaseData.repoPath,
+        testOutput: verify.output,
+        diffSummary: phaseData.plan,
+      });
 
       if (item.repository) {
         ctx.db.createWorkJob({
@@ -177,9 +219,10 @@ export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHa
       }
 
       return {
-        summary: `Orchestrated task complete for **${phaseData.branchName}**\n\n${verify.output}`,
+        summary: `Orchestrated task complete for **${phaseData.branchName}**\n\n${verify.output}${advisorPrReady ? `\n\nAdvisor: ${advisorPrReady}` : ""}`,
         branchName: phaseData.branchName,
         verifyOutput: verify.output,
+        advisorPrReady,
       };
     }
 

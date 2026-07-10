@@ -5,20 +5,20 @@
  * NEIGHBORS: src/index-worker.ts, src/workerDispatch.ts
  */
 
+import { parseCliChain as parseSharedCliChain, workerChainKinds, codeChainKinds } from "./providers/selection.js";
+
 export type WorkerCliKind = "codex" | "claude" | "antigravity";
 
-const VALID_WORKER_CLIS = new Set<WorkerCliKind>(["codex", "claude", "antigravity"]);
-
 function parseCliChain(raw: string | undefined, fallback: WorkerCliKind[]): WorkerCliKind[] {
-  const parsed = (raw ?? "")
-    .split(",")
-    .map(s => s.trim())
-    .filter((s): s is WorkerCliKind => VALID_WORKER_CLIS.has(s as WorkerCliKind));
-  return parsed.length > 0 ? parsed : fallback;
+  return parseSharedCliChain(raw, {
+    allowed: workerChainKinds() as WorkerCliKind[],
+    fallback,
+  });
 }
 
 function withoutAntigravity(chain: WorkerCliKind[]): WorkerCliKind[] {
-  const codeSafe = chain.filter(cli => cli !== "antigravity");
+  const codeKinds = new Set<string>(codeChainKinds());
+  const codeSafe = chain.filter(cli => codeKinds.has(cli));
   return codeSafe.length > 0 ? codeSafe : ["codex", "claude"];
 }
 

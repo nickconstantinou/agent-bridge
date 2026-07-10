@@ -19,6 +19,7 @@ import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
 import { loadBotsConfig, resolveExecutionMode } from "./config.js";
 import { WorkerFallbackChain } from "./workerFallback.js";
+import { parseCliChain, interactiveChainKinds } from "./providers/selection.js";
 import { getAvailableCliKinds } from "./interactiveCliAuth.js";
 import {
   getUserCliPreference,
@@ -107,9 +108,12 @@ if (!botUsername) {
   }
 }
 
-// Fallback chain state
-const cliChain = (process.env.INTERACTIVE_CLI_CHAIN || process.env.WORKER_CLI_CHAIN || "codex,claude,antigravity,kimchi")
-  .split(",").map(s => s.trim()).filter(Boolean);
+// Fallback chain state. Unknown chain entries are dropped by the shared
+// parser; an all-invalid chain falls back to the full default order.
+const cliChain = parseCliChain(
+  process.env.INTERACTIVE_CLI_CHAIN || process.env.WORKER_CLI_CHAIN,
+  { allowed: interactiveChainKinds(), fallback: ["codex", "claude", "antigravity", "kimchi"] },
+);
 const fallbackChain = new WorkerFallbackChain(cliChain, db);
 const exhaustedChats = new Set<string>();
 

@@ -1,0 +1,12 @@
+name: Architecture Lint
+
+on:
+  pull_request:
+
+jobs:
+  arch-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run architecture lint guard
+        run: bash scripts/arch-lint.sh src

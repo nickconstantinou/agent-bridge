@@ -6,7 +6,7 @@
  * NEIGHBORS: src/index-worker.ts, src/workCallbacks.ts
  */
 
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 export interface RunCommandOptions {
@@ -30,7 +30,18 @@ export function createRunCommand(options: RunCommandOptions = {}): RunCommand {
       const env = opts.env ? { ...opts.env } : { ...process.env };
       if (loadGhToken) {
         const tokenPath = process.env.GITHUB_TOKEN_FILE || `${process.env.HOME}/.secrets/GITHUB_TOKEN.TXT`;
-        try { env.GH_TOKEN = readFileSync(tokenPath, "utf8").trim(); } catch { /* git ops still work without it */ }
+        try {
+          const token = readFileSync(tokenPath, "utf8").trim();
+          if (token) env.GH_TOKEN = token;
+        } catch {
+          try {
+            // Fallback to the active gh CLI login when the token file is absent.
+            const token = execFileSync("gh", ["auth", "token"], { encoding: "utf8" }).trim();
+            if (token) env.GH_TOKEN = token;
+          } catch {
+            /* git ops still work without it */
+          }
+        }
       }
 
       execFile(binary, args, { encoding: "utf8", env, maxBuffer, cwd: opts.cwd }, (err, stdout, stderr) => {

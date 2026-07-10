@@ -32,6 +32,16 @@ Work item
 The Engineering Worker owns:
 
 - repository resolution
+
+When the frontier advisor is enabled, `orchestrated_task` requests bounded
+advisor checkpoints after planning and after successful verification. Plan
+advice is folded into the execution contract; PR-readiness advice is attached
+to the completed job result. Checkpoints are advisory and fail-open unless the
+job explicitly sets `advisor_required=true`. Logical calls are budgeted per
+task and each provider attempt is audited. The audit tables do not store
+prompts or raw advice; bounded selected checkpoint advice is intentionally
+carried in resumable job phase/result state so a worker restart does not
+discard it.
 - disposable clones / workspaces
 - work item and job state
 - software planning

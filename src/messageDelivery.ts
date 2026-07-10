@@ -42,7 +42,7 @@ export async function sendTelegramMessage({
   kind: string;
   chatId: number;
   body: any;
-}): Promise<void> {
+}): Promise<number | null> {
   const text = String(body.text || "");
   const { text: _ignored, ...rest } = body;
   const route = routeNativeLayout(text, {
@@ -58,7 +58,7 @@ export async function sendTelegramMessage({
       mime_type: "text/markdown",
       caption: `Full response attached as response.md (${route.reason})`,
     });
-    return;
+    return null;
   }
 
   // Tables route through sendRichMessage (Telegram Bot API 10.1+) which accepts <table> HTML.
@@ -67,13 +67,13 @@ export async function sendTelegramMessage({
     const richHtml = markdownTableToRichHtml(text);
     try {
       await client.sendRichMessage({ chat_id: chatId, ...rest, rich_message: { html: richHtml } });
-      return;
+      return null;
     } catch {
       // sendRichMessage unsupported or rejected — fall through to card-style delivery
     }
   }
 
-  await sendEntityMessages({ client, chatId, body: { ...rest, text } });
+  return sendEntityMessages({ client, chatId, body: { ...rest, text } });
 }
 
 async function sendEntityMessages({
@@ -84,9 +84,10 @@ async function sendEntityMessages({
   client: MessagingPlatform;
   chatId: number;
   body: any;
-}): Promise<void> {
+}): Promise<number | null> {
   const chunks = splitTelegramText(String(body.text || ""));
   const { text: _ignored, ...rest } = body;
+  let firstMessageId: number | null = null;
 
   for (let i = 0; i < chunks.length; i += 1) {
     const chunkText = chunks[i];
@@ -99,8 +100,10 @@ async function sendEntityMessages({
     if (i > 0) delete chunkBody.reply_markup;
     chunkBody.text = renderTelegramHtml(chunkText);
     chunkBody.parse_mode = "HTML";
-    await client.sendMessage(chunkBody);
+    const response = await client.sendMessage(chunkBody);
+    if (i === 0 && typeof response?.result?.message_id === "number") firstMessageId = response.result.message_id;
   }
+  return firstMessageId;
 }
 
 function validateParity({

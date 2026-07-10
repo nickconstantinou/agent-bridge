@@ -12,6 +12,7 @@ import { buildModelKeyboard, buildModelsText } from "./bridge.js";
 import { listLocalCatalog } from "./skills.js";
 import { buildEffortKeyboard, buildEffortText, resolveEffort } from "./effort.js";
 import { contextInjectionPolicy, preseedCompactMode, preseedCompactCharThreshold } from "./contextPolicy.js";
+import { parseAdvisorConfig } from "./advisorConfig.js";
 
 const CONTEXT_COMPACT_NUDGE_TURNS = 100;
 
@@ -20,9 +21,10 @@ export type CommandResult =
   | { kind: "keyboard_message"; text: string; reply_markup: any }
   | { kind: "execute"; prompt: string }
   | { kind: "codex_usage" }
-  | { kind: "compact"; chatKey: string };
+  | { kind: "compact"; chatKey: string }
+  | { kind: "advisor"; action: "ask" | "review" | "plan" | "debug"; task: string; chatKey: string };
 
-const bridgeCommands = new Set(["/start", "/reset", "/models", "/effort", "/skills", "/usage", "/narration", "/compact", "/context"]);
+const bridgeCommands = new Set(["/start", "/reset", "/models", "/effort", "/skills", "/usage", "/narration", "/compact", "/context", "/advisor"]);
 
 function normalizeCommand(text: string): string {
   const [command] = String(text || "").trim().toLowerCase().split(/\s+/, 1);
@@ -159,6 +161,35 @@ export function handleCommand(
     return { kind: "compact", chatKey: chatId };
   }
 
+  if (text === "/advisor") {
+    const [, rawAction = "status", ...rest] = String(prompt || "").trim().split(/\s+/);
+    const action = rawAction.toLowerCase();
+    const advisor = parseAdvisorConfig();
+    if (action === "status") {
+      const chain = advisor.chain.length
+        ? advisor.chain.map((target) => `${target.provider}:${target.model}`).join(" -> ")
+        : "not configured";
+      return {
+        kind: "message",
+        text: [
+          `Advisor: ${advisor.enabled ? "enabled" : "disabled"}`,
+          `Mode: ${advisor.mode}`,
+          `Chain: ${chain}`,
+          `Budgets: ${advisor.maxCallsPerTurn}/turn, ${advisor.maxCallsPerTask}/task`,
+        ].join("\n"),
+      };
+    }
+    if (!["ask", "review", "plan", "debug"].includes(action)) {
+      return { kind: "message", text: "Usage: /advisor status|ask <question>|review|plan <goal>|debug <problem>" };
+    }
+    const supplied = rest.join(" ").trim();
+    if (["ask", "plan", "debug"].includes(action) && !supplied) {
+      return { kind: "message", text: `Usage: /advisor ${action} <text>` };
+    }
+    const task = supplied || "Review the current conversation and identify missed risks, weak assumptions, and next steps.";
+    return { kind: "advisor", action: action as "ask" | "review" | "plan" | "debug", task, chatKey: chatId };
+  }
+
   if (text === "/context") {
     const status = db.getConvStatus(chatId);
     const summary = db.getLatestConvSummary(chatId);
@@ -208,6 +239,7 @@ export function buildTelegramCommands(kind: "codex" | "antigravity" | "claude" |
     { command: "stop",     description: "Abort running execution" },
     { command: "compact",  description: "Compact conversation context" },
     { command: "context",  description: "Show context status" },
+    { command: "advisor",  description: "Ask frontier advisor" },
   ];
 
   if (kind === "codex") {

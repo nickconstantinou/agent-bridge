@@ -124,6 +124,11 @@ Set in the worker's env file (`.env.worker` or the systemd default file):
 | `BRIDGE_ADVISOR_TIMEOUT_MS` | `120000` | Timeout for each advisor target attempt |
 | `PR_DEFECT_SCAN_ENABLED` | `false` | Enable pre-merge defect scanning when CI checks pass |
 
+Advisor audit records store provider/model, status, timing, budget, and error
+metadata only. Bounded selected checkpoint advice may be persisted in
+resumable job phase/result state because it is part of the execution review,
+not raw advisor transcript storage.
+
 
 Code-writing jobs (`tdd_implementation`, `orchestrated_task`) use the code
 chain and never fall back to Agy. Scribe/read-only jobs (`defect_scan`,

@@ -164,6 +164,9 @@ export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHa
       return {
         status: "continue",
         phase: "executing",
+        // The selected, bounded recommendation is intentionally carried in
+        // resumable phase state so execution can continue after a restart.
+        // Advisor audit tables still never store prompts or raw advice.
         phaseData: { workItemId, repoPath, workspaceDir, branchName, plan, advisorPlan, preferredCli: selectedCli ?? undefined },
         summary: `Plan complete for work item #${workItemId}; executing next.`,
       };

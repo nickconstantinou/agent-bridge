@@ -9,6 +9,7 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "test": "vitest run",
+    "doctor": "tsx src/doctorCli.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "skills": "tsx scripts/skill-manager.ts",

@@ -123,6 +123,28 @@ describe("sendMessageWithProgress", () => {
     expect(allTexts.some((text: string) => text.includes("I will inspect files"))).toBe(false);
   });
 
+  it("preserves markdown formatting when editing an antigravity progress message into the final answer", async () => {
+    const client = createMockClient();
+
+    await sendMessageWithProgress({
+      client,
+      kind: "antigravity",
+      chatId: 123,
+      showProgressNarration: true,
+      execution: (onProgress: (chunk: string) => void) => {
+        onProgress("STATUS: running tests\n");
+        return Promise.resolve({ text: "**Done** run `npm test`", sessionId: "s1" } as CliResult);
+      },
+    });
+
+    expect(client.editMessageText).toHaveBeenCalledWith(expect.objectContaining({
+      chat_id: 123,
+      message_id: 456,
+      parse_mode: "HTML",
+      text: "<b>Done</b> run <code>npm test</code>",
+    }));
+  });
+
   it("does not re-send an unchanged STATUS preview on a later tick (dedup)", async () => {
     const dateSpy = vi.spyOn(Date, "now");
     let now = 1_000_000;

@@ -18,6 +18,10 @@ function truncate(text: string): string {
   return text.length > MAX_TELEGRAM_TEXT ? text.slice(-MAX_TELEGRAM_TEXT) : text;
 }
 
+function renderTelegramHtml(text: string): string {
+  return renderMarkerString(parseMarkdownToIR(text), TELEGRAM_HTML_MARKERS, "\n\n");
+}
+
 function extractStatusProgress(text: string): string {
   return text
     .split(/\r?\n/)
@@ -93,7 +97,7 @@ async function sendEntityMessages({
     };
 
     if (i > 0) delete chunkBody.reply_markup;
-    chunkBody.text = renderMarkerString(parseMarkdownToIR(chunkText), TELEGRAM_HTML_MARKERS, "\n\n");
+    chunkBody.text = renderTelegramHtml(chunkText);
     chunkBody.parse_mode = "HTML";
     await client.sendMessage(chunkBody);
   }
@@ -261,7 +265,8 @@ export async function sendMessageWithProgress({
           chat_id: chatId,
           message_id: progressMsgId,
           ...body,
-          text: truncate(text),
+          text: renderTelegramHtml(truncate(text)),
+          parse_mode: "HTML",
         });
         return;
       } catch (editErr: any) {

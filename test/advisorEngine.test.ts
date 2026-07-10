@@ -159,6 +159,38 @@ describe("BridgeEngine advisor command", () => {
     db.close();
   });
 
+  it("rejects a suggest approval callback after ten minutes", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-07-10T20:00:00.000Z"));
+    try {
+      process.env.BRIDGE_ADVISOR_MODE = "suggest";
+      const { BridgeEngine } = await import("../src/engine.js");
+      const db = openDb(":memory:");
+      const messaging = client();
+      const runCli = vi.fn().mockResolvedValue("Executor result");
+      const engine = new BridgeEngine({
+        kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42"]),
+        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000, fullConfig: config(),
+      }, db, messaging, { runCli });
+
+      await engine.handleMessages([message("Plan the migration architecture")]);
+      const approvalData = messaging.sendMessage.mock.calls.at(-1)?.[0].reply_markup.inline_keyboard[0][0].callback_data as string;
+      const suggestionMessageId = messaging.sendMessage.mock.calls.at(-1)?.[0].message_id ?? 1;
+      vi.advanceTimersByTime(10 * 60 * 1000 + 1);
+
+      await engine.handleCallback({
+        id: "cb-expired", from: { id: 42, first_name: "Test" }, data: approvalData,
+        message: { message_id: suggestionMessageId, chat: { id: 100, type: "private" }, text: "suggestion" },
+      });
+
+      expect(messaging.answerCallbackQuery).toHaveBeenCalledWith(expect.objectContaining({ text: "Advisor suggestion expired" }));
+      expect(runCli).not.toHaveBeenCalled();
+      db.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("marks folded advisor guidance as non-authoritative", async () => {
     process.env.BRIDGE_ADVISOR_MODE = "auto";
     const { BridgeEngine } = await import("../src/engine.js");

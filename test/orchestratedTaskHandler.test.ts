@@ -71,6 +71,43 @@ describe("createOrchestratedTaskHandler", () => {
     expect(stubs.runCli.mock.calls[0][1].at(-1)).toMatch(/Do not edit files/i);
   });
 
+  it("folds an advisor plan checkpoint into phase data when configured", async () => {
+    const stubs = makeStubs();
+    const advisorCheckpoint = vi.fn().mockResolvedValue("Advisor: narrow the migration and add rollback coverage.");
+    const item = db.createWorkItem({
+      kind: "feature", source: "telegram", repository: "owner/repo",
+      title: "Add orchestration", created_by: "worker",
+    });
+
+    const result = await createOrchestratedTaskHandler({ ...stubs, advisorCheckpoint })(
+      { work_item_id: item.id, repository_path: "/tmp/repo" },
+      { db, workerId: "w", phase: "initial", phaseData: {} },
+    );
+
+    expect(advisorCheckpoint).toHaveBeenCalledWith(expect.objectContaining({ mode: "plan", taskKey: `work-item:${item.id}` }));
+    expect(result.phaseData).toMatchObject({ advisorPlan: expect.stringContaining("rollback") });
+  });
+
+  it("runs a PR-readiness advisor checkpoint after tests pass", async () => {
+    const stubs = makeStubs();
+    const advisorCheckpoint = vi.fn().mockResolvedValue("Advisor: ready for review.");
+    const item = db.createWorkItem({
+      kind: "feature", source: "telegram", repository: "owner/repo",
+      title: "Add orchestration", created_by: "worker",
+    });
+
+    await createOrchestratedTaskHandler({ ...stubs, advisorCheckpoint })(
+      { work_item_id: item.id },
+      { db, workerId: "w", phase: "verifying", phaseData: {
+        workItemId: item.id, repoPath: "/tmp/repo", branchName: `agent/work-${item.id}`, plan: "Plan",
+      } },
+    );
+
+    expect(advisorCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      mode: "pr_ready", taskKey: `work-item:${item.id}`, testOutput: "Tests passed.",
+    }));
+  });
+
   it("executes from the stored plan, commits changes, then continues to verifying", async () => {
     const stubs = makeStubs();
     const item = db.createWorkItem({

@@ -13,6 +13,7 @@ const ADAPTERS: Readonly<Record<ProviderId, ProviderAdapter>> = {
     capabilities: {
       interactive: true,
       worker: true,
+      workerChain: true,
       fallbackTarget: true,
     },
   },
@@ -24,6 +25,7 @@ const ADAPTERS: Readonly<Record<ProviderId, ProviderAdapter>> = {
     capabilities: {
       interactive: true,
       worker: true,
+      workerChain: true,
       fallbackTarget: true,
     },
   },
@@ -35,6 +37,19 @@ const ADAPTERS: Readonly<Record<ProviderId, ProviderAdapter>> = {
     capabilities: {
       interactive: true,
       worker: false,
+      workerChain: true,
+      fallbackTarget: true,
+    },
+  },
+  kimchi: {
+    id: "kimchi",
+    displayName: "Kimchi",
+    executable: "kimchi",
+    defaultArgs: ["--print"],
+    capabilities: {
+      interactive: true,
+      worker: false,
+      workerChain: false,
       fallbackTarget: true,
     },
   },

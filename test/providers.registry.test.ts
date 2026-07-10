@@ -10,12 +10,12 @@ import type { ProviderId } from "../src/providers/types.js";
 
 describe("provider registry", () => {
   it("exports the canonical provider ids", () => {
-    expect(PROVIDER_IDS).toEqual(["codex", "claude", "agy"]);
+    expect(PROVIDER_IDS).toEqual(["codex", "claude", "agy", "kimchi"]);
   });
 
   it("returns all adapters in stable order", () => {
     const adapters = getProviderAdapters();
-    expect(adapters.map((a) => a.id)).toEqual(["codex", "claude", "agy"]);
+    expect(adapters.map((a) => a.id)).toEqual(["codex", "claude", "agy", "kimchi"]);
   });
 
   it("returns the codex adapter", () => {
@@ -45,7 +45,7 @@ describe("provider registry", () => {
     expect(isProviderId("codex")).toBe(true);
     expect(isProviderId("claude")).toBe(true);
     expect(isProviderId("agy")).toBe(true);
-    expect(isProviderId("kimchi")).toBe(false);
+    expect(isProviderId("not-a-provider")).toBe(false);
     expect(isProviderId("")).toBe(false);
   });
 
@@ -55,12 +55,12 @@ describe("provider registry", () => {
   });
 
   it("throws for unknown provider ids", () => {
-    expect(() => assertProviderId("kimchi")).toThrow("Unknown provider id");
+    expect(() => assertProviderId("not-a-provider")).toThrow("Unknown provider id");
     expect(() => assertProviderId("")).toThrow("Unknown provider id");
   });
 
   it("rejects unknown provider ids when looked up directly", () => {
-    expect(() => getProviderAdapter("kimchi" as ProviderId)).toThrow();
+    expect(() => getProviderAdapter("not-a-provider" as ProviderId)).toThrow();
   });
 
   it("exposes worker and fallback metadata", () => {

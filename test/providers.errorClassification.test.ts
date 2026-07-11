@@ -17,6 +17,10 @@ describe("provider error classification", () => {
     expect(classifyProviderError("codex", new Error('Error: Model "glm-5.2-fp8" not found.'))).toMatchObject({
       kind: "model_unavailable",
     });
+    // Real claude CLI json-mode 404 for an unknown/unauthorized model.
+    expect(classifyProviderError("claude", new Error('CLI exited with code 1: {"type":"result","is_error":true,"api_error_status":404,"result":"There\'s an issue with the selected model (claude-smoke-nonexistent-model). It may not exist or you may not have access to it."}'))).toMatchObject({
+      kind: "model_unavailable",
+    });
   });
 
   it("classifies Agy/Antigravity usage exhaustion messages", () => {

@@ -285,7 +285,7 @@ export function buildCliInvocation({
     }
     args.push("--print");
     if (toolMode === "none") {
-      args.push("--tools", "", "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", "{}");
+      args.push("--tools", "", "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}');
     }
     const pluginSettings = buildClaudeExcludedPluginSettings();
     if (pluginSettings) args.push("--settings", pluginSettings);

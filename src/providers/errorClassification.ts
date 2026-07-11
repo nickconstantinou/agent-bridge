@@ -55,6 +55,9 @@ const MODEL_UNAVAILABLE_PATTERNS: readonly RegExp[] = [
   /model\s+"?[\w./:-]+"?\s+(?:not found|does not exist)/i,
   /unknown model\s+[\w./:-]+/i,
   /unsupported model\s+[\w./:-]+/i,
+  // claude CLI json mode reports an unknown/unauthorized model as a 404 with
+  // "There's an issue with the selected model (...). It may not exist or you may not have access to it."
+  /issue with the selected model/i,
 ];
 
 const TRANSIENT_PATTERNS: readonly RegExp[] = [

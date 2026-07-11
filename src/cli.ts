@@ -910,7 +910,10 @@ export async function runCli(command: string, args: string[], cwd: string, optio
   return new Promise((resolve, reject) => {
     const normalizedArgs = normalizeCliArgs(command, args);
     console.log(formatSpawnLog(command, normalizedArgs, cwd, options.chatId, options.stdin));
-    const child = spawn(command, normalizedArgs, { cwd, shell: false, env: buildChildEnv(options.contextEnv) });
+    // detached:true puts the child in its own process group so timeout kills
+    // can signal the whole subtree (process.kill(-pid)) instead of stranding
+    // grandchildren, mirroring runCliAsync.
+    const child = spawn(command, normalizedArgs, { cwd, shell: false, detached: true, env: buildChildEnv(options.contextEnv) });
     if (options.stdin) {
       child.stdin?.write(options.stdin);
     }
@@ -939,7 +942,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
       console.error(`[HARD TIMEOUT] CLI hard timeout after ${timeoutMs}ms - killing process\n${formatSpawnLog(command, args, cwd, options.chatId)}`);
       if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI hard timeout after ${timeoutMs}ms`, category: "timeout" }));
       doReject(new Error(`CLI hard timeout after ${timeoutMs}ms`));
-      killWithGrace(child, killGraceMs);
+      if (pid) killProcessTree(child, pid, killGraceMs); else killWithGrace(child, killGraceMs);
     }, timeoutMs);
 
     let plannerStallTriggered = false;
@@ -950,7 +953,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
           console.error(`[AGY STALL] Planner churn detected without usable output${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""}`);
           if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: "Agy stalled in planner loop without usable output", category: "timeout" }));
           doReject(new Error("Agy stalled in planner loop without usable output"));
-          killWithGrace(child, killGraceMs);
+          if (pid) killProcessTree(child, pid, killGraceMs); else killWithGrace(child, killGraceMs);
         })
       : null;
 
@@ -962,7 +965,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
         console.error(`[IDLE TIMEOUT] CLI idle timeout after ${idleTimeoutMs}ms with no stdout/stderr${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""}`);
         if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI idle timeout after ${idleTimeoutMs}ms`, category: "timeout" }));
         doReject(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`));
-        killWithGrace(child, killGraceMs);
+        if (pid) killProcessTree(child, pid, killGraceMs); else killWithGrace(child, killGraceMs);
       }, idleTimeoutMs);
     };
 

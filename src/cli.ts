@@ -142,6 +142,17 @@ function createAntigravityPlannerStallWatch(args: string[], stdoutRef: () => str
   }, intervalMs);
 }
 
+/**
+ * Removes a chat's process registration only if it still points at this child.
+ * A retry/fallback spawn may have re-registered the same chatId; a late close
+ * from the older child must not deregister the newer process.
+ */
+function deregisterProcess(chatId: number | string, child: ChildProcess): void {
+  if (activeProcesses.get(chatId) === child) {
+    activeProcesses.delete(chatId);
+  }
+}
+
 export function abortCliProcess(chatId: number | string): boolean {
   const child = activeProcesses.get(chatId);
   if (!child) return false;
@@ -975,7 +986,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
       clearTimeout(timer);
       if (plannerStallTimer) clearInterval(plannerStallTimer);
       if (idleTimer) clearTimeout(idleTimer);
-      if (options.chatId != null) activeProcesses.delete(options.chatId);
+      if (options.chatId != null) deregisterProcess(options.chatId, child);
       console.log(`[close]${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"} code=${code} signal=${signal ?? "none"}`);
 
       if (settled) return;
@@ -1001,7 +1012,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
       clearTimeout(timer);
       if (plannerStallTimer) clearInterval(plannerStallTimer);
       if (idleTimer) clearTimeout(idleTimer);
-      if (options.chatId != null) activeProcesses.delete(options.chatId);
+      if (options.chatId != null) deregisterProcess(options.chatId, child);
       if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: err.message, category: "cli" }));
       doReject(err);
     });
@@ -1122,7 +1133,7 @@ export async function runCliAsync(
       clearTimeout(timer);
       if (plannerStallTimer) clearInterval(plannerStallTimer);
       if (idleTimer) clearTimeout(idleTimer);
-      if (options.chatId != null) activeProcesses.delete(options.chatId);
+      if (options.chatId != null) deregisterProcess(options.chatId, child);
       console.log(`[close]${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"} code=${code} signal=${signal ?? "none"}`);
       if (settled) return;
 
@@ -1147,7 +1158,7 @@ export async function runCliAsync(
       clearTimeout(timer);
       if (plannerStallTimer) clearInterval(plannerStallTimer);
       if (idleTimer) clearTimeout(idleTimer);
-      if (options.chatId != null) activeProcesses.delete(options.chatId);
+      if (options.chatId != null) deregisterProcess(options.chatId, child);
       if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: err.message, category: "cli" }));
       doReject(err);
     });

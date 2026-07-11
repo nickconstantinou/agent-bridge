@@ -344,7 +344,7 @@ describe("BridgeEngine", () => {
         AGENT_BRIDGE_CHAT_KEY: "100",
       });
       expect(capturedContextEnv?.AGENT_BRIDGE_CONTEXT_COMMAND).toContain("agent-bridge-context");
-      expect(capturedContextEnv?.AGENT_BRIDGE_ADVISOR_COMMAND).toContain("agent-bridge-advisor");
+      expect(capturedContextEnv?.AGENT_BRIDGE_ADVISOR_COMMAND).toBeUndefined();
     });
   });
 

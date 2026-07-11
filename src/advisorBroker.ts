@@ -5,12 +5,14 @@
  * NEIGHBORS: src/advisor.ts, src/engine.ts, src/advisorCommand.ts
  */
 
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { chmodSync, unlinkSync } from "node:fs";
 import { createConnection, createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { requestAdvisor, formatAdvisorResult } from "./advisor.js";
+import { formatAdvisorResult } from "./advisor.js";
+import { AdvisorService } from "./advisorService.js";
+import { assertChainSupportsProfile, chainSupportsProfile } from "./advisorPolicy.js";
 import type { AdvisorConfig, AdvisorRequestMode } from "./advisorTypes.js";
 import type { BridgeDb } from "./db.js";
 import type { BotConfig, BotKind } from "./types.js";
@@ -19,7 +21,7 @@ import { parseAdvisorConfig } from "./advisorConfig.js";
 const CAPABILITY_TTL_MS = 10 * 60_000;
 const ALLOWED_MODES = new Set<AdvisorRequestMode>(["plan", "review", "debug", "risk", "decision"]);
 const LOCAL_SOCKET_PATHS = new Map<string, string>();
-type RunCli = Parameters<typeof requestAdvisor>[0]["runCli"];
+type RunCli = ConstructorParameters<typeof AdvisorService>[0]["runCli"];
 
 export interface AdvisorCapabilityBinding {
   chatKey: string;
@@ -49,6 +51,7 @@ export class AdvisorBroker implements AdvisorCapabilityIssuer {
   private readonly socketPath: string;
   private readonly capabilities = new Map<string, CapabilityRecord>();
   private readonly activeByScope = new Map<string, string>();
+  private readonly service: AdvisorService;
   private server: Server | null = null;
   private now = () => Date.now();
 
@@ -60,6 +63,7 @@ export class AdvisorBroker implements AdvisorCapabilityIssuer {
     socketDir?: string;
   }) {
     this.socketPath = join(deps.socketDir ?? tmpdir(), `agent-bridge-advisor-${this.brokerId}.sock`);
+    this.service = new AdvisorService({ db: deps.db, config: deps.config, bots: deps.bots, runCli: deps.runCli });
     LOCAL_SOCKET_PATHS.set(this.brokerId, this.socketPath);
   }
 
@@ -89,9 +93,7 @@ export class AdvisorBroker implements AdvisorCapabilityIssuer {
     if (!this.deps.config.enabled || this.deps.config.chain.length === 0) {
       throw new Error("Advisor disabled or misconfigured");
     }
-    if (this.deps.config.chain.some((target) => target.provider !== "claude")) {
-      throw new Error("Agent advisor requires a tool-free advisor provider; current supported provider: claude");
-    }
+    assertChainSupportsProfile(this.deps.config.chain, this.service.executionProfile);
     const scope = binding.chatKey;
     const previous = this.activeByScope.get(scope);
     if (previous) this.capabilities.delete(previous);
@@ -109,38 +111,44 @@ export class AdvisorBroker implements AdvisorCapabilityIssuer {
     LOCAL_SOCKET_PATHS.delete(this.brokerId);
   }
 
+  /**
+   * Untrusted entry point: authenticates the capability, reconstructs trusted
+   * scope, then resolves into the same execution path as manual and worker
+   * requests via AdvisorService.requestTrusted().
+   */
+  async requestWithCapability(input: { capability: string; mode: AdvisorRequestMode; task: string }): Promise<string> {
+    if (typeof input.capability !== "string") throw new Error("Invalid capability");
+    if (!ALLOWED_MODES.has(input.mode)) throw new Error("Invalid advisor mode");
+    if (typeof input.task !== "string" || !input.task.trim()) throw new Error("Advisor task is required");
+    const binding = this.capabilities.get(input.capability);
+    if (!binding) throw new Error("Invalid capability");
+    if (this.now() > binding.expiresAt) {
+      this.capabilities.delete(input.capability);
+      throw new Error("Expired capability");
+    }
+    const result = await this.service.requestTrusted({
+      origin: "manual",
+      scopeKey: binding.chatKey,
+      turnKey: binding.turnKey,
+      taskKey: binding.taskKey,
+      mode: input.mode,
+      task: input.task.trim(),
+      activeProvider: binding.cliKind,
+      activeModel: binding.activeModel,
+      cwd: binding.repoPath,
+    });
+    return formatAdvisorResult(result);
+  }
+
   private async handleWireRequest(raw: string): Promise<BrokerResponse> {
     try {
       const input = JSON.parse(raw) as Partial<BrokerRequest>;
-      if (typeof input.capability !== "string") throw new Error("Invalid capability");
-      if (!ALLOWED_MODES.has(input.mode as AdvisorRequestMode)) throw new Error("Invalid advisor mode");
-      if (typeof input.task !== "string" || !input.task.trim()) throw new Error("Advisor task is required");
-      const binding = this.capabilities.get(input.capability);
-      if (!binding) throw new Error("Invalid capability");
-      if (this.now() > binding.expiresAt) {
-        this.capabilities.delete(input.capability);
-        throw new Error("Expired capability");
-      }
-      const result = await requestAdvisor({
-        db: this.deps.db,
-        config: this.deps.config,
-        request: {
-          requestId: randomUUID(),
-          scopeKey: binding.chatKey,
-          turnKey: binding.turnKey,
-          taskKey: binding.taskKey,
-          origin: "manual",
-          mode: input.mode as AdvisorRequestMode,
-          task: input.task.trim(),
-          activeProvider: binding.cliKind,
-          activeModel: binding.activeModel,
-        },
-        bots: this.deps.bots,
-        runCli: this.deps.runCli,
-        cwd: binding.repoPath,
-        toolMode: "none",
+      const output = await this.requestWithCapability({
+        capability: input.capability as string,
+        mode: input.mode as AdvisorRequestMode,
+        task: input.task as string,
       });
-      return { ok: true, output: formatAdvisorResult(result) };
+      return { ok: true, output };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
@@ -177,7 +185,7 @@ export async function startConfiguredAdvisorBroker(deps: {
 }): Promise<AdvisorBroker | null> {
   const config = parseAdvisorConfig(deps.env ?? process.env);
   if (!config.enabled || config.chain.length === 0) return null;
-  if (config.chain.some((target) => target.provider !== "claude")) {
+  if (!chainSupportsProfile(config.chain, "tool_free")) {
     console.warn("[advisor] agent-direct access disabled: every target must support tool-free mode (currently claude only)");
     return null;
   }

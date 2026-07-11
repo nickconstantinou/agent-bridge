@@ -59,10 +59,16 @@ budgets, chain, executable, timeout, and database remain server-side. A new
 turn revokes the previous capability; unused capabilities expire after ten
 minutes. Provider children receive no advisor configuration or capability.
 
-Agent-direct providers must technically support tool-free execution. The
-current implementation enables Claude with `--tools ""` and fails closed for
-Codex, Agy, and Kimchi. A two-model agent chain may use two Claude models.
-User `/advisor` and worker checkpoints retain their existing provider support.
+Every advisor entry point — manual `/advisor`, worker checkpoints, and agent
+capability requests — resolves through one `AdvisorService` and its single
+private execution path, under one `tool_free` execution profile. `/advisor`
+and worker checkpoints call `requestTrusted()` in-process; the Unix-socket
+broker is only the untrusted cross-process adapter for CLI agents, and its
+`requestWithCapability()` merely authenticates a capability and reconstructs
+trusted scope before entering the same path. `tool_free` requires every chain
+target to support verified tool-disabled execution: Claude runs with
+`--tools ""`, while Codex, Agy, and Kimchi fail closed until a verified
+tool-disabled adapter exists. A two-model chain may use two Claude models.
 
 ## Flow
 

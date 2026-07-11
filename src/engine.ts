@@ -49,7 +49,8 @@ import { DEFAULT_CONTEXT_MAX_CHARS } from "./db.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { extractProjectMemorySidecars, storeProjectMemoryCandidate } from "./projectMemory.js";
 import { parseAdvisorConfig } from "./advisorConfig.js";
-import { formatAdvisorResult, requestAdvisor } from "./advisor.js";
+import { formatAdvisorResult } from "./advisor.js";
+import { AdvisorService } from "./advisorService.js";
 import type { AdvisorRequestMode, AdvisorResult } from "./advisorTypes.js";
 import type { AdvisorCapabilityIssuer } from "./advisorBroker.js";
 
@@ -408,21 +409,14 @@ export class BridgeEngine {
             const mode = commandResponse.action === "ask" ? "decision" : commandResponse.action;
             try {
               await this.sendText(chatId, { text: "Consulting frontier advisor...", message_thread_id: threadId });
-              const result = await requestAdvisor({
-                db: this.db,
-                config: parseAdvisorConfig(),
-                request: {
-                  requestId: randomUUID(),
-                  scopeKey: commandResponse.chatKey,
-                  turnKey: `${commandResponse.chatKey}:${primaryMessage.message_id}`,
-                  origin: "manual",
-                  mode,
-                  task: commandResponse.task,
-                  activeProvider: this.kind,
-                  activeModel: this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null,
-                },
-                bots: this._effectiveConfig().bots,
-                runCli: (command, args, cwd, options) => this.exec.runCli(command, args, cwd, options),
+              const result = await this._advisorService().requestTrusted({
+                origin: "manual",
+                scopeKey: commandResponse.chatKey,
+                turnKey: `${commandResponse.chatKey}:${primaryMessage.message_id}`,
+                mode,
+                task: commandResponse.task,
+                activeProvider: this.kind,
+                activeModel: this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null,
                 cwd: getCliWorkingDir(this._executionKind()),
               });
               await this.sendText(chatId, { text: formatAdvisorResult(result), message_thread_id: threadId });
@@ -549,18 +543,20 @@ export class BridgeEngine {
     task: string,
     approved = false,
   ): Promise<AdvisorResult> {
-    return requestAdvisor({
+    return this._advisorService().requestTrusted({
+      origin, scopeKey: chatKey, turnKey, approved, mode, task,
+      activeProvider: this.kind,
+      activeModel: this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null,
+      cwd: getCliWorkingDir(this._executionKind()),
+    });
+  }
+
+  private _advisorService(): AdvisorService {
+    return new AdvisorService({
       db: this.db,
       config: parseAdvisorConfig(),
-      request: {
-        requestId: randomUUID(),
-        scopeKey: chatKey, turnKey, origin, approved, mode, task,
-        activeProvider: this.kind,
-        activeModel: this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null,
-      },
       bots: this._effectiveConfig().bots,
       runCli: (command, args, cwd, options) => this.exec.runCli(command, args, cwd, options),
-      cwd: getCliWorkingDir(this._executionKind()),
     });
   }
 

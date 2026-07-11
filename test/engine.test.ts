@@ -864,6 +864,74 @@ describe("BridgeEngine", () => {
       expect(capturedPrompts[2]).toContain("first question");
       expect(client.sendMessage.mock.calls.at(-1)?.[0].text).toBe("Recovered command status error");
     });
+
+    it("retries a second fresh session when the first fresh retry also hits a recoverable cascade error", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+
+      const runCli = vi.fn().mockImplementation(async () => {
+        if (runCli.mock.calls.length === 1) return "***\nPrior answer";
+        if (runCli.mock.calls.length <= 3) {
+          throw new Error("error executing cascade step: CORTEX_STEP_TYPE_COMMAND_STATUS: command abc/task-18 not found");
+        }
+        return "***\nRecovered on second fresh retry";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        {
+          kind: "antigravity",
+          botConfig: { command: "agy", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      db.setSession("100", "antigravity", "stale-conversation");
+
+      await engine.handleMessages([makeMessage("first question")]);
+      await engine.handleMessages([makeMessage("second question")]);
+
+      expect(runCli).toHaveBeenCalledTimes(4);
+      expect(client.sendMessage.mock.calls.at(-1)?.[0].text).toBe("Recovered on second fresh retry");
+    });
+
+    it("surfaces a friendly error instead of the raw cascade error when all fresh retries fail", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+
+      const runCli = vi.fn().mockImplementation(async () => {
+        if (runCli.mock.calls.length === 1) return "***\nPrior answer";
+        throw new Error("error executing cascade step: CORTEX_STEP_TYPE_COMMAND_STATUS: command abc/task-18 not found");
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        {
+          kind: "antigravity",
+          botConfig: { command: "agy", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      db.setSession("100", "antigravity", "stale-conversation");
+
+      await engine.handleMessages([makeMessage("first question")]);
+      await engine.handleMessages([makeMessage("second question")]);
+
+      expect(runCli).toHaveBeenCalledTimes(4);
+      const finalText = client.sendMessage.mock.calls.at(-1)?.[0].text as string;
+      expect(finalText).not.toContain("CORTEX_STEP_TYPE");
+      expect(finalText).toContain("internal cascade error");
+      expect(finalText).toContain("resend");
+    });
   });
 
   describe("authorization", () => {

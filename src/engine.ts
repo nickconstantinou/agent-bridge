@@ -1197,18 +1197,38 @@ export class BridgeEngine {
     if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
     // Fresh-session retry: sessionId is null, so this always injects under handoff_once too.
     const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt, null);
-    const retryResult = await this._runFreshAntigravityRetry(
-      retryPrompt,
-      chatId,
-      chatKey,
-      outDir,
-      onProgress,
-      attachments,
-      mode,
-      eventContext,
-      runId,
-      collect,
-    );
+    const maxFreshAttempts = 2;
+    let retryResult: CliResult | null = null;
+    for (let attempt = 1; attempt <= maxFreshAttempts; attempt++) {
+      try {
+        retryResult = await this._runFreshAntigravityRetry(
+          retryPrompt,
+          chatId,
+          chatKey,
+          outDir,
+          onProgress,
+          attachments,
+          mode,
+          eventContext,
+          runId,
+          collect,
+        );
+        break;
+      } catch (retryError) {
+        const err = retryError instanceof Error ? retryError : new Error(String(retryError));
+        if (!(isAntigravityPrintTimeoutError(err) || isRecoverableAntigravityExecutionError(err))) throw err;
+        console.warn(`[${this.kind}] fresh-session retry ${attempt}/${maxFreshAttempts} failed with recoverable Agy error`, err.message);
+        if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
+        if (attempt === maxFreshAttempts) {
+          // Agy flake (e.g. cascade COMMAND_STATUS losing its own background
+          // command) persisted across fresh sessions — surface a clean message
+          // instead of the raw cascade error. Keep it colon-free so
+          // toUserMessage does not truncate it.
+          throw new Error("Agy failed repeatedly with an internal cascade error. The session was reset — please resend your message.");
+        }
+      }
+    }
+    if (!retryResult) throw new Error("Agy fresh-session retry produced no result.");
     retryResult.text = this._applyMemorySidecars(chatKey, retryResult.text);
     this._rememberTurn(chatKey, promptForMemory(prompt), retryResult.text);
     if (this.hooks.onAfterExecute) {

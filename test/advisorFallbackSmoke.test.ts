@@ -1,6 +1,6 @@
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { runIsolatedAdvisorFallbackSmoke } from "../scripts/smoke-advisor-fallback.js";
 
@@ -62,5 +62,19 @@ describe("isolated advisor fallback smoke", () => {
     expect(result.forbiddenEnvKeys).toEqual([]);
     expect(result.repoClean).toBe(true);
     expect(result.canaryUnchanged).toBe(true);
+  });
+
+  it("resolves a bare Codex command through PATH", async () => {
+    const command = fakeCodex();
+    const result = await runIsolatedAdvisorFallbackSmoke({
+      isolated: true,
+      codexCommand: "codex",
+      inheritedEnv: {
+        PATH: `${dirname(command)}:${process.env.PATH}`,
+      },
+    });
+
+    expect(result.selectedProvider).toBe("codex");
+    expect(result.attempts).toHaveLength(2);
   });
 });

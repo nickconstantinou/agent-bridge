@@ -2320,11 +2320,7 @@ describe("BridgeEngine", () => {
 
       await engine.handleMessages([makeMessage("hello")]);
 
-      expect(capturedContextEnv).toMatchObject({
-        AGENT_BRIDGE_ADVISOR_AVAILABLE: "1",
-        AGENT_BRIDGE_CHAT_KEY: "100",
-      });
-      expect(capturedContextEnv?.AGENT_BRIDGE_ADVISOR_COMMAND).toContain("agent-bridge-advisor");
+      expect(capturedContextEnv).toBeUndefined();
       expect(capturedPrompt).not.toContain("[Agent Bridge context]");
     });
 
@@ -2333,8 +2329,10 @@ describe("BridgeEngine", () => {
       process.env.BRIDGE_ADVISOR_CHAIN = "claude:fable-5,codex:gpt-5.6-luna";
       const { BridgeEngine } = await import("../src/engine.js");
       let capturedPrompt = "";
-      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+      let capturedContextEnv: Record<string, string> | undefined;
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[], _cwd: string, options: any) => {
         capturedPrompt = args[args.length - 1];
+        capturedContextEnv = options.contextEnv;
         return "done";
       });
       const engine = new BridgeEngine(
@@ -2346,6 +2344,9 @@ describe("BridgeEngine", () => {
           asyncEnabled: false,
           pollIntervalMs: 1000,
           fullConfig: makeFullConfig(dbPath),
+          advisorCapabilities: {
+            issue: vi.fn().mockReturnValue("broker.capability"),
+          },
         },
         db,
         makeMockClient(),
@@ -2358,6 +2359,11 @@ describe("BridgeEngine", () => {
       expect(capturedPrompt).toContain("$AGENT_BRIDGE_ADVISOR_COMMAND");
       expect(capturedPrompt).toContain("--mode review --task");
       expect(capturedPrompt).toContain("non-authoritative");
+      expect(capturedPrompt).not.toContain("BRIDGE_ADVISOR_CHAIN");
+      expect(capturedContextEnv).toEqual({
+        AGENT_BRIDGE_ADVISOR_COMMAND: expect.stringContaining("agent-bridge-advisor"),
+        AGENT_BRIDGE_ADVISOR_CAPABILITY: "broker.capability",
+      });
     });
   });
 

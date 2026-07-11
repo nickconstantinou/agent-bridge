@@ -768,20 +768,30 @@ export class BridgeEngine {
     const hasContext = status.turnCount > 0 || !!status.latestSummaryAt || memoryCount > 0;
     const commandPath = join(process.cwd(), "bin", "agent-bridge-context");
     const advisorCommandPath = join(process.cwd(), "bin", "agent-bridge-advisor");
+    const advisorEnabled = parseAdvisorConfig().enabled;
     const memoryHint = memoryCount > 0 ? [
       '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory',
       '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-query "<specific query>"',
       '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-add-json \'<json>\'',
     ] : [];
-    return {
-      prompt: hasContext ? [
+    const contextPrompt = hasContext ? [
         "[Agent Bridge context]",
         "More conversation history is available if needed:",
         '"$AGENT_BRIDGE_CONTEXT_COMMAND" --summary',
         '"$AGENT_BRIDGE_CONTEXT_COMMAND" --recent 20',
         ...memoryHint,
         "",
-      ].join("\n") : "",
+      ].join("\n") : "";
+    const advisorPrompt = advisorEnabled ? [
+      "[Frontier advisor available]",
+      "For a bounded, non-authoritative second opinion, run:",
+      '"$AGENT_BRIDGE_ADVISOR_COMMAND" --mode review --task "<question>"',
+      "Modes: plan, review, debug, risk, decision.",
+      "Validate its advice independently; it cannot execute or approve actions.",
+      "",
+    ].join("\n") : "";
+    return {
+      prompt: `${contextPrompt}${advisorPrompt}`,
       env: {
         ...(hasContext ? {
           AGENT_BRIDGE_CONTEXT_AVAILABLE: "1",

@@ -151,7 +151,7 @@ The response is prepended with a warning notice when a fallback is used.
 
 > **Antigravity note**: Agy does not accept a `--model` CLI flag. Model selection (including fallback) is applied by mapping the chosen model ID (e.g. `gemini-3.5-flash-high`) to its display label (e.g. `Gemini 3.5 Flash (High)`) and writing that value into `~/.gemini/antigravity-cli/settings.json` before the process is spawned. Resetting to default removes the `model` key so Agy falls back to its own default.
 
-### 4.4b Agent Context Helper
+### 4.4b Agent Context and Advisor Helpers
 
 CLI agents spawned by the bridge receive three environment variables injected by `buildCliInvocation`:
 
@@ -163,6 +163,9 @@ CLI agents spawned by the bridge receive three environment variables injected by
 | `AGENT_BRIDGE_CHAT_KEY` | Current chat key (`chatId:threadId`) |
 | `AGENT_BRIDGE_CLI_KIND` | Current CLI kind (`codex`, `claude`, or `antigravity`) |
 | `AGENT_BRIDGE_REPO_PATH` | Workspace path for memory provenance |
+| `AGENT_BRIDGE_ADVISOR_AVAILABLE` | `"1"` — signals the agent advisor command is installed |
+| `AGENT_BRIDGE_ADVISOR_COMMAND` | Absolute path to `bin/agent-bridge-advisor` |
+| `AGENT_BRIDGE_ADVISOR_TURN_KEY` | Opaque per-turn key used for advisor budgets |
 
 The `agent-bridge-context` binary (in `bin/`) opens the DB read-only for
 inspection commands and outputs:
@@ -174,6 +177,17 @@ inspection commands and outputs:
 For agent-driven writes, the helper also supports:
 - `agent-bridge-context --memory-add-json '<json>'` — stores a validated project
   memory candidate with chat, CLI, latest-turn, repo, and confidence provenance
+
+When `BRIDGE_ADVISOR_ENABLED=true`, agents are prompted to request a bounded
+second opinion with:
+
+```bash
+"$AGENT_BRIDGE_ADVISOR_COMMAND" --mode review --task "<question>"
+```
+
+The advisor helper supports `plan`, `review`, `debug`, `risk`, and `decision`.
+It reuses the configured two-target chain, timeouts, redaction, structured
+output validation, budgets, and audit tables. It cannot execute or approve.
 
 Agents may also emit a hidden post-turn sidecar in the successful response:
 

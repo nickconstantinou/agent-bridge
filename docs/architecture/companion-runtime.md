@@ -32,7 +32,8 @@ The optional advisor lets a standard executor consult up to two ordered
 frontier provider/model targets without changing its active provider or native
 session. It is disabled by default.
 
-- `manual`: only `/advisor ask|review|plan|debug` invokes the advisor.
+- `manual`: explicit `/advisor ask|review|plan|debug` commands and direct agent
+  calls through `AGENT_BRIDGE_ADVISOR_COMMAND` invoke the advisor.
 - `suggest`: complex, risky, or stuck prompts pause for explicit approval.
 - `auto`: those prompts consult the advisor and fold structured guidance into
   the executor prompt. Operational advisor failure is fail-open.
@@ -42,6 +43,18 @@ timeout, transient failure, or invalid structured output. A valid opinion is
 never retried merely because the executor disagrees. The advisor is trusted for
 reasoning; merge, deploy, approval, deletion, final-message, and session
 authority remain with Agent Bridge and its existing gates.
+
+Bridge-spawned CLI agents receive `AGENT_BRIDGE_ADVISOR_COMMAND` and a
+turn-scoped budget key. When enabled, the prompt advertises this command:
+
+```bash
+"$AGENT_BRIDGE_ADVISOR_COMMAND" --mode review --task "Review this plan"
+```
+
+Supported agent modes are `plan`, `review`, `debug`, `risk`, and `decision`.
+The helper binds calls to the active chat and workspace, uses the same ordered
+fallback chain and structured-output parser as `/advisor`, and writes the same
+logical-call and per-attempt audit records. Advice remains non-authoritative.
 
 ## Flow
 

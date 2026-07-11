@@ -660,3 +660,20 @@ describe("sendMessageWithProgress Option 1 validation", () => {
     warnSpy.mockRestore();
   });
 });
+
+describe("typing indicator throttling", () => {
+  it("keeps sendChatAction bounded when antigravity emits many rapid progress chunks", async () => {
+    const client = createMockClient();
+    const chatId = 321;
+    const execution = async (onProgress: (t: string) => void) => {
+      for (let i = 0; i < 50; i += 1) onProgress(`chunk-${i}\n`);
+      return { text: "Final answer", sessionId: null } as CliResult;
+    };
+
+    await sendMessageWithProgress({ client, kind: "antigravity", chatId, execution });
+
+    // One initial typing action plus at most interval-driven refreshes —
+    // never one call per stdout chunk.
+    expect((client.sendChatAction as any).mock.calls.length).toBeLessThanOrEqual(3);
+  });
+});

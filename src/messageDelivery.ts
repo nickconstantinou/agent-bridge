@@ -222,7 +222,9 @@ export async function sendMessageWithProgress({
   let currentText = "";
   let lastProgressEditMs = 0;
   let lastSentPreviewText = "";
+  let lastTypingSentMs = Date.now();
   const PROGRESS_EDIT_INTERVAL_MS = 5_000;
+  const TYPING_REFRESH_INTERVAL_MS = 4_000;
   const originalOnProgress = onProgress;
 
   const wrappedOnProgress = (chunk: string) => {
@@ -230,7 +232,14 @@ export async function sendMessageWithProgress({
     originalOnProgress?.(chunk);
 
     if (streamingEnabled) {
-      sendTyping();
+      // Throttle typing refreshes: Telegram's typing status lasts ~5s and the
+      // background typingInterval already refreshes it, so per-chunk sends
+      // would only spam the API on chatty streams.
+      const nowTyping = Date.now();
+      if (nowTyping - lastTypingSentMs >= TYPING_REFRESH_INTERVAL_MS) {
+        lastTypingSentMs = nowTyping;
+        void sendTyping();
+      }
       if (!showProgressNarration) return;
       const now = Date.now();
       if (now - lastProgressEditMs >= PROGRESS_EDIT_INTERVAL_MS) {

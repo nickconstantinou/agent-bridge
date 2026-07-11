@@ -317,6 +317,7 @@ export function buildCliInvocation({
     if (sessionId) args.push("--conversation", sessionId);
     if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
     if (logFile) args.push("--log-file", logFile);
+    if (toolMode === "none") args.push("--sandbox");
     const timeouts = resolveTimeoutsForKind("antigravity");
     const timeoutSeconds = Math.floor(timeouts.cliTimeoutMs / 1000);
     args.push("--print-timeout", `${timeoutSeconds}s`);

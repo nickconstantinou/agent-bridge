@@ -90,6 +90,19 @@ describe("CLI Runner", () => {
     expect(claude.args).toEqual(expect.arrayContaining(["--tools", "", "--disable-slash-commands", "--strict-mcp-config"]));
     // The real CLI rejects a bare {}: --mcp-config must be {"mcpServers":{}}.
     expect(claude.args[claude.args.indexOf("--mcp-config") + 1]).toBe('{"mcpServers":{}}');
+
+    const agy = buildCliInvocation({
+      bot: "antigravity", prompt: "advise", sessionId: null, command: "agy",
+      model: "gemini-3.5-flash-high", outputFormat: "json", toolMode: "none",
+    });
+    expect(agy.args).toContain("--sandbox");
+
+    const codex = buildCliInvocation({
+      bot: "codex", prompt: "advise", sessionId: null, command: "codex",
+      model: "gpt-5.6-luna", outputFormat: "json", toolMode: "none",
+    });
+    expect(codex.args).toEqual(expect.arrayContaining(["--disable", "shell_tool", "--disable", "browser_use"]));
+
     expect(() => buildCliInvocation({
       bot: "kimchi", prompt: "advise", sessionId: null, command: "kimchi",
       model: "some-model", outputFormat: "json", toolMode: "none",

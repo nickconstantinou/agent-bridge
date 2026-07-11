@@ -73,6 +73,8 @@ describe("BridgeEngine", () => {
     delete process.env.BRIDGE_CONTEXT_INJECTION_POLICY;
     delete process.env.BRIDGE_PRESEED_COMPACT_MODE;
     delete process.env.BRIDGE_PRESEED_COMPACT_CHARS;
+    delete process.env.BRIDGE_ADVISOR_ENABLED;
+    delete process.env.BRIDGE_ADVISOR_CHAIN;
     db.close();
     try { rmSync(dbPath); } catch {}
   });
@@ -2324,6 +2326,38 @@ describe("BridgeEngine", () => {
       });
       expect(capturedContextEnv?.AGENT_BRIDGE_ADVISOR_COMMAND).toContain("agent-bridge-advisor");
       expect(capturedPrompt).not.toContain("[Agent Bridge context]");
+    });
+
+    it("tells the agent how to call the advisor when it is enabled", async () => {
+      process.env.BRIDGE_ADVISOR_ENABLED = "true";
+      process.env.BRIDGE_ADVISOR_CHAIN = "claude:fable-5,codex:gpt-5.6-luna";
+      const { BridgeEngine } = await import("../src/engine.js");
+      let capturedPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompt = args[args.length - 1];
+        return "done";
+      });
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          fullConfig: makeFullConfig(dbPath),
+        },
+        db,
+        makeMockClient(),
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("review this plan")]);
+
+      expect(capturedPrompt).toContain("[Frontier advisor available]");
+      expect(capturedPrompt).toContain("$AGENT_BRIDGE_ADVISOR_COMMAND");
+      expect(capturedPrompt).toContain("--mode review --task");
+      expect(capturedPrompt).toContain("non-authoritative");
     });
   });
 

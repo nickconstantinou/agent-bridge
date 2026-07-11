@@ -3,7 +3,7 @@ import type { BotConfig, BotKind } from "./types.js";
 import { buildCliInvocation, parseCliResult, setAntigravityModel } from "./cli.js";
 import { classifyProviderError, isFallbackEligibleProviderError } from "./providers/errorClassification.js";
 import type { ProviderId } from "./providers/types.js";
-import { shouldAllowAdvisorCall } from "./advisorPolicy.js";
+import { assertChainSupportsProfile, shouldAllowAdvisorCall, type AdvisorExecutionProfile } from "./advisorPolicy.js";
 import { buildAdvisorContext, buildAdvisorPrompt, parseAdvisorOutput } from "./advisorPrompt.js";
 import type { AdvisorConfig, AdvisorRequest, AdvisorResult } from "./advisorTypes.js";
 
@@ -38,14 +38,21 @@ function parseRawResult(provider: ProviderId, raw: string) {
   }
 }
 
-export async function requestAdvisor(deps: {
+/**
+ * Single private execution path for every advisor entry point (manual /advisor,
+ * worker checkpoints, agent capability requests). Only AdvisorService may call
+ * this; all callers share the same policy, budget, tool-free profile,
+ * fallback, and audit behaviour.
+ */
+export async function executeAdvisorRequest(deps: {
   db: BridgeDb; config: AdvisorConfig; request: AdvisorRequest;
   bots: Partial<Record<BotKind, Pick<BotConfig, "command" | "modelPreference">>>;
-  runCli: RunCli; cwd: string;
+  runCli: RunCli; cwd: string; executionProfile: AdvisorExecutionProfile;
 }): Promise<AdvisorResult> {
   const { db, config, request, bots, runCli, cwd } = deps;
   if (!config.enabled) throw new Error("Advisor disabled");
   if (config.chain.length === 0) throw new Error("Advisor unavailable: no configured targets");
+  assertChainSupportsProfile(config.chain, deps.executionProfile);
   if (!shouldAllowAdvisorCall(config.mode, request.origin, request.approved === true)) throw new Error("Advisor call denied by policy");
   const context = buildAdvisorContext(db, { scopeKey: request.scopeKey, task: request.task, maxChars: config.contextMaxChars, evidence: request.evidence });
   if (!db.reserveAdvisorCall({
@@ -65,8 +72,8 @@ export async function requestAdvisor(deps: {
     try {
       if (!botConfig?.command) throw new Error(`Advisor provider unavailable: ${target.provider}`);
       if (target.provider === "agy") setAntigravityModel(target.model);
-      const invocation = buildCliInvocation({ bot, prompt, sessionId: null, command: botConfig.command, model: target.model, executionMode: "safe", outputFormat: "json" });
-      const raw = await withTimeout(runCli(invocation.command, invocation.args, cwd, { timeoutMs: config.timeoutMs }), config.timeoutMs);
+      const invocation = buildCliInvocation({ bot, prompt, sessionId: null, command: botConfig.command, model: target.model, executionMode: "safe", outputFormat: "json", toolMode: "none" });
+      const raw = await withTimeout(runCli(invocation.command, invocation.args, cwd, { timeoutMs: config.timeoutMs, advisorChild: true }), config.timeoutMs);
       const parsed = parseRawResult(target.provider, raw);
       db.addAdvisorAttempt({ requestId: request.requestId, ordinal: index + 1, provider: target.provider, model: target.model, status: "succeeded", durationMs: Date.now() - startedAt });
       db.completeAdvisorCall(request.requestId, target.provider, target.model, parsed.confidence);

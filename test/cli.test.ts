@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
-import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage, buildCliInvocation, buildSafeChildEnv, resolveKimchiSessionId } from "../src/cli.js";
+import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage, buildCliInvocation, buildSafeChildEnv, buildAdvisorChildEnv, resolveKimchiSessionId } from "../src/cli.js";
 import { isBridgeCommand, handleCommand } from "../src/commands.js";
 import { openDb } from "../src/db.js";
 import type { BridgeConfig } from "../src/types.js";
@@ -60,6 +60,38 @@ describe("CLI Runner", () => {
     expect(env.AGENT_BRIDGE_CONTEXT_AVAILABLE).toBe("1");
     expect(env.AGENT_BRIDGE_CONTEXT_COMMAND).toBe("agent-bridge-context");
     expect(env.AGENT_BRIDGE_CHAT_KEY).toBe("chat:1");
+  });
+
+  it("buildAdvisorChildEnv strips advisor capability and trusted configuration", () => {
+    const env = buildAdvisorChildEnv({
+      HOME: "/home/test",
+      PATH: "/bin",
+      ANTHROPIC_API_KEY: "provider-auth",
+      AGENT_BRIDGE_ADVISOR_CAPABILITY: "capability",
+      AGENT_BRIDGE_ADVISOR_COMMAND: "command",
+      BRIDGE_ADVISOR_ENABLED: "true",
+      BRIDGE_ADVISOR_CHAIN: "claude:model",
+      TELEGRAM_BOT_TOKEN: "telegram-secret",
+    });
+    expect(env.HOME).toBe("/home/test");
+    expect(env.ANTHROPIC_API_KEY).toBe("provider-auth");
+    expect(env.AGENT_BRIDGE_ADVISOR_CAPABILITY).toBeUndefined();
+    expect(env.AGENT_BRIDGE_ADVISOR_COMMAND).toBeUndefined();
+    expect(env.BRIDGE_ADVISOR_ENABLED).toBeUndefined();
+    expect(env.BRIDGE_ADVISOR_CHAIN).toBeUndefined();
+    expect(env.TELEGRAM_BOT_TOKEN).toBeUndefined();
+  });
+
+  it("technically disables Claude tools and rejects unsupported tool-free providers", () => {
+    const claude = buildCliInvocation({
+      bot: "claude", prompt: "advise", sessionId: null, command: "claude",
+      model: "claude-fable-5", outputFormat: "json", toolMode: "none",
+    });
+    expect(claude.args).toEqual(expect.arrayContaining(["--tools", "", "--disable-slash-commands", "--strict-mcp-config"]));
+    expect(() => buildCliInvocation({
+      bot: "codex", prompt: "advise", sessionId: null, command: "codex",
+      model: "gpt-5.6-luna", outputFormat: "json", toolMode: "none",
+    })).toThrow(/tool-free mode.*codex/i);
   });
 
   it("passes contextEnv into child processes", async () => {

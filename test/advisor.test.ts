@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { parseAdvisorConfig } from "../src/advisorConfig.js";
-import { requestAdvisor } from "../src/advisor.js";
+import { executeAdvisorRequest } from "../src/advisor.js";
 import { buildAdvisorContext, parseAdvisorOutput } from "../src/advisorPrompt.js";
 import { shouldAllowAdvisorCall } from "../src/advisorPolicy.js";
 
@@ -77,11 +77,11 @@ describe("advisor request execution", () => {
         advice_md: "Proceed with tests.", risks: [], suggested_next_steps: ["Run suite"], confidence: "high",
       }));
 
-    const result = await requestAdvisor({
+    const result = await executeAdvisorRequest({
       db,
       config: parseAdvisorConfig({
         BRIDGE_ADVISOR_ENABLED: "true",
-        BRIDGE_ADVISOR_CHAIN: "claude:fable-5,codex:gpt-5.6-luna",
+        BRIDGE_ADVISOR_CHAIN: "claude:fable-5,claude:opus-4-8",
       }),
       request: {
         requestId: "req-1", scopeKey: "chat", turnKey: "chat:10", origin: "manual",
@@ -89,13 +89,14 @@ describe("advisor request execution", () => {
       },
       bots: {
         claude: { command: "claude", modelPreference: [] },
-        codex: { command: "codex", modelPreference: [] },
       },
       runCli,
       cwd: "/repo",
+      executionProfile: "tool_free",
     });
 
-    expect(result.provider).toBe("codex");
+    expect(result.provider).toBe("claude");
+    expect(result.model).toBe("opus-4-8");
     expect(runCli).toHaveBeenCalledTimes(2);
     expect(db.getSession("chat", "codex")).toBe("executor-session");
     expect(db.getAdvisorAttempts("req-1")).toHaveLength(2);
@@ -106,21 +107,22 @@ describe("advisor request execution", () => {
     const db = openDb(":memory:");
     const config = parseAdvisorConfig({
       BRIDGE_ADVISOR_ENABLED: "true",
-      BRIDGE_ADVISOR_CHAIN: "codex:gpt-5.6-luna",
+      BRIDGE_ADVISOR_CHAIN: "claude:fable-5",
       BRIDGE_ADVISOR_MAX_CALLS_PER_TURN: "1",
     });
     const runCli = vi.fn().mockResolvedValue(JSON.stringify({
       advice_md: "Advice", risks: [], suggested_next_steps: [], confidence: "medium",
     }));
     const base = {
-      db, config, bots: { codex: { command: "codex", modelPreference: [] } }, runCli, cwd: "/repo",
+      db, config, bots: { claude: { command: "claude", modelPreference: [] } }, runCli, cwd: "/repo",
+      executionProfile: "tool_free" as const,
     };
 
-    await requestAdvisor({ ...base, request: {
+    await executeAdvisorRequest({ ...base, request: {
       requestId: "req-a", scopeKey: "chat", turnKey: "turn", origin: "manual" as const,
       mode: "review" as const, task: "First", activeProvider: "claude", activeModel: null,
     }});
-    await expect(requestAdvisor({ ...base, request: {
+    await expect(executeAdvisorRequest({ ...base, request: {
       requestId: "req-b", scopeKey: "chat", turnKey: "turn", origin: "manual" as const,
       mode: "review" as const, task: "Second", activeProvider: "claude", activeModel: null,
     }})).rejects.toThrow(/budget exhausted/i);
@@ -136,22 +138,23 @@ describe("advisor request execution", () => {
       .mockResolvedValueOnce(JSON.stringify({
         advice_md: "Recovered advice", risks: [], suggested_next_steps: [], confidence: "medium",
       }));
-    const result = await requestAdvisor({
+    const result = await executeAdvisorRequest({
       db,
-      config: parseAdvisorConfig({ BRIDGE_ADVISOR_ENABLED: "true", BRIDGE_ADVISOR_CHAIN: "claude:fable-5,codex:gpt-5.6-luna" }),
+      config: parseAdvisorConfig({ BRIDGE_ADVISOR_ENABLED: "true", BRIDGE_ADVISOR_CHAIN: "claude:fable-5,claude:opus-4-8" }),
       request: {
         requestId: "invalid-fallback", scopeKey: "chat", turnKey: "invalid-turn", origin: "manual",
         mode: "review", task: "Review", activeProvider: "codex", activeModel: null,
       },
       bots: {
         claude: { command: "claude", modelPreference: [] },
-        codex: { command: "codex", modelPreference: [] },
       },
       runCli,
       cwd: "/repo",
+      executionProfile: "tool_free",
     });
     expect(result.adviceMd).toBe("Recovered advice");
-    expect(result.provider).toBe("codex");
+    expect(result.provider).toBe("claude");
+    expect(result.model).toBe("opus-4-8");
     db.close();
   });
 });

@@ -8,7 +8,6 @@
  */
 
 import dotenv from "dotenv";
-import { randomUUID } from "node:crypto";
 import {
   getBridgeProjectDir,
   openDb,
@@ -56,7 +55,8 @@ import { workerEffortForTask } from "./effort.js";
 import { sendApprovalHtmlPack } from "./approvalHtml.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 import { parseAdvisorConfig } from "./advisorConfig.js";
-import { requestAdvisor } from "./advisor.js";
+import { startConfiguredAdvisorBroker } from "./advisorBroker.js";
+import { AdvisorService } from "./advisorService.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env.worker",
@@ -111,6 +111,7 @@ const config: BridgeConfig = {
   dbPath,
   bots: loadBotsConfig(process.env),
 };
+const agentAdvisorBroker = await startConfiguredAdvisorBroker({ db, bots: config.bots, runCli });
 
 // ── Build one engine per CLI kind ─────────────────────────────────────────────
 
@@ -129,6 +130,7 @@ const engines = Object.fromEntries(
           asyncEnabled,
           pollIntervalMs,
           fullConfig: config,
+          advisorCapabilities: agentAdvisorBroker ?? undefined,
           hooks: {
             onCapacityExhausted: async (chatKey: string) => {
               exhaustedChats.add(chatKey);
@@ -190,22 +192,16 @@ const advisorCheckpoint = advisorConfig.enabled ? async (input: {
   diffSummary?: string;
   testOutput?: string;
 }): Promise<string> => {
-  const result = await requestAdvisor({
-    db,
-    config: advisorConfig,
-    request: {
-      requestId: randomUUID(),
-      scopeKey: `worker:${input.taskKey}`,
-      taskKey: input.taskKey,
-      origin: "worker",
-      mode: input.mode,
-      task: input.task,
-      activeProvider: codeCliChain[0] ?? "codex",
-      activeModel: null,
-      evidence: { diffSummary: input.diffSummary, testOutput: input.testOutput },
-    },
-    bots: config.bots,
-    runCli,
+  const advisorService = new AdvisorService({ db, config: advisorConfig, bots: config.bots, runCli });
+  const result = await advisorService.requestTrusted({
+    origin: "worker",
+    scopeKey: `worker:${input.taskKey}`,
+    taskKey: input.taskKey,
+    mode: input.mode,
+    task: input.task,
+    activeProvider: codeCliChain[0] ?? "codex",
+    activeModel: null,
+    evidence: { diffSummary: input.diffSummary, testOutput: input.testOutput },
     cwd: input.repoPath,
   });
   return [result.adviceMd, ...result.risks.map((risk) => `Risk: ${risk}`), ...result.suggestedNextSteps.map((step) => `Next: ${step}`)].join("\n");

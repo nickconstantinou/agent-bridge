@@ -32,7 +32,8 @@ The optional advisor lets a standard executor consult up to two ordered
 frontier provider/model targets without changing its active provider or native
 session. It is disabled by default.
 
-- `manual`: only `/advisor ask|review|plan|debug` invokes the advisor.
+- `manual`: explicit `/advisor ask|review|plan|debug` commands and direct agent
+  calls through `AGENT_BRIDGE_ADVISOR_COMMAND` invoke the advisor.
 - `suggest`: complex, risky, or stuck prompts pause for explicit approval.
 - `auto`: those prompts consult the advisor and fold structured guidance into
   the executor prompt. Operational advisor failure is fail-open.
@@ -42,6 +43,32 @@ timeout, transient failure, or invalid structured output. A valid opinion is
 never retried merely because the executor disagrees. The advisor is trusted for
 reasoning; merge, deploy, approval, deletion, final-message, and session
 authority remain with Agent Bridge and its existing gates.
+
+When agent-direct access is validly configured, bridge-spawned CLI agents
+receive only `AGENT_BRIDGE_ADVISOR_COMMAND` and an opaque, expiring
+`AGENT_BRIDGE_ADVISOR_CAPABILITY`. The prompt advertises this command:
+
+```bash
+"$AGENT_BRIDGE_ADVISOR_COMMAND" --mode review --task "Review this plan"
+```
+
+Supported agent modes are `plan`, `review`, `debug`, `risk`, and `decision`.
+The helper sends only capability, mode, and task to a bridge-owned Unix-socket
+broker. Scope, CLI identity, turn/task keys, repository path, enablement,
+budgets, chain, executable, timeout, and database remain server-side. A new
+turn revokes the previous capability; unused capabilities expire after ten
+minutes. Provider children receive no advisor configuration or capability.
+
+Every advisor entry point — manual `/advisor`, worker checkpoints, and agent
+capability requests — resolves through one `AdvisorService` and its single
+private execution path, under one `tool_free` execution profile. `/advisor`
+and worker checkpoints call `requestTrusted()` in-process; the Unix-socket
+broker is only the untrusted cross-process adapter for CLI agents, and its
+`requestWithCapability()` merely authenticates a capability and reconstructs
+trusted scope before entering the same path. `tool_free` requires every chain
+target to support verified tool-disabled execution: Claude runs with
+`--tools ""`, while Codex, Agy, and Kimchi fail closed until a verified
+tool-disabled adapter exists. A two-model chain may use two Claude models.
 
 ## Flow
 

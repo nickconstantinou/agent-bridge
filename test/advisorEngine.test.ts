@@ -24,7 +24,7 @@ const config = (): BridgeConfig => ({
 describe("BridgeEngine advisor command", () => {
   beforeEach(() => {
     process.env.BRIDGE_ADVISOR_ENABLED = "true";
-    process.env.BRIDGE_ADVISOR_CHAIN = "claude:fable-5,codex:gpt-5.6-luna";
+    process.env.BRIDGE_ADVISOR_CHAIN = "claude:fable-5,claude:opus-4-8";
   });
   afterEach(() => {
     delete process.env.BRIDGE_ADVISOR_ENABLED;

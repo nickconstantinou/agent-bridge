@@ -49,8 +49,10 @@ import { DEFAULT_CONTEXT_MAX_CHARS } from "./db.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { extractProjectMemorySidecars, storeProjectMemoryCandidate } from "./projectMemory.js";
 import { parseAdvisorConfig } from "./advisorConfig.js";
-import { formatAdvisorResult, requestAdvisor } from "./advisor.js";
+import { formatAdvisorResult } from "./advisor.js";
+import { AdvisorService } from "./advisorService.js";
 import type { AdvisorRequestMode, AdvisorResult } from "./advisorTypes.js";
+import type { AdvisorCapabilityIssuer } from "./advisorBroker.js";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -92,6 +94,8 @@ export interface BridgeEngineOptions {
   hooks?: BridgeEngineHooks;
   /** Compact summary profile: "engineering" (default) for coding-agent bots, "companion" for the interactive/companion bot. */
   compactProfile?: CompactProfile;
+  /** Bridge-owned issuer; absent when advisor is disabled or misconfigured. */
+  advisorCapabilities?: AdvisorCapabilityIssuer;
 }
 
 /** Injected execution functions — replace real CLI for unit tests. */
@@ -405,21 +409,14 @@ export class BridgeEngine {
             const mode = commandResponse.action === "ask" ? "decision" : commandResponse.action;
             try {
               await this.sendText(chatId, { text: "Consulting frontier advisor...", message_thread_id: threadId });
-              const result = await requestAdvisor({
-                db: this.db,
-                config: parseAdvisorConfig(),
-                request: {
-                  requestId: randomUUID(),
-                  scopeKey: commandResponse.chatKey,
-                  turnKey: `${commandResponse.chatKey}:${primaryMessage.message_id}`,
-                  origin: "manual",
-                  mode,
-                  task: commandResponse.task,
-                  activeProvider: this.kind,
-                  activeModel: this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null,
-                },
-                bots: this._effectiveConfig().bots,
-                runCli: (command, args, cwd, options) => this.exec.runCli(command, args, cwd, options),
+              const result = await this._advisorService().requestTrusted({
+                origin: "manual",
+                scopeKey: commandResponse.chatKey,
+                turnKey: `${commandResponse.chatKey}:${primaryMessage.message_id}`,
+                mode,
+                task: commandResponse.task,
+                activeProvider: this.kind,
+                activeModel: this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null,
                 cwd: getCliWorkingDir(this._executionKind()),
               });
               await this.sendText(chatId, { text: formatAdvisorResult(result), message_thread_id: threadId });
@@ -546,18 +543,20 @@ export class BridgeEngine {
     task: string,
     approved = false,
   ): Promise<AdvisorResult> {
-    return requestAdvisor({
+    return this._advisorService().requestTrusted({
+      origin, scopeKey: chatKey, turnKey, approved, mode, task,
+      activeProvider: this.kind,
+      activeModel: this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null,
+      cwd: getCliWorkingDir(this._executionKind()),
+    });
+  }
+
+  private _advisorService(): AdvisorService {
+    return new AdvisorService({
       db: this.db,
       config: parseAdvisorConfig(),
-      request: {
-        requestId: randomUUID(),
-        scopeKey: chatKey, turnKey, origin, approved, mode, task,
-        activeProvider: this.kind,
-        activeModel: this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null,
-      },
       bots: this._effectiveConfig().bots,
       runCli: (command, args, cwd, options) => this.exec.runCli(command, args, cwd, options),
-      cwd: getCliWorkingDir(this._executionKind()),
     });
   }
 
@@ -762,32 +761,64 @@ export class BridgeEngine {
 
   private _buildContextAccess(chatKey: string): { prompt: string; env: Record<string, string> } | null {
     const dbPath = this.opts.fullConfig?.dbPath;
-    if (!dbPath) return null;
     const status = this.db.getConvStatus(chatKey);
     const memoryCount = this.db.getMemoryCount();
-    if (status.turnCount === 0 && !status.latestSummaryAt && memoryCount === 0) return null;
+    const hasContext = !!dbPath && (status.turnCount > 0 || !!status.latestSummaryAt || memoryCount > 0);
     const commandPath = join(process.cwd(), "bin", "agent-bridge-context");
+    const advisorCommandPath = join(process.cwd(), "bin", "agent-bridge-advisor");
+    const turnKey = `${chatKey}:${randomUUID()}`;
+    let advisorCapability: string | null = null;
+    if (this.opts.advisorCapabilities) {
+      try {
+        advisorCapability = this.opts.advisorCapabilities.issue({
+          chatKey,
+          cliKind: this.kind,
+          turnKey,
+          taskKey: turnKey,
+          repoPath: getCliWorkingDir(this._executionKind()),
+          activeModel: this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null,
+        });
+      } catch (error) {
+        console.warn("[advisor] capability unavailable:", error);
+      }
+    }
+    if (!hasContext && !advisorCapability) return null;
     const memoryHint = memoryCount > 0 ? [
       '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory',
       '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-query "<specific query>"',
       '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-add-json \'<json>\'',
     ] : [];
-    return {
-      prompt: [
+    const contextPrompt = hasContext ? [
         "[Agent Bridge context]",
         "More conversation history is available if needed:",
         '"$AGENT_BRIDGE_CONTEXT_COMMAND" --summary',
         '"$AGENT_BRIDGE_CONTEXT_COMMAND" --recent 20',
         ...memoryHint,
         "",
-      ].join("\n"),
+      ].join("\n") : "";
+    const advisorPrompt = advisorCapability ? [
+      "[Frontier advisor available]",
+      "For a bounded, non-authoritative second opinion, run:",
+      '"$AGENT_BRIDGE_ADVISOR_COMMAND" --mode review --task "<question>"',
+      "Modes: plan, review, debug, risk, decision.",
+      "Validate its advice independently; it cannot execute or approve actions.",
+      "",
+    ].join("\n") : "";
+    return {
+      prompt: `${contextPrompt}${advisorPrompt}`,
       env: {
-        AGENT_BRIDGE_CONTEXT_AVAILABLE: "1",
-        AGENT_BRIDGE_CONTEXT_COMMAND: commandPath,
-        AGENT_BRIDGE_CONTEXT_DB: dbPath,
-        AGENT_BRIDGE_CHAT_KEY: chatKey,
-        AGENT_BRIDGE_CLI_KIND: this.kind,
-        AGENT_BRIDGE_REPO_PATH: process.cwd(),
+        ...(hasContext ? {
+          AGENT_BRIDGE_CONTEXT_AVAILABLE: "1",
+          AGENT_BRIDGE_CONTEXT_COMMAND: commandPath,
+          AGENT_BRIDGE_CONTEXT_DB: dbPath!,
+          AGENT_BRIDGE_CHAT_KEY: chatKey,
+          AGENT_BRIDGE_CLI_KIND: this.kind,
+          AGENT_BRIDGE_REPO_PATH: process.cwd(),
+        } : {}),
+        ...(advisorCapability ? {
+          AGENT_BRIDGE_ADVISOR_COMMAND: advisorCommandPath,
+          AGENT_BRIDGE_ADVISOR_CAPABILITY: advisorCapability,
+        } : {}),
       },
     };
   }

@@ -38,6 +38,7 @@ import {
 import { runCli } from "./cli.js";
 import { compactConversation } from "./compactConversation.js";
 import type { BridgeConfig, BotKind, TelegramUpdate, TelegramMessage } from "./types.js";
+import { startConfiguredAdvisorBroker } from "./advisorBroker.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env.discord-interactive",
@@ -83,6 +84,7 @@ const soulContext = loadSoulContext({
 if (soulContext) console.log(`[discord-interactive] loaded SOUL.md context (${soulContext.length} chars)`);
 
 const db = openDb(dbPath);
+const advisorBroker = await startConfiguredAdvisorBroker({ db, bots: config.bots, runCli });
 
 // ── Fallback chain ────────────────────────────────────────────────────────────
 
@@ -194,6 +196,7 @@ const engines = Object.fromEntries(
         soulContext,
         fullConfig: config,
         compactProfile: "companion",
+        advisorCapabilities: advisorBroker ?? undefined,
         hooks: {
           onCapacityExhausted: async (chatKey: string) => {
             exhaustedChats.add(chatKey);
@@ -434,16 +437,17 @@ async function handleInteraction(d: any): Promise<void> {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
-const shutdown = (signal: string) => {
+const shutdown = async (signal: string) => {
   console.log(`[discord-interactive] ${signal} received, shutting down...`);
   client.destroy();
   shutdownCliProcesses();
+  await advisorBroker?.close();
   db.close();
   process.exit(0);
 };
 
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => { void shutdown("SIGINT"); });
+process.on("SIGTERM", () => { void shutdown("SIGTERM"); });
 
 console.log("[discord-interactive] connecting gateway...");
 client.connect();

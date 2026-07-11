@@ -765,25 +765,31 @@ export class BridgeEngine {
     if (!dbPath) return null;
     const status = this.db.getConvStatus(chatKey);
     const memoryCount = this.db.getMemoryCount();
-    if (status.turnCount === 0 && !status.latestSummaryAt && memoryCount === 0) return null;
+    const hasContext = status.turnCount > 0 || !!status.latestSummaryAt || memoryCount > 0;
     const commandPath = join(process.cwd(), "bin", "agent-bridge-context");
+    const advisorCommandPath = join(process.cwd(), "bin", "agent-bridge-advisor");
     const memoryHint = memoryCount > 0 ? [
       '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory',
       '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-query "<specific query>"',
       '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-add-json \'<json>\'',
     ] : [];
     return {
-      prompt: [
+      prompt: hasContext ? [
         "[Agent Bridge context]",
         "More conversation history is available if needed:",
         '"$AGENT_BRIDGE_CONTEXT_COMMAND" --summary',
         '"$AGENT_BRIDGE_CONTEXT_COMMAND" --recent 20',
         ...memoryHint,
         "",
-      ].join("\n"),
+      ].join("\n") : "",
       env: {
-        AGENT_BRIDGE_CONTEXT_AVAILABLE: "1",
-        AGENT_BRIDGE_CONTEXT_COMMAND: commandPath,
+        ...(hasContext ? {
+          AGENT_BRIDGE_CONTEXT_AVAILABLE: "1",
+          AGENT_BRIDGE_CONTEXT_COMMAND: commandPath,
+        } : {}),
+        AGENT_BRIDGE_ADVISOR_AVAILABLE: "1",
+        AGENT_BRIDGE_ADVISOR_COMMAND: advisorCommandPath,
+        AGENT_BRIDGE_ADVISOR_TURN_KEY: `${chatKey}:${randomUUID()}`,
         AGENT_BRIDGE_CONTEXT_DB: dbPath,
         AGENT_BRIDGE_CHAT_KEY: chatKey,
         AGENT_BRIDGE_CLI_KIND: this.kind,

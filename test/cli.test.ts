@@ -998,3 +998,32 @@ Done.
     expect(args).toContain("--print");
   });
 });
+
+describe("runCli process tree kill on timeout", () => {
+  it("kills grandchild processes when the sync path hits an idle timeout", async () => {
+    const pidFile = `/tmp/agent-bridge-test-grandchild-${process.pid}.pid`;
+    const p = runCli(
+      "bash",
+      ["-c", `sleep 30 & echo $! > ${pidFile}; wait`],
+      process.cwd(),
+      { idleTimeoutMs: 500, timeoutMs: 10_000, killGraceMs: 200 },
+    );
+    await expect(p).rejects.toThrow(/idle timeout/);
+    // allow SIGTERM/SIGKILL grace to complete
+    await new Promise((r) => setTimeout(r, 600));
+    const { readFileSync: rf, rmSync: rm } = await import("node:fs");
+    const grandchildPid = parseInt(rf(pidFile, "utf8").trim(), 10);
+    rm(pidFile, { force: true });
+    expect(Number.isFinite(grandchildPid)).toBe(true);
+    let alive = true;
+    try {
+      process.kill(grandchildPid, 0);
+    } catch {
+      alive = false;
+    }
+    if (alive) {
+      try { process.kill(grandchildPid, "SIGKILL"); } catch { /* cleanup */ }
+    }
+    expect(alive).toBe(false);
+  }, 15_000);
+});

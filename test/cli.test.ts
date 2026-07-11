@@ -88,6 +88,8 @@ describe("CLI Runner", () => {
       model: "claude-fable-5", outputFormat: "json", toolMode: "none",
     });
     expect(claude.args).toEqual(expect.arrayContaining(["--tools", "", "--disable-slash-commands", "--strict-mcp-config"]));
+    // The real CLI rejects a bare {}: --mcp-config must be {"mcpServers":{}}.
+    expect(claude.args[claude.args.indexOf("--mcp-config") + 1]).toBe('{"mcpServers":{}}');
     expect(() => buildCliInvocation({
       bot: "codex", prompt: "advise", sessionId: null, command: "codex",
       model: "gpt-5.6-luna", outputFormat: "json", toolMode: "none",

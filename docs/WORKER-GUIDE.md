@@ -118,7 +118,7 @@ Set in the worker's env file (`.env.worker` or the systemd default file):
 | `WORKER_GIT_EMAIL` | `agent-bridge-worker@users.noreply.github.com` | Git author email used in workspace commits |
 | `DB_PATH` | `.data/bridge.sqlite` | SQLite database path |
 | `BRIDGE_EXECUTION_MODE` | `safe` | Execution mode (`safe` or `trusted`) |
-| `BRIDGE_ADVISOR_ENABLED` | `false` | Enable frontier plan and PR-readiness checkpoints |
+| `BRIDGE_ADVISOR_ENABLED` | `true` | Advisor availability; manual mode still requires explicit consultation and an empty chain remains inert |
 | `BRIDGE_ADVISOR_CHAIN` | — | Up to two ordered `provider:model` advisor targets |
 | `BRIDGE_ADVISOR_MAX_CALLS_PER_TASK` | `2` | Logical advisor requests allowed per worker task |
 | `BRIDGE_ADVISOR_TIMEOUT_MS` | `120000` | Timeout for each advisor target attempt |

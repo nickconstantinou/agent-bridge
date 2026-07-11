@@ -177,8 +177,8 @@ For agent-driven writes, the helper also supports:
 - `agent-bridge-context --memory-add-json '<json>'` — stores a validated project
   memory candidate with chat, CLI, latest-turn, repo, and confidence provenance
 
-When `BRIDGE_ADVISOR_ENABLED=true`, agents are prompted to request a bounded
-second opinion with:
+The advisor defaults enabled in manual mode when a valid configured chain is
+present. Agents are then prompted to request a bounded second opinion with:
 
 ```bash
 "$AGENT_BRIDGE_ADVISOR_COMMAND" --mode review --task "<question>"
@@ -188,9 +188,9 @@ The advisor helper supports `plan`, `review`, `debug`, `risk`, and `decision`.
 It submits only capability, mode, and task over a user-owned Unix socket. The
 running bridge owns configuration, scope, database, budgets, provider chain,
 executables, and audit writes. Agent-direct provider children have advisor
-environment removed and must support technical tool disabling; currently that
-means Claude with `--tools ""`. Disabled, invalid, or unsupported chains are
-not advertised. The advisor cannot execute or approve.
+environment removed and must support technical tool disabling. Disabled,
+empty, invalid, or unsupported chains are not advertised. The advisor cannot
+execute or approve.
 
 Agents may also emit a hidden post-turn sidecar in the successful response:
 

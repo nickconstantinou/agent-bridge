@@ -6,6 +6,10 @@ const positiveInt = (raw: string | undefined, fallback: number) => {
   const value = Number.parseInt(raw ?? "", 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
 };
+function parseEnabled(raw: string | undefined): boolean {
+  if (raw == null || raw.trim() === "") return true;
+  return /^(?:1|true|yes|on)$/i.test(raw);
+}
 const parseMode = (raw: string | undefined): AdvisorPolicyMode => raw === "suggest" || raw === "auto" ? raw : "manual";
 function parseTarget(raw: string): AdvisorTarget | null {
   const split = raw.indexOf(":");
@@ -17,7 +21,7 @@ function parseTarget(raw: string): AdvisorTarget | null {
 }
 export function parseAdvisorConfig(env: Env = process.env): AdvisorConfig {
   return {
-    enabled: /^(?:1|true|yes|on)$/i.test(env.BRIDGE_ADVISOR_ENABLED ?? ""),
+    enabled: parseEnabled(env.BRIDGE_ADVISOR_ENABLED),
     mode: parseMode(env.BRIDGE_ADVISOR_MODE),
     chain: (env.BRIDGE_ADVISOR_CHAIN ?? "").split(",").map((v) => parseTarget(v.trim()))
       .filter((v): v is AdvisorTarget => v !== null).slice(0, 2),

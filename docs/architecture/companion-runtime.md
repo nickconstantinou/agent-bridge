@@ -28,9 +28,10 @@ The Companion Runtime owns:
 
 ## Frontier Advisor
 
-The optional advisor lets a standard executor consult up to two ordered
-frontier provider/model targets without changing its active provider or native
-session. It is disabled by default.
+The advisor lets a standard executor consult up to two ordered frontier
+provider/model targets without changing its active provider or native session.
+It is enabled by default in manual mode when a valid chain is configured; an
+empty, explicitly disabled, invalid, or unsupported chain remains unavailable.
 
 - `manual`: explicit `/advisor ask|review|plan|debug` commands and direct agent
   calls through `AGENT_BRIDGE_ADVISOR_COMMAND` invoke the advisor.
@@ -66,9 +67,9 @@ and worker checkpoints call `requestTrusted()` in-process; the Unix-socket
 broker is only the untrusted cross-process adapter for CLI agents, and its
 `requestWithCapability()` merely authenticates a capability and reconstructs
 trusted scope before entering the same path. `tool_free` requires every chain
-target to support verified tool-disabled execution: Claude runs with
-`--tools ""`, while Codex, Agy, and Kimchi fail closed until a verified
-tool-disabled adapter exists. A two-model chain may use two Claude models.
+target to support verified tool-disabled execution. Claude runs with
+`--tools ""`, Codex receives explicit `--disable` pairs, and Agy uses
+`--sandbox`; unsupported providers fail closed.
 
 ## Flow
 

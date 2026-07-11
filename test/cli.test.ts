@@ -91,9 +91,9 @@ describe("CLI Runner", () => {
     // The real CLI rejects a bare {}: --mcp-config must be {"mcpServers":{}}.
     expect(claude.args[claude.args.indexOf("--mcp-config") + 1]).toBe('{"mcpServers":{}}');
     expect(() => buildCliInvocation({
-      bot: "codex", prompt: "advise", sessionId: null, command: "codex",
-      model: "gpt-5.6-luna", outputFormat: "json", toolMode: "none",
-    })).toThrow(/tool-free mode.*codex/i);
+      bot: "kimchi", prompt: "advise", sessionId: null, command: "kimchi",
+      model: "some-model", outputFormat: "json", toolMode: "none",
+    })).toThrow(/tool-free mode.*kimchi/i);
   });
 
   it("passes contextEnv into child processes", async () => {

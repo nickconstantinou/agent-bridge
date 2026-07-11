@@ -198,7 +198,7 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `BRIDGE_EXECUTION_MODE` | All | `safe` | `safe` or `trusted` (bypasses CLI approval prompts) |
 | `BRIDGE_ADVISOR_ENABLED` | Companion/Worker | `false` | Enable frontier advisor calls; kill switch for the capability |
 | `BRIDGE_ADVISOR_MODE` | Companion/Worker | `manual` | `manual`, `suggest`, or `auto` consultation policy |
-| `BRIDGE_ADVISOR_CHAIN` | Companion/Worker | — | Up to two ordered `provider:model` targets; agent-direct access currently requires Claude targets for `--tools ""` |
+| `BRIDGE_ADVISOR_CHAIN` | Companion/Worker | — | Up to two ordered `provider:model` targets; tool-free invocation requires claude or codex targets |
 | `BRIDGE_ADVISOR_MAX_CALLS_PER_TURN` | Companion | `1` | Maximum logical advisor requests for one Telegram/agent turn |
 | `BRIDGE_ADVISOR_MAX_CALLS_PER_TASK` | Worker | `2` | Maximum logical advisor requests for one worker task |
 | `BRIDGE_ADVISOR_TIMEOUT_MS` | Companion/Worker | `120000` | Hard timeout for each advisor provider attempt |

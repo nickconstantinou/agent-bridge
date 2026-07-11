@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AdvisorBroker, requestAdvisorViaBroker } from "../src/advisorBroker.js";
+import { AdvisorBroker, requestAdvisorViaBroker, startConfiguredAdvisorBroker } from "../src/advisorBroker.js";
 import { parseAdvisorConfig } from "../src/advisorConfig.js";
 import { openDb } from "../src/db.js";
 
@@ -33,6 +33,23 @@ function setup(overrides: Record<string, string> = {}) {
 }
 
 describe("bridge-owned advisor broker", () => {
+  it.each([
+    ["empty", {}],
+    ["unsupported", { BRIDGE_ADVISOR_CHAIN: "kimchi:some-model" }],
+  ])("does not advertise capabilities for an %s chain", async (_label, env) => {
+    const dir = mkdtempSync(join(tmpdir(), "advisor-broker-start-"));
+    dirs.push(dir);
+    const db = openDb(join(dir, "bridge.sqlite"));
+    const broker = await startConfiguredAdvisorBroker({
+      db,
+      bots: { claude: { command: "claude", modelPreference: [] } },
+      runCli: vi.fn(),
+      env,
+    });
+    expect(broker).toBeNull();
+    db.close();
+  });
+
   it("binds trusted scope, identity, repository and budgets server-side", async () => {
     const { broker, db, runCli } = setup();
     await broker.start();

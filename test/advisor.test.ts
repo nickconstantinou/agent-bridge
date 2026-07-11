@@ -8,8 +8,25 @@ import { shouldAllowAdvisorCall } from "../src/advisorPolicy.js";
 describe("advisor configuration and policy", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("defaults off and parses two ordered provider/model targets", () => {
-    expect(parseAdvisorConfig({})).toMatchObject({ enabled: false, mode: "manual", chain: [] });
+  it("defaults enabled in manual mode with conservative budgets and no implicit chain", () => {
+    expect(parseAdvisorConfig({})).toMatchObject({
+      enabled: true,
+      mode: "manual",
+      chain: [],
+      maxCallsPerTurn: 1,
+      maxCallsPerTask: 2,
+    });
+  });
+
+  it.each(["false", "0", "no", "off"])("treats explicit %s as disabled", (value) => {
+    expect(parseAdvisorConfig({ BRIDGE_ADVISOR_ENABLED: value }).enabled).toBe(false);
+  });
+
+  it.each([undefined, "", "1", "true", "yes", "on"])("treats %s as enabled", (value) => {
+    expect(parseAdvisorConfig({ BRIDGE_ADVISOR_ENABLED: value }).enabled).toBe(true);
+  });
+
+  it("parses two ordered provider/model targets", () => {
     expect(parseAdvisorConfig({
       BRIDGE_ADVISOR_ENABLED: "true",
       BRIDGE_ADVISOR_MODE: "auto",

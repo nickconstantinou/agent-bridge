@@ -2359,6 +2359,13 @@ describe("BridgeEngine", () => {
       expect(capturedPrompt).toContain("$AGENT_BRIDGE_ADVISOR_COMMAND");
       expect(capturedPrompt).toContain("--mode review --task");
       expect(capturedPrompt).toContain("non-authoritative");
+      expect(capturedPrompt).toContain("Consult the advisor when:");
+      expect(capturedPrompt).toContain("same approach has failed twice");
+      expect(capturedPrompt).toContain("Do not consult it for:");
+      expect(capturedPrompt).toContain("routine edits with an obvious implementation");
+      expect(capturedPrompt).toContain("plan: architecture and implementation approach");
+      expect(capturedPrompt).toContain("risk: security, deployment, destructive or approval-sensitive work");
+      expect(capturedPrompt).toContain("Call at most once for the same decision unless new evidence materially changes the problem");
       expect(capturedPrompt).not.toContain("BRIDGE_ADVISOR_CHAIN");
       expect(capturedContextEnv).toEqual({
         AGENT_BRIDGE_ADVISOR_COMMAND: expect.stringContaining("agent-bridge-advisor"),

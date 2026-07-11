@@ -62,7 +62,7 @@ describe("unified advisor service", () => {
   });
 
   it("rejects chains containing providers without tool-free mode before consuming budget", async () => {
-    const { db, runCli, service } = setup("claude:claude-fable-5,codex:gpt-5.6-luna");
+    const { db, runCli, service } = setup("claude:claude-fable-5,kimchi:some-model");
     await expect(service.requestTrusted({
       origin: "manual", scopeKey: "chat:1", turnKey: "turn-1", mode: "review", task: "Review it",
       activeProvider: "codex", activeModel: null, cwd: "/repo",

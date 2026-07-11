@@ -9,13 +9,13 @@ export function shouldAllowAdvisorCall(mode: AdvisorPolicyMode, origin: AdvisorO
 // to execute tools. Only providers with a verified tool-disabled invocation
 // qualify; today that is claude alone.
 export type AdvisorExecutionProfile = "tool_free";
-const TOOL_FREE_PROVIDERS = new Set<string>(["claude"]);
+const TOOL_FREE_PROVIDERS = new Set<string>(["claude", "agy", "codex"]);
 export function assertChainSupportsProfile(chain: AdvisorTarget[], profile: AdvisorExecutionProfile): void {
   if (profile !== "tool_free") throw new Error(`Unknown advisor execution profile: ${profile as string}`);
   const ineligible = chain.filter((target) => !TOOL_FREE_PROVIDERS.has(target.provider));
   if (ineligible.length > 0) {
     throw new Error(
-      `Advisor requires a tool-free advisor provider; unsupported chain targets: ${ineligible.map((t) => t.provider).join(", ")} (currently supported: claude)`,
+      `Advisor requires a tool-free advisor provider; unsupported chain targets: ${ineligible.map((t) => t.provider).join(", ")} (currently supported: claude, agy, codex)`,
     );
   }
 }

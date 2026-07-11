@@ -234,7 +234,8 @@ export function buildCliInvocation({
 }): { command: string; args: string[]; stdin?: string } {
   const args = [];
 
-  if (toolMode === "none" && bot !== "claude") {
+  const ALLOWED_TOOL_FREE_BOTS = new Set(["claude", "codex", "antigravity"]);
+  if (toolMode === "none" && !ALLOWED_TOOL_FREE_BOTS.has(bot)) {
     throw new Error(`Tool-free mode is not supported for ${bot}`);
   }
 
@@ -247,6 +248,18 @@ export function buildCliInvocation({
         console.warn("[bridge] Codex: starting fresh session for attachment turn because resume does not support -i");
       }
       args.push("exec");
+    }
+    if (toolMode === "none") {
+      args.push(
+        "--disable", "shell_tool",
+        "--disable", "browser_use",
+        "--disable", "computer_use",
+        "--disable", "plugins",
+        "--disable", "guardian_approval",
+        "--disable", "hooks",
+        "--disable", "goals",
+        "--disable", "apps"
+      );
     }
     args.push("--skip-git-repo-check");
     if (model) {

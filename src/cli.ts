@@ -23,6 +23,7 @@ const activeProcesses = new Map<number | string, ChildProcess>();
 const abortedChildren = new WeakSet<ChildProcess>();
 
 const STRIPPED_ENV_KEYS = /^TELEGRAM_BOT_TOKEN|^TELEGRAM_ALLOWED_USER_IDS/;
+const ADVISOR_SECRET_ENV_KEYS = /(?:TOKEN|SECRET|PASSWORD|API_KEY|PRIVATE_KEY|CREDENTIAL)/i;
 
 export function buildSafeChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return Object.fromEntries(
@@ -33,7 +34,9 @@ export function buildSafeChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.
 export function buildAdvisorChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(buildSafeChildEnv(env)).filter(([key]) =>
-      !key.startsWith("AGENT_BRIDGE_ADVISOR_") && !key.startsWith("BRIDGE_ADVISOR_"),
+      !key.startsWith("AGENT_BRIDGE_ADVISOR_")
+      && !key.startsWith("BRIDGE_ADVISOR_")
+      && !ADVISOR_SECRET_ENV_KEYS.test(key),
     ),
   );
 }
@@ -1219,6 +1222,7 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
   let effort: EffortLevel | null = null;
   let resumeSessionId: string | null = null;
   const attachments: string[] = [];
+  const disabledTools: string[] = [];
   let hasDoubleDash = false;
   let hasDashPrompt = false;
 
@@ -1243,6 +1247,7 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
         "--print-timeout",
         "-c",
         "--config",
+        "--disable",
       ].includes(arg);
 
       if (arg === "--conversation") {
@@ -1266,6 +1271,10 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
       } else if (arg === "-i") {
         const att = args[i + 1];
         if (att) attachments.push(att);
+        i++;
+      } else if (arg === "--disable") {
+        const tool = args[i + 1];
+        if (tool) disabledTools.push(tool);
         i++;
       } else if (hasValue) {
         i++;
@@ -1345,6 +1354,9 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
     }
     if (model) {
       newArgs.push("--model", model);
+    }
+    for (const tool of disabledTools) {
+      newArgs.push("--disable", tool);
     }
     if (hasPermissionBypass) {
       newArgs.push("--dangerously-bypass-approvals-and-sandbox");

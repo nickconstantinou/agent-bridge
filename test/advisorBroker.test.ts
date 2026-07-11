@@ -50,7 +50,6 @@ describe("bridge-owned advisor broker", () => {
       "/trusted/repo",
       expect.objectContaining({ advisorChild: true }),
     );
-    expect(db.getAdvisorAttempts(expect.anything())).toBeDefined();
     const call = db.raw.prepare("SELECT scope_key, turn_key, task_key, selected_provider FROM advisor_calls").get() as any;
     expect(call).toMatchObject({ scope_key: "chat:7", turn_key: "turn-1", task_key: "task-1", selected_provider: "claude" });
     const attempt = db.raw.prepare("SELECT provider, model, status FROM advisor_attempts").get() as any;

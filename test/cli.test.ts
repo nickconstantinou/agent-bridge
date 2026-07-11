@@ -143,6 +143,17 @@ describe("abortCliProcess", () => {
     await expect(p).resolves.toEqual(expect.any(String));
   }, 5000);
 
+  it("keeps a newer process registered when an older process for the same chat closes late", async () => {
+    const chatId = "test-reregister-race";
+    const first = runCli("echo", ["fast"], process.cwd(), { chatId });
+    const second = runCli("sleep", ["10"], process.cwd(), { chatId });
+    await first;
+    await new Promise((r) => setTimeout(r, 50));
+    // The stale close of the first process must not deregister the second.
+    expect(abortCliProcess(chatId)).toBe(true);
+    await expect(second).resolves.toEqual(expect.any(String));
+  }, 5000);
+
   it("returns false for already-completed process", async () => {
     const chatId = "test-abort-done";
     await runCli("echo", ["hi"], process.cwd(), { chatId });

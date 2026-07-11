@@ -92,7 +92,10 @@ export async function runIsolatedAdvisorFallbackSmoke(options: SmokeOptions): Pr
     assertIsolated(dbPath, repoPath);
     const canaryBefore = sha256(canaryPath);
     const headBefore = runGit(repoPath, ["rev-parse", "HEAD"]);
-    writeCodexWrapper(wrapperPath, resolve(options.codexCommand), capturePath);
+    const realCodex = options.codexCommand.includes("/") || options.codexCommand.includes("\\")
+      ? resolve(options.codexCommand)
+      : options.codexCommand;
+    writeCodexWrapper(wrapperPath, realCodex, capturePath);
 
     db = openDb(dbPath);
     let advisorChild = false;

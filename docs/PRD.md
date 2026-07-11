@@ -163,9 +163,8 @@ CLI agents spawned by the bridge receive three environment variables injected by
 | `AGENT_BRIDGE_CHAT_KEY` | Current chat key (`chatId:threadId`) |
 | `AGENT_BRIDGE_CLI_KIND` | Current CLI kind (`codex`, `claude`, or `antigravity`) |
 | `AGENT_BRIDGE_REPO_PATH` | Workspace path for memory provenance |
-| `AGENT_BRIDGE_ADVISOR_AVAILABLE` | `"1"` — signals the agent advisor command is installed |
 | `AGENT_BRIDGE_ADVISOR_COMMAND` | Absolute path to `bin/agent-bridge-advisor` |
-| `AGENT_BRIDGE_ADVISOR_TURN_KEY` | Opaque per-turn key used for advisor budgets |
+| `AGENT_BRIDGE_ADVISOR_CAPABILITY` | Opaque, expiring capability bound by the broker to the active scope and turn |
 
 The `agent-bridge-context` binary (in `bin/`) opens the DB read-only for
 inspection commands and outputs:
@@ -186,8 +185,12 @@ second opinion with:
 ```
 
 The advisor helper supports `plan`, `review`, `debug`, `risk`, and `decision`.
-It reuses the configured two-target chain, timeouts, redaction, structured
-output validation, budgets, and audit tables. It cannot execute or approve.
+It submits only capability, mode, and task over a user-owned Unix socket. The
+running bridge owns configuration, scope, database, budgets, provider chain,
+executables, and audit writes. Agent-direct provider children have advisor
+environment removed and must support technical tool disabling; currently that
+means Claude with `--tools ""`. Disabled, invalid, or unsupported chains are
+not advertised. The advisor cannot execute or approve.
 
 Agents may also emit a hidden post-turn sidecar in the successful response:
 

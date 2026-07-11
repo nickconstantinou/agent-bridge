@@ -44,17 +44,25 @@ never retried merely because the executor disagrees. The advisor is trusted for
 reasoning; merge, deploy, approval, deletion, final-message, and session
 authority remain with Agent Bridge and its existing gates.
 
-Bridge-spawned CLI agents receive `AGENT_BRIDGE_ADVISOR_COMMAND` and a
-turn-scoped budget key. When enabled, the prompt advertises this command:
+When agent-direct access is validly configured, bridge-spawned CLI agents
+receive only `AGENT_BRIDGE_ADVISOR_COMMAND` and an opaque, expiring
+`AGENT_BRIDGE_ADVISOR_CAPABILITY`. The prompt advertises this command:
 
 ```bash
 "$AGENT_BRIDGE_ADVISOR_COMMAND" --mode review --task "Review this plan"
 ```
 
 Supported agent modes are `plan`, `review`, `debug`, `risk`, and `decision`.
-The helper binds calls to the active chat and workspace, uses the same ordered
-fallback chain and structured-output parser as `/advisor`, and writes the same
-logical-call and per-attempt audit records. Advice remains non-authoritative.
+The helper sends only capability, mode, and task to a bridge-owned Unix-socket
+broker. Scope, CLI identity, turn/task keys, repository path, enablement,
+budgets, chain, executable, timeout, and database remain server-side. A new
+turn revokes the previous capability; unused capabilities expire after ten
+minutes. Provider children receive no advisor configuration or capability.
+
+Agent-direct providers must technically support tool-free execution. The
+current implementation enables Claude with `--tools ""` and fails closed for
+Codex, Agy, and Kimchi. A two-model agent chain may use two Claude models.
+User `/advisor` and worker checkpoints retain their existing provider support.
 
 ## Flow
 

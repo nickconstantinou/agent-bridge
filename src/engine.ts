@@ -51,6 +51,7 @@ import { extractProjectMemorySidecars, storeProjectMemoryCandidate } from "./pro
 import { parseAdvisorConfig } from "./advisorConfig.js";
 import { formatAdvisorResult, requestAdvisor } from "./advisor.js";
 import type { AdvisorRequestMode, AdvisorResult } from "./advisorTypes.js";
+import type { AdvisorCapabilityIssuer } from "./advisorBroker.js";
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
@@ -92,6 +93,8 @@ export interface BridgeEngineOptions {
   hooks?: BridgeEngineHooks;
   /** Compact summary profile: "engineering" (default) for coding-agent bots, "companion" for the interactive/companion bot. */
   compactProfile?: CompactProfile;
+  /** Bridge-owned issuer; absent when advisor is disabled or misconfigured. */
+  advisorCapabilities?: AdvisorCapabilityIssuer;
 }
 
 /** Injected execution functions — replace real CLI for unit tests. */
@@ -762,13 +765,28 @@ export class BridgeEngine {
 
   private _buildContextAccess(chatKey: string): { prompt: string; env: Record<string, string> } | null {
     const dbPath = this.opts.fullConfig?.dbPath;
-    if (!dbPath) return null;
     const status = this.db.getConvStatus(chatKey);
     const memoryCount = this.db.getMemoryCount();
-    const hasContext = status.turnCount > 0 || !!status.latestSummaryAt || memoryCount > 0;
+    const hasContext = !!dbPath && (status.turnCount > 0 || !!status.latestSummaryAt || memoryCount > 0);
     const commandPath = join(process.cwd(), "bin", "agent-bridge-context");
     const advisorCommandPath = join(process.cwd(), "bin", "agent-bridge-advisor");
-    const advisorEnabled = parseAdvisorConfig().enabled;
+    const turnKey = `${chatKey}:${randomUUID()}`;
+    let advisorCapability: string | null = null;
+    if (this.opts.advisorCapabilities) {
+      try {
+        advisorCapability = this.opts.advisorCapabilities.issue({
+          chatKey,
+          cliKind: this.kind,
+          turnKey,
+          taskKey: turnKey,
+          repoPath: getCliWorkingDir(this._executionKind()),
+          activeModel: this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null,
+        });
+      } catch (error) {
+        console.warn("[advisor] capability unavailable:", error);
+      }
+    }
+    if (!hasContext && !advisorCapability) return null;
     const memoryHint = memoryCount > 0 ? [
       '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory',
       '"$AGENT_BRIDGE_CONTEXT_COMMAND" --memory-query "<specific query>"',
@@ -782,7 +800,7 @@ export class BridgeEngine {
         ...memoryHint,
         "",
       ].join("\n") : "";
-    const advisorPrompt = advisorEnabled ? [
+    const advisorPrompt = advisorCapability ? [
       "[Frontier advisor available]",
       "For a bounded, non-authoritative second opinion, run:",
       '"$AGENT_BRIDGE_ADVISOR_COMMAND" --mode review --task "<question>"',
@@ -796,14 +814,15 @@ export class BridgeEngine {
         ...(hasContext ? {
           AGENT_BRIDGE_CONTEXT_AVAILABLE: "1",
           AGENT_BRIDGE_CONTEXT_COMMAND: commandPath,
+          AGENT_BRIDGE_CONTEXT_DB: dbPath!,
+          AGENT_BRIDGE_CHAT_KEY: chatKey,
+          AGENT_BRIDGE_CLI_KIND: this.kind,
+          AGENT_BRIDGE_REPO_PATH: process.cwd(),
         } : {}),
-        AGENT_BRIDGE_ADVISOR_AVAILABLE: "1",
-        AGENT_BRIDGE_ADVISOR_COMMAND: advisorCommandPath,
-        AGENT_BRIDGE_ADVISOR_TURN_KEY: `${chatKey}:${randomUUID()}`,
-        AGENT_BRIDGE_CONTEXT_DB: dbPath,
-        AGENT_BRIDGE_CHAT_KEY: chatKey,
-        AGENT_BRIDGE_CLI_KIND: this.kind,
-        AGENT_BRIDGE_REPO_PATH: process.cwd(),
+        ...(advisorCapability ? {
+          AGENT_BRIDGE_ADVISOR_COMMAND: advisorCommandPath,
+          AGENT_BRIDGE_ADVISOR_CAPABILITY: advisorCapability,
+        } : {}),
       },
     };
   }

@@ -41,7 +41,7 @@ function parseRawResult(provider: ProviderId, raw: string) {
 export async function requestAdvisor(deps: {
   db: BridgeDb; config: AdvisorConfig; request: AdvisorRequest;
   bots: Partial<Record<BotKind, Pick<BotConfig, "command" | "modelPreference">>>;
-  runCli: RunCli; cwd: string;
+  runCli: RunCli; cwd: string; toolMode?: "none";
 }): Promise<AdvisorResult> {
   const { db, config, request, bots, runCli, cwd } = deps;
   if (!config.enabled) throw new Error("Advisor disabled");
@@ -65,8 +65,8 @@ export async function requestAdvisor(deps: {
     try {
       if (!botConfig?.command) throw new Error(`Advisor provider unavailable: ${target.provider}`);
       if (target.provider === "agy") setAntigravityModel(target.model);
-      const invocation = buildCliInvocation({ bot, prompt, sessionId: null, command: botConfig.command, model: target.model, executionMode: "safe", outputFormat: "json" });
-      const raw = await withTimeout(runCli(invocation.command, invocation.args, cwd, { timeoutMs: config.timeoutMs }), config.timeoutMs);
+      const invocation = buildCliInvocation({ bot, prompt, sessionId: null, command: botConfig.command, model: target.model, executionMode: "safe", outputFormat: "json", toolMode: deps.toolMode });
+      const raw = await withTimeout(runCli(invocation.command, invocation.args, cwd, { timeoutMs: config.timeoutMs, advisorChild: deps.toolMode === "none" }), config.timeoutMs);
       const parsed = parseRawResult(target.provider, raw);
       db.addAdvisorAttempt({ requestId: request.requestId, ordinal: index + 1, provider: target.provider, model: target.model, status: "succeeded", durationMs: Date.now() - startedAt });
       db.completeAdvisorCall(request.requestId, target.provider, target.model, parsed.confidence);

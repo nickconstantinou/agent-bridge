@@ -56,6 +56,7 @@ import { workerEffortForTask } from "./effort.js";
 import { sendApprovalHtmlPack } from "./approvalHtml.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 import { parseAdvisorConfig } from "./advisorConfig.js";
+import { startConfiguredAdvisorBroker } from "./advisorBroker.js";
 import { requestAdvisor } from "./advisor.js";
 
 dotenv.config({
@@ -111,6 +112,7 @@ const config: BridgeConfig = {
   dbPath,
   bots: loadBotsConfig(process.env),
 };
+const agentAdvisorBroker = await startConfiguredAdvisorBroker({ db, bots: config.bots, runCli });
 
 // ── Build one engine per CLI kind ─────────────────────────────────────────────
 
@@ -129,6 +131,7 @@ const engines = Object.fromEntries(
           asyncEnabled,
           pollIntervalMs,
           fullConfig: config,
+          advisorCapabilities: agentAdvisorBroker ?? undefined,
           hooks: {
             onCapacityExhausted: async (chatKey: string) => {
               exhaustedChats.add(chatKey);

@@ -30,11 +30,21 @@ export function buildSafeChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.
   );
 }
 
-function buildChildEnv(extraEnv?: Record<string, string>): NodeJS.ProcessEnv {
-  return {
-    ...buildSafeChildEnv(),
+export function buildAdvisorChildEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(buildSafeChildEnv(env)).filter(([key]) =>
+      !key.startsWith("AGENT_BRIDGE_ADVISOR_") && !key.startsWith("BRIDGE_ADVISOR_"),
+    ),
+  );
+}
+
+function buildChildEnv(extraEnv?: Record<string, string>, advisorChild = false): NodeJS.ProcessEnv {
+  const base = advisorChild ? buildAdvisorChildEnv() : buildSafeChildEnv();
+  const merged = {
+    ...base,
     ...(extraEnv ?? {}),
   };
+  return advisorChild ? buildAdvisorChildEnv(merged) : merged;
 }
 
 export function scrubOutputDir(text: string, outDir: string | null | undefined): string {
@@ -204,6 +214,7 @@ export function buildCliInvocation({
   outputDir = null,
   effort = null,
   homeDir = homedir(),
+  toolMode = "default",
 }: {
   bot: string;
   prompt: string;
@@ -219,8 +230,13 @@ export function buildCliInvocation({
   outputDir?: string | null;
   effort?: EffortLevel | null;
   homeDir?: string;
+  toolMode?: "default" | "none";
 }): { command: string; args: string[]; stdin?: string } {
   const args = [];
+
+  if (toolMode === "none" && bot !== "claude") {
+    throw new Error(`Tool-free mode is not supported for ${bot}`);
+  }
 
   if (bot === "codex") {
     const forceFreshForAttachments = attachments.length > 0;
@@ -268,6 +284,9 @@ export function buildCliInvocation({
       return { command, args: appendEffortArgs(command, args, effort), stdin: stdinPayload };
     }
     args.push("--print");
+    if (toolMode === "none") {
+      args.push("--tools", "", "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", "{}");
+    }
     const pluginSettings = buildClaudeExcludedPluginSettings();
     if (pluginSettings) args.push("--settings", pluginSettings);
     if (model) args.push("--model", model);
@@ -913,7 +932,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
     // detached:true puts the child in its own process group so timeout kills
     // can signal the whole subtree (process.kill(-pid)) instead of stranding
     // grandchildren, mirroring runCliAsync.
-    const child = spawn(command, normalizedArgs, { cwd, shell: false, detached: true, env: buildChildEnv(options.contextEnv) });
+    const child = spawn(command, normalizedArgs, { cwd, shell: false, detached: true, env: buildChildEnv(options.contextEnv, options.advisorChild) });
     if (options.stdin) {
       child.stdin?.write(options.stdin);
     }
@@ -1059,7 +1078,7 @@ export async function runCliAsync(
   const normalizedArgs = normalizeCliArgs(command, args);
   return new Promise((resolve, reject) => {
     console.log(formatSpawnLog(command, normalizedArgs, cwd, options.chatId, options.stdin));
-    const child = spawn(command, normalizedArgs, { cwd, shell: false, detached: true, env: buildChildEnv(options.contextEnv) });
+    const child = spawn(command, normalizedArgs, { cwd, shell: false, detached: true, env: buildChildEnv(options.contextEnv, options.advisorChild) });
     if (options.stdin) {
       child.stdin?.write(options.stdin);
     }

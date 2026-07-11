@@ -43,6 +43,7 @@ import {
 import { runCli } from "./cli.js";
 import { compactConversation } from "./compactConversation.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
+import { startConfiguredAdvisorBroker } from "./advisorBroker.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env.interactive",
@@ -80,6 +81,7 @@ const soulContext = loadSoulContext({
 if (soulContext) console.log(`[interactive] loaded SOUL.md context (${soulContext.length} chars)`);
 
 const db = openDb(dbPath);
+const advisorBroker = await startConfiguredAdvisorBroker({ db, bots: config.bots, runCli });
 const client = new TelegramClient(token, fetch, 45_000);
 
 db.cleanupOrphanedRuns(async (run) => {
@@ -146,6 +148,7 @@ const engines = Object.fromEntries(
           soulContext,
           fullConfig: config,
           compactProfile: "companion",
+          advisorCapabilities: advisorBroker ?? undefined,
           hooks: {
             onCapacityExhausted: async (chatKey: string) => {
               exhaustedChats.add(chatKey);

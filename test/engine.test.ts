@@ -342,6 +342,7 @@ describe("BridgeEngine", () => {
         AGENT_BRIDGE_CHAT_KEY: "100",
       });
       expect(capturedContextEnv?.AGENT_BRIDGE_CONTEXT_COMMAND).toContain("agent-bridge-context");
+      expect(capturedContextEnv?.AGENT_BRIDGE_ADVISOR_COMMAND).toContain("agent-bridge-advisor");
     });
   });
 
@@ -2317,7 +2318,11 @@ describe("BridgeEngine", () => {
 
       await engine.handleMessages([makeMessage("hello")]);
 
-      expect(capturedContextEnv).toBeUndefined();
+      expect(capturedContextEnv).toMatchObject({
+        AGENT_BRIDGE_ADVISOR_AVAILABLE: "1",
+        AGENT_BRIDGE_CHAT_KEY: "100",
+      });
+      expect(capturedContextEnv?.AGENT_BRIDGE_ADVISOR_COMMAND).toContain("agent-bridge-advisor");
       expect(capturedPrompt).not.toContain("[Agent Bridge context]");
     });
   });

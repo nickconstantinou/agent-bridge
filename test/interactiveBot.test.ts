@@ -599,24 +599,34 @@ describe("dispatchInteractiveWithFallback", () => {
     expect(isHandoffRequired(db, "chat:1", "claude")).toBe(true);
   });
 
-  it("calls compactBeforeSwitch with the outgoing CLI before falling back", async () => {
+  it("passes outgoing, incoming, and exhausted CLIs to fallback compaction", async () => {
     setUserCliPreference(db, "chat:1", "codex");
     codex.handleUpdate = async () => {
       codex.handleCount++;
       exhaustedChats.add("chat:1");
     };
-    const compactCalls: Array<{ chatKey: string; fromCli: string }> = [];
+    const compactCalls: Array<{
+      chatKey: string;
+      fromCli: string;
+      toCli: string;
+      exhaustedClis: readonly string[];
+    }> = [];
 
     await dispatchInteractiveWithFallback(
       { update_id: 1, message: { text: "hello", chat: { id: 1 } } } as any,
       "chat:1",
-      { ...deps(), compactBeforeSwitch: async (chatKey, fromCli) => {
-        compactCalls.push({ chatKey, fromCli });
+      { ...deps(), compactBeforeSwitch: async (request) => {
+        compactCalls.push(request);
         return { outcome: "no_turns", trigger: "capacity_fallback" };
       } },
     );
 
-    expect(compactCalls).toEqual([{ chatKey: "chat:1", fromCli: "codex" }]);
+    expect(compactCalls).toEqual([{
+      chatKey: "chat:1",
+      fromCli: "codex",
+      toCli: "claude",
+      exhaustedClis: ["codex"],
+    }]);
   });
 
   it("does not block fallback when compactBeforeSwitch rejects", async () => {

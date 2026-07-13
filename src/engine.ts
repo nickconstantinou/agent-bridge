@@ -457,6 +457,7 @@ export class BridgeEngine {
                 runCli: (command, args, cwd, options) => this.exec.runCli(command, args, cwd, options),
                 botConfig: this.opts.botConfig,
                 cliKind: this.kind,
+                trigger: "manual",
                 compactProfile: this.opts.compactProfile ?? "engineering",
               });
 
@@ -468,13 +469,18 @@ export class BridgeEngine {
                   text: `Context compacted. ${result.turnCount} turn${result.turnCount === 1 ? "" : "s"} summarised. Session reset — next message starts fresh, seeded with this summary.`,
                   message_thread_id: threadId,
                 });
-              } else {
+              } else if (result.outcome === "failed") {
                 // Non-destructive failure: no summary stored, no turns pruned — the
                 // previous summary and raw turns remain available so the conversation
                 // can continue uninterrupted.
                 console.warn(`[compact] failed chatKey=${ck} bot=${this.kind} error=${result.error}`);
                 await this.sendText(chatId, {
                   text: `Compaction failed — conversation history was left unchanged. You can try /compact again or keep working normally.`,
+                  message_thread_id: threadId,
+                });
+              } else {
+                await this.sendText(chatId, {
+                  text: "Nothing to compact — no conversation turns yet.",
                   message_thread_id: threadId,
                 });
               }
@@ -846,13 +852,17 @@ export class BridgeEngine {
 
     this.db.setSetting(inProgressKey, new Date().toISOString());
     try {
-      await compactConversation(chatKey, {
+      const result = await compactConversation(chatKey, {
         db: this.db,
         runCli: (command, args, cwd, options) => this.exec.runCli(command, args, cwd, options),
         botConfig: this.opts.botConfig,
         cliKind: this.kind,
+        trigger: "preseed",
         compactProfile: this.opts.compactProfile ?? "engineering",
       });
+      if (result.outcome === "failed") {
+        console.warn(`[preseed-compact] failed outcome chatKey=${chatKey} cliKind=${this.kind} error=${result.error}`);
+      }
     } catch (error) {
       console.warn(`[preseed-compact] failed chatKey=${chatKey} cliKind=${this.kind}`, error);
     } finally {

@@ -2,7 +2,7 @@
  * Tests for the interactive bot's CLI routing and /switch + /cli commands.
  */
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import type { BridgeDb } from "../src/db.js";
 import type { TelegramUpdate } from "../src/types.js";
@@ -610,7 +610,10 @@ describe("dispatchInteractiveWithFallback", () => {
     await dispatchInteractiveWithFallback(
       { update_id: 1, message: { text: "hello", chat: { id: 1 } } } as any,
       "chat:1",
-      { ...deps(), compactBeforeSwitch: async (chatKey, fromCli) => { compactCalls.push({ chatKey, fromCli }); } },
+      { ...deps(), compactBeforeSwitch: async (chatKey, fromCli) => {
+        compactCalls.push({ chatKey, fromCli });
+        return { outcome: "no_turns", trigger: "capacity_fallback" };
+      } },
     );
 
     expect(compactCalls).toEqual([{ chatKey: "chat:1", fromCli: "codex" }]);
@@ -633,6 +636,47 @@ describe("dispatchInteractiveWithFallback", () => {
     expect(getUserCliPreference(db, "chat:1")).toBe("claude");
   });
 
+  it("does not block fallback or set success cooldown when compaction returns failed", async () => {
+    setUserCliPreference(db, "chat:1", "codex");
+    codex.handleUpdate = async () => { exhaustedChats.add("chat:1"); };
+    const compactBeforeSwitch = vi.fn().mockResolvedValue({
+      outcome: "failed", trigger: "capacity_fallback", error: "invalid compact JSON output",
+    });
+
+    await dispatchInteractiveWithFallback(
+      { update_id: 1, message: { text: "hello", chat: { id: 1 } } } as any,
+      "chat:1",
+      { ...deps(), compactBeforeSwitch },
+    );
+
+    expect(claude.handleCount).toBe(1);
+    expect(db.getSetting("fallback_compact_last_success_at:chat:1")).toBeNull();
+
+    setUserCliPreference(db, "chat:1", "codex");
+    await dispatchInteractiveWithFallback(
+      { update_id: 2, message: { text: "again", chat: { id: 1 } } } as any,
+      "chat:1",
+      { ...deps(), compactBeforeSwitch },
+    );
+    expect(compactBeforeSwitch).toHaveBeenCalledTimes(2);
+  });
+
+  it("sets success cooldown only when fallback compaction succeeds", async () => {
+    setUserCliPreference(db, "chat:1", "codex");
+    codex.handleUpdate = async () => { exhaustedChats.add("chat:1"); };
+    const compactBeforeSwitch = vi.fn().mockResolvedValue({
+      outcome: "compacted", trigger: "capacity_fallback", summaryMd: "done",
+    });
+
+    await dispatchInteractiveWithFallback(
+      { update_id: 1, message: { text: "hello", chat: { id: 1 } } } as any,
+      "chat:1",
+      { ...deps(), compactBeforeSwitch },
+    );
+
+    expect(db.getSetting("fallback_compact_last_success_at:chat:1")).toBeTruthy();
+  });
+
   it("skips compactBeforeSwitch on a second fallback within the cooldown window", async () => {
     setUserCliPreference(db, "chat:1", "codex");
     let attempts = 0;
@@ -642,7 +686,7 @@ describe("dispatchInteractiveWithFallback", () => {
     await dispatchInteractiveWithFallback(
       { update_id: 1, message: { text: "hello", chat: { id: 1 } } } as any,
       "chat:1",
-      { ...deps(), compactBeforeSwitch: async () => { attempts++; } },
+      { ...deps(), compactBeforeSwitch: async () => { attempts++; return { outcome: "compacted", trigger: "capacity_fallback" }; } },
     );
     expect(attempts).toBe(1);
 
@@ -651,7 +695,7 @@ describe("dispatchInteractiveWithFallback", () => {
     await dispatchInteractiveWithFallback(
       { update_id: 2, message: { text: "again", chat: { id: 1 } } } as any,
       "chat:1",
-      { ...deps(), compactBeforeSwitch: async () => { attempts++; } },
+      { ...deps(), compactBeforeSwitch: async () => { attempts++; return { outcome: "compacted", trigger: "capacity_fallback" }; } },
     );
     expect(attempts).toBe(1);
   });

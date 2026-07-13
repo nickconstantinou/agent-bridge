@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
-import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage, buildCliInvocation, buildSafeChildEnv, buildAdvisorChildEnv, resolveKimchiSessionId } from "../src/cli.js";
+import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage, buildCliInvocation, buildSafeChildEnv, buildAdvisorChildEnv, resolveKimchiSessionId, normalizeCliArgs } from "../src/cli.js";
 import { isBridgeCommand, handleCommand } from "../src/commands.js";
 import { openDb } from "../src/db.js";
 import type { BridgeConfig } from "../src/types.js";
@@ -761,6 +761,21 @@ describe("redactArgs — spawn log prompt redaction", () => {
 });
 
 describe("normalizeCliArgs — CLI argument translator", () => {
+  it("preserves Agy tool-free sandbox through invocation normalization", () => {
+    const invocation = buildCliInvocation({
+      bot: "antigravity",
+      prompt: "compact these turns",
+      sessionId: null,
+      command: "agy",
+      model: "gemini-3.5-flash-high",
+      executionMode: "safe",
+      toolMode: "none",
+    });
+
+    expect(invocation.args).toContain("--sandbox");
+    expect(normalizeCliArgs(invocation.command, invocation.args)).toContain("--sandbox");
+  });
+
   it("keeps arguments unchanged for Claude commands", async () => {
     const { normalizeCliArgs } = await import("../src/cli.js");
     const args = ["--print", "--output-format", "text", "--permission-mode", "acceptEdits", "hello"];

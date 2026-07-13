@@ -470,6 +470,7 @@ describe("BridgeEngine", () => {
         return "ok";
       });
       const client = makeMockClient();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const engine = new BridgeEngine(
         { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
         db, client, { runCli },
@@ -479,6 +480,7 @@ describe("BridgeEngine", () => {
       expect(db.getLatestConvSummary("100")).toBeNull();
       expect(mainPrompt).toContain("hello");
       expect(db.getSetting(compactInProgressSettingKey("100"))).toBeNull();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("[preseed-compact] failed outcome"));
     });
 
     it("runs on the async execution path as well", async () => {

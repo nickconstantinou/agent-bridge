@@ -41,7 +41,7 @@ import {
   type CliKind,
 } from "./interactiveBot.js";
 import { runCli } from "./cli.js";
-import { compactConversation } from "./compactConversation.js";
+import { parseCompactionProviderChain, runCapacityFallbackCompaction } from "./fallbackCompaction.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 import { startConfiguredAdvisorBroker } from "./advisorBroker.js";
 
@@ -117,6 +117,7 @@ const cliChain = parseCliChain(
   { allowed: interactiveChainKinds(), fallback: ["codex", "claude", "antigravity", "kimchi"] },
 );
 const fallbackChain = new WorkerFallbackChain(cliChain, db);
+const compactionProviderChain = parseCompactionProviderChain(process.env.BRIDGE_COMPACTION_CHAIN);
 const exhaustedChats = new Set<string>();
 
 function resolveCredentialCheckedPreference(chatKey: string): { pref: CliKind | null; available: Set<CliKind>; stored: CliKind } {
@@ -311,18 +312,14 @@ for (;;) {
                   await registerGroupChatCommands(newCli, chatId);
                 }
               },
-              compactBeforeSwitch: async (ck, fromCli) => {
-                const botConfig = config.bots[fromCli as BotKind];
-                if (!botConfig) return { outcome: "failed", trigger: "capacity_fallback", error: `missing bot config for ${fromCli}` };
-                return compactConversation(ck, {
+              compactBeforeSwitch: (request) =>
+                runCapacityFallbackCompaction(request, {
                   db,
                   runCli,
-                  botConfig,
-                  cliKind: fromCli,
-                  trigger: "capacity_fallback",
+                  bots: config.bots,
+                  configuredChain: compactionProviderChain,
                   compactProfile: "companion",
-                });
-              },
+                }),
             }).catch((err: unknown) => console.error("[interactive] dispatch error", err));
           } else {
             engines[pref].handleUpdate(typedUpdate)

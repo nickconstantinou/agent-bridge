@@ -21,6 +21,31 @@ export interface CompactionTargetSpec {
   model: string | null;
 }
 
+export function resolveCompactionRecoveryTargets(input: {
+  db: BridgeDb;
+  activeProvider: BotKind;
+  bots: Partial<Record<BotKind, Pick<BotConfig, "command" | "modelPreference">>>;
+  configuredChain: readonly CompactionTargetSpec[];
+  exhaustedProviders?: readonly BotKind[];
+}): CompactionFallbackTarget[] {
+  const exhausted = new Set(input.exhaustedProviders ?? []);
+  const seen = new Set<string>();
+  const targets: CompactionFallbackTarget[] = [];
+  for (const spec of [{ provider: input.activeProvider, model: null }, ...input.configuredChain]) {
+    if (!TOOL_FREE_COMPACTION_PROVIDERS.has(spec.provider) || exhausted.has(spec.provider)) continue;
+    const key = `${spec.provider}:${spec.model ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const config = input.bots[spec.provider];
+    targets.push({
+      provider: spec.provider,
+      command: config?.command ?? "",
+      model: spec.model ?? input.db.getSetting(spec.provider) ?? config?.modelPreference[0] ?? null,
+    });
+  }
+  return targets;
+}
+
 function recordPreflightFailure(db: BridgeDb, chatKey: string, provider: BotKind | "unavailable"): void {
   const at = new Date().toISOString();
   try {
@@ -91,17 +116,15 @@ export async function runCapacityFallbackCompaction(
     compactProfile: CompactProfile;
   },
 ): Promise<CompactConversationResult> {
-  const exhausted = new Set<BotKind>([...request.exhaustedClis, request.fromCli]);
-  const orderedSpecs: CompactionTargetSpec[] = [];
-  const seen = new Set<string>();
-  for (const spec of [{ provider: request.toCli, model: null }, ...deps.configuredChain]) {
-    if (!TOOL_FREE_COMPACTION_PROVIDERS.has(spec.provider) || exhausted.has(spec.provider)) continue;
-    const key = `${spec.provider}:${spec.model ?? ""}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    orderedSpecs.push(spec);
-  }
-  if (orderedSpecs.length === 0) {
+  const exhausted = [...request.exhaustedClis, request.fromCli];
+  const runtimeTargets = resolveCompactionRecoveryTargets({
+    db: deps.db,
+    activeProvider: request.toCli,
+    bots: deps.bots,
+    configuredChain: deps.configuredChain,
+    exhaustedProviders: exhausted,
+  });
+  if (runtimeTargets.length === 0) {
     recordPreflightFailure(deps.db, request.chatKey, "unavailable");
     return {
       outcome: "failed",
@@ -110,14 +133,6 @@ export async function runCapacityFallbackCompaction(
     };
   }
 
-  const runtimeTargets: CompactionFallbackTarget[] = orderedSpecs.map((spec) => {
-    const config = deps.bots[spec.provider];
-    return {
-      provider: spec.provider,
-      command: config?.command ?? "",
-      model: spec.model ?? deps.db.getSetting(spec.provider) ?? config?.modelPreference[0] ?? null,
-    };
-  });
   if (!runtimeTargets.some((target) => target.command.trim().length > 0)) {
     recordPreflightFailure(deps.db, request.chatKey, runtimeTargets[0].provider);
     return {
@@ -135,7 +150,7 @@ export async function runCapacityFallbackCompaction(
     cliKind: primary.provider,
     model: primary.model,
     fallbackTargets,
-    exhaustedProviders: [...exhausted],
+    exhaustedProviders: exhausted,
     trigger: "capacity_fallback",
     compactProfile: deps.compactProfile,
   });

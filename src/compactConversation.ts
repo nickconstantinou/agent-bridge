@@ -199,7 +199,7 @@ export async function compactConversation(
       finalModel = target.model;
       try {
         const raw = await callTarget(target, prompt);
-        const invalidResponse = parseCliResult({ bot: target.provider, stdout: raw }).text;
+        const invalidResponse = parseCompactionProviderResponse(target.provider, raw);
         const parsed = parseCompactOutput(invalidResponse);
         if (parsed) return parsed;
 
@@ -209,7 +209,7 @@ export async function compactConversation(
             target,
             buildCompactRepairPrompt(invalidResponse, compactProfile),
           );
-          const repairedResponse = parseCliResult({ bot: target.provider, stdout: repairedRaw }).text;
+          const repairedResponse = parseCompactionProviderResponse(target.provider, repairedRaw);
           const repaired = parseCompactOutput(repairedResponse);
           if (repaired) return repaired;
         }
@@ -282,6 +282,19 @@ export async function compactConversation(
     promotedMemoryIds,
     rejectedCandidateCount,
   });
+}
+
+function parseCompactionProviderResponse(provider: BotKind, raw: string): string {
+  try {
+    return parseCliResult({ bot: provider, stdout: raw }).text;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (provider === "antigravity" &&
+        /Agy JSON parse failed: could not extract response field|Agy execution returned empty response/i.test(message)) {
+      return "";
+    }
+    throw error;
+  }
 }
 
 class CompactionFailure extends Error {

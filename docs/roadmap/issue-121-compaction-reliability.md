@@ -1,8 +1,24 @@
 # Issue #121 — Reliable Conversation Compaction Implementation Plan
 
 Date: 2026-07-13
-Status: Proposed
+Status: Active
 Issue: #121
+
+## Delivery status
+
+| Phase | Status | Delivery |
+|---|---|---|
+| Provider contract correctness and explicit outcomes | Complete | PR #125, squash commit `1ccb9dd` |
+| Healthy fallback compaction | Next | Incoming healthy provider first; exhausted provider excluded |
+| Attempt telemetry and `/context` | Pending | No prompt, output, summary, secret, or conversation content persistence |
+| Structured-output recovery | Pending | Conservative extraction, one repair, bounded eligible fallback |
+| Atomic persistence | Pending | Summary, accepted memories, and pruning in one transaction |
+| Execution lifecycle | Blocked on shared boundary | Integrate with Issue #119; do not create a second process registry |
+| Acceptance and operations | Pending | Isolated provider smokes, lifecycle/failure coverage, rollback docs |
+| Resumable chunk checkpoints | Optional | Implement only if telemetry demonstrates need |
+
+The architecture and defect descriptions below preserve the original planning
+baseline. This delivery table is authoritative for current implementation status.
 
 ## Purpose
 
@@ -279,7 +295,7 @@ Rules:
 
 The work should be delivered as small implementation PRs. The planning PR must not be merged together with runtime changes.
 
-### PR 1 — Provider contract correctness and outcome handling
+### PR 1 — Provider contract correctness and outcome handling — complete in #125
 
 #### Scope
 
@@ -416,6 +432,11 @@ No prompt or summary content.
 - automatic trigger metadata.
 
 ### PR 3 — Abortable execution and process ownership
+
+This work must integrate with the shared run supervisor from Issue #119. It
+must not add a compaction-only process registry, cancellation map, or competing
+process-lifecycle abstraction. Start this phase only when #119 exposes the
+required supervisor boundary on `main`.
 
 #### Problem
 
@@ -616,9 +637,11 @@ Inject failures at:
 
 Assert that no partial state remains.
 
-### PR 7 — Resumable chunk checkpoints
+### PR 7 — Resumable chunk checkpoints (optional)
 
-This phase should follow the P0/P1 reliability fixes rather than block them.
+This phase should follow the P0/P1 reliability fixes rather than block them,
+and should be implemented only when attempt telemetry proves checkpoint reuse
+is operationally necessary.
 
 #### Storage
 
@@ -829,7 +852,10 @@ Issue #121 is complete when:
 
 ## Coding-agent handoff
 
-Implement Issue #121 as the ordered PR sequence in this document. Start with PR 1 only; do not combine all phases into one large runtime change.
+Implement Issue #121 as small, ordered PRs; do not combine phases. PR 1 is
+complete in #125. Continue with healthy target selection for capacity fallback.
+Execution-lifecycle work depends on Issue #119 and must reuse its shared run
+supervisor rather than introduce a second process registry.
 
 For every PR:
 

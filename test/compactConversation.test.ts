@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { rmSync } from "node:fs";
 import { openDb, type BridgeDb } from "../src/db.js";
 import { compactConversation } from "../src/compactConversation.js";
+import { buildExecutionOptions } from "../src/cli.js";
 
 function compactJson(summaryMd: string, memoryCandidates: unknown[] = []): string {
   return JSON.stringify({ summary_md: summaryMd, memory_candidates: memoryCandidates });
@@ -28,6 +29,65 @@ describe("compactConversation", () => {
     runCli,
     botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
     cliKind: "claude",
+    trigger: "manual" as const,
+  });
+
+  it("uses Codex JSON events, tool-free flags, and normal execution options", async () => {
+    db.addConvTurn("chat:1", "user", "fix the Codex contract");
+    const output = compactJson("Current objective:\n- fix Codex contract");
+    const runCli = vi.fn().mockResolvedValue([
+      JSON.stringify({ type: "thread.started", thread_id: "thread-1" }),
+      JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: output } }),
+    ].join("\n"));
+
+    const result = await compactConversation("chat:1", {
+      ...deps(runCli),
+      botConfig: { command: "codex", modelPreference: ["gpt-5.6-sol"] },
+      cliKind: "codex",
+    });
+
+    expect(result.outcome).toBe("compacted");
+    const [, args, , options] = runCli.mock.calls[0];
+    expect(args).toContain("--json");
+    expect(args).toEqual(expect.arrayContaining(["--disable", "shell_tool", "--disable", "plugins"]));
+    expect(options).toEqual(buildExecutionOptions("codex"));
+  });
+
+  it("keeps Claude JSON extraction compatible and runs tool-free", async () => {
+    db.addConvTurn("chat:1", "user", "fix the Claude contract");
+    const runCli = vi.fn().mockResolvedValue(JSON.stringify({
+      result: compactJson("Current objective:\n- fix Claude contract"),
+      session_id: "claude-session",
+    }));
+
+    const result = await compactConversation("chat:1", deps(runCli));
+
+    expect(result.outcome).toBe("compacted");
+    const [, args, , options] = runCli.mock.calls[0];
+    expect(args).toEqual(expect.arrayContaining([
+      "--output-format", "json", "--tools", "", "--disable-slash-commands", "--strict-mcp-config",
+    ]));
+    expect(options).toEqual(buildExecutionOptions("claude"));
+  });
+
+  it("keeps Agy wrapped extraction compatible and runs tool-free", async () => {
+    db.addConvTurn("chat:1", "user", "fix the Agy contract");
+    const runCli = vi.fn().mockResolvedValue(JSON.stringify({
+      reasoning: "bounded transformation",
+      response: compactJson("Current objective:\n- fix Agy contract"),
+    }));
+
+    const result = await compactConversation("chat:1", {
+      ...deps(runCli),
+      botConfig: { command: "agy", modelPreference: ["gemini-3.5-flash-high"] },
+      cliKind: "antigravity",
+      trigger: "manual",
+    });
+
+    expect(result.outcome).toBe("compacted");
+    const [, args, , options] = runCli.mock.calls[0];
+    expect(args).toContain("--sandbox");
+    expect(options).toEqual(buildExecutionOptions("antigravity"));
   });
 
   it("returns no_turns when there is nothing to compact", async () => {
@@ -79,6 +139,32 @@ describe("compactConversation", () => {
     expect(result.error).toBeTruthy();
     expect(db.getLatestConvSummary("chat:1")).toBeNull();
     expect(db.getRecentConvTurns("chat:1", 100)).toHaveLength(2);
+  });
+
+  it("does not store partial summary, promote chunk memory, or prune turns when reduce fails", async () => {
+    process.env.BRIDGE_COMPACT_CHUNK_MAX_CHARS = "80";
+    try {
+      for (let i = 0; i < 4; i++) {
+        db.addConvTurn("chat:1", i % 2 === 0 ? "user" : "assistant", `turn-${i} ${"x".repeat(40)}`);
+      }
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        const prompt = args[args.length - 1];
+        if (prompt.includes("Merge these compact summaries")) return "invalid reduce output";
+        return compactJson("Current objective:\n- partial chunk", [
+          { type: "decision", scope: "project", text: "Partial output must never become memory.", confidence: 0.9 },
+        ]);
+      });
+
+      const result = await compactConversation("chat:1", deps(runCli));
+
+      expect(result.outcome).toBe("failed");
+      expect(db.getLatestConvSummary("chat:1")).toBeNull();
+      expect(db.getMemoryCount()).toBe(0);
+      expect(db.getRecentConvTurns("chat:1", 100)).toHaveLength(4);
+      expect(result.trigger).toBe("manual");
+    } finally {
+      delete process.env.BRIDGE_COMPACT_CHUNK_MAX_CHARS;
+    }
   });
 
   it("does not store a summary or prune turns when the CLI returns non-JSON/invalid output", async () => {
@@ -149,6 +235,7 @@ describe("compactConversation", () => {
       runCli,
       botConfig: { command: "agy", modelPreference: ["gemini-3.5-flash-high"] },
       cliKind: "antigravity",
+      trigger: "manual",
     });
 
     expect(result.outcome).toBe("compacted");
@@ -175,6 +262,7 @@ describe("compactConversation", () => {
       runCli,
       botConfig: { command: "agy", modelPreference: ["gemini-3.5-flash-high"] },
       cliKind: "antigravity",
+      trigger: "manual",
     });
 
     expect(result.outcome).toBe("failed");

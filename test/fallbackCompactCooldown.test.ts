@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { openDb, type BridgeDb } from "../src/db.js";
 import {
   shouldCompactBeforeFallback,
-  recordFallbackCompactAttempt,
+  recordFallbackCompactSuccess,
 } from "../src/fallbackCompactCooldown.js";
 
 let db: BridgeDb;
@@ -21,15 +21,15 @@ describe("fallback compact cooldown", () => {
     expect(shouldCompactBeforeFallback(db, "chat:1")).toBe(true);
   });
 
-  it("blocks compaction immediately after an attempt is recorded", () => {
-    recordFallbackCompactAttempt(db, "chat:1");
+  it("blocks compaction immediately after a success is recorded", () => {
+    recordFallbackCompactSuccess(db, "chat:1");
     expect(shouldCompactBeforeFallback(db, "chat:1")).toBe(false);
   });
 
   it("allows compaction again once the cooldown window has elapsed", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
-    recordFallbackCompactAttempt(db, "chat:1");
+    recordFallbackCompactSuccess(db, "chat:1");
     expect(shouldCompactBeforeFallback(db, "chat:1")).toBe(false);
 
     vi.setSystemTime(new Date("2026-01-01T00:06:00.000Z")); // +6 minutes, past default 5 min cooldown
@@ -40,7 +40,7 @@ describe("fallback compact cooldown", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
     process.env.BRIDGE_FALLBACK_COMPACT_COOLDOWN_MS = "1000";
-    recordFallbackCompactAttempt(db, "chat:1");
+    recordFallbackCompactSuccess(db, "chat:1");
     expect(shouldCompactBeforeFallback(db, "chat:1")).toBe(false);
 
     vi.setSystemTime(new Date("2026-01-01T00:00:01.500Z")); // +1.5s, past the 1s override
@@ -48,7 +48,7 @@ describe("fallback compact cooldown", () => {
   });
 
   it("tracks cooldown independently per chat key", () => {
-    recordFallbackCompactAttempt(db, "chat:1");
+    recordFallbackCompactSuccess(db, "chat:1");
     expect(shouldCompactBeforeFallback(db, "chat:1")).toBe(false);
     expect(shouldCompactBeforeFallback(db, "chat:2")).toBe(true);
   });

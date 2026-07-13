@@ -187,6 +187,68 @@ function stripJsonFence(text: string): string {
   return fence ? fence[1].trim() : text;
 }
 
+function extractTopLevelJsonObjects(text: string): string[] {
+  const objects: string[] = [];
+  let start = -1;
+  let depth = 0;
+  let quoted = false;
+  let escaped = false;
+
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') quoted = false;
+      continue;
+    }
+    if (char === '"') {
+      quoted = true;
+      continue;
+    }
+    if (char === "{") {
+      if (depth === 0) start = index;
+      depth++;
+    } else if (char === "}" && depth > 0) {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        objects.push(text.slice(start, index + 1));
+        start = -1;
+      }
+    }
+  }
+  return depth === 0 ? objects : [];
+}
+
+function isHarmlessJsonWrapper(text: string): boolean {
+  const normalized = text
+    .replace(/```(?:json)?/gi, "")
+    .replace(/```/g, "")
+    .trim();
+  if (!normalized) return true;
+  return /^(?:sure[,.!]?\s*)?(?:here is (?:the )?(?:corrected )?(?:json|result|output)[:.]?)$/i.test(normalized);
+}
+
+function parseCompactObject(text: string): CompactOutput | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const obj = parsed as Record<string, unknown>;
+  const summaryMd = obj.summary_md;
+  if (typeof summaryMd !== "string" || summaryMd.trim().length === 0) return null;
+  if (!Array.isArray(obj.memory_candidates)) return null;
+  if (obj.memory_candidates.some((item) => !item || typeof item !== "object" || Array.isArray(item))) return null;
+  return {
+    summaryMd,
+    memoryCandidates: obj.memory_candidates as ProjectMemoryCandidate[],
+  };
+}
+
 /**
  * Parses the structured `{ summary_md, memory_candidates }` compact output.
  * Returns null on any parse/shape failure so the caller can fall back to a
@@ -195,24 +257,32 @@ function stripJsonFence(text: string): string {
 export function parseCompactOutput(raw: string): CompactOutput | null {
   const text = raw.trim();
   if (!text) return null;
+  const direct = parseCompactObject(stripJsonFence(text));
+  if (direct) return direct;
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(stripJsonFence(text));
-  } catch {
-    return null;
-  }
+  const objects = extractTopLevelJsonObjects(text);
+  if (objects.length !== 1) return null;
+  const candidate = objects[0];
+  const start = text.indexOf(candidate);
+  if (!isHarmlessJsonWrapper(text.slice(0, start)) ||
+      !isHarmlessJsonWrapper(text.slice(start + candidate.length))) return null;
+  return parseCompactObject(candidate);
+}
 
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-  const obj = parsed as Record<string, unknown>;
-
-  const summaryMd = obj.summary_md;
-  if (typeof summaryMd !== "string" || summaryMd.trim().length === 0) return null;
-
-  const rawCandidates = obj.memory_candidates;
-  const memoryCandidates = Array.isArray(rawCandidates)
-    ? rawCandidates.filter((item) => item && typeof item === "object") as ProjectMemoryCandidate[]
-    : [];
-
-  return { summaryMd, memoryCandidates };
+export function buildCompactRepairPrompt(
+  invalidResponse: string,
+  profile: CompactProfile = "engineering",
+  maxChars = compactPromptMaxChars(),
+): string {
+  const header = [
+    jsonOutputHeader(profile),
+    "",
+    "Correct the invalid structured response below. Preserve its intended facts, but output only one schema-valid JSON object.",
+    "Do not add explanation, markdown fences, tools, or reasoning.",
+    "",
+    "--- Invalid structured response ---",
+  ].join("\n");
+  const footer = "\n--- End invalid response ---\n\nReturn corrected JSON now:";
+  const budget = Math.max(0, maxChars - header.length - footer.length);
+  return header + "\n" + invalidResponse.slice(0, budget) + footer;
 }

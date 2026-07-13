@@ -188,7 +188,9 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `TELEGRAM_LAYOUT_CODE_BLOCK_THRESHOLD` | Telegram bots | `3` | Code-block attachment threshold used only when `TELEGRAM_DOCUMENT_FALLBACK_ENABLED=true` |
 | `INTERACTIVE_DEFAULT_CLI` | Interactive | `codex` | Default CLI for new interactive chats |
 | `INTERACTIVE_CLI_CHAIN` | Interactive | `codex,claude,antigravity` | CLI fallback order after model fallbacks are exhausted |
-| `BRIDGE_COMPACTION_CHAIN` | Interactive/Worker | — | Optional provider-only fallback order for capacity-handoff compaction; incoming healthy provider is always preferred, exhausted providers and Kimchi are excluded |
+| `BRIDGE_COMPACTION_CHAIN` | Interactive/Worker | — | Optional ordered `provider[:model]` recovery targets; the healthy caller-selected provider is first, duplicates/invalid targets and exhausted providers are excluded, and Kimchi remains fail-closed |
+| `BRIDGE_COMPACTION_MAX_ATTEMPTS` | Interactive/Worker | `3` | Maximum provider/model targets tried for each structured compaction output; bounded to 8 |
+| `BRIDGE_COMPACTION_REPAIR_ATTEMPTS` | Interactive/Worker | `1` | Invalid structured-output repair attempts per provider/model target; bounded to 0 or 1 |
 | `WORKER_ENABLED` | Worker | `false` | Master switch for autonomous job commands |
 | `WORKER_CLI_CHAIN` | Worker | `codex,claude,antigravity` | CLI fallback order for worker interactive chat |
 | `WORKER_CODE_CLI_CHAIN` | Worker | `codex,claude` | Code-writing job fallback order; `antigravity` is stripped if present |

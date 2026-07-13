@@ -4,6 +4,8 @@ export type CompactionOutcome = "no_turns" | "compacted" | "failed";
 export type CompactionErrorCategory =
   | "auth"
   | "capacity"
+  | "cancelled"
+  | "fatal"
   | "invalid_output"
   | "provider_unavailable"
   | "timeout"

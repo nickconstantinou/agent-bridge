@@ -9,10 +9,10 @@ Issue: #121
 | Phase | Status | Delivery |
 |---|---|---|
 | Provider contract correctness and explicit outcomes | Complete | PR #125, squash commit `1ccb9dd` |
-| Healthy fallback compaction | Next | Incoming healthy provider first; exhausted provider excluded |
-| Attempt telemetry and `/context` | Pending | No prompt, output, summary, secret, or conversation content persistence |
-| Structured-output recovery | Pending | Conservative extraction, one repair, bounded eligible fallback |
-| Atomic persistence | Pending | Summary, accepted memories, and pruning in one transaction |
+| Healthy fallback compaction | Complete | PR #126, squash commit `5801109` |
+| Attempt telemetry and `/context` | Complete | PR #127, squash commit `0c684ff` |
+| Structured-output recovery | Complete | PR #129, squash commit `5abf7aa` |
+| Atomic persistence | Next | Summary, accepted memories, and pruning in one transaction |
 | Execution lifecycle | Blocked on shared boundary | Integrate with Issue #119; do not create a second process registry |
 | Acceptance and operations | Pending | Isolated provider smokes, lifecycle/failure coverage, rollback docs |
 | Resumable chunk checkpoints | Optional | Implement only if telemetry demonstrates need |

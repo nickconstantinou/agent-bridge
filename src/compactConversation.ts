@@ -22,6 +22,7 @@ import {
   type CompactProfile,
 } from "./compactSummary.js";
 import { storeProjectMemoryCandidate } from "./projectMemory.js";
+import type { CompactionErrorCategory } from "./repositories/compactionRepository.js";
 
 export interface CompactConversationDeps {
   db: BridgeDb;
@@ -30,6 +31,7 @@ export interface CompactConversationDeps {
   cliKind: string;
   trigger: CompactionTrigger;
   compactProfile?: CompactProfile;
+  now?: () => Date;
 }
 
 export type CompactConversationOutcome = "compacted" | "no_turns" | "failed";
@@ -51,21 +53,56 @@ export async function compactConversation(
   chatKey: string,
   deps: CompactConversationDeps,
 ): Promise<CompactConversationResult> {
-  const { db, runCli, botConfig, cliKind, trigger, compactProfile = "engineering" } = deps;
+  const { db, runCli, botConfig, cliKind, trigger, compactProfile = "engineering", now = () => new Date() } = deps;
+  const startedAt = now();
+  const model = db.getSetting(cliKind) || botConfig.modelPreference[0] || null;
+  let cliCallCount = 0;
+  let chunkCount = 0;
+  let rangeStartTurnId: number | null = null;
+  let rangeEndTurnId: number | null = null;
+
+  const finish = (
+    result: CompactConversationResult,
+    errorCategory: CompactionErrorCategory | null = null,
+  ): CompactConversationResult => {
+    const endedAt = now();
+    try {
+      db.addCompactionAttempt({
+        chatKey,
+        trigger,
+        provider: cliKind,
+        model,
+        outcome: result.outcome,
+        errorCategory,
+        durationMs: Math.max(0, endedAt.getTime() - startedAt.getTime()),
+        chunkCount,
+        cliCallCount,
+        rangeStartTurnId,
+        rangeEndTurnId,
+        startedAt: startedAt.toISOString(),
+        endedAt: endedAt.toISOString(),
+      });
+    } catch {
+      console.warn(`[compaction-telemetry] write failed for ${trigger}/${result.outcome}`);
+    }
+    return result;
+  };
 
   const previousSummary = db.getLatestConvSummary(chatKey);
   const turns = db.getConvTurnsForCompaction(chatKey);
-  if (turns.length === 0) return { outcome: "no_turns", trigger };
+  if (turns.length === 0) return finish({ outcome: "no_turns", trigger });
 
   const startId = turns[0].id;
   const endId = turns[turns.length - 1].id;
   const chunks = chunkCompactTurns(turns);
+  chunkCount = chunks.length;
+  rangeStartTurnId = startId;
+  rangeEndTurnId = endId;
 
   const summarizePrompt = async (prompt: string): Promise<string> => {
     if (cliKind === "kimchi") {
       throw new Error("Kimchi compaction is disabled because verified tool-free execution is not supported");
     }
-    const model = db.getSetting(cliKind) || botConfig.modelPreference[0] || null;
     const invocation = buildCliInvocation({
       bot: cliKind,
       prompt,
@@ -77,6 +114,7 @@ export async function compactConversation(
       outputFormat: cliKind === "codex" || cliKind === "claude" ? "json" : null,
       toolMode: "none",
     });
+    cliCallCount++;
     const raw = await Promise.race([
       runCli(invocation.command, invocation.args, process.cwd(), buildExecutionOptions(cliKind as BotKind)),
       new Promise<never>((_, reject) =>
@@ -116,14 +154,15 @@ export async function compactConversation(
   } catch (error) {
     // Non-destructive: no summary stored, no turns pruned. Previous summary and
     // raw turns remain available so the conversation can continue.
-    return {
+    const message = (error as Error).message;
+    return finish({
       outcome: "failed",
       trigger,
-      error: (error as Error).message,
+      error: message,
       turnCount: turns.length,
       startId,
       endId,
-    };
+    }, classifyCompactionError(message));
   }
 
   db.addConvSummary(chatKey, startId, endId, finalOutput.summaryMd);
@@ -142,7 +181,7 @@ export async function compactConversation(
 
   db.pruneConvTurns(chatKey, endId);
 
-  return {
+  return finish({
     outcome: "compacted",
     trigger,
     summaryMd: finalOutput.summaryMd,
@@ -151,5 +190,15 @@ export async function compactConversation(
     endId,
     promotedMemoryIds,
     rejectedCandidateCount,
-  };
+  });
+}
+
+function classifyCompactionError(message: string): CompactionErrorCategory {
+  if (/timeout|timed out/i.test(message)) return "timeout";
+  if (/capacity|rate.?limit|quota|session limit/i.test(message)) return "capacity";
+  if (/auth|unauthori[sz]ed|credential|login/i.test(message)) return "auth";
+  if (/invalid compact JSON|empty compact summary/i.test(message)) return "invalid_output";
+  if (/unavailable|not found|ENOENT|disabled because|no healthy/i.test(message)) return "provider_unavailable";
+  if (/ECONN|network|temporary|transient|service unavailable|HTTP 5\d\d/i.test(message)) return "transient";
+  return "unknown";
 }

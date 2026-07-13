@@ -15,6 +15,29 @@ import type { BotConfig, BotKind } from "./types.js";
 
 const TOOL_FREE_COMPACTION_PROVIDERS = new Set<BotKind>(["codex", "claude", "antigravity"]);
 
+function recordPreflightFailure(db: BridgeDb, chatKey: string, provider: BotKind | "unavailable"): void {
+  const at = new Date().toISOString();
+  try {
+    db.addCompactionAttempt({
+      chatKey,
+      trigger: "capacity_fallback",
+      provider,
+      model: null,
+      outcome: "failed",
+      errorCategory: "provider_unavailable",
+      durationMs: 0,
+      chunkCount: 0,
+      cliCallCount: 0,
+      rangeStartTurnId: null,
+      rangeEndTurnId: null,
+      startedAt: at,
+      endedAt: at,
+    });
+  } catch {
+    console.warn("[compaction-telemetry] write failed for capacity_fallback/failed");
+  }
+}
+
 export interface CapacityFallbackCompactionRequest {
   chatKey: string;
   fromCli: BotKind;
@@ -63,6 +86,7 @@ export async function runCapacityFallbackCompaction(
     configuredChain: deps.configuredChain,
   });
   if (!target) {
+    recordPreflightFailure(deps.db, request.chatKey, "unavailable");
     return {
       outcome: "failed",
       trigger: "capacity_fallback",
@@ -72,6 +96,7 @@ export async function runCapacityFallbackCompaction(
 
   const botConfig = deps.bots[target];
   if (!botConfig) {
+    recordPreflightFailure(deps.db, request.chatKey, target);
     return {
       outcome: "failed",
       trigger: "capacity_fallback",

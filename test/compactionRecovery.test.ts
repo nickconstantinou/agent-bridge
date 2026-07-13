@@ -88,6 +88,25 @@ describe("structured compaction recovery", () => {
     expect(runCli).toHaveBeenCalledTimes(2);
   });
 
+  it("shares the one-repair budget across provider/model fallback targets", async () => {
+    const commands: string[] = [];
+    const runCli = vi.fn().mockImplementation(async (command: string) => {
+      commands.push(command);
+      if (command === "codex") return codexEvents("invalid fallback output");
+      return JSON.stringify({ result: "invalid primary output" });
+    });
+
+    const result = await compactConversation("chat:1", {
+      ...baseDeps(runCli),
+      fallbackTargets: [{ provider: "codex", command: "codex", model: "gpt-fallback" }],
+      maxAttempts: 2,
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(commands).toEqual(["claude", "claude", "codex"]);
+    expect(db.getLatestCompactionAttempt("chat:1")?.cli_call_count).toBe(3);
+  });
+
   it("falls back in order and records one logical row with aggregate calls and final target", async () => {
     const commands: string[] = [];
     const runCli = vi.fn().mockImplementation(async (command: string) => {

@@ -205,6 +205,44 @@ describe("structured compaction recovery", () => {
     expect(JSON.stringify(attempt)).not.toContain(rawSecret);
   });
 
+  it("repairs empty Antigravity parser output once, then falls back safely", async () => {
+    const rawSecret = "agy-fallback-token=DO_NOT_PERSIST";
+    const commands: string[] = [];
+    const runCli = vi.fn().mockImplementation(async (command: string) => {
+      commands.push(command);
+      if (command === "agy") return "";
+      throw new Error(`ECONNRESET ${rawSecret}`);
+    });
+
+    const result = await compactConversation("chat:1", {
+      db,
+      runCli,
+      botConfig: { command: "agy", modelPreference: ["gemini-primary"] },
+      cliKind: "antigravity",
+      trigger: "manual",
+      fallbackTargets: [{ provider: "codex", command: "codex", model: "gpt-fallback" }],
+      maxAttempts: 2,
+    });
+
+    expect(result.outcome).toBe("failed");
+    expect(result.error).not.toContain(rawSecret);
+    expect(commands).toEqual(["agy", "agy", "codex"]);
+    expect(db.getLatestConvSummary("chat:1")).toBeNull();
+    expect(db.getMemoryCount()).toBe(0);
+    expect(db.getRecentConvTurns("chat:1", 100)).toHaveLength(1);
+    expect(db.raw.prepare("SELECT COUNT(*) AS count FROM compaction_attempts WHERE chat_key = ?")
+      .get("chat:1")).toEqual({ count: 1 });
+    const attempt = db.getLatestCompactionAttempt("chat:1");
+    expect(attempt).toEqual(expect.objectContaining({
+      provider: "codex",
+      model: "gpt-fallback",
+      outcome: "failed",
+      error_category: "transient",
+      cli_call_count: 3,
+    }));
+    expect(JSON.stringify(attempt)).not.toContain(rawSecret);
+  });
+
   it("uses bounded safe configuration defaults", () => {
     expect(compactMaxAttempts()).toBe(3);
     expect(compactRepairAttempts()).toBe(1);

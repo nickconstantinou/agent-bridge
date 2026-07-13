@@ -1223,6 +1223,7 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
   let resumeSessionId: string | null = null;
   const attachments: string[] = [];
   const disabledTools: string[] = [];
+  let hasSandbox = false;
   let hasDoubleDash = false;
   let hasDashPrompt = false;
 
@@ -1232,6 +1233,8 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
       hasDashPrompt = true;
     } else if (arg === "--") {
       hasDoubleDash = true;
+    } else if (arg === "--sandbox") {
+      hasSandbox = true;
     } else if (arg.startsWith("-")) {
       const hasValue = [
         "--model",
@@ -1328,6 +1331,9 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
     }
     if (logFile) {
       newArgs.push("--log-file", logFile);
+    }
+    if (hasSandbox) {
+      newArgs.push("--sandbox");
     }
     if (printTimeout) {
       newArgs.push("--print-timeout", printTimeout);

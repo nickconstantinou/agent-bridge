@@ -62,6 +62,9 @@ export async function compactConversation(
   const chunks = chunkCompactTurns(turns);
 
   const summarizePrompt = async (prompt: string): Promise<string> => {
+    if (cliKind === "kimchi") {
+      throw new Error("Kimchi compaction is disabled because verified tool-free execution is not supported");
+    }
     const model = db.getSetting(cliKind) || botConfig.modelPreference[0] || null;
     const invocation = buildCliInvocation({
       bot: cliKind,

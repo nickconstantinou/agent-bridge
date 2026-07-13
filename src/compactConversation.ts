@@ -193,6 +193,7 @@ export async function compactConversation(
 
   const summarizeToOutput = async (prompt: string) => {
     let lastFailure = new CompactionFailure("provider_unavailable", true);
+    let repairsRemaining = repairAttempts;
     for (const target of boundedTargets) {
       finalProvider = target.provider;
       finalModel = target.model;
@@ -202,7 +203,8 @@ export async function compactConversation(
         const parsed = parseCompactOutput(invalidResponse);
         if (parsed) return parsed;
 
-        if (repairAttempts === 1) {
+        if (repairsRemaining > 0) {
+          repairsRemaining--;
           const repairedRaw = await callTarget(
             target,
             buildCompactRepairPrompt(invalidResponse, compactProfile),

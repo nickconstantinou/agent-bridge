@@ -85,6 +85,8 @@ describe("healthy capacity-fallback compaction", () => {
     expect(result.outcome).toBe("compacted");
     expect(runCli).toHaveBeenCalledTimes(1);
     expect(runCli.mock.calls[0][0]).toBe("claude");
+    expect(db.raw.prepare("SELECT COUNT(*) AS count FROM compaction_attempts WHERE chat_key = ?").get("chat:1"))
+      .toEqual({ count: 1 });
   });
 
   it("fails non-destructively without spawning when no healthy tool-free target exists", async () => {
@@ -113,5 +115,82 @@ describe("healthy capacity-fallback compaction", () => {
     expect(db.getLatestConvSummary("chat:1")).toBeNull();
     expect(db.getMemoryCount()).toBe(0);
     expect(db.getRecentConvTurns("chat:1", 100)).toHaveLength(1);
+    expect(db.getLatestCompactionAttempt("chat:1")).toEqual(expect.objectContaining({
+      trigger: "capacity_fallback",
+      provider: "unavailable",
+      model: null,
+      outcome: "failed",
+      error_category: "provider_unavailable",
+      chunk_count: 0,
+      cli_call_count: 0,
+      range_start_turn_id: null,
+      range_end_turn_id: null,
+    }));
+    expect(db.raw.prepare("SELECT COUNT(*) AS count FROM compaction_attempts WHERE chat_key = ?").get("chat:1"))
+      .toEqual({ count: 1 });
+  });
+
+  it("records one bounded preflight failure without spawning when the selected provider has no bot config", async () => {
+    db.addConvTurn("chat:1", "user", "keep this private turn");
+    const runCli = vi.fn();
+
+    const result = await runCapacityFallbackCompaction({
+      chatKey: "chat:1",
+      fromCli: "codex",
+      toCli: "claude",
+      exhaustedClis: ["codex"],
+    }, {
+      db,
+      runCli,
+      bots: {},
+      configuredChain: ["claude"],
+      compactProfile: "companion",
+    });
+
+    expect(result).toMatchObject({ outcome: "failed", trigger: "capacity_fallback" });
+    expect(runCli).not.toHaveBeenCalled();
+    expect(db.getLatestConvSummary("chat:1")).toBeNull();
+    expect(db.getRecentConvTurns("chat:1", 100)).toHaveLength(1);
+    expect(db.getLatestCompactionAttempt("chat:1")).toEqual(expect.objectContaining({
+      trigger: "capacity_fallback",
+      provider: "claude",
+      model: null,
+      outcome: "failed",
+      error_category: "provider_unavailable",
+      chunk_count: 0,
+      cli_call_count: 0,
+      range_start_turn_id: null,
+      range_end_turn_id: null,
+    }));
+    expect(JSON.stringify(db.getLatestCompactionAttempt("chat:1"))).not.toContain("keep this private turn");
+    expect(db.raw.prepare("SELECT COUNT(*) AS count FROM compaction_attempts WHERE chat_key = ?").get("chat:1"))
+      .toEqual({ count: 1 });
+  });
+
+  it("keeps a preflight failure non-blocking and secret-safe when telemetry persistence fails", async () => {
+    const runCli = vi.fn();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(db, "addCompactionAttempt").mockImplementation(() => {
+      throw new Error("raw token=must-not-leak");
+    });
+
+    const result = await runCapacityFallbackCompaction({
+      chatKey: "chat:1",
+      fromCli: "codex",
+      toCli: "kimchi",
+      exhaustedClis: ["codex", "claude", "antigravity"],
+    }, {
+      db,
+      runCli,
+      bots: {},
+      configuredChain: [],
+      compactProfile: "companion",
+    });
+
+    expect(result).toMatchObject({ outcome: "failed", trigger: "capacity_fallback" });
+    expect(runCli).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith("[compaction-telemetry] write failed for capacity_fallback/failed");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("must-not-leak");
+    warn.mockRestore();
   });
 });

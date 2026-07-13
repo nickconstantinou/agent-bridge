@@ -15,6 +15,11 @@ import { RunRepository } from "./repositories/runRepository.js";
 import { SessionRepository } from "./repositories/sessionRepository.js";
 import { SettingsRepository } from "./repositories/settingsRepository.js";
 import { WorkQueueRepository } from "./repositories/workQueueRepository.js";
+import {
+  CompactionRepository,
+  type CompactionAttemptInput,
+  type CompactionAttemptRecord,
+} from "./repositories/compactionRepository.js";
 
 // Sentinel row keys stored in bridge_state for non-chat state
 const pollingKey = (bot: string) => `$polling:${bot}`;
@@ -455,6 +460,25 @@ export function openDb(dbPath: string): BridgeDb {
         created_at          TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
       );
       CREATE INDEX IF NOT EXISTS idx_conv_summaries_chat_key ON conversation_summaries(chat_key, id);
+
+      CREATE TABLE IF NOT EXISTS compaction_attempts (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_key              TEXT    NOT NULL,
+        trigger               TEXT    NOT NULL CHECK (trigger IN ('manual', 'preseed', 'capacity_fallback')),
+        provider              TEXT    NOT NULL,
+        model                 TEXT,
+        outcome               TEXT    NOT NULL CHECK (outcome IN ('no_turns', 'compacted', 'failed')),
+        error_category        TEXT,
+        duration_ms           INTEGER NOT NULL,
+        chunk_count           INTEGER NOT NULL,
+        cli_call_count        INTEGER NOT NULL,
+        range_start_turn_id   INTEGER,
+        range_end_turn_id     INTEGER,
+        started_at            TEXT    NOT NULL,
+        ended_at              TEXT    NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_compaction_attempts_chat_key
+        ON compaction_attempts(chat_key, id);
     `);
   } catch { /* tables already exist on upgraded DBs */ }
   raw.exec(`
@@ -536,6 +560,7 @@ export class BridgeDb {
   private readonly runs: RunRepository;
   private readonly workQueue: WorkQueueRepository;
   private readonly memories: MemoryRepository;
+  private readonly compactions: CompactionRepository;
 
   constructor(raw: Database.Database) {
     this.raw = raw;
@@ -545,6 +570,7 @@ export class BridgeDb {
     this.runs = new RunRepository(raw);
     this.workQueue = new WorkQueueRepository(raw);
     this.memories = new MemoryRepository(raw);
+    this.compactions = new CompactionRepository(raw);
   }
 
   // ── Session management ───────────────────────────────────────────────────
@@ -1074,6 +1100,14 @@ export class BridgeDb {
       latestSummaryAt: ls?.created_at ?? null,
       latestTurnAt: lt?.created_at ?? null,
     };
+  }
+
+  addCompactionAttempt(input: CompactionAttemptInput): void {
+    this.compactions.addAttempt(input);
+  }
+
+  getLatestCompactionAttempt(chatKey: string): CompactionAttemptRecord | null {
+    return this.compactions.getLatestAttempt(chatKey);
   }
 
   // ── Project memory ────────────────────────────────────────────────────────

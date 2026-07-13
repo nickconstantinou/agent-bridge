@@ -193,6 +193,7 @@ export function handleCommand(
   if (text === "/context") {
     const status = db.getConvStatus(chatId);
     const summary = db.getLatestConvSummary(chatId);
+    const latestAttempt = db.getLatestCompactionAttempt(chatId);
     const compactStartedAt = db.getSetting(compactInProgressSettingKey(chatId));
     const turnWord = status.turnCount === 1 ? "1 turn" : `${status.turnCount} turns`;
     const lines = [
@@ -200,8 +201,19 @@ export function handleCommand(
       `Stored: ${turnWord}`,
       `Pending queue: ${status.pendingCount}`,
       `Latest turn: ${status.latestTurnAt ?? "none"}`,
-      `Latest compact: ${status.latestSummaryAt ?? "never"}`,
+      `Latest successful compact: ${status.latestSummaryAt ?? "never"}`,
+      `Latest compact attempt: ${latestAttempt?.ended_at ?? "never"}`,
     ];
+    if (latestAttempt) {
+      lines.push(
+        `Outcome: ${latestAttempt.outcome}${latestAttempt.error_category ? ` (${latestAttempt.error_category})` : ""}`,
+        `Trigger: ${latestAttempt.trigger}`,
+        `Provider/model: ${latestAttempt.provider} / ${latestAttempt.model ?? "default"}`,
+        `Calls/chunks: ${latestAttempt.cli_call_count} / ${latestAttempt.chunk_count}`,
+        `Duration: ${latestAttempt.duration_ms} ms`,
+        `Turn range: ${latestAttempt.range_start_turn_id ?? "none"}-${latestAttempt.range_end_turn_id ?? "none"}`,
+      );
+    }
     if (compactStartedAt) {
       lines.push(`Compact: in progress since ${compactStartedAt}`);
     }

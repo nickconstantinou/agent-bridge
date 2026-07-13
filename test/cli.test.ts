@@ -948,6 +948,40 @@ describe("/context command", () => {
     const result = handleCommand("claude", "/context", { db, chatId: "chat:1", config: stubConfig });
     expect(result?.kind).toBe("message");
     expect(result?.text).toContain("1 turn");
+    expect(result?.text).toContain("Latest compact attempt: never");
+  });
+
+  it("distinguishes the latest attempt from the latest successful compaction", () => {
+    const db = openDb(":memory:");
+    db.addConvTurn("chat:1", "user", "hello");
+    db.addConvSummary("chat:1", 1, 1, "successful summary");
+    db.addCompactionAttempt({
+      chatKey: "chat:1",
+      trigger: "capacity_fallback",
+      provider: "claude",
+      model: "claude-sonnet-5",
+      outcome: "failed",
+      errorCategory: "timeout",
+      durationMs: 1500,
+      chunkCount: 2,
+      cliCallCount: 2,
+      rangeStartTurnId: 2,
+      rangeEndTurnId: 4,
+      startedAt: "2026-07-13T10:00:00.000Z",
+      endedAt: "2026-07-13T10:00:01.500Z",
+    });
+
+    const result = handleCommand("claude", "/context", { db, chatId: "chat:1", config: stubConfig });
+
+    expect(result?.kind).toBe("message");
+    expect(result?.text).toContain("Latest successful compact:");
+    expect(result?.text).toContain("Latest compact attempt: 2026-07-13T10:00:01.500Z");
+    expect(result?.text).toContain("Outcome: failed (timeout)");
+    expect(result?.text).toContain("Trigger: capacity_fallback");
+    expect(result?.text).toContain("Provider/model: claude / claude-sonnet-5");
+    expect(result?.text).toContain("Calls/chunks: 2 / 2");
+    expect(result?.text).toContain("Duration: 1500 ms");
+    expect(result?.text).toContain("Turn range: 2-4");
   });
 
   it("nudges users to compact when stored turns are high", () => {

@@ -32,6 +32,123 @@ describe("compactConversation", () => {
     trigger: "manual" as const,
   });
 
+  it.each(["manual", "preseed", "capacity_fallback"] as const)(
+    "records a bounded no_turns attempt for the %s trigger",
+    async (trigger) => {
+      db.setSetting("claude", "claude-fable-5");
+      const runCli = vi.fn();
+      const result = await compactConversation("chat:1", {
+        ...deps(runCli),
+        trigger,
+        now: () => new Date("2026-07-13T10:00:00.000Z"),
+      });
+
+      expect(result.outcome).toBe("no_turns");
+      expect(db.getLatestCompactionAttempt("chat:1")).toEqual(expect.objectContaining({
+        trigger,
+        provider: "claude",
+        model: "claude-fable-5",
+        outcome: "no_turns",
+        error_category: null,
+        duration_ms: 0,
+        chunk_count: 0,
+        cli_call_count: 0,
+        range_start_turn_id: null,
+        range_end_turn_id: null,
+        started_at: "2026-07-13T10:00:00.000Z",
+        ended_at: "2026-07-13T10:00:00.000Z",
+      }));
+    },
+  );
+
+  it("records provider, model, timing, calls, chunks and covered turn range on success", async () => {
+    process.env.BRIDGE_COMPACT_CHUNK_MAX_CHARS = "80";
+    try {
+      for (let i = 0; i < 4; i++) {
+        db.addConvTurn("chat:1", i % 2 === 0 ? "user" : "assistant", `turn-${i} ${"x".repeat(40)}`);
+      }
+      db.setSetting("claude", "claude-sonnet-5");
+      const times = [
+        new Date("2026-07-13T10:00:00.000Z"),
+        new Date("2026-07-13T10:00:00.125Z"),
+      ];
+      const runCli = vi.fn().mockResolvedValue(compactJson("Current objective:\n- telemetry"));
+
+      const result = await compactConversation("chat:1", {
+        ...deps(runCli),
+        trigger: "preseed",
+        now: () => times.shift()!,
+      });
+
+      expect(result.outcome).toBe("compacted");
+      const attempt = db.getLatestCompactionAttempt("chat:1");
+      expect(attempt).toEqual(expect.objectContaining({
+        trigger: "preseed",
+        provider: "claude",
+        model: "claude-sonnet-5",
+        outcome: "compacted",
+        error_category: null,
+        duration_ms: 125,
+        chunk_count: 4,
+        cli_call_count: 5,
+        range_start_turn_id: 1,
+        range_end_turn_id: 4,
+      }));
+      expect(runCli).toHaveBeenCalledTimes(5);
+    } finally {
+      delete process.env.BRIDGE_COMPACT_CHUNK_MAX_CHARS;
+    }
+  });
+
+  it("stores only a bounded failure category and never persists sensitive compaction material", async () => {
+    const secret = "token=super-secret raw repository conversation";
+    db.addConvTurn("chat:1", "user", secret);
+    const runCli = vi.fn().mockResolvedValue(`invalid output ${secret}`);
+
+    const result = await compactConversation("chat:1", {
+      ...deps(runCli),
+      trigger: "capacity_fallback",
+    });
+
+    expect(result.outcome).toBe("failed");
+    const attempt = db.getLatestCompactionAttempt("chat:1");
+    expect(attempt).toEqual(expect.objectContaining({
+      trigger: "capacity_fallback",
+      outcome: "failed",
+      error_category: "invalid_output",
+      cli_call_count: 1,
+      chunk_count: 1,
+      range_start_turn_id: 1,
+      range_end_turn_id: 1,
+    }));
+    expect(JSON.stringify(attempt)).not.toContain(secret);
+    const columns = db.raw.prepare("PRAGMA table_info(compaction_attempts)").all()
+      .map((column: any) => column.name);
+    expect(columns).not.toEqual(expect.arrayContaining([
+      "prompt", "raw_output", "summary", "memory_candidates", "conversation_text", "error_message",
+    ]));
+    expect(db.getLatestConvSummary("chat:1")).toBeNull();
+    expect(db.getRecentConvTurns("chat:1", 100)).toHaveLength(1);
+  });
+
+  it("does not alter a successful compaction result when telemetry persistence fails", async () => {
+    db.addConvTurn("chat:1", "user", "compact safely");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(db, "addCompactionAttempt").mockImplementation(() => {
+      throw new Error("telemetry database contains token=must-not-leak");
+    });
+    const runCli = vi.fn().mockResolvedValue(compactJson("Current objective:\n- compact safely"));
+
+    const result = await compactConversation("chat:1", deps(runCli));
+
+    expect(result.outcome).toBe("compacted");
+    expect(db.getLatestConvSummary("chat:1")?.summary_md).toContain("compact safely");
+    expect(db.getRecentConvTurns("chat:1", 100)).toHaveLength(0);
+    expect(warn).toHaveBeenCalledWith("[compaction-telemetry] write failed for manual/compacted");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("must-not-leak");
+    warn.mockRestore();
+  });
+
   it("uses Codex JSON events, tool-free flags, and normal execution options", async () => {
     db.addConvTurn("chat:1", "user", "fix the Codex contract");
     const output = compactJson("Current objective:\n- fix Codex contract");

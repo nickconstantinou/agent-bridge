@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildCompactSummaryPrompt,
+  buildCompactRepairPrompt,
   parseCompactOutput,
   COMPACT_PROMPT_MAX_CHARS,
   COMPACT_TIMEOUT_MS,
@@ -86,20 +87,31 @@ describe("parseCompactOutput", () => {
     expect(result?.summaryMd).toBe("Current objective:\n- fenced");
   });
 
-  it("defaults memory_candidates to an empty array when missing", () => {
-    const raw = JSON.stringify({ summary_md: "Current objective:\n- no candidates" });
-    const result = parseCompactOutput(raw);
-    expect(result?.memoryCandidates).toEqual([]);
+  it("conservatively extracts one valid object from harmless surrounding text", () => {
+    const raw = `Here is the JSON:\n${JSON.stringify({
+      summary_md: "Current objective:\n- wrapped",
+      memory_candidates: [],
+    })}`;
+    expect(parseCompactOutput(raw)?.summaryMd).toContain("wrapped");
   });
 
-  it("filters out non-object entries from memory_candidates", () => {
+  it("rejects ambiguous multiple objects and incomplete JSON", () => {
+    const valid = JSON.stringify({ summary_md: "Current objective:\n- one", memory_candidates: [] });
+    expect(parseCompactOutput(`${valid}\n${valid}`)).toBeNull();
+    expect(parseCompactOutput(`Here is the JSON:\n${valid.slice(0, -1)}`)).toBeNull();
+  });
+
+  it("rejects output when memory_candidates is missing", () => {
+    const raw = JSON.stringify({ summary_md: "Current objective:\n- no candidates" });
+    expect(parseCompactOutput(raw)).toBeNull();
+  });
+
+  it("rejects structurally invalid memory_candidates entries", () => {
     const raw = JSON.stringify({
       summary_md: "Current objective:\n- mixed",
       memory_candidates: [{ type: "note", scope: "project", text: "keep me" }, "not an object", 42, null],
     });
-    const result = parseCompactOutput(raw);
-    expect(result?.memoryCandidates).toHaveLength(1);
-    expect(result?.memoryCandidates[0].text).toBe("keep me");
+    expect(parseCompactOutput(raw)).toBeNull();
   });
 
   it("returns null when summary_md is missing", () => {
@@ -119,6 +131,15 @@ describe("parseCompactOutput", () => {
 
   it("returns null for valid JSON that is not an object (e.g. a bare array)", () => {
     expect(parseCompactOutput("[]")).toBeNull();
+  });
+
+  it("builds a bounded repair prompt from only schema instructions and the invalid response", () => {
+    const prompt = buildCompactRepairPrompt("BROKEN_STRUCTURED_RESPONSE", "engineering", 2_000);
+    expect(prompt).toContain("summary_md");
+    expect(prompt).toContain("memory_candidates");
+    expect(prompt).toContain("BROKEN_STRUCTURED_RESPONSE");
+    expect(prompt).not.toContain("--- Conversation ---");
+    expect(prompt.length).toBeLessThanOrEqual(2_000);
   });
 });
 

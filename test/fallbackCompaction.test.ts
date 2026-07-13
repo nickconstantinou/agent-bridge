@@ -29,9 +29,18 @@ describe("healthy capacity-fallback compaction", () => {
 
   it("parses a provider-only chain, maps agy, and excludes unsupported Kimchi", () => {
     expect(parseCompactionProviderChain(" codex, agy, kimchi, invalid, claude, codex ")).toEqual([
-      "codex",
-      "antigravity",
-      "claude",
+      { provider: "codex", model: null },
+      { provider: "antigravity", model: null },
+      { provider: "claude", model: null },
+    ]);
+  });
+
+  it("validates and deduplicates ordered provider:model targets", () => {
+    expect(parseCompactionProviderChain(
+      "claude:claude-sonnet-5,claude:claude-sonnet-5,codex:gpt-5.6-sol,claude:bad model,kimchi:any",
+    )).toEqual([
+      { provider: "claude", model: "claude-sonnet-5" },
+      { provider: "codex", model: "gpt-5.6-sol" },
     ]);
   });
 
@@ -39,24 +48,35 @@ describe("healthy capacity-fallback compaction", () => {
     expect(selectCapacityFallbackCompactionTarget({
       toCli: "claude",
       exhaustedClis: ["codex"],
-      configuredChain: ["antigravity", "claude"],
-    })).toBe("claude");
+      configuredChain: [
+        { provider: "antigravity", model: null },
+        { provider: "claude", model: "claude-sonnet-5" },
+      ],
+    })).toEqual({ provider: "claude", model: null });
   });
 
   it("uses the configured chain when the incoming provider cannot compact tool-free", () => {
     expect(selectCapacityFallbackCompactionTarget({
       toCli: "kimchi",
       exhaustedClis: ["codex"],
-      configuredChain: ["codex", "antigravity", "claude"],
-    })).toBe("antigravity");
+      configuredChain: [
+        { provider: "codex", model: null },
+        { provider: "antigravity", model: "gemini-high" },
+        { provider: "claude", model: null },
+      ],
+    })).toEqual({ provider: "antigravity", model: "gemini-high" });
   });
 
   it("never selects a provider already marked capacity-exhausted", () => {
     expect(selectCapacityFallbackCompactionTarget({
       toCli: "claude",
       exhaustedClis: ["codex", "claude"],
-      configuredChain: ["codex", "claude", "antigravity"],
-    })).toBe("antigravity");
+      configuredChain: [
+        { provider: "codex", model: null },
+        { provider: "claude", model: null },
+        { provider: "antigravity", model: null },
+      ],
+    })).toEqual({ provider: "antigravity", model: null });
   });
 
   it("compacts database-owned turns with the incoming provider, never the exhausted provider", async () => {
@@ -78,7 +98,10 @@ describe("healthy capacity-fallback compaction", () => {
         codex: { command: "codex", modelPreference: ["gpt-5.6-sol"] },
         claude: { command: "claude", modelPreference: ["claude-fable-5"] },
       },
-      configuredChain: ["codex", "claude"],
+      configuredChain: [
+        { provider: "codex", model: null },
+        { provider: "claude", model: null },
+      ],
       compactProfile: "companion",
     });
 
@@ -102,7 +125,11 @@ describe("healthy capacity-fallback compaction", () => {
       db,
       runCli,
       bots: {},
-      configuredChain: ["codex", "claude", "antigravity"],
+      configuredChain: [
+        { provider: "codex", model: null },
+        { provider: "claude", model: null },
+        { provider: "antigravity", model: null },
+      ],
       compactProfile: "companion",
     });
 
@@ -143,7 +170,7 @@ describe("healthy capacity-fallback compaction", () => {
       db,
       runCli,
       bots: {},
-      configuredChain: ["claude"],
+      configuredChain: [{ provider: "claude", model: null }],
       compactProfile: "companion",
     });
 

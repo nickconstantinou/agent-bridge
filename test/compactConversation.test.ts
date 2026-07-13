@@ -116,7 +116,7 @@ describe("compactConversation", () => {
       trigger: "capacity_fallback",
       outcome: "failed",
       error_category: "invalid_output",
-      cli_call_count: 1,
+      cli_call_count: 2,
       chunk_count: 1,
       range_start_turn_id: 1,
       range_end_turn_id: 1,
@@ -287,7 +287,9 @@ describe("compactConversation", () => {
       }
       const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
         const prompt = args[args.length - 1];
-        if (prompt.includes("Merge these compact summaries")) return "invalid reduce output";
+        if (prompt.includes("Merge these compact summaries") || prompt.includes("invalid reduce output")) {
+          return "invalid reduce output";
+        }
         return compactJson("Current objective:\n- partial chunk", [
           { type: "decision", scope: "project", text: "Partial output must never become memory.", confidence: 0.9 },
         ]);

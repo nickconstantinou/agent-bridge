@@ -11,6 +11,7 @@ import { WorkerFallbackChain } from "./workerFallback.js";
 import { markHandoffRequired } from "./handoffState.js";
 import { shouldCompactBeforeFallback, recordFallbackCompactSuccess } from "./fallbackCompactCooldown.js";
 import type { CompactConversationResult } from "./compactConversation.js";
+import type { CapacityFallbackCompactionRequest } from "./fallbackCompaction.js";
 
 export type CliKind = "codex" | "claude" | "antigravity" | "kimchi";
 export type InteractiveCommandRegistration = {
@@ -274,13 +275,11 @@ export interface InteractiveDispatchDeps {
   notify: (msg: string) => Promise<void> | void;
   onCliSwitched?: (newCli: CliKind) => Promise<void> | void;
   /**
-   * Called with the outgoing CLI kind right before a capacity fallback
-   * switches to the next CLI, so the conversation gets compacted (summary +
-   * memory promotion) using whatever context the outgoing CLI can still
-   * summarise. Rate-limited by fallbackCompactCooldown.ts. A rejection here
-   * must never block the fallback itself — it is always caught and ignored.
+   * Called after resolving the incoming CLI and all exhausted CLIs. The
+   * callback must select a healthy provider for database-owned compaction.
+   * A rejection or failed outcome must never block the provider switch.
    */
-  compactBeforeSwitch?: (chatKey: string, fromCli: string) => Promise<CompactConversationResult>;
+  compactBeforeSwitch?: (request: CapacityFallbackCompactionRequest) => Promise<CompactConversationResult>;
 }
 
 /** Clears the target CLI's session and marks one-time handoff for it. Used by both manual /cli switch and capacity fallback. */
@@ -326,7 +325,12 @@ export async function dispatchInteractiveWithFallback(
     if (next) {
       if (compactBeforeSwitch && shouldCompactBeforeFallback(db, chatKey)) {
         try {
-          const result = await compactBeforeSwitch(chatKey, activeCli);
+          const result = await compactBeforeSwitch({
+            chatKey,
+            fromCli: activeCli,
+            toCli: next,
+            exhaustedClis: [...tried] as CliKind[],
+          });
           if (result.outcome === "compacted") {
             recordFallbackCompactSuccess(db, chatKey);
           } else if (result.outcome === "failed") {

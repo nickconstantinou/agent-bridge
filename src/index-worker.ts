@@ -34,7 +34,7 @@ import {
   applyManualCliSwitchHandoff,
   type CliKind,
 } from "./interactiveBot.js";
-import { compactConversation } from "./compactConversation.js";
+import { parseCompactionProviderChain, runCapacityFallbackCompaction } from "./fallbackCompaction.js";
 import { startJobExecutorLoop } from "./jobExecutorLoop.js";
 import { createDefectScanHandler } from "./handlers/defectScan.js";
 import { createFeaturePlanHandler } from "./handlers/featurePlan.js";
@@ -97,6 +97,7 @@ function withThread<T extends Record<string, unknown>>(body: T, threadId?: numbe
 // ── Fallback chain state (shared across all dispatches) ───────────────────────
 
 const fallbackChain = new WorkerFallbackChain(cliChain, db);
+const compactionProviderChain = parseCompactionProviderChain(process.env.BRIDGE_COMPACTION_CHAIN);
 const exhaustedChats = new Set<string>();
 
 // ── Bridge config ─────────────────────────────────────────────────────────────
@@ -519,18 +520,14 @@ for (;;) {
           onCliSwitched: async (newCli: CliKind) => {
             setUserCliPreference(db, chatKey, newCli);
           },
-          compactBeforeSwitch: async (ck, fromCli) => {
-            const botConfig = config.bots[fromCli as BotKind];
-            if (!botConfig) return { outcome: "failed", trigger: "capacity_fallback", error: `missing bot config for ${fromCli}` };
-            return compactConversation(ck, {
+          compactBeforeSwitch: (request) =>
+            runCapacityFallbackCompaction(request, {
               db,
               runCli,
-              botConfig,
-              cliKind: fromCli,
-              trigger: "capacity_fallback",
+              bots: config.bots,
+              configuredChain: compactionProviderChain,
               compactProfile: "engineering",
-            });
-          },
+            }),
         });
       } catch (err) {
         console.error("[worker-bot] update handling failed", err);

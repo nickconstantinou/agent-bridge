@@ -36,7 +36,7 @@ import {
   type CliKind,
 } from "./interactiveBot.js";
 import { runCli } from "./cli.js";
-import { compactConversation } from "./compactConversation.js";
+import { parseCompactionProviderChain, runCapacityFallbackCompaction } from "./fallbackCompaction.js";
 import type { BridgeConfig, BotKind, TelegramUpdate, TelegramMessage } from "./types.js";
 import { startConfiguredAdvisorBroker } from "./advisorBroker.js";
 
@@ -91,6 +91,7 @@ const advisorBroker = await startConfiguredAdvisorBroker({ db, bots: config.bots
 const cliChain = (process.env.INTERACTIVE_CLI_CHAIN || "codex,claude,antigravity")
   .split(",").map((s) => s.trim()).filter(Boolean);
 const fallbackChain = new WorkerFallbackChain(cliChain, db);
+const compactionProviderChain = parseCompactionProviderChain(process.env.BRIDGE_COMPACTION_CHAIN);
 const exhaustedChats = new Set<string>();
 const snowflakeAliases = new Map<string, string>();
 
@@ -330,18 +331,14 @@ async function handleMessage(d: any): Promise<void> {
     onCliSwitched: async (_newCli) => {
       // Slash command list doesn't change per-CLI on Discord — no-op
     },
-    compactBeforeSwitch: async (ck, fromCli) => {
-      const botConfig = config.bots[fromCli as BotKind];
-      if (!botConfig) return { outcome: "failed", trigger: "capacity_fallback", error: `missing bot config for ${fromCli}` };
-      return compactConversation(ck, {
+    compactBeforeSwitch: (request) =>
+      runCapacityFallbackCompaction(request, {
         db,
         runCli,
-        botConfig,
-        cliKind: fromCli,
-        trigger: "capacity_fallback",
+        bots: config.bots,
+        configuredChain: compactionProviderChain,
         compactProfile: "companion",
-      });
-    },
+      }),
   });
 }
 

@@ -266,6 +266,60 @@ describe("compactConversation", () => {
     expect(db.searchMemories("compact-first memory architecture").length).toBeGreaterThan(0);
   });
 
+  it("rolls back summary and promoted memory when memory promotion fails", async () => {
+    db.addConvTurn("chat:1", "user", "remember this decision atomically");
+    const originalAddMemory = db.addMemory.bind(db);
+    vi.spyOn(db, "addMemory").mockImplementation((memory) => {
+      originalAddMemory(memory);
+      throw new Error("promotion failure token=must-not-leak");
+    });
+    const runCli = vi.fn().mockResolvedValue(compactJson("Current objective:\n- atomic memory", [
+      { type: "decision", scope: "project", text: "Commit compacted memory atomically.", confidence: 0.9 },
+    ]));
+
+    const result = await compactConversation("chat:1", deps(runCli));
+
+    expect(result).toMatchObject({
+      outcome: "failed",
+      error: "Compaction failed (unknown)",
+    });
+    expect(JSON.stringify(result)).not.toContain("must-not-leak");
+    expect(db.getLatestConvSummary("chat:1")).toBeNull();
+    expect(db.getMemoryCount()).toBe(0);
+    expect(db.getRecentConvTurns("chat:1", 100)).toHaveLength(1);
+    expect(db.getLatestCompactionAttempt("chat:1")).toMatchObject({
+      outcome: "failed",
+      error_category: "unknown",
+    });
+  });
+
+  it("rolls back summary, promoted memory and pruning when pruning fails", async () => {
+    db.addConvTurn("chat:1", "user", "keep this turn if the commit fails");
+    const originalPruneConvTurns = db.pruneConvTurns.bind(db);
+    vi.spyOn(db, "pruneConvTurns").mockImplementation((chatKey, upToTurnId) => {
+      originalPruneConvTurns(chatKey, upToTurnId);
+      throw new Error("prune failure repository=private-content");
+    });
+    const runCli = vi.fn().mockResolvedValue(compactJson("Current objective:\n- atomic pruning", [
+      { type: "decision", scope: "project", text: "Rollback every compaction mutation together.", confidence: 0.9 },
+    ]));
+
+    const result = await compactConversation("chat:1", deps(runCli));
+
+    expect(result).toMatchObject({
+      outcome: "failed",
+      error: "Compaction failed (unknown)",
+    });
+    expect(JSON.stringify(result)).not.toContain("private-content");
+    expect(db.getLatestConvSummary("chat:1")).toBeNull();
+    expect(db.getMemoryCount()).toBe(0);
+    expect(db.getRecentConvTurns("chat:1", 100)).toHaveLength(1);
+    expect(db.getLatestCompactionAttempt("chat:1")).toMatchObject({
+      outcome: "failed",
+      error_category: "unknown",
+    });
+  });
+
   it("does not store a summary or prune turns when the CLI call fails", async () => {
     db.addConvTurn("chat:1", "user", "hello");
     db.addConvTurn("chat:1", "assistant", "hi");

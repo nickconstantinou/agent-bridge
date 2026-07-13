@@ -20,7 +20,7 @@ function cooldownMs(): number {
 }
 
 function cooldownSettingKey(chatKey: string): string {
-  return `fallback_compact_last_at:${chatKey}`;
+  return `fallback_compact_last_success_at:${chatKey}`;
 }
 
 export function shouldCompactBeforeFallback(db: CooldownDb, chatKey: string): boolean {
@@ -31,6 +31,6 @@ export function shouldCompactBeforeFallback(db: CooldownDb, chatKey: string): bo
   return Date.now() - lastAt >= cooldownMs();
 }
 
-export function recordFallbackCompactAttempt(db: CooldownDb, chatKey: string): void {
+export function recordFallbackCompactSuccess(db: CooldownDb, chatKey: string): void {
   db.setSetting(cooldownSettingKey(chatKey), new Date().toISOString());
 }

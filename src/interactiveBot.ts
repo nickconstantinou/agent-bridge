@@ -9,7 +9,8 @@ import type { TelegramUpdate } from "./types.js";
 import { buildTelegramCommands } from "./commands.js";
 import { WorkerFallbackChain } from "./workerFallback.js";
 import { markHandoffRequired } from "./handoffState.js";
-import { shouldCompactBeforeFallback, recordFallbackCompactAttempt } from "./fallbackCompactCooldown.js";
+import { shouldCompactBeforeFallback, recordFallbackCompactSuccess } from "./fallbackCompactCooldown.js";
+import type { CompactConversationResult } from "./compactConversation.js";
 
 export type CliKind = "codex" | "claude" | "antigravity" | "kimchi";
 export type InteractiveCommandRegistration = {
@@ -279,7 +280,7 @@ export interface InteractiveDispatchDeps {
    * summarise. Rate-limited by fallbackCompactCooldown.ts. A rejection here
    * must never block the fallback itself — it is always caught and ignored.
    */
-  compactBeforeSwitch?: (chatKey: string, fromCli: string) => Promise<void>;
+  compactBeforeSwitch?: (chatKey: string, fromCli: string) => Promise<CompactConversationResult>;
 }
 
 /** Clears the target CLI's session and marks one-time handoff for it. Used by both manual /cli switch and capacity fallback. */
@@ -324,9 +325,13 @@ export async function dispatchInteractiveWithFallback(
     }
     if (next) {
       if (compactBeforeSwitch && shouldCompactBeforeFallback(db, chatKey)) {
-        recordFallbackCompactAttempt(db, chatKey);
         try {
-          await compactBeforeSwitch(chatKey, activeCli);
+          const result = await compactBeforeSwitch(chatKey, activeCli);
+          if (result.outcome === "compacted") {
+            recordFallbackCompactSuccess(db, chatKey);
+          } else if (result.outcome === "failed") {
+            console.warn(`[fallback] compact-before-switch failed outcome chatKey=${chatKey} fromCli=${activeCli} error=${result.error}`);
+          }
         } catch (err) {
           console.warn(`[fallback] compact-before-switch failed chatKey=${chatKey} fromCli=${activeCli}`, err);
         }

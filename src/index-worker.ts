@@ -521,12 +521,13 @@ for (;;) {
           },
           compactBeforeSwitch: async (ck, fromCli) => {
             const botConfig = config.bots[fromCli as BotKind];
-            if (!botConfig) return;
-            await compactConversation(ck, {
+            if (!botConfig) return { outcome: "failed", trigger: "capacity_fallback", error: `missing bot config for ${fromCli}` };
+            return compactConversation(ck, {
               db,
               runCli,
               botConfig,
               cliKind: fromCli,
+              trigger: "capacity_fallback",
               compactProfile: "engineering",
             });
           },

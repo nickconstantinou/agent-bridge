@@ -8,9 +8,9 @@
  */
 
 import type { BridgeDb } from "./db.js";
-import { buildCliInvocation, parseCliResult } from "./cli.js";
+import { buildCliInvocation, buildExecutionOptions, parseCliResult } from "./cli.js";
 import { resolveEffort } from "./effort.js";
-import type { BotKind } from "./types.js";
+import type { BotKind, CliOptions } from "./types.js";
 import { mapWithConcurrency } from "./concurrency.js";
 import {
   buildCompactSummaryPrompt,
@@ -25,16 +25,19 @@ import { storeProjectMemoryCandidate } from "./projectMemory.js";
 
 export interface CompactConversationDeps {
   db: BridgeDb;
-  runCli: (command: string, args: string[], cwd: string, options: Record<string, unknown>) => Promise<string>;
+  runCli: (command: string, args: string[], cwd: string, options: CliOptions) => Promise<string>;
   botConfig: { command: string; modelPreference: string[] };
   cliKind: string;
+  trigger: CompactionTrigger;
   compactProfile?: CompactProfile;
 }
 
 export type CompactConversationOutcome = "compacted" | "no_turns" | "failed";
+export type CompactionTrigger = "manual" | "preseed" | "capacity_fallback";
 
 export interface CompactConversationResult {
   outcome: CompactConversationOutcome;
+  trigger: CompactionTrigger;
   summaryMd?: string;
   turnCount?: number;
   startId?: number;
@@ -48,11 +51,11 @@ export async function compactConversation(
   chatKey: string,
   deps: CompactConversationDeps,
 ): Promise<CompactConversationResult> {
-  const { db, runCli, botConfig, cliKind, compactProfile = "engineering" } = deps;
+  const { db, runCli, botConfig, cliKind, trigger, compactProfile = "engineering" } = deps;
 
   const previousSummary = db.getLatestConvSummary(chatKey);
   const turns = db.getConvTurnsForCompaction(chatKey);
-  if (turns.length === 0) return { outcome: "no_turns" };
+  if (turns.length === 0) return { outcome: "no_turns", trigger };
 
   const startId = turns[0].id;
   const endId = turns[turns.length - 1].id;
@@ -68,9 +71,11 @@ export async function compactConversation(
       model,
       effort: resolveEffort(cliKind as BotKind, db),
       executionMode: "safe",
+      outputFormat: cliKind === "codex" || cliKind === "claude" ? "json" : null,
+      toolMode: "none",
     });
     const raw = await Promise.race([
-      runCli(invocation.command, invocation.args, process.cwd(), {}),
+      runCli(invocation.command, invocation.args, process.cwd(), buildExecutionOptions(cliKind as BotKind)),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("compact timeout")), COMPACT_TIMEOUT_MS)
       ),
@@ -110,6 +115,7 @@ export async function compactConversation(
     // raw turns remain available so the conversation can continue.
     return {
       outcome: "failed",
+      trigger,
       error: (error as Error).message,
       turnCount: turns.length,
       startId,
@@ -135,6 +141,7 @@ export async function compactConversation(
 
   return {
     outcome: "compacted",
+    trigger,
     summaryMd: finalOutput.summaryMd,
     turnCount: turns.length,
     startId,

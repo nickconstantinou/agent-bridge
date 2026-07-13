@@ -39,6 +39,7 @@ import { buildEffortKeyboard, buildEffortText, effortSettingKey, resolveDefaultE
 import { getCodexUsageText } from "./codexUsage.js";
 import { chunkCompactTurns, type CompactProfile } from "./compactSummary.js";
 import { compactConversation } from "./compactConversation.js";
+import { parseCompactionProviderChain, resolveCompactionRecoveryTargets } from "./fallbackCompaction.js";
 import { consumeHandoffRequired, isHandoffRequired } from "./handoffState.js";
 import { contextInjectionPolicy, preseedCompactMode, preseedCompactCharThreshold, type ContextInjectionPolicy } from "./contextPolicy.js";
 import type { BridgeEvent } from "./events/types.js";
@@ -455,8 +456,7 @@ export class BridgeEngine {
               const result = await compactConversation(ck, {
                 db: this.db,
                 runCli: (command, args, cwd, options) => this.exec.runCli(command, args, cwd, options),
-                botConfig: this.opts.botConfig,
-                cliKind: this.kind,
+                ...this._compactionRecoveryDeps(),
                 trigger: "manual",
                 compactProfile: this.opts.compactProfile ?? "engineering",
               });
@@ -855,8 +855,7 @@ export class BridgeEngine {
       const result = await compactConversation(chatKey, {
         db: this.db,
         runCli: (command, args, cwd, options) => this.exec.runCli(command, args, cwd, options),
-        botConfig: this.opts.botConfig,
-        cliKind: this.kind,
+        ...this._compactionRecoveryDeps(),
         trigger: "preseed",
         compactProfile: this.opts.compactProfile ?? "engineering",
       });
@@ -1493,6 +1492,33 @@ export class BridgeEngine {
 
   private _deliveryKind(): string {
     return this._executionKind();
+  }
+
+  private _compactionRecoveryDeps(): {
+    botConfig: { command: string; modelPreference: string[] };
+    cliKind: BotKind;
+    model: string | null;
+    fallbackTargets: import("./compactConversation.js").CompactionFallbackTarget[];
+  } {
+    const executionKind = this._executionKind();
+    const config = this._effectiveConfig();
+    const targets = resolveCompactionRecoveryTargets({
+      db: this.db,
+      activeProvider: executionKind,
+      bots: { ...config.bots, [executionKind]: this.opts.botConfig },
+      configuredChain: parseCompactionProviderChain(process.env.BRIDGE_COMPACTION_CHAIN),
+    });
+    const primary = targets[0] ?? {
+      provider: executionKind,
+      command: this.opts.botConfig.command,
+      model: this.db.getSetting(executionKind) ?? this.opts.botConfig.modelPreference[0] ?? null,
+    };
+    return {
+      botConfig: { command: primary.command, modelPreference: primary.model ? [primary.model] : [] },
+      cliKind: primary.provider,
+      model: primary.model,
+      fallbackTargets: targets.slice(1),
+    };
   }
 
   /** Returns fullConfig if provided, otherwise builds a minimal BridgeConfig from engine options. */

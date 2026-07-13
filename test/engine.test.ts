@@ -38,6 +38,13 @@ function compactJson(summaryMd: string, memoryCandidates: unknown[] = []): strin
   return JSON.stringify({ summary_md: summaryMd, memory_candidates: memoryCandidates });
 }
 
+function codexCompactEvents(text: string): string {
+  return [
+    JSON.stringify({ type: "thread.started", thread_id: "compact-thread" }),
+    JSON.stringify({ type: "item.completed", item: { type: "agent_message", text } }),
+  ].join("\n");
+}
+
 function makeFullConfig(dbPath: string): BridgeConfig {
   return {
     allowedUserIds: new Set(["42"]),
@@ -73,6 +80,7 @@ describe("BridgeEngine", () => {
     delete process.env.BRIDGE_CONTEXT_INJECTION_POLICY;
     delete process.env.BRIDGE_PRESEED_COMPACT_MODE;
     delete process.env.BRIDGE_PRESEED_COMPACT_CHARS;
+    delete process.env.BRIDGE_COMPACTION_CHAIN;
     delete process.env.BRIDGE_ADVISOR_ENABLED;
     delete process.env.BRIDGE_ADVISOR_CHAIN;
     db.close();
@@ -403,6 +411,55 @@ describe("BridgeEngine", () => {
 
       expect(db.getLatestConvSummary("100")).not.toBeNull();
       expect(mainPrompt).toContain("preseeded");
+    });
+
+    it("uses the configured recovery chain through the real pre-seed engine path", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      process.env.BRIDGE_PRESEED_COMPACT_MODE = "auto";
+      process.env.BRIDGE_PRESEED_COMPACT_CHARS = "10";
+      process.env.BRIDGE_COMPACTION_CHAIN = "codex:gpt-preseed-fallback";
+      const { BridgeEngine } = await import("../src/engine.js");
+      seedLongTurns("100");
+
+      const commands: string[] = [];
+      const runCli = vi.fn().mockImplementation(async (command: string, args: string[]) => {
+        const prompt = args[args.length - 1];
+        commands.push(command);
+        if (prompt.includes("Summarise now:")) {
+          if (command === "claude") throw new Error("Authentication required: please log in");
+          return codexCompactEvents(compactJson("Current objective:\n- preseed fallback\n\nDurable facts:\n- none\n\nOpen state:\n- none"));
+        }
+        return "ok";
+      });
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: ["claude-primary"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          fullConfig: makeFullConfig(dbPath),
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("hello")]);
+
+      expect(commands.slice(0, 2)).toEqual(["claude", "codex"]);
+      expect(db.getLatestConvSummary("100")?.summary_md).toContain("preseed fallback");
+      expect(db.raw.prepare("SELECT COUNT(*) AS count FROM compaction_attempts WHERE chat_key = ?")
+        .get("100")).toEqual({ count: 1 });
+      expect(db.getLatestCompactionAttempt("100")).toEqual(expect.objectContaining({
+        trigger: "preseed",
+        provider: "codex",
+        model: "gpt-preseed-fallback",
+        outcome: "compacted",
+        cli_call_count: 2,
+      }));
     });
 
     it("does not compact when there are zero uncompacted turns", async () => {
@@ -1963,6 +2020,48 @@ describe("BridgeEngine", () => {
       expect(sentBody.text).toContain("Session reset");
       expect(sentBody.text).not.toContain("turn count, CLI, last message");
       expect(db.getSetting("compact_in_progress:100")).toBeNull();
+    });
+
+    it("uses the configured recovery chain through the real manual engine path", async () => {
+      process.env.BRIDGE_COMPACTION_CHAIN = "codex:gpt-manual-fallback";
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+      db.addConvTurn("100", "user", "recover manual compaction");
+
+      const commands: string[] = [];
+      const runCli = vi.fn().mockImplementation(async (command: string) => {
+        commands.push(command);
+        if (command === "claude") throw new Error("Authentication required: please log in");
+        return codexCompactEvents(compactJson("Current objective:\n- manual fallback\n\nDurable facts:\n- none\n\nOpen state:\n- none"));
+      });
+      const engine = new BridgeEngine(
+        {
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: ["claude-primary"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          fullConfig: makeFullConfig(dbPath),
+        },
+        db,
+        client,
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("/compact")]);
+
+      expect(commands).toEqual(["claude", "codex"]);
+      expect(db.getLatestConvSummary("100")?.summary_md).toContain("manual fallback");
+      expect(db.raw.prepare("SELECT COUNT(*) AS count FROM compaction_attempts WHERE chat_key = ?")
+        .get("100")).toEqual({ count: 1 });
+      expect(db.getLatestCompactionAttempt("100")).toEqual(expect.objectContaining({
+        trigger: "manual",
+        provider: "codex",
+        model: "gpt-manual-fallback",
+        outcome: "compacted",
+        cli_call_count: 2,
+      }));
     });
 
     it("reports an existing compact run instead of starting a duplicate", async () => {

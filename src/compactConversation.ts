@@ -8,13 +8,14 @@
  */
 
 import type { BridgeDb } from "./db.js";
-import { buildCliInvocation, buildExecutionOptions, parseCliResult } from "./cli.js";
+import { buildCliInvocation, buildExecutionOptions, parseCliResult, setAntigravityModel } from "./cli.js";
 import { resolveEffort } from "./effort.js";
 import type { BotKind, CliOptions } from "./types.js";
 import { mapWithConcurrency } from "./concurrency.js";
 import {
   buildCompactSummaryPrompt,
   buildCompactReducePrompt,
+  buildCompactRepairPrompt,
   chunkCompactTurns,
   compactParallelism,
   parseCompactOutput,
@@ -23,6 +24,34 @@ import {
 } from "./compactSummary.js";
 import { storeProjectMemoryCandidate } from "./projectMemory.js";
 import type { CompactionErrorCategory } from "./repositories/compactionRepository.js";
+import { classifyProviderError } from "./providers/errorClassification.js";
+
+const DEFAULT_COMPACTION_MAX_ATTEMPTS = 3;
+const MAX_COMPACTION_MAX_ATTEMPTS = 8;
+const DEFAULT_COMPACTION_REPAIR_ATTEMPTS = 1;
+const TOOL_FREE_PROVIDERS = new Set<BotKind>(["codex", "claude", "antigravity"]);
+
+function boundedEnvInt(name: string, fallback: number, maximum: number, allowZero = false): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < (allowZero ? 0 : 1)) return fallback;
+  return Math.min(maximum, parsed);
+}
+
+export function compactMaxAttempts(): number {
+  return boundedEnvInt("BRIDGE_COMPACTION_MAX_ATTEMPTS", DEFAULT_COMPACTION_MAX_ATTEMPTS, MAX_COMPACTION_MAX_ATTEMPTS);
+}
+
+export function compactRepairAttempts(): number {
+  return boundedEnvInt("BRIDGE_COMPACTION_REPAIR_ATTEMPTS", DEFAULT_COMPACTION_REPAIR_ATTEMPTS, 1, true);
+}
+
+export interface CompactionFallbackTarget {
+  provider: BotKind;
+  command: string;
+  model: string | null;
+}
 
 export interface CompactConversationDeps {
   db: BridgeDb;
@@ -32,6 +61,11 @@ export interface CompactConversationDeps {
   trigger: CompactionTrigger;
   compactProfile?: CompactProfile;
   now?: () => Date;
+  model?: string | null;
+  fallbackTargets?: readonly CompactionFallbackTarget[];
+  exhaustedProviders?: readonly BotKind[];
+  maxAttempts?: number;
+  repairAttempts?: number;
 }
 
 export type CompactConversationOutcome = "compacted" | "no_turns" | "failed";
@@ -55,7 +89,11 @@ export async function compactConversation(
 ): Promise<CompactConversationResult> {
   const { db, runCli, botConfig, cliKind, trigger, compactProfile = "engineering", now = () => new Date() } = deps;
   const startedAt = now();
-  const model = db.getSetting(cliKind) || botConfig.modelPreference[0] || null;
+  const initialModel = deps.model !== undefined
+    ? deps.model
+    : db.getSetting(cliKind) || botConfig.modelPreference[0] || null;
+  let finalProvider = cliKind;
+  let finalModel = initialModel;
   let cliCallCount = 0;
   let chunkCount = 0;
   let rangeStartTurnId: number | null = null;
@@ -70,8 +108,8 @@ export async function compactConversation(
       db.addCompactionAttempt({
         chatKey,
         trigger,
-        provider: cliKind,
-        model,
+        provider: finalProvider,
+        model: finalModel,
         outcome: result.outcome,
         errorCategory,
         durationMs: Math.max(0, endedAt.getTime() - startedAt.getTime()),
@@ -99,38 +137,89 @@ export async function compactConversation(
   rangeStartTurnId = startId;
   rangeEndTurnId = endId;
 
-  const summarizePrompt = async (prompt: string): Promise<string> => {
-    if (cliKind === "kimchi") {
-      throw new Error("Kimchi compaction is disabled because verified tool-free execution is not supported");
+  const exhausted = new Set(deps.exhaustedProviders ?? []);
+  const targets: CompactionFallbackTarget[] = [];
+  const seenTargets = new Set<string>();
+  const addTarget = (target: CompactionFallbackTarget, initial = false): void => {
+    if (exhausted.has(target.provider)) return;
+    if (!initial && !TOOL_FREE_PROVIDERS.has(target.provider)) return;
+    const key = `${target.provider}:${target.model ?? ""}`;
+    if (seenTargets.has(key)) return;
+    seenTargets.add(key);
+    targets.push(target);
+  };
+  addTarget({
+    provider: cliKind as BotKind,
+    command: botConfig.command,
+    model: initialModel,
+  }, true);
+  for (const target of deps.fallbackTargets ?? []) addTarget(target);
+  const maxAttempts = Math.min(MAX_COMPACTION_MAX_ATTEMPTS, Math.max(1, deps.maxAttempts ?? compactMaxAttempts()));
+  const repairAttempts = Math.min(1, Math.max(0, deps.repairAttempts ?? compactRepairAttempts()));
+  const boundedTargets = targets.slice(0, maxAttempts);
+
+  const callTarget = async (target: CompactionFallbackTarget, prompt: string): Promise<string> => {
+    if (target.provider === "kimchi") {
+      throw new CompactionFailure(
+        "fatal",
+        false,
+        "Kimchi compaction is disabled because verified tool-free execution is not supported",
+      );
     }
+    if (!target.command.trim()) {
+      throw new CompactionFailure("provider_unavailable", true);
+    }
+    if (target.provider === "antigravity") setAntigravityModel(target.model);
     const invocation = buildCliInvocation({
-      bot: cliKind,
+      bot: target.provider,
       prompt,
       sessionId: null,
-      command: botConfig.command,
-      model,
-      effort: resolveEffort(cliKind as BotKind, db),
+      command: target.command,
+      model: target.model,
+      effort: resolveEffort(target.provider, db),
       executionMode: "safe",
-      outputFormat: cliKind === "codex" || cliKind === "claude" ? "json" : null,
+      outputFormat: target.provider === "codex" || target.provider === "claude" ? "json" : null,
       toolMode: "none",
     });
     cliCallCount++;
     const raw = await Promise.race([
-      runCli(invocation.command, invocation.args, process.cwd(), buildExecutionOptions(cliKind as BotKind)),
+      runCli(invocation.command, invocation.args, process.cwd(), buildExecutionOptions(target.provider)),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("compact timeout")), COMPACT_TIMEOUT_MS)
       ),
     ]);
-    if (typeof raw === "string" && raw.trim().length > 0) return raw.trim();
-    throw new Error("empty compact summary");
+    return typeof raw === "string" ? raw.trim() : "";
   };
 
   const summarizeToOutput = async (prompt: string) => {
-    const raw = await summarizePrompt(prompt);
-    const cliResult = parseCliResult({ bot: cliKind, stdout: raw });
-    const parsed = parseCompactOutput(cliResult.text);
-    if (!parsed) throw new Error("invalid compact JSON output");
-    return parsed;
+    let lastFailure = new CompactionFailure("provider_unavailable", true);
+    let repairsRemaining = repairAttempts;
+    for (const target of boundedTargets) {
+      finalProvider = target.provider;
+      finalModel = target.model;
+      try {
+        const raw = await callTarget(target, prompt);
+        const invalidResponse = parseCompactionProviderResponse(target.provider, raw);
+        const parsed = parseCompactOutput(invalidResponse);
+        if (parsed) return parsed;
+
+        if (repairsRemaining > 0) {
+          repairsRemaining--;
+          const repairedRaw = await callTarget(
+            target,
+            buildCompactRepairPrompt(invalidResponse, compactProfile),
+          );
+          const repairedResponse = parseCompactionProviderResponse(target.provider, repairedRaw);
+          const repaired = parseCompactOutput(repairedResponse);
+          if (repaired) return repaired;
+        }
+        lastFailure = new CompactionFailure("invalid_output", true);
+      } catch (error) {
+        lastFailure = toCompactionFailure(target.provider, error);
+      }
+      if (!lastFailure.fallbackEligible) throw lastFailure;
+    }
+    throw lastFailure;
   };
 
   let finalOutput: { summaryMd: string; memoryCandidates: Array<Record<string, unknown>> };
@@ -154,15 +243,17 @@ export async function compactConversation(
   } catch (error) {
     // Non-destructive: no summary stored, no turns pruned. Previous summary and
     // raw turns remain available so the conversation can continue.
-    const message = (error as Error).message;
+    const failure = error instanceof CompactionFailure
+      ? error
+      : toCompactionFailure(finalProvider as BotKind, error);
     return finish({
       outcome: "failed",
       trigger,
-      error: message,
+      error: failure.safeMessage,
       turnCount: turns.length,
       startId,
       endId,
-    }, classifyCompactionError(message));
+    }, failure.category);
   }
 
   db.addConvSummary(chatKey, startId, endId, finalOutput.summaryMd);
@@ -172,7 +263,7 @@ export async function compactConversation(
   for (const candidate of finalOutput.memoryCandidates) {
     const result = storeProjectMemoryCandidate(db, candidate, {
       chatKey,
-      cliKind,
+      cliKind: finalProvider,
       repoPath: process.cwd(),
     });
     if (result.status === "stored") promotedMemoryIds.push(result.id);
@@ -193,12 +284,45 @@ export async function compactConversation(
   });
 }
 
-function classifyCompactionError(message: string): CompactionErrorCategory {
-  if (/timeout|timed out/i.test(message)) return "timeout";
-  if (/capacity|rate.?limit|quota|session limit/i.test(message)) return "capacity";
-  if (/auth|unauthori[sz]ed|credential|login/i.test(message)) return "auth";
-  if (/invalid compact JSON|empty compact summary/i.test(message)) return "invalid_output";
-  if (/unavailable|not found|ENOENT|disabled because|no healthy/i.test(message)) return "provider_unavailable";
-  if (/ECONN|network|temporary|transient|service unavailable|HTTP 5\d\d/i.test(message)) return "transient";
-  return "unknown";
+function parseCompactionProviderResponse(provider: BotKind, raw: string): string {
+  try {
+    return parseCliResult({ bot: provider, stdout: raw }).text;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (provider === "antigravity" &&
+        /Agy JSON parse failed: could not extract response field|Agy execution returned empty response/i.test(message)) {
+      return "";
+    }
+    throw error;
+  }
+}
+
+class CompactionFailure extends Error {
+  constructor(
+    readonly category: CompactionErrorCategory,
+    readonly fallbackEligible: boolean,
+    readonly safeMessage = `Compaction failed (${category})`,
+  ) {
+    super(safeMessage);
+  }
+}
+
+function toCompactionFailure(provider: BotKind, error: unknown): CompactionFailure {
+  if (error instanceof CompactionFailure) return error;
+  const value = error instanceof Error ? error : new Error(String(error));
+  if (value.name === "AbortError" || /cancelled by user|canceled by user|aborted by user/i.test(value.message)) {
+    return new CompactionFailure("cancelled", false);
+  }
+  if (/timeout|timed out/i.test(value.message)) return new CompactionFailure("timeout", true);
+
+  const providerId = provider === "antigravity" ? "agy" : provider;
+  const classification = classifyProviderError(providerId, value);
+  switch (classification.kind) {
+    case "auth_required": return new CompactionFailure("auth", true);
+    case "capacity_exhausted": return new CompactionFailure("capacity", true);
+    case "model_unavailable": return new CompactionFailure("provider_unavailable", true);
+    case "transient": return new CompactionFailure("transient", true);
+    case "fatal": return new CompactionFailure("fatal", false);
+    default: return new CompactionFailure("fatal", false);
+  }
 }

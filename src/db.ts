@@ -573,6 +573,10 @@ export class BridgeDb {
     this.compactions = new CompactionRepository(raw);
   }
 
+  runInTransaction<T>(operation: () => T): T {
+    return this.raw.transaction(operation)();
+  }
+
   // ── Session management ───────────────────────────────────────────────────
 
   getSession(chatId: string, bot: "codex" | "antigravity" | "claude" | "kimchi"): string | null {

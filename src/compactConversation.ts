@@ -256,21 +256,34 @@ export async function compactConversation(
     }, failure.category);
   }
 
-  db.addConvSummary(chatKey, startId, endId, finalOutput.summaryMd);
-
   const promotedMemoryIds: string[] = [];
   let rejectedCandidateCount = 0;
-  for (const candidate of finalOutput.memoryCandidates) {
-    const result = storeProjectMemoryCandidate(db, candidate, {
-      chatKey,
-      cliKind: finalProvider,
-      repoPath: process.cwd(),
-    });
-    if (result.status === "stored") promotedMemoryIds.push(result.id);
-    else if (result.status === "rejected") rejectedCandidateCount++;
-  }
+  try {
+    db.runInTransaction(() => {
+      db.addConvSummary(chatKey, startId, endId, finalOutput.summaryMd);
 
-  db.pruneConvTurns(chatKey, endId);
+      for (const candidate of finalOutput.memoryCandidates) {
+        const result = storeProjectMemoryCandidate(db, candidate, {
+          chatKey,
+          cliKind: finalProvider,
+          repoPath: process.cwd(),
+        });
+        if (result.status === "stored") promotedMemoryIds.push(result.id);
+        else if (result.status === "rejected") rejectedCandidateCount++;
+      }
+
+      db.pruneConvTurns(chatKey, endId);
+    });
+  } catch {
+    return finish({
+      outcome: "failed",
+      trigger,
+      error: "Compaction failed (unknown)",
+      turnCount: turns.length,
+      startId,
+      endId,
+    }, "unknown");
+  }
 
   return finish({
     outcome: "compacted",

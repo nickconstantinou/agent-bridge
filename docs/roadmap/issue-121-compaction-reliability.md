@@ -12,8 +12,8 @@ Issue: #121
 | Healthy fallback compaction | Complete | PR #126, squash commit `5801109` |
 | Attempt telemetry and `/context` | Complete | PR #127, squash commit `0c684ff` |
 | Structured-output recovery | Complete | PR #129, squash commit `5abf7aa` |
-| Atomic persistence | Next | Summary, accepted memories, and pruning in one transaction |
-| Execution lifecycle | Blocked on shared boundary | Integrate with Issue #119; do not create a second process registry |
+| Atomic persistence | Complete | PR #130, squash commit `793026e` |
+| Execution lifecycle | Blocked on Issue #119 | Next after the shared run-supervisor boundary lands; do not create a second process registry |
 | Acceptance and operations | Pending | Isolated provider smokes, lifecycle/failure coverage, rollback docs |
 | Resumable chunk checkpoints | Optional | Implement only if telemetry demonstrates need |
 

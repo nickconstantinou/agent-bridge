@@ -30,6 +30,7 @@ describe("MessagingPlatform abstraction — Phase 1", () => {
     try {
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
           allowedUserIds: new Set(["42"]),

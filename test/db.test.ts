@@ -52,23 +52,23 @@ describe("BridgeDb sessions", () => {
 
 describe("BridgeDb execution lock", () => {
   it("acquires lock when chat is free", () => {
-    expect(db.tryLock("chat1")).toBe(true);
+    expect(db.tryLock("test", "chat1")).toBe(true);
   });
 
   it("rejects lock when chat is already locked", () => {
-    db.tryLock("chat1");
-    expect(db.tryLock("chat1")).toBe(false);
+    db.tryLock("test", "chat1");
+    expect(db.tryLock("test", "chat1")).toBe(false);
   });
 
   it("lock is released by unlock", () => {
-    db.tryLock("chat1");
-    db.unlock("chat1");
-    expect(db.tryLock("chat1")).toBe(true);
+    db.tryLock("test", "chat1");
+    db.unlock("test", "chat1");
+    expect(db.tryLock("test", "chat1")).toBe(true);
   });
 
   it("lock is per chat — other chats are unaffected", () => {
-    db.tryLock("chat1");
-    expect(db.tryLock("chat2")).toBe(true);
+    db.tryLock("test", "chat1");
+    expect(db.tryLock("test", "chat2")).toBe(true);
   });
 
   it("isolates the same chat across bot surfaces", () => {
@@ -145,6 +145,36 @@ describe("BridgeDb execution lock", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("keeps a heartbeat-renewed lease unavailable to another run", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agent-bridge-lock-heartbeat-"));
+    const dbPath = join(dir, "bridge.sqlite");
+    let now = 1_000;
+    const clock = () => now;
+    try {
+      const first = openDb(dbPath, {
+        serviceId: "telegram:interactive", runId: "run-a", lockLeaseMs: 500, clock,
+      });
+      const second = openDb(dbPath, {
+        serviceId: "telegram:interactive", runId: "run-b", lockLeaseMs: 500, clock,
+      });
+      expect(first.tryLock("telegram:interactive", "chat1")).toBe(true);
+      now += 400;
+      expect(first.heartbeatLock("telegram:interactive", "chat1")).toBe(true);
+      now += 200;
+      expect(second.tryLock("telegram:interactive", "chat1")).toBe(false);
+      second.close();
+      first.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects lock and queue calls without an explicit surface", () => {
+    expect(() => (db.tryLock as any)("chat1")).toThrow("chatKey is required");
+    expect(() => (db.pendingMsgCount as any)("chat1")).toThrow("chatKey is required");
+    expect(() => (db.dequeueMsgs as any)("chat1")).toThrow("chatKey is required");
   });
 });
 

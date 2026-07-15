@@ -180,6 +180,7 @@ describe("BridgeEngine /reset command", () => {
 
     const engine = new BridgeEngine(
       {
+        surfaceIdentity: "test",
         kind: "claude",
         botConfig: { command: "claude", modelPreference: [] },
         allowedUserIds: new Set(["42"]),
@@ -211,9 +212,9 @@ describe("BridgeEngine /reset command", () => {
     const db = openDb(dbPath);
 
     // Simulate a held lock — tryLock returns true on first call (acquired), false when already held
-    const acquired = db.tryLock("100");
+    const acquired = db.tryLock("test", "100");
     expect(acquired).toBe(true);
-    expect(db.tryLock("100")).toBe(false); // still locked
+    expect(db.tryLock("test", "100")).toBe(false); // still locked
 
     const client = {
       getUpdates: vi.fn().mockResolvedValue({ result: [], ok: true }),
@@ -228,6 +229,7 @@ describe("BridgeEngine /reset command", () => {
 
     const engine = new BridgeEngine(
       {
+        surfaceIdentity: "test",
         kind: "claude",
         botConfig: { command: "claude", modelPreference: [] },
         allowedUserIds: new Set(["42"]),
@@ -247,7 +249,7 @@ describe("BridgeEngine /reset command", () => {
     }]);
 
     // After /reset, tryLock should succeed again (lock was released)
-    expect(db.tryLock("100")).toBe(true);
+    expect(db.tryLock("test", "100")).toBe(true);
 
     db.close();
     try { rmSync(dbPath); } catch {}

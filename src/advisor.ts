@@ -23,12 +23,15 @@ function fallbackEligible(error: Error, provider: ProviderId): boolean {
 }
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
+  let cancelTimeout = (): void => {};
   try {
-    return await Promise.race([promise, new Promise<never>((_, reject) => {
+    return await Promise.race([promise, new Promise<T>((resolve, reject) => {
+      cancelTimeout = () => resolve(undefined as T);
       timer = setTimeout(() => reject(new Error("Advisor timeout")), timeoutMs);
     })]);
   } finally {
     if (timer) clearTimeout(timer);
+    cancelTimeout();
   }
 }
 function parseRawResult(provider: ProviderId, raw: string) {

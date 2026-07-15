@@ -22,6 +22,7 @@ type UsageFetchResponse = {
   ok: boolean;
   status: number;
   json: () => Promise<unknown>;
+  body?: { cancel: () => Promise<void> } | null;
 };
 
 type FetchLike = (input: string, init?: UsageFetchInit) => Promise<UsageFetchResponse>;
@@ -84,6 +85,7 @@ async function fetchCodexUsageWithFetch(accessToken: string, fetchImpl: FetchLik
   });
 
   if (!response.ok) {
+    await response.body?.cancel();
     throw new Error(`Codex usage request failed with HTTP ${response.status}.`);
   }
 

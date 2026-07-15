@@ -1204,6 +1204,27 @@ describe("BridgeEngine", () => {
       releaseFirst();
       await firstTask;
     });
+
+    it("private-topic /stop clears only the queue owned by that topic lane", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const surface = "telegram:interactive";
+      db.enqueueMsg(surface, "100:7", {
+        prompt: "topic seven queued", chatId: 100, threadId: 7, chatType: "private",
+      });
+      db.enqueueMsg(surface, "100:8", {
+        prompt: "topic eight queued", chatId: 100, threadId: 8, chatType: "private",
+      });
+      const engine = new BridgeEngine({
+        kind: "codex", surfaceIdentity: surface,
+        botConfig: { command: "codex", modelPreference: [] }, allowedUserIds: new Set(["42"]),
+        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+      }, db, makeMockClient(), {});
+
+      await engine.handleUpdate({ update_id: 1, message: makePrivateTopicMessage("/stop", 7) });
+
+      expect(db.pendingMsgCount(surface, "100:7")).toBe(0);
+      expect(db.pendingMsgCount(surface, "100:8")).toBe(1);
+    });
   });
 
   describe("BridgeEvent persistence", () => {

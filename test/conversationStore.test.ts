@@ -185,6 +185,16 @@ describe("pending messages", () => {
     expect(db.pendingMsgCount("chat:1")).toBe(1);
     expect(db.pendingMsgCount("chat:2")).toBe(1);
   });
+
+  it("only exposes queued rows to their owning surface", () => {
+    db.enqueueMsg("telegram:codex", "chat:1", { prompt: "codex work", chatId: 1, chatType: "private" });
+    db.enqueueMsg("telegram:claude", "chat:1", { prompt: "claude work", chatId: 1, chatType: "private" });
+
+    expect(db.pendingMsgCount("telegram:codex", "chat:1")).toBe(1);
+    expect(db.pendingMsgCount("telegram:claude", "chat:1")).toBe(1);
+    expect(db.dequeueMsgs("telegram:codex", "chat:1").map((msg) => msg.prompt)).toEqual(["codex work"]);
+    expect(db.dequeueMsgs("telegram:claude", "chat:1").map((msg) => msg.prompt)).toEqual(["claude work"]);
+  });
 });
 
 describe("conversation summaries", () => {

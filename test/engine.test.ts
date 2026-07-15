@@ -20,6 +20,13 @@ function makeMessage(text: string, userId = 42, chatId = 100): TelegramMessage {
   };
 }
 
+function makePrivateTopicMessage(text: string, threadId: number, userId = 42, chatId = 100): TelegramMessage {
+  return {
+    ...makeMessage(text, userId, chatId),
+    message_thread_id: threadId,
+  };
+}
+
 function makeMockClient() {
   return {
     getUpdates: vi.fn().mockResolvedValue({ result: [], ok: true }),
@@ -1092,6 +1099,110 @@ describe("BridgeEngine", () => {
       expect(db.pendingMsgCount("chat:1")).toBe(1);
       const msgs = db.dequeueMsgs("chat:1");
       expect(msgs[0].prompt).toBe("hello");
+    });
+
+    it("lets standalone bot surfaces execute concurrently for the same chat", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      let releaseFirst!: () => void;
+      let markFirstStarted!: () => void;
+      const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
+      const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      const firstRun = vi.fn().mockImplementation(async () => {
+        markFirstStarted();
+        await firstBlocked;
+        return "codex done";
+      });
+      const secondRun = vi.fn().mockResolvedValue("claude done");
+      const codex = new BridgeEngine({
+        kind: "codex", surfaceIdentity: "telegram:codex",
+        botConfig: { command: "codex", modelPreference: [] }, allowedUserIds: new Set(["42"]),
+        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+      }, db, makeMockClient(), { runCli: firstRun });
+      const claude = new BridgeEngine({
+        kind: "claude", surfaceIdentity: "telegram:claude",
+        botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]),
+        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+      }, db, makeMockClient(), { runCli: secondRun });
+
+      const codexTask = codex.handleMessages([makeMessage("codex")]);
+      await firstStarted;
+      await claude.handleMessages([makeMessage("claude")]);
+
+      const ranConcurrently = secondRun.mock.calls.length === 1;
+      db.raw.exec("DELETE FROM pending_messages");
+      releaseFirst();
+      await codexTask;
+      expect(ranConcurrently).toBe(true);
+    });
+
+    it("lets different private topics execute concurrently on one interactive surface", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      let releaseFirst!: () => void;
+      let markFirstStarted!: () => void;
+      const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
+      const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      const firstRun = vi.fn().mockImplementation(async () => {
+        markFirstStarted();
+        await firstBlocked;
+        return "topic 7 done";
+      });
+      const secondRun = vi.fn().mockResolvedValue("topic 8 done");
+      const topic7 = new BridgeEngine({
+        kind: "codex", surfaceIdentity: "telegram:interactive",
+        botConfig: { command: "codex", modelPreference: [] }, allowedUserIds: new Set(["42"]),
+        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+      }, db, makeMockClient(), { runCli: firstRun });
+      const topic8 = new BridgeEngine({
+        kind: "claude", surfaceIdentity: "telegram:interactive",
+        botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]),
+        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+      }, db, makeMockClient(), { runCli: secondRun });
+
+      const topic7Task = topic7.handleMessages([makePrivateTopicMessage("seven", 7)]);
+      await firstStarted;
+      await topic8.handleMessages([makePrivateTopicMessage("eight", 8)]);
+
+      const ranConcurrently = secondRun.mock.calls.length === 1;
+      db.raw.exec("DELETE FROM pending_messages");
+      releaseFirst();
+      await topic7Task;
+      expect(ranConcurrently).toBe(true);
+    });
+
+    it("queues a second turn in the same private topic and interactive surface", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      let releaseFirst!: () => void;
+      let markFirstStarted!: () => void;
+      const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
+      const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      const firstRun = vi.fn().mockImplementation(async () => {
+        markFirstStarted();
+        await firstBlocked;
+        return "first done";
+      });
+      const secondRun = vi.fn().mockResolvedValue("second done");
+      const firstClient = makeMockClient();
+      const secondClient = makeMockClient();
+      const first = new BridgeEngine({
+        kind: "codex", surfaceIdentity: "telegram:interactive",
+        botConfig: { command: "codex", modelPreference: [] }, allowedUserIds: new Set(["42"]),
+        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+      }, db, firstClient, { runCli: firstRun });
+      const second = new BridgeEngine({
+        kind: "claude", surfaceIdentity: "telegram:interactive",
+        botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]),
+        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+      }, db, secondClient, { runCli: secondRun });
+
+      const firstTask = first.handleMessages([makePrivateTopicMessage("first", 7)]);
+      await firstStarted;
+      await second.handleMessages([makePrivateTopicMessage("second", 7)]);
+
+      expect(secondRun).not.toHaveBeenCalled();
+      expect(secondClient.sendMessage.mock.calls.some((call: any[]) => call[0]?.text?.includes("Queued"))).toBe(true);
+      db.raw.exec("DELETE FROM pending_messages");
+      releaseFirst();
+      await firstTask;
     });
   });
 

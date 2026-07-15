@@ -70,6 +70,51 @@ describe("BridgeDb execution lock", () => {
     db.tryLock("chat1");
     expect(db.tryLock("chat2")).toBe(true);
   });
+
+  it("isolates the same chat across bot surfaces", () => {
+    expect(db.tryLock("telegram:codex", "chat1")).toBe(true);
+    expect(db.tryLock("telegram:claude", "chat1")).toBe(true);
+    expect(db.tryLock("telegram:codex", "chat1")).toBe(false);
+  });
+
+  it("opening another service owner does not clear a live lock", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agent-bridge-lock-owner-"));
+    const dbPath = join(dir, "bridge.sqlite");
+    try {
+      const first = openDb(dbPath, { lockOwner: "service:codex" });
+      expect(first.tryLock("telegram:codex", "chat1")).toBe(true);
+
+      const second = openDb(dbPath, { lockOwner: "service:claude" });
+      expect(second.tryLock("telegram:codex", "chat1")).toBe(false);
+
+      second.close();
+      first.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers only locks owned by the restarting service", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agent-bridge-lock-recovery-"));
+    const dbPath = join(dir, "bridge.sqlite");
+    try {
+      const first = openDb(dbPath, { lockOwner: "service:codex" });
+      expect(first.tryLock("telegram:codex", "chat1")).toBe(true);
+
+      const other = openDb(dbPath, { lockOwner: "service:claude" });
+      expect(other.tryLock("telegram:claude", "chat1")).toBe(true);
+
+      const restarted = openDb(dbPath, { lockOwner: "service:codex" });
+      expect(restarted.tryLock("telegram:codex", "chat1")).toBe(true);
+      expect(restarted.tryLock("telegram:claude", "chat1")).toBe(false);
+
+      restarted.close();
+      other.close();
+      first.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("BridgeDb polling offset", () => {

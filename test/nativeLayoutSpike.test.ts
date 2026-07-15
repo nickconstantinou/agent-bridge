@@ -21,7 +21,7 @@ describe("native layout spike helpers", () => {
     expect(payload.body).toBeInstanceOf(FormData);
     const file = (payload.body as FormData).get("document") as File;
     expect(file.name).toBe("response.md");
-    expect(await file.text()).toBe("x".repeat(3_501));
+    expect(new TextDecoder().decode(await file.arrayBuffer())).toBe("x".repeat(3_501));
   });
 
   it("builds an in-memory photo payload without requiring a temp file path", async () => {

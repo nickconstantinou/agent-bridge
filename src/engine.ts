@@ -8,7 +8,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { readFileSync, rmSync, unlinkSync } from "node:fs";
 import {
@@ -46,7 +46,7 @@ import { contextInjectionPolicy, preseedCompactMode, preseedCompactCharThreshold
 import type { BridgeEvent } from "./events/types.js";
 import { EventStore } from "./events/store.js";
 import type { BridgeConfig, BotKind, BotConfig, TelegramUpdate, TelegramMessage, TelegramCallbackQuery, CliResult, CliOptions } from "./types.js";
-import type { BridgeDb } from "./db.js";
+import { ExecutionLockLostError, type BridgeDb } from "./db.js";
 import { DEFAULT_CONTEXT_MAX_CHARS } from "./db.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { extractProjectMemorySidecars, storeProjectMemoryCandidate } from "./projectMemory.js";
@@ -80,12 +80,14 @@ export interface BridgeEngineHooks {
   /** Called after a successful CLI execution. */
   onAfterExecute?: (prompt: string, resultText: string, ctx: HookContext) => void | Promise<void>;
   /** Re-enters the owning surface router for a transactionally claimed queue row. */
-  onQueuedMessage?: (message: PendingMessage) => Promise<void>;
+  onQueuedMessage?: (message: PendingMessage) => Promise<ExecutionOutcome>;
 }
 
 export interface PendingMessage {
-  id: number; chatKey: string; prompt: string; chatId: number; threadId: number | null; chatType: string; userId: number | null;
+  id: number; chatKey: string; prompt: string; chatId: number; threadId: number | null; chatType: string; userId: number | null; attachments: string[];
 }
+
+export type ExecutionOutcome = "committed" | "queued" | "failed" | "fenced";
 
 class LostExecutionLeaseError extends Error {
   constructor() { super("execution lane ownership lost"); }
@@ -231,8 +233,10 @@ export class BridgeEngine {
   private readonly db: BridgeDb;
   private readonly hooks: BridgeEngineHooks;
   private readonly exec: ExecFns;
-  private queuedMessageHandler?: (message: PendingMessage) => Promise<void>;
+  private queuedMessageHandler?: (message: PendingMessage) => Promise<ExecutionOutcome>;
+  private readonly queueRecoveryTimers = new Map<string, NodeJS.Timeout>();
   private readonly abortedChats = new Set<string>();
+  private readonly resettingChats = new Set<string>();
   private readonly advisorSuggestions = new Map<string, {
     prompt: string; mode: AdvisorRequestMode; messageId: number; suggestionMessageId?: number;
     chatKey: string; chatType: string; userId?: number; createdAt: number;
@@ -272,6 +276,7 @@ export class BridgeEngine {
         commands: buildTelegramCommands(this.kind),
       }).catch((err) => console.warn(`[${this.kind}] setMyCommands failed`, err));
     }
+    await this.recoverPendingQueues();
 
     let offset = isAgentKind(this.kind) ? this.db.getLastUpdateId(this.kind) + 1 : 0;
     console.log(`[${this.kind}] engine online (offset: ${offset})`);
@@ -313,8 +318,14 @@ export class BridgeEngine {
     }
   }
 
-  setQueuedMessageHandler(handler: (message: PendingMessage) => Promise<void>): void {
+  setQueuedMessageHandler(handler: (message: PendingMessage) => Promise<ExecutionOutcome>): void {
     this.queuedMessageHandler = handler;
+  }
+
+  async recoverPendingQueues(): Promise<void> {
+    await Promise.all(this.db.getPendingLaneKeys(this.surfaceIdentity).map(async (chatKey) => {
+      if (this.db.tryLock(this.surfaceIdentity, chatKey)) await this._drainQueueAndUnlock(chatKey);
+    }));
   }
 
   async handleUpdate(update: TelegramUpdate): Promise<void> {
@@ -339,7 +350,10 @@ export class BridgeEngine {
         this.db.unlock(this.surfaceIdentity, chatKey);
       }
       const pendingStop = this.db.dequeueMsgs(this.surfaceIdentity, chatKey);
-      for (const m of pendingStop) this.db.deletePendingMsg(m.id);
+      for (const queued of pendingStop) {
+        this._deleteQueuedAttachments(queued.attachments);
+        this.db.deletePendingMsg(queued.id);
+      }
       await this.sendText(chatId, { text: "🛑 Execution aborted by user.", message_thread_id: threadId });
       return;
     }
@@ -389,6 +403,18 @@ export class BridgeEngine {
 
       // Built-in handler for known agent kinds
       if (isAgentKind(this.kind) && isBridgeCommand(commandText)) {
+        if (commandText === "/reset") {
+          const executionLane = this._executionLane(chatKey);
+          this.resettingChats.add(executionLane);
+          this.abortedChats.add(executionLane);
+          await abortCliProcessAndWait(executionLane);
+          const pending = this.db.dequeueMsgs(this.surfaceIdentity, chatKey);
+          for (const queued of pending) {
+            this._deleteQueuedAttachments(queued.attachments);
+            this.db.deletePendingMsg(queued.id);
+          }
+          this.db.setSetting(`ctx_suppress:${chatKey}`, "1");
+        }
         const commandResponse = handleCommand(this.kind, commandText, {
           db: this.db,
           chatId: chatKey,
@@ -398,13 +424,15 @@ export class BridgeEngine {
         if (commandResponse) {
           if (commandResponse.kind === "message") {
             if (commandText === "/reset") {
-              const pending = this.db.dequeueMsgs(this.surfaceIdentity, chatKey);
-              for (const m of pending) this.db.deletePendingMsg(m.id);
-              this.db.setSetting(`ctx_suppress:${chatKey}`, "1");
-              abortCliProcess(this._executionLane(chatKey));
-              this.db.unlock(this.surfaceIdentity, chatKey);
+              try {
+                await this.sendText(chatId, { text: commandResponse.text, message_thread_id: threadId });
+              } finally {
+                this.resettingChats.delete(this._executionLane(chatKey));
+                this.db.unlock(this.surfaceIdentity, chatKey);
+              }
+            } else {
+              await this.sendText(chatId, { text: commandResponse.text, message_thread_id: threadId });
             }
-            await this.sendText(chatId, { text: commandResponse.text, message_thread_id: threadId });
             return;
           }
           if (commandResponse.kind === "keyboard_message") {
@@ -427,7 +455,8 @@ export class BridgeEngine {
           }
           if (commandResponse.kind === "execute") {
             // Fall through to execution with the overridden prompt
-            return this._executeAndSend(commandResponse.prompt, chatId, chatKey, primaryMessage.chat.type, threadId, userId, hookCtx, []);
+            await this._executeAndSend(commandResponse.prompt, chatId, chatKey, primaryMessage.chat.type, threadId, userId, hookCtx, []);
+            return;
           }
           if (commandResponse.kind === "advisor") {
             const mode = commandResponse.action === "ask" ? "decision" : commandResponse.action;
@@ -494,14 +523,17 @@ export class BridgeEngine {
                 ...this._compactionRecoveryDeps(),
                 trigger: "manual",
                 compactProfile: this.opts.compactProfile ?? "engineering",
-                assertCanCommit: () => this._assertLaneOwned(ck),
+                assertCanCommit: () => this._renewLaneOrThrow(ck),
               });
-              this._assertLaneOwned(ck);
+              this._renewLaneOrThrow(ck);
 
               if (result.outcome === "compacted") {
-                this.db.setSetting(`ctx_suppress:${ck}`, null);
-                if (isAgentKind(this.kind)) db_setSession(this.db, ck, this.kind, null);
+                this._runWithFence(ck, () => {
+                  this.db.setSetting(`ctx_suppress:${ck}`, null);
+                  if (isAgentKind(this.kind)) db_setSession(this.db, ck, this.kind, null);
+                });
                 console.log(`[compact] success chatKey=${ck} summaryRange=${result.startId}-${result.endId} promoted=${result.promotedMemoryIds?.length ?? 0} rejected=${result.rejectedCandidateCount ?? 0}`);
+                this._renewLaneOrThrow(ck);
                 await this.sendText(chatId, {
                   text: `Context compacted. ${result.turnCount} turn${result.turnCount === 1 ? "" : "s"} summarised. Session reset — next message starts fresh, seeded with this summary.`,
                   message_thread_id: threadId,
@@ -578,10 +610,13 @@ export class BridgeEngine {
         console.warn(`[advisor] automatic consultation failed; continuing without advice:`, error);
       }
     }
+    let executionOutcome: ExecutionOutcome = "failed";
     try {
-      await this._executeAndSend(executionPrompt, chatId, chatKey, primaryMessage.chat.type, threadId, userId, hookCtx, attachments, attachmentLocalPath);
+      executionOutcome = await this._executeAndSend(executionPrompt, chatId, chatKey, primaryMessage.chat.type, threadId, userId, hookCtx, attachments, attachmentLocalPath);
     } finally {
-      try { rmSync(uploadDir, { recursive: true, force: true }); } catch {}
+      if (executionOutcome !== "queued") {
+        try { rmSync(uploadDir, { recursive: true, force: true }); } catch {}
+      }
     }
   }
 
@@ -621,7 +656,7 @@ export class BridgeEngine {
     attachments: string[],
     attachmentLocalPath: string | null = null,
     laneAlreadyOwned = false,
-  ): Promise<void> {
+  ): Promise<ExecutionOutcome> {
     // Apply onBeforeExecute hook
     let prompt = rawPrompt;
     if (this.hooks.onBeforeExecute) {
@@ -633,23 +668,32 @@ export class BridgeEngine {
       : null;
     const useAsync = this.opts.asyncEnabled === true;
 
-    if (!laneAlreadyOwned && !this.db.tryLock(this.surfaceIdentity, chatKey)) {
-      if (this.db.pendingMsgCount(this.surfaceIdentity, chatKey) >= MAX_QUEUE_DEPTH) {
-        if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
+    if (!laneAlreadyOwned) {
+      const admission = this.db.admitMessage(this.surfaceIdentity, chatKey, {
+        prompt, chatId, threadId, chatType, userId, attachments,
+      }, MAX_QUEUE_DEPTH);
+      if (admission.kind === "full") {
         await this.sendText(chatId, {
           text: `⏳ Queue is full (max ${MAX_QUEUE_DEPTH}). Please wait.`,
           message_thread_id: threadId,
         });
-        return;
+        return "failed";
       }
-      this.db.enqueueMsg(this.surfaceIdentity, chatKey, { prompt, chatId, threadId, chatType, userId });
-      const queuePos = this.db.pendingMsgCount(this.surfaceIdentity, chatKey);
-      if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
-      await this.sendText(chatId, {
-        text: `⏳ Queued (position ${queuePos} of ${MAX_QUEUE_DEPTH}). Will process shortly.`,
-        message_thread_id: threadId,
-      });
-      return;
+      if (admission.kind === "queued") {
+        await this.sendText(chatId, {
+          text: `⏳ Queued (position ${admission.position} of ${MAX_QUEUE_DEPTH}). Will process shortly.`,
+          message_thread_id: threadId,
+        }).catch((error) => console.warn(`[${this.kind}] queue notice failed`, error));
+        return "queued";
+      }
+      if (admission.kind === "execute_claimed") {
+        await this.sendText(chatId, {
+          text: `⏳ Queued (position ${admission.position} of ${MAX_QUEUE_DEPTH}). Processing older queued work first.`,
+          message_thread_id: threadId,
+        }).catch((error) => console.warn(`[${this.kind}] queue recovery notice failed`, error));
+        await this._drainQueueAndUnlock(chatKey, admission.claimed);
+        return "queued";
+      }
     }
     if (laneAlreadyOwned) this._assertLaneOwned(chatKey);
 
@@ -670,18 +714,23 @@ export class BridgeEngine {
     try {
       if (useAsync) {
         const { runId, eventContext, collect, finalize } = this._createEventContext(chatId, threadId);
-        await sendMessageWithProgress({
+        const delivered = await sendMessageWithProgress({
           client: this.client,
           kind: this._deliveryKind(),
           chatId,
           body: { message_thread_id: threadId },
           showProgressNarration: this.kind === "antigravity" && isAntigravityNarrationVisible(this.db, chatKey),
           isAborted: () => this.abortedChats.has(this._executionLane(chatKey)) || !this.db.ownsLock(this.surfaceIdentity, chatKey),
+          beforeFinalDelivery: () => {
+            try { this._renewLaneOrThrow(chatKey); return true; }
+            catch (error) { if (error instanceof LostExecutionLeaseError) return false; throw error; }
+          },
           runId,
           onEvent: (e) => collect(e),
           execution: (onProgress: (text: string) => void) =>
             this.executePromptAsync(prompt, sessionId, chatId, { message_thread_id: threadId }, onProgress, attachments, eventContext, runId, collect, chatKey),
         });
+        if (!delivered) return "fenced";
         finalize();
       } else {
         const { runId, eventContext, collect, finalize } = this._createEventContext(chatId, threadId);
@@ -689,15 +738,16 @@ export class BridgeEngine {
         finalize();
         // For the sync path the final message is sent below; build a view from the
         // collected events so the new event-driven path drives the output text.
-        this._assertLaneOwned(chatKey);
+        this._renewLaneOrThrow(chatKey);
         if (result && result.text) {
           await this.sendText(chatId, { text: result.text, message_thread_id: threadId });
         }
       }
+      return "committed";
     } catch (error) {
       if (error instanceof LostExecutionLeaseError) {
         console.warn(`[${this.kind}] discarded fenced result surface=${this.surfaceIdentity} chatKey=${chatKey}`);
-        return;
+        return "fenced";
       }
       console.error(`[${this.kind}] prompt execution failed`, error);
       if (isCapacityExhaustedError(error instanceof Error ? error : new Error(String(error))) && this.hooks.onCapacityExhausted) {
@@ -714,10 +764,10 @@ export class BridgeEngine {
           body: { text: `Error: ${userText}`, message_thread_id: threadId },
         });
       }
+      return "failed";
     } finally {
       clearInterval(lockHeartbeat);
-      if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
-      if (!laneAlreadyOwned) await this._drainQueueAndUnlock(chatKey);
+      if (!laneAlreadyOwned && !this.resettingChats.has(executionLane)) await this._drainQueueAndUnlock(chatKey);
     }
   }
 
@@ -758,9 +808,16 @@ export class BridgeEngine {
     return { runId, eventContext, collect, finalize, events };
   }
 
-  private async _drainQueueAndUnlock(chatKey: string): Promise<void> {
+  private async _drainQueueAndUnlock(chatKey: string, initial?: PendingMessage, recoveryAttempt = 0): Promise<void> {
+    const scheduled = this.queueRecoveryTimers.get(chatKey);
+    if (scheduled) {
+      clearTimeout(scheduled);
+      this.queueRecoveryTimers.delete(chatKey);
+    }
+    let nextPending = initial;
     for (;;) {
-      const next = this.db.claimNextPendingMsg(this.surfaceIdentity, chatKey);
+      const next = nextPending ?? this.db.claimNextPendingMsg(this.surfaceIdentity, chatKey);
+      nextPending = undefined;
       if (!next) {
         if (this.db.unlockIfQueueEmpty(this.surfaceIdentity, chatKey)) return;
         if (!this.db.ownsLock(this.surfaceIdentity, chatKey)) return;
@@ -768,16 +825,39 @@ export class BridgeEngine {
       }
       try {
         await this.sendText(next.chatId, { text: "▶️ Processing your queued message...", message_thread_id: next.threadId ?? undefined });
-        if (this.queuedMessageHandler) await this.queuedMessageHandler(next);
-        else await this.executeClaimedMessage(next);
-        this.db.completePendingMsg(next.id);
+        const outcome = this.queuedMessageHandler
+          ? await this.queuedMessageHandler(next)
+          : await this.executeClaimedMessage(next);
+        if (outcome === "fenced") return;
+        if (outcome !== "committed") {
+          this.db.releasePendingClaim(next.id);
+          this.db.unlock(this.surfaceIdentity, chatKey);
+          this._scheduleQueueRecovery(chatKey, recoveryAttempt + 1);
+          return;
+        }
+        if (!this.db.completePendingMsg(this.surfaceIdentity, chatKey, next.id)) return;
+        this._deleteQueuedAttachments(next.attachments);
       } catch (error) {
         this.db.releasePendingClaim(next.id);
         this.db.unlock(this.surfaceIdentity, chatKey);
         console.error(`[${this.kind}] queued handoff failed`, error);
+        this._scheduleQueueRecovery(chatKey, recoveryAttempt + 1);
         return;
       }
     }
+  }
+
+  private _scheduleQueueRecovery(chatKey: string, attempt: number): void {
+    if (attempt > 3 || this.queueRecoveryTimers.has(chatKey)) return;
+    const timer = setTimeout(() => {
+      this.queueRecoveryTimers.delete(chatKey);
+      if (!this.db.tryLock(this.surfaceIdentity, chatKey)) return;
+      void this._drainQueueAndUnlock(chatKey, undefined, attempt).catch((error) =>
+        console.error(`[${this.kind}] queue recovery failed chatKey=${chatKey}`, error)
+      );
+    }, Math.min(1_000, 100 * (2 ** (attempt - 1))));
+    timer.unref();
+    this.queueRecoveryTimers.set(chatKey, timer);
   }
 
   /** Diagnostic compatibility shim; runtime handoff uses _drainQueueAndUnlock while retaining ownership. */
@@ -786,15 +866,51 @@ export class BridgeEngine {
     await this._drainQueueAndUnlock(chatKey);
   }
 
-  async executeClaimedMessage(next: PendingMessage): Promise<void> {
+  async executeClaimedMessage(next: PendingMessage): Promise<ExecutionOutcome> {
     const chatKey = next.chatKey;
     const hookCtx: HookContext = { chatId: next.chatId, chatKey, threadId: next.threadId ?? undefined, userId: next.userId ?? undefined };
-    await this._executeAndSend(next.prompt, next.chatId, chatKey, next.chatType, next.threadId ?? undefined, next.userId ?? undefined, hookCtx, [], null, true);
+    return this._executeAndSend(next.prompt, next.chatId, chatKey, next.chatType, next.threadId ?? undefined, next.userId ?? undefined, hookCtx, next.attachments, null, true);
+  }
+
+  private _deleteQueuedAttachments(attachments: string[]): void {
+    const uploadDirs = new Set<string>();
+    for (const attachment of attachments) {
+      try { unlinkSync(attachment); } catch {}
+      const parent = dirname(attachment);
+      if (basename(parent).startsWith("bridge-uploads-")) uploadDirs.add(parent);
+    }
+    for (const dir of uploadDirs) {
+      try { rmSync(dir, { recursive: true, force: true }); } catch {}
+    }
   }
 
   private _assertLaneOwned(chatKey: string): void {
     if (this.abortedChats.has(this._executionLane(chatKey)) || !this.db.ownsLock(this.surfaceIdentity, chatKey)) {
       throw new LostExecutionLeaseError();
+    }
+  }
+
+  private _renewLaneOrThrow(chatKey: string): void {
+    if (this.abortedChats.has(this._executionLane(chatKey)) || !this.db.heartbeatLock(this.surfaceIdentity, chatKey)) {
+      throw new LostExecutionLeaseError();
+    }
+  }
+
+  private _commitResultState(chatKey: string, prompt: string, result: CliResult): void {
+    this._runWithFence(chatKey, () => {
+      if (result.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
+      if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
+      result.text = this._applyMemorySidecars(chatKey, result.text);
+      if (isAgentKind(this.kind)) this._rememberTurn(chatKey, promptForMemory(prompt), result.text);
+    });
+  }
+
+  private _runWithFence<T>(chatKey: string, operation: () => T): T {
+    try {
+      return this.db.runWithLockFence(this.surfaceIdentity, chatKey, operation);
+    } catch (error) {
+      if (error instanceof ExecutionLockLostError) throw new LostExecutionLeaseError();
+      throw error;
     }
   }
 
@@ -944,9 +1060,9 @@ export class BridgeEngine {
         ...this._compactionRecoveryDeps(),
         trigger: "preseed",
         compactProfile: this.opts.compactProfile ?? "engineering",
-        assertCanCommit: () => this._assertLaneOwned(chatKey),
+        assertCanCommit: () => this._renewLaneOrThrow(chatKey),
       });
-      this._assertLaneOwned(chatKey);
+      this._renewLaneOrThrow(chatKey);
       if (result.outcome === "failed") {
         console.warn(`[preseed-compact] failed outcome chatKey=${chatKey} cliKind=${this.kind} error=${result.error}`);
       }
@@ -1046,16 +1162,13 @@ export class BridgeEngine {
       } else if (executionKind === "kimchi" && !result.sessionId) {
         result.sessionId = resolveKimchiSessionId(cwd);
       }
-      if (result?.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
-      if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
       result.text = scrubOutputDir(result.text, outDir);
-      result.text = this._applyMemorySidecars(chatKey, result.text);
-      if (isAgentKind(this.kind)) {
-        this._rememberTurn(chatKey, promptForMemory(prompt), result.text);
-      }
+      this._commitResultState(chatKey, prompt, result);
+      this._renewLaneOrThrow(chatKey);
       if (this.hooks.onAfterExecute) {
         await this.hooks.onAfterExecute(prompt, result.text, hookContext(chatId, chatKey, body.message_thread_id));
       }
+      this._renewLaneOrThrow(chatKey);
       await uploadOutputFiles(outDir, chatId, this.client, fileSendOptions).catch((err) =>
         console.error(`[${this.kind}] output file upload failed`, err)
       );
@@ -1084,7 +1197,7 @@ export class BridgeEngine {
       await uploadOutputFiles(outDir, chatId, this.client, fileSendOptions).catch(() => {});
       if (sessionId && /No conversation found with session ID|thread not found|session not found|conversation not found/i.test((error as Error).message ?? "")) {
         console.warn(`[${this.kind}] session ID invalid, retrying with fresh session...`);
-        if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
+        if (isAgentKind(this.kind)) this._runWithFence(chatKey, () => db_setSession(this.db, chatKey, this.kind as BotKind, null));
         // executePromptAsync injects conversation context itself — do not pre-wrap
         return this.executePromptAsync(prompt, null, chatId, body, onProgress, attachments, eventContext, runId, collect, chatKey);
       }
@@ -1175,16 +1288,13 @@ export class BridgeEngine {
       if (executionKind === "antigravity" && !result.sessionId) {
         result.sessionId = resolveAntigravityConversationId({ cwd, sinceMs: startedAtMs, explicitLogContent: logContent });
       }
-      if (result.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
-      if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
       result.text = scrubOutputDir(result.text, outDir);
-      result.text = this._applyMemorySidecars(chatKey, result.text);
-      if (isAgentKind(this.kind)) {
-        this._rememberTurn(chatKey, promptForMemory(prompt), result.text);
-      }
+      this._commitResultState(chatKey, prompt, result);
+      this._renewLaneOrThrow(chatKey);
       if (this.hooks.onAfterExecute) {
         await this.hooks.onAfterExecute(prompt, result.text, hookContext(chatId, chatKey, body.message_thread_id));
       }
+      this._renewLaneOrThrow(chatKey);
       await uploadOutputFiles(outDir, chatId, this.client, fileSendOptions).catch((err) =>
         console.error(`[${this.kind}] output file upload failed`, err)
       );
@@ -1209,7 +1319,7 @@ export class BridgeEngine {
       await uploadOutputFiles(outDir, chatId, this.client, fileSendOptions).catch(() => {});
       if (sessionId && /No conversation found with session ID|thread not found|session not found|conversation not found/i.test((error as Error).message ?? "")) {
         console.warn(`[${this.kind}] session ID invalid, retrying with fresh session...`);
-        if (isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, null);
+        if (isAgentKind(this.kind)) this._runWithFence(chatKey, () => db_setSession(this.db, chatKey, this.kind as BotKind, null));
         // executePrompt injects conversation context itself — do not pre-wrap
         return this.executePrompt(prompt, null, chatId, body, attachments, eventContext, runId, collect, chatKey);
       }
@@ -1291,9 +1401,8 @@ export class BridgeEngine {
       if (!result.sessionId) {
         result.sessionId = resolveAntigravityConversationId({ cwd: retryCwd, sinceMs: retryStartedAtMs, explicitLogContent: retryLogContent });
       }
-      if (result.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
-      if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
       result.text = scrubOutputDir(result.text, outDir);
+      this._commitResultState(chatKey, prompt, result);
       if (collect && runId && eventContext) {
         collect({
           type: "run.completed",
@@ -1442,17 +1551,13 @@ export class BridgeEngine {
       if (executionKind === "antigravity" && !result.sessionId) {
         result.sessionId = resolveAntigravityConversationId({ cwd: fallbackCwd, sinceMs: fallbackStartedAtMs, explicitLogContent: fallbackLogContent });
       }
-      if (result.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
-      if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
       const currentModel = isAgentKind(this.kind) ? (this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null) : null;
       const finalResult = {
         ...result,
         text: `⚠️ Fell back to ${fallbackModel} (${currentModel || "default"} at capacity)\n\n${result.text}`,
       };
-      finalResult.text = this._applyMemorySidecars(chatKey, finalResult.text);
-      if (isAgentKind(this.kind)) {
-        this._rememberTurn(chatKey, promptForMemory(prompt), finalResult.text);
-      }
+      this._commitResultState(chatKey, prompt, finalResult);
+      this._renewLaneOrThrow(chatKey);
       if (this.hooks.onAfterExecute) {
         await this.hooks.onAfterExecute(prompt, finalResult.text, hookContext(chatId, chatKey, eventContext?.threadId));
       }
@@ -1467,15 +1572,17 @@ export class BridgeEngine {
     if (!isAgentKind(this.kind)) return;
     const msg = error.message ?? "";
     if (/timeout|killed by signal/i.test(msg)) {
-      const failures = this.db.incrementFailures(chatKey, this.kind);
-      if (failures >= 2) {
-        console.warn(`[${this.kind}] clearing session after ${failures} consecutive failures for ${chatKey}`);
-        db_setSession(this.db, chatKey, this.kind, null);
-        this.db.resetFailures(chatKey, this.kind);
-      }
+      this._runWithFence(chatKey, () => {
+        const failures = this.db.incrementFailures(chatKey, this.kind as BotKind);
+        if (failures >= 2) {
+          console.warn(`[${this.kind}] clearing session after ${failures} consecutive failures for ${chatKey}`);
+          db_setSession(this.db, chatKey, this.kind as BotKind, null);
+          this.db.resetFailures(chatKey, this.kind as BotKind);
+        }
+      });
     } else if (/No conversation found with session ID|thread not found|session not found|conversation not found/i.test(msg)) {
       console.warn(`[${this.kind}] clearing invalid session ID for ${chatKey}`);
-      db_setSession(this.db, chatKey, this.kind, null);
+      this._runWithFence(chatKey, () => db_setSession(this.db, chatKey, this.kind as BotKind, null));
       this.db.resetFailures(chatKey, this.kind);
     }
   }
@@ -1518,10 +1625,11 @@ export class BridgeEngine {
           await this.sendText(chatId, { text: `Advisor unavailable; continuing without advice: ${message}`, message_thread_id: threadId });
         }
       }
-      return this._executeAndSend(
+      await this._executeAndSend(
         prompt, chatId, chatKey, pending.chatType, threadId, pending.userId,
         hookContext(chatId, chatKey, threadId), [],
       );
+      return;
     }
     if (!["model", "effort"].includes(action) || targetKind !== this.kind) return;
 

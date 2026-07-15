@@ -30,6 +30,19 @@ const withEnv = async (env: Record<string, string | undefined>, fn: () => Promis
 };
 
 describe("sendMessageWithProgress", () => {
+  it("suppresses final delivery when the execution fence rejects publication", async () => {
+    const client = createMockClient();
+    const result = await sendMessageWithProgress({
+      client,
+      kind: "codex",
+      chatId: 123,
+      execution: Promise.resolve({ text: "stale result", sessionId: "s1" }),
+      beforeFinalDelivery: () => false,
+    });
+    expect(result).toBeNull();
+    expect(client.sendMessage).not.toHaveBeenCalled();
+  });
+
   it("does not send a thinking placeholder for codex", async () => {
     const client = createMockClient();
     const chatId = 123;

@@ -55,6 +55,10 @@ export class LockRepository {
     return this.options.runId;
   }
 
+  get serviceId(): string {
+    return this.options.serviceId;
+  }
+
   unlock(surface: string, chatKey: string): void {
     this.db.prepare(`
       DELETE FROM execution_locks

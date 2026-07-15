@@ -12,7 +12,7 @@ import { markHandoffRequired } from "./handoffState.js";
 import { shouldCompactBeforeFallback, recordFallbackCompactSuccess } from "./fallbackCompactCooldown.js";
 import type { CompactConversationResult } from "./compactConversation.js";
 import type { CapacityFallbackCompactionRequest } from "./fallbackCompaction.js";
-import type { PendingMessage } from "./engine.js";
+import type { ExecutionOutcome, PendingMessage } from "./engine.js";
 
 export type CliKind = "codex" | "claude" | "antigravity" | "kimchi";
 export type InteractiveCommandRegistration = {
@@ -265,7 +265,7 @@ function describeMessageContentDetail(message: TelegramUpdate["message"]): strin
 
 export interface InteractiveDispatchEngine {
   handleUpdate(update: TelegramUpdate): Promise<void>;
-  executeClaimedMessage(message: PendingMessage): Promise<void>;
+  executeClaimedMessage(message: PendingMessage): Promise<ExecutionOutcome>;
 }
 
 export interface InteractiveDispatchDeps {
@@ -300,7 +300,7 @@ export async function dispatchInteractiveWithFallback(
   deps: InteractiveDispatchDeps,
   tried = new Set<string>(),
   claimedMessage?: PendingMessage,
-): Promise<void> {
+): Promise<ExecutionOutcome> {
   const { engines, fallbackChain, exhaustedChats, db, notify, onCliSwitched, compactBeforeSwitch } = deps;
 
   exhaustedChats.delete(chatKey);
@@ -312,7 +312,8 @@ export async function dispatchInteractiveWithFallback(
 
   const activeCli = fallbackChain.getActiveCli(chatKey) as CliKind;
   tried.add(activeCli);
-  if (claimedMessage) await engines[activeCli].executeClaimedMessage(claimedMessage);
+  let outcome: ExecutionOutcome = "committed";
+  if (claimedMessage) outcome = await engines[activeCli].executeClaimedMessage(claimedMessage);
   else await engines[activeCli].handleUpdate(update);
 
   if (exhaustedChats.has(chatKey)) {
@@ -350,21 +351,23 @@ export async function dispatchInteractiveWithFallback(
         await onCliSwitched(next);
       }
 
-      await dispatchInteractiveWithFallback(update, chatKey, deps, tried, claimedMessage);
+      return dispatchInteractiveWithFallback(update, chatKey, deps, tried, claimedMessage);
     } else {
       await notify("All CLIs are currently unavailable. Please try again later.");
+      return "failed";
     }
   } else if (tried.size > 1) {
     // Persist only the CLI that actually completed the fallback turn.
     setUserCliPreference(db, chatKey, activeCli);
   }
+  return outcome;
 }
 
 export function dispatchClaimedInteractiveWithFallback(
   message: PendingMessage,
   chatKey: string,
   deps: InteractiveDispatchDeps,
-): Promise<void> {
+): Promise<ExecutionOutcome> {
   const update: TelegramUpdate = {
     update_id: 0,
     message: {

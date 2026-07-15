@@ -185,7 +185,7 @@ async function registerGroupChatCommands(pref: CliKind, chatId: number): Promise
 for (const engine of Object.values(engines)) {
   engine.setQueuedMessageHandler(async (queued) => {
     const chatKey = queued.chatKey;
-    await dispatchClaimedInteractiveWithFallback(queued, chatKey, {
+    return dispatchClaimedInteractiveWithFallback(queued, chatKey, {
       engines, fallbackChain, exhaustedChats, db,
       notify: async (msg) => {
         await sendTelegramMessage({ client, kind: "interactive", chatId: queued.chatId, body: { text: msg, message_thread_id: queued.threadId ?? undefined } });
@@ -200,6 +200,8 @@ for (const engine of Object.values(engines)) {
     });
   });
 }
+
+await engines[defaultPref].recoverPendingQueues();
 
 await registerGlobalCommands(defaultPref, "");
 // Tracks which group chat IDs have had per-chat commands registered this session.

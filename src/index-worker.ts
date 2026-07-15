@@ -150,7 +150,7 @@ const engines = Object.fromEntries(
 
 for (const engine of Object.values(engines)) {
   engine.setQueuedMessageHandler(async (queued) => {
-    await dispatchClaimedInteractiveWithFallback(queued, queued.chatKey, {
+    return dispatchClaimedInteractiveWithFallback(queued, queued.chatKey, {
       engines, fallbackChain, exhaustedChats, db,
       notify: async (msg: string) => {
         await sendTelegramMessage({ client, kind: "worker-bot", chatId: queued.chatId, body: withThread({ text: msg }, queued.threadId ?? undefined) });
@@ -166,6 +166,7 @@ for (const engine of Object.values(engines)) {
 // ── setMyCommands — merge worker + interactive (CLI) commands ─────────────────
 
 const defaultCli: CliKind = "codex";
+await engines[defaultCli].recoverPendingQueues();
 const workerCmds = buildWorkerCommands();
 const interactiveCmds = buildInteractiveCommands(defaultCli);
 const workerCmdSet = new Set(workerCmds.map(c => c.command));

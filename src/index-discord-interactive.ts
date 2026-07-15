@@ -214,7 +214,7 @@ const engines = Object.fromEntries(
 
 for (const engine of Object.values(engines)) {
   engine.setQueuedMessageHandler(async (queued) => {
-    await dispatchClaimedInteractiveWithFallback(queued, queued.chatKey, {
+    return dispatchClaimedInteractiveWithFallback(queued, queued.chatKey, {
       engines, fallbackChain, exhaustedChats, db,
       notify: async (msg) => { await engineClient.sendMessage({ chat_id: queued.chatId, text: msg }); },
       onCliSwitched: async (newCli) => setUserCliPreference(db, queued.chatKey, newCli),
@@ -224,6 +224,8 @@ for (const engine of Object.values(engines)) {
     });
   });
 }
+
+await engines.codex.recoverPendingQueues();
 
 // ── Slash command registration ────────────────────────────────────────────────
 

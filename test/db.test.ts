@@ -233,10 +233,12 @@ describe("BridgeDb execution-lane migration", () => {
       expect(migrated.getQuarantinedPendingMessageCount()).toBe(1);
       expect(warn).toHaveBeenCalledWith("[db] quarantined 1 legacy pending message(s)");
       expect(migrated.pendingMsgCount("telegram:codex", "chat1")).toBe(0);
+      expect(migrated.dequeueMsgs("legacy", "chat1")[0].attachments).toEqual([]);
       migrated.enqueueMsg("telegram:codex", "chat1", {
-        prompt: "owned prompt", chatId: 1, chatType: "private",
+        prompt: "owned prompt", chatId: 1, chatType: "private", attachments: ["/tmp/owned.txt"],
       });
       expect(migrated.dequeueMsgs("telegram:codex", "chat1").map((msg) => msg.prompt)).toEqual(["owned prompt"]);
+      expect(migrated.dequeueMsgs("telegram:codex", "chat1")[0].attachments).toEqual(["/tmp/owned.txt"]);
       migrated.close();
       warn.mockRestore();
     } finally {

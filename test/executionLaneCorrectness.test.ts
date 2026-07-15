@@ -247,6 +247,27 @@ describe("execution lane correctness", () => {
     db.close(); rmSync(path, { force: true });
   });
 
+  it("automatically retries a transient queue-router failure without a new message", async () => {
+    const path = join(tmpdir(), `router-retry-${Date.now()}-${Math.random()}.sqlite`);
+    const db = openDb(path);
+    db.setSetting("ctx_suppress:100:7", "1");
+    db.enqueueMsg("telegram:interactive", "100:7", { prompt: "retry automatically", chatId: 100, threadId: 7, chatType: "private" });
+    const runCli = vi.fn().mockResolvedValue("recovered");
+    let failOnce = true;
+    let engine!: BridgeEngine;
+    engine = new BridgeEngine(options("claude", {
+      onQueuedMessage: async (queued: any) => {
+        if (failOnce) { failOnce = false; throw new Error("transient router failure"); }
+        return engine.executeClaimedMessage(queued);
+      },
+    }), db, client(), { runCli });
+    await engine.recoverPendingQueues();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(runCli).toHaveBeenCalledOnce();
+    expect(db.pendingMsgCount("telegram:interactive", "100:7")).toBe(0);
+    db.close(); rmSync(path, { force: true });
+  });
+
   it("renews and fences atomically after parsing before the first state mutation", async () => {
     const path = join(tmpdir(), `commit-fence-${Date.now()}-${Math.random()}.sqlite`);
     let now = Date.parse("2026-07-15T10:00:00.000Z");

@@ -104,7 +104,7 @@ Sessions are stored per chat in SQLite and restored across service restarts. Eve
 
 `runCli` and `runCliAsync` register each child process in `activeProcesses: Map<chatId, ChildProcess>`. Abort sends SIGTERM, escalates to SIGKILL after the grace period, and retains the process registration and execution lane until the close/error lifecycle confirms exit.
 
-`/stop` and `/cancel` are intercepted in `handleUpdate` before `db.tryLock()`, so they work even when a lock is held.
+`/stop`, `/cancel`, and `/reset` retain the lane through the existing supervisor's confirmed close/error lifecycle. TERM-resistant children are escalated to SIGKILL before replacement work may start.
 
 ### 4.4 Conversation Persistence & Compaction
 
@@ -235,9 +235,11 @@ Manual `/cli` switching applies the same target-session-clear + handoff-mark (`a
 
 `db.tryLock(surface, chatKey)` atomically inserts into `execution_locks`, whose primary key is `(surface, chat_key)`. A conversation scope is `chatId:threadId` whenever Telegram supplies a thread ID, including private-chat topics. Standalone bots use distinct surfaces; all providers behind one interactive bot share its surface. Lock heartbeat, result commit, and release compare the unique acquiring `run_id`.
 
-If a lane is busy, the incoming message is queued to `pending_messages` under the same explicit `(surface, chat_key)` ownership (max `MAX_QUEUE_DEPTH = 5`), surviving restarts. Legacy rows created before the surface migration are retained under the quarantined `legacy` surface and cannot drain into a live bot. Handoff transactionally claims the oldest row, retains the lane while the interactive router resolves the current provider, and deletes the row only after execution returns. A stale successor reclaims rows claimed by the displaced run. Lock release occurs transactionally only when the lane queue is empty, preventing new arrivals from overtaking FIFO work.
+If a lane is busy, the incoming message is queued to `pending_messages` under the same explicit `(surface, chat_key)` ownership (max `MAX_QUEUE_DEPTH = 5`), surviving restarts. One transactional admission operation either acquires an empty lane for the current message or appends it and claims the oldest durable row. Legacy rows created before the surface migration are retained under the quarantined `legacy` surface and cannot drain into a live bot. Handoff retains the lane while the interactive router resolves the current provider, and deletes the row only after a committed outcome plus a same-run lock fence. Fenced and failed rows remain recoverable. Startup scans live-surface queues; handler failures receive three bounded retries. Lock release occurs transactionally only when the lane queue is empty, preventing new arrivals from overtaking FIFO work.
 
 Each service has a configuration-independent `service_id` and each process generation gets a unique `run_id`. Opening a second process never clears live locks. Engines renew their bounded lease while executing; a competing run may atomically take over only after `lease_expires_at`, proving the prior lock stale. The standalone service ID remains `telegram:standalone` when its enabled provider set changes.
+
+Parsed results commit session, failure counter, memory sidecars, and conversation turns in one transaction that first renews the acquiring run's lease. Hooks, generated-file upload, compaction session reset, and final response delivery each require another successful renewal. A displaced run reports a fenced outcome and cannot delete its claimed queue row.
 
 ### 4.7 Rate Limit Handling
 
@@ -342,6 +344,7 @@ CREATE TABLE pending_messages (
   state    TEXT NOT NULL DEFAULT 'queued',
   claim_run_id TEXT,
   claimed_at TEXT,
+  attachments_json TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```

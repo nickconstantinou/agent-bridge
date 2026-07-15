@@ -89,6 +89,10 @@ export interface OpenDbOptions {
   clock?: () => number;
 }
 
+export class ExecutionLockLostError extends Error {
+  constructor() { super("execution lock ownership lost"); }
+}
+
 export function openDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
   if (dbPath !== ":memory:") {
     mkdirSync(dirname(dbPath), { recursive: true });
@@ -495,6 +499,7 @@ export function openDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
         state       TEXT    NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'claimed')),
         claim_run_id TEXT,
         claimed_at  TEXT,
+        attachments_json TEXT NOT NULL DEFAULT '[]',
         created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
       );
       CREATE TABLE IF NOT EXISTS conversation_summaries (
@@ -536,6 +541,7 @@ export function openDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
   try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'claimed'))`); } catch {}
   try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN claim_run_id TEXT`); } catch {}
   try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN claimed_at TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'`); } catch {}
   if (migratedPendingSurface) {
     const { count } = raw.prepare(`SELECT COUNT(*) AS count FROM pending_messages WHERE surface = 'legacy'`).get() as { count: number };
     if (count > 0) console.warn(`[db] quarantined ${count} legacy pending message(s)`);
@@ -643,6 +649,14 @@ export class BridgeDb {
 
   runInTransaction<T>(operation: () => T): T {
     return this.raw.transaction(operation)();
+  }
+
+  runWithLockFence<T>(surface: string, chatKey: string, operation: () => T): T {
+    assertExecutionScope(surface, chatKey);
+    return this.runInTransaction(() => {
+      if (!this.locks.heartbeat(surface, chatKey)) throw new ExecutionLockLostError();
+      return operation();
+    });
   }
 
   // ── Session management ───────────────────────────────────────────────────
@@ -1089,25 +1103,26 @@ export class BridgeDb {
   enqueueMsg(
     surface: string,
     chatKey: string,
-    msg: { prompt: string; chatId: number; threadId?: number; chatType: string; userId?: number },
+    msg: { prompt: string; chatId: number; threadId?: number; chatType: string; userId?: number; attachments?: string[] },
   ): void {
     assertExecutionScope(surface, chatKey);
     this.raw
       .prepare(
-        `INSERT INTO pending_messages (surface, chat_key, prompt, chat_id, thread_id, chat_type, user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO pending_messages (surface, chat_key, prompt, chat_id, thread_id, chat_type, user_id, attachments_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(surface, chatKey, msg.prompt, msg.chatId, msg.threadId ?? null, msg.chatType, msg.userId ?? null);
+      .run(surface, chatKey, msg.prompt, msg.chatId, msg.threadId ?? null, msg.chatType, msg.userId ?? null, JSON.stringify(msg.attachments ?? []));
   }
 
   dequeueMsgs(surface: string, chatKey: string): Array<{
-    id: number; prompt: string; chatId: number; threadId: number | null; chatType: string; userId: number | null;
+    id: number; prompt: string; chatId: number; threadId: number | null; chatType: string; userId: number | null; attachments: string[];
   }> {
     assertExecutionScope(surface, chatKey);
     return (this.raw
-      .prepare(`SELECT id, prompt, chat_id AS chatId, thread_id AS threadId, chat_type AS chatType, user_id AS userId
+      .prepare(`SELECT id, prompt, chat_id AS chatId, thread_id AS threadId, chat_type AS chatType, user_id AS userId,
+                       attachments_json AS attachmentsJson
                 FROM pending_messages WHERE surface = ? AND chat_key = ? ORDER BY id ASC`)
-      .all(surface, chatKey) as any);
+      .all(surface, chatKey) as any[]).map(({ attachmentsJson, ...row }) => ({ ...row, attachments: JSON.parse(attachmentsJson || "[]") }));
   }
 
   deletePendingMsg(id: number): void {
@@ -1115,7 +1130,7 @@ export class BridgeDb {
   }
 
   claimNextPendingMsg(surface: string, chatKey: string): {
-    id: number; chatKey: string; prompt: string; chatId: number; threadId: number | null; chatType: string; userId: number | null;
+    id: number; chatKey: string; prompt: string; chatId: number; threadId: number | null; chatType: string; userId: number | null; attachments: string[];
   } | null {
     assertExecutionScope(surface, chatKey);
     return this.runInTransaction(() => {
@@ -1130,7 +1145,8 @@ export class BridgeDb {
       `).get(surface, chatKey, this.locks.runId);
       if (active) return null;
       const row = this.raw.prepare(`
-        SELECT id, chat_key AS chatKey, prompt, chat_id AS chatId, thread_id AS threadId, chat_type AS chatType, user_id AS userId
+        SELECT id, chat_key AS chatKey, prompt, chat_id AS chatId, thread_id AS threadId, chat_type AS chatType, user_id AS userId,
+               attachments_json AS attachmentsJson
         FROM pending_messages WHERE surface = ? AND chat_key = ? AND state = 'queued' ORDER BY id ASC LIMIT 1
       `).get(surface, chatKey) as any;
       if (!row) return null;
@@ -1138,13 +1154,44 @@ export class BridgeDb {
         UPDATE pending_messages SET state = 'claimed', claim_run_id = ?, claimed_at = ?
         WHERE id = ? AND state = 'queued'
       `).run(this.locks.runId, new Date().toISOString(), row.id).changes;
-      return changed === 1 ? row : null;
+      if (changed !== 1) return null;
+      const { attachmentsJson, ...claimed } = row;
+      return { ...claimed, attachments: JSON.parse(attachmentsJson || "[]") };
     });
   }
 
-  completePendingMsg(id: number): boolean {
-    return this.raw.prepare(`DELETE FROM pending_messages WHERE id = ? AND state = 'claimed' AND claim_run_id = ?`)
-      .run(id, this.locks.runId).changes === 1;
+  completePendingMsg(surface: string, chatKey: string, id: number): boolean {
+    assertExecutionScope(surface, chatKey);
+    return this.raw.prepare(`
+      DELETE FROM pending_messages
+      WHERE id = ? AND surface = ? AND chat_key = ? AND state = 'claimed' AND claim_run_id = ?
+        AND EXISTS (
+          SELECT 1 FROM execution_locks
+          WHERE surface = ? AND chat_key = ? AND service_id = ? AND run_id = ?
+        )
+    `).run(id, surface, chatKey, this.locks.runId, surface, chatKey, this.locks.serviceId, this.locks.runId).changes === 1;
+  }
+
+  admitMessage(
+    surface: string,
+    chatKey: string,
+    msg: { prompt: string; chatId: number; threadId?: number; chatType: string; userId?: number; attachments?: string[] },
+    maxDepth: number,
+  ): { kind: "execute_current" } | { kind: "queued"; position: number } | { kind: "full" } |
+     { kind: "execute_claimed"; position: number; claimed: ReturnType<BridgeDb["claimNextPendingMsg"]> & {} } {
+    assertExecutionScope(surface, chatKey);
+    return this.runInTransaction(() => {
+      const pending = this.pendingMsgCount(surface, chatKey);
+      if (pending === 0 && this.locks.tryLock(surface, chatKey)) return { kind: "execute_current" as const };
+      if (pending >= maxDepth) return { kind: "full" as const };
+      this.enqueueMsg(surface, chatKey, msg);
+      const position = pending + 1;
+      if (this.locks.tryLock(surface, chatKey)) {
+        const claimed = this.claimNextPendingMsg(surface, chatKey);
+        if (claimed) return { kind: "execute_claimed" as const, position, claimed };
+      }
+      return { kind: "queued" as const, position };
+    });
   }
 
   releasePendingClaim(id: number): void {
@@ -1168,6 +1215,12 @@ export class BridgeDb {
       `SELECT COUNT(*) AS count FROM pending_messages WHERE surface = 'legacy'`
     ).get() as { count: number };
     return count;
+  }
+
+  getPendingLaneKeys(surface: string): string[] {
+    if (!surface?.trim()) throw new Error("surface is required");
+    return (this.raw.prepare(`SELECT DISTINCT chat_key AS chatKey FROM pending_messages WHERE surface = ? ORDER BY chat_key`)
+      .all(surface) as Array<{ chatKey: string }>).map((row) => row.chatKey);
   }
 
   // ── Conversation summaries ──────────────────────────────────────────────

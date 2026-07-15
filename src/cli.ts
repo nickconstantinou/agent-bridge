@@ -7,6 +7,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, basename } from "node:path";
@@ -18,8 +19,17 @@ import { type as evtType } from "./events/types.js";
 import type { BridgeEvent } from "./events/types.js";
 import { appendEffortArgs, type EffortLevel } from "./effort.js";
 import { isProviderFallbackEligibleError } from "./providers/fallbackEligibility.js";
+import type { ExecutionLaneHandle } from "./db.js";
 
-const activeProcesses = new Map<number | string, ChildProcess>();
+interface ActiveExecution {
+  child: ChildProcess | null;
+  lifecycleToken: string | null;
+  lifecycleHandle: ExecutionLaneHandle | null;
+  lifecycleDone: Promise<void> | null;
+  finishLifecycle: (() => void) | null;
+}
+
+const activeExecutions = new Map<number | string, ActiveExecution>();
 const abortedChildren = new WeakSet<ChildProcess>();
 
 const STRIPPED_ENV_KEYS = /^TELEGRAM_BOT_TOKEN|^TELEGRAM_ALLOWED_USER_IDS/;
@@ -161,20 +171,54 @@ function createAntigravityPlannerStallWatch(args: string[], stdoutRef: () => str
  * from the older child must not deregister the newer process.
  */
 function deregisterProcess(chatId: number | string, child: ChildProcess): void {
-  if (activeProcesses.get(chatId) === child) {
-    activeProcesses.delete(chatId);
+  const active = activeExecutions.get(chatId);
+  if (active?.child === child) {
+    active.child = null;
+    if (!active.lifecycleToken) activeExecutions.delete(chatId);
   }
 }
 
+function registerProcess(chatId: number | string, child: ChildProcess): void {
+  const active = activeExecutions.get(chatId);
+  if (active) active.child = child;
+  else activeExecutions.set(chatId, { child, lifecycleToken: null, lifecycleHandle: null, lifecycleDone: null, finishLifecycle: null });
+}
+
+export function beginExecutionLifecycle(chatId: number | string, handle: ExecutionLaneHandle): string {
+  const token = randomUUID();
+  let finishLifecycle!: () => void;
+  const lifecycleDone = new Promise<void>((resolve) => { finishLifecycle = resolve; });
+  const active = activeExecutions.get(chatId);
+  activeExecutions.set(chatId, {
+    child: active?.child ?? null,
+    lifecycleToken: token,
+    lifecycleHandle: handle,
+    lifecycleDone,
+    finishLifecycle,
+  });
+  return token;
+}
+
+export function completeExecutionLifecycle(chatId: number | string, token: string): void {
+  const active = activeExecutions.get(chatId);
+  if (!active || active.lifecycleToken !== token) return;
+  active.finishLifecycle?.();
+  active.lifecycleToken = null;
+  active.lifecycleHandle = null;
+  active.lifecycleDone = null;
+  active.finishLifecycle = null;
+  if (!active.child) activeExecutions.delete(chatId);
+}
+
 export function abortCliProcess(chatId: number | string): boolean {
-  const child = activeProcesses.get(chatId);
+  const child = activeExecutions.get(chatId)?.child;
   if (!child) return false;
   killChild(child);
   return true;
 }
 
 export function abortCliProcessAndWait(chatId: number | string): Promise<boolean> {
-  const child = activeProcesses.get(chatId);
+  const child = activeExecutions.get(chatId)?.child;
   if (!child) return Promise.resolve(false);
   return new Promise((resolve) => {
     const done = () => resolve(true);
@@ -184,13 +228,22 @@ export function abortCliProcessAndWait(chatId: number | string): Promise<boolean
   });
 }
 
+export async function abortExecutionAndWait(chatId: number | string): Promise<ExecutionLaneHandle | null> {
+  const active = activeExecutions.get(chatId);
+  if (!active) return null;
+  const handle = active.lifecycleHandle;
+  if (active.child) await abortCliProcessAndWait(chatId);
+  await active.lifecycleDone;
+  return handle;
+}
+
 export function shutdownCliProcesses(): number {
-  const children = [...activeProcesses.values()];
+  const children = [...activeExecutions.values()].flatMap((active) => active.child ? [active.child] : []);
   for (const child of children) {
     killChild(child);
   }
   const count = children.length;
-  activeProcesses.clear();
+  activeExecutions.clear();
   return count;
 }
 
@@ -964,7 +1017,7 @@ export async function runCli(command: string, args: string[], cwd: string, optio
       child.stdin?.write(options.stdin);
     }
     child.stdin?.end();
-    if (options.chatId != null) activeProcesses.set(options.chatId, child);
+    if (options.chatId != null) registerProcess(options.chatId, child);
     const pid = child.pid;
     let stdout = "";
     let stderr = "";
@@ -1110,7 +1163,7 @@ export async function runCliAsync(
       child.stdin?.write(options.stdin);
     }
     child.stdin?.end();
-    if (options.chatId != null) activeProcesses.set(options.chatId, child);
+    if (options.chatId != null) registerProcess(options.chatId, child);
     const pid = child.pid;
     let settled = false;
 

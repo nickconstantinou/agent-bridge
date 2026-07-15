@@ -53,16 +53,16 @@ describe("execution lane correctness", () => {
 
   it("claims FIFO queue rows only for the run that owns the lane and retains them until completion", () => {
     const db = openDb(":memory:", { serviceId: "telegram:interactive", runId: "run-a" });
-    expect(db.tryLock("telegram:interactive", "100:7")).toBe(true);
+    const handle = db.acquireLock("telegram:interactive", "100:7")!;
     db.enqueueMsg("telegram:interactive", "100:7", { prompt: "oldest", chatId: 100, threadId: 7, chatType: "private" });
     db.enqueueMsg("telegram:interactive", "100:7", { prompt: "newest", chatId: 100, threadId: 7, chatType: "private" });
-    const first = db.claimNextPendingMsg("telegram:interactive", "100:7");
+    const first = db.claimNextPendingMsg(handle);
     expect(first?.prompt).toBe("oldest");
-    expect(db.claimNextPendingMsg("telegram:interactive", "100:7")).toBeNull();
+    expect(db.claimNextPendingMsg(handle)).toBeNull();
     expect(db.pendingMsgCount("telegram:interactive", "100:7")).toBe(2);
-    expect(db.unlockIfQueueEmpty("telegram:interactive", "100:7")).toBe(false);
-    expect(db.completePendingMsg("telegram:interactive", "100:7", first!.id)).toBe(true);
-    expect(db.claimNextPendingMsg("telegram:interactive", "100:7")?.prompt).toBe("newest");
+    expect(db.unlockIfQueueEmpty(handle)).toBe(false);
+    expect(db.completePendingMsg(handle, first!.id)).toBe(true);
+    expect(db.claimNextPendingMsg(handle)?.prompt).toBe("newest");
     db.close();
   });
 
@@ -71,16 +71,17 @@ describe("execution lane correctness", () => {
     let now = Date.parse("2026-07-15T10:00:00.000Z");
     const clock = () => now;
     const runA = openDb(path, { serviceId: "telegram:interactive", runId: "run-a", lockLeaseMs: 500, clock });
-    runA.tryLock("telegram:interactive", "100:7");
+    const handleA = runA.acquireLock("telegram:interactive", "100:7")!;
     runA.enqueueMsg("telegram:interactive", "100:7", { prompt: "durable", chatId: 100, threadId: 7, chatType: "private" });
-    const claimed = runA.claimNextPendingMsg("telegram:interactive", "100:7");
+    const claimed = runA.claimNextPendingMsg(handleA);
     expect(claimed?.prompt).toBe("durable");
     const earlyRunB = openDb(path, { serviceId: "telegram:interactive", runId: "run-b", lockLeaseMs: 500, clock });
-    expect(earlyRunB.completePendingMsg("telegram:interactive", "100:7", claimed!.id)).toBe(false);
+    expect(earlyRunB.completePendingMsg(handleA, claimed!.id)).toBe(false);
     earlyRunB.close(); runA.close(); now += 501;
     const runB = openDb(path, { serviceId: "telegram:interactive", runId: "run-b", lockLeaseMs: 500, clock });
-    expect(runB.tryLock("telegram:interactive", "100:7")).toBe(true);
-    expect(runB.claimNextPendingMsg("telegram:interactive", "100:7")?.prompt).toBe("durable");
+    const handleB = runB.acquireLock("telegram:interactive", "100:7")!;
+    expect(handleB).not.toBeNull();
+    expect(runB.claimNextPendingMsg(handleB)?.prompt).toBe("durable");
     runB.close(); rmSync(path, { force: true });
   });
 
@@ -120,7 +121,7 @@ describe("execution lane correctness", () => {
     const engine = new BridgeEngine(options("claude"), db, c, { runCli: vi.fn().mockResolvedValue('{"summary_md":"topic eight summary","memory_candidates":[]}') });
     db.addConvTurn("100", "user", "quarantined flat history");
     db.addConvTurn("100:7", "user", "topic seven"); db.addConvTurn("100:8", "user", "topic eight");
-    db.tryLock("telegram:interactive", "100:7");
+    db.acquireLock("telegram:interactive", "100:7");
     await engine.handleMessages([message("/compact", 7)]);
     expect(c.sendMessage.mock.calls.some((call: any[]) => /busy|active/i.test(call[0].text))).toBe(true);
     await engine.handleMessages([message("/compact", 8)]);
@@ -146,9 +147,9 @@ describe("execution lane correctness", () => {
     await new Promise((r) => setTimeout(r, 150));
     const stopping = engine.handleUpdate({ update_id: 2, message: message("/stop", 7) });
     await new Promise((r) => setTimeout(r, 100));
-    expect(db.tryLock("telegram:interactive", "100:7")).toBe(false);
+    expect(db.acquireLock("telegram:interactive", "100:7")).toBeNull();
     await stopping; await active;
-    expect(db.tryLock("telegram:interactive", "100:7")).toBe(true);
+    expect(db.acquireLock("telegram:interactive", "100:7")).not.toBeNull();
     db.close(); rmSync(path, { force: true });
   }, 8_000);
 
@@ -168,25 +169,58 @@ describe("execution lane correctness", () => {
     await new Promise((r) => setTimeout(r, 150));
     const resetting = engine.handleMessages([message("/reset", 7)]);
     await new Promise((r) => setTimeout(r, 100));
-    expect(db.tryLock("telegram:interactive", "100:7")).toBe(false);
+    expect(db.acquireLock("telegram:interactive", "100:7")).toBeNull();
     await resetting; await active;
-    expect(db.tryLock("telegram:interactive", "100:7")).toBe(true);
+    expect(db.acquireLock("telegram:interactive", "100:7")).not.toBeNull();
     db.close(); rmSync(path, { force: true });
   }, 8_000);
+
+  it("keeps /reset fenced through delayed finalisation before allowing a new acquisition", async () => {
+    const db = openDb(":memory:", { serviceId: "telegram:interactive", runId: "same-process" });
+    const c = client();
+    let resumeFinalisation!: () => void;
+    const delayedFinalisation = new Promise<void>((resolve) => { resumeFinalisation = resolve; });
+    let hookCalls = 0;
+    const runCli = vi.fn().mockResolvedValueOnce("old result").mockResolvedValueOnce("new result");
+    const engine = new BridgeEngine(options("claude", {
+      onAfterExecute: async () => {
+        hookCalls += 1;
+        if (hookCalls === 1) await delayedFinalisation;
+      },
+    }), db, c, { runCli });
+
+    const oldRun = engine.handleMessages([message("old request", 7)]);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const reset = engine.handleMessages([message("/reset", 7)]);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(db.acquireLock("telegram:interactive", "100:7")).toBeNull();
+
+    resumeFinalisation();
+    await oldRun;
+    await reset;
+    await engine.handleMessages([message("new request", 7)]);
+
+    expect(c.sendMessage.mock.calls.some((call: any[]) => call[0].text === "old result")).toBe(false);
+    expect(c.sendMessage.mock.calls.some((call: any[]) => call[0].text === "new result")).toBe(true);
+    expect(db.getSession("100:7", "claude")).not.toBe("old result");
+    expect(db.pendingMsgCount("telegram:interactive", "100:7")).toBe(0);
+    db.close();
+  });
 
   it("does not let a displaced run delete its claimed row before the successor reclaims it", () => {
     const path = join(tmpdir(), `claim-fence-${Date.now()}-${Math.random()}.sqlite`);
     let now = Date.parse("2026-07-15T10:00:00.000Z");
     const runA = openDb(path, { serviceId: "telegram:interactive", runId: "a", lockLeaseMs: 100, clock: () => now });
     const runB = openDb(path, { serviceId: "telegram:interactive", runId: "b", lockLeaseMs: 100, clock: () => now });
-    runA.tryLock("telegram:interactive", "100:7");
+    const handleA = runA.acquireLock("telegram:interactive", "100:7")!;
     runA.enqueueMsg("telegram:interactive", "100:7", { prompt: "must survive", chatId: 100, threadId: 7, chatType: "private" });
-    const claimed = runA.claimNextPendingMsg("telegram:interactive", "100:7")!;
+    const claimed = runA.claimNextPendingMsg(handleA)!;
     now += 101;
-    expect(runB.tryLock("telegram:interactive", "100:7")).toBe(true);
-    expect(runA.completePendingMsg("telegram:interactive", "100:7", claimed.id)).toBe(false);
+    const handleB = runB.acquireLock("telegram:interactive", "100:7")!;
+    expect(handleB).not.toBeNull();
+    expect(runA.completePendingMsg(handleA, claimed.id)).toBe(false);
     expect(runB.pendingMsgCount("telegram:interactive", "100:7")).toBe(1);
-    expect(runB.claimNextPendingMsg("telegram:interactive", "100:7")?.prompt).toBe("must survive");
+    expect(runB.claimNextPendingMsg(handleB)?.prompt).toBe("must survive");
     runA.close(); runB.close(); rmSync(path, { force: true });
   });
 
@@ -195,15 +229,15 @@ describe("execution lane correctness", () => {
     let now = Date.parse("2026-07-15T10:00:00.000Z");
     const runA = openDb(path, { serviceId: "telegram:interactive", runId: "a", lockLeaseMs: 100, clock: () => now });
     const runB = openDb(path, { serviceId: "telegram:interactive", runId: "b", lockLeaseMs: 100, clock: () => now });
-    runA.tryLock("telegram:interactive", "100:7");
+    const handleA = runA.acquireLock("telegram:interactive", "100:7")!;
     runA.enqueueMsg("telegram:interactive", "100:7", { prompt: "claimed work", chatId: 100, threadId: 7, chatType: "private" });
-    const claimed = runA.claimNextPendingMsg("telegram:interactive", "100:7")!;
+    const claimed = runA.claimNextPendingMsg(handleA)!;
     let resume!: (value: string) => void;
     const paused = new Promise<string>((resolve) => { resume = resolve; });
     const engine = new BridgeEngine(options("claude"), runA, client(), { runCli: () => paused });
-    const execution = engine.executeClaimedMessage(claimed);
+    const execution = engine.executeClaimedMessage({ ...claimed, laneHandle: handleA });
     await new Promise((r) => setTimeout(r, 20)); now += 101;
-    expect(runB.tryLock("telegram:interactive", "100:7")).toBe(true);
+    expect(runB.acquireLock("telegram:interactive", "100:7")).not.toBeNull();
     resume(JSON.stringify({ result: "stale", session_id: "stale" }));
     await expect(execution).resolves.toBe("fenced");
     expect(runB.pendingMsgCount("telegram:interactive", "100:7")).toBe(1);
@@ -238,7 +272,7 @@ describe("execution lane correctness", () => {
     const path = join(tmpdir(), `busy-attachment-${Date.now()}-${Math.random()}.sqlite`);
     const db = openDb(path);
     db.setSetting("ctx_suppress:100:7", "1");
-    expect(db.tryLock("telegram:interactive", "100:7")).toBe(true);
+    const blockingHandle = db.acquireLock("telegram:interactive", "100:7")!;
     const c = client();
     c.getFilePath = vi.fn().mockResolvedValue("documents/queued.txt");
     c.downloadFile = vi.fn().mockImplementation(async (_remote: string, destination: string) => {
@@ -261,7 +295,7 @@ describe("execution lane correctness", () => {
     expect(existsSync(queuedPath)).toBe(true);
     expect(runCli).not.toHaveBeenCalled();
 
-    db.unlock("telegram:interactive", "100:7");
+    db.unlock(blockingHandle);
     await engine.recoverPendingQueues();
     expect(runCli).toHaveBeenCalledOnce();
     expect(cliInput).toContain(Buffer.from("queued document payload").toString("base64"));
@@ -338,10 +372,10 @@ describe("execution lane correctness", () => {
     const runB = openDb(path, { serviceId: "telegram:interactive", runId: "b", lockLeaseMs: 100, clock: () => now });
     const c = client();
     const original = (runA as any).runWithLockFence?.bind(runA);
-    (runA as any).runWithLockFence = (surface: string, chatKey: string, operation: () => unknown) => {
+    (runA as any).runWithLockFence = (handle: any, operation: () => unknown) => {
       now += 101;
-      expect(runB.tryLock(surface, chatKey)).toBe(true);
-      return original(surface, chatKey, operation);
+      expect(runB.acquireLock(handle.surface, handle.chatKey)).not.toBeNull();
+      return original(handle, operation);
     };
     const engine = new BridgeEngine(options("claude"), runA, c, {
       runCli: vi.fn().mockResolvedValue(JSON.stringify({ result: "parsed but fenced", session_id: "must-not-store" })),
@@ -362,10 +396,10 @@ describe("execution lane correctness", () => {
     runA.setSession("100:7", "claude", "keep-on-fence");
     const c = client();
     const original = (runA as any).runWithLockFence?.bind(runA);
-    (runA as any).runWithLockFence = (surface: string, chatKey: string, operation: () => unknown) => {
+    (runA as any).runWithLockFence = (handle: any, operation: () => unknown) => {
       now += 101;
-      expect(runB.tryLock(surface, chatKey)).toBe(true);
-      return original(surface, chatKey, operation);
+      expect(runB.acquireLock(handle.surface, handle.chatKey)).not.toBeNull();
+      return original(handle, operation);
     };
     const engine = new BridgeEngine(options("claude"), runA, c, {
       runCli: vi.fn().mockResolvedValue('{"summary_md":"safe summary","memory_candidates":[]}'),
@@ -386,11 +420,12 @@ describe("execution lane correctness", () => {
     const engineA = new BridgeEngine(options("claude"), runA, c, { runCli: () => paused });
     const active = engineA.handleMessages([message("old run", 7)]);
     await new Promise((r) => setTimeout(r, 20)); now += 101;
-    expect(runB.tryLock("telegram:interactive", "100:7")).toBe(true);
+    const handleB = runB.acquireLock("telegram:interactive", "100:7")!;
+    expect(handleB).not.toBeNull();
     resume(JSON.stringify({ result: "stale output", session_id: "stale-session" })); await active;
     expect(c.sendMessage.mock.calls.some((call: any[]) => call[0].text === "stale output")).toBe(false);
     expect(runB.getSession("100:7", "claude")).toBeNull();
-    expect(runB.ownsLock("telegram:interactive", "100:7")).toBe(true);
+    expect(runB.ownsLock(handleB)).toBe(true);
     runA.close(); runB.close(); rmSync(path, { force: true });
   });
 

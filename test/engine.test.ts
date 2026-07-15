@@ -1007,7 +1007,7 @@ describe("BridgeEngine", () => {
       const execute = vi.fn().mockImplementation(async () => {
         calls += 1;
         if (calls === 1) return "***\nPrior answer";
-        if (calls === 2) throw new Error("CORTEX_STEP_TYPE_COMMAND_STATUS: command retry/task not found");
+        if (calls === 2) throw new Error("error executing cascade step: CORTEX_STEP_TYPE_COMMAND_STATUS: command retry/task not found");
         return `***\n${memorySidecar}`;
       });
       const onAfterExecute = vi.fn();
@@ -1147,7 +1147,7 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
 
       // Hold the lock externally to simulate an in-flight execution
-      db.tryLock("test", "100");
+      db.acquireLock("test", "100");
 
       const engine = new BridgeEngine(
         {
@@ -1175,7 +1175,7 @@ describe("BridgeEngine", () => {
       // This test verifies the queue is now backed by SQLite, not an in-memory Map.
       // After a new engine instance is created with the same db, the queued message
       // should be visible.
-      db.tryLock("test", "chat:1");
+      db.acquireLock("test", "chat:1");
       db.enqueueMsg("test", "chat:1", { prompt: "hello", chatId: 1, chatType: "private" });
       // Simulate engine restart: new instance, same db
       expect(db.pendingMsgCount("test", "chat:1")).toBe(1);
@@ -1653,7 +1653,7 @@ describe("BridgeEngine", () => {
 
       // chatId=100, threadId=7 → topic-aware key is "100:7"
       const threadKey = "100:7";
-      db.tryLock("test", threadKey); // hold lock to force queueing
+      db.acquireLock("test", threadKey); // hold lock to force queueing
 
       const engine = new BridgeEngine(
         {
@@ -1768,7 +1768,7 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
 
       const flatKey = "100";
-      db.tryLock("test", flatKey); // hold lock to force queueing
+      db.acquireLock("test", flatKey); // hold lock to force queueing
 
       const engine = new BridgeEngine(
         {
@@ -1809,7 +1809,7 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
 
       const threadKey = "100:7";
-      db.tryLock("test", threadKey); // hold lock
+      db.acquireLock("test", threadKey); // hold lock
 
       const engine = new BridgeEngine(
         {
@@ -1843,7 +1843,7 @@ describe("BridgeEngine", () => {
 
       // Hold lock only for thread 7
       const thread7Key = "100:7";
-      db.tryLock("test", thread7Key);
+      db.acquireLock("test", thread7Key);
 
       const runCliAsync = vi.fn().mockImplementation(async (
         _command: string,
@@ -1963,12 +1963,11 @@ describe("BridgeEngine", () => {
       );
 
       const topicKey = "100:7";
-      db.tryLock("test", topicKey);
+      const blockingHandle = db.acquireLock("test", topicKey)!;
       await engine.handleMessages([makeGroupMessage("queued topic message", 42, 100, 7)]);
 
-      db.unlock("test", topicKey);
-      (engine as any)._drainQueue(topicKey);
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      db.unlock(blockingHandle);
+      await engine.recoverPendingQueues();
 
       expect(runCliAsync).toHaveBeenCalledOnce();
       expect(db.getSession(topicKey, "claude")).toBe("queued-topic-session");

@@ -10,6 +10,8 @@ Before stopping services, record the **legacy queue count** reported by migratio
 
 Migration adds queue claim state and `attachments_json` with backward-compatible defaults. After start-all, verify live-surface pending lanes are claimed oldest-first and that the startup recovery log is free of repeated handler failures. Rollback must preserve the pre-migration database backup because older binaries do not understand claimed rows or queued attachment ownership.
 
+Text queue rows are host-restart durable in SQLite. Queued attachment paths and files are process/service-restart durable on the same host only: files remain under the operating system temporary directory and may be removed by host reboot, `/tmp` cleanup, or private-temp service configuration. Do not claim host-restart durability for queued attachments until a persistent spool beside the SQLite database is implemented.
+
 Old flat private-chat history remains quarantined under its original flat chat key. It must not be copied or assigned to an arbitrary private topic. Topic keys begin receiving new history only after the upgraded services start.
 
 Deployment, restart, legacy-row discard, and production acceptance each require separate approval. PR merge approval is not deployment approval.

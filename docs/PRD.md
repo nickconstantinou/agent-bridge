@@ -233,11 +233,11 @@ Manual `/cli` switching applies the same target-session-clear + handoff-mark (`a
 
 ### 4.6 Concurrency Lock & Message Queue
 
-`db.tryLock(surface, chatKey)` atomically inserts into `execution_locks`, whose primary key is `(surface, chat_key)`. A conversation scope is `chatId:threadId` whenever Telegram supplies a thread ID, including private-chat topics. Standalone bots use distinct surfaces; all providers behind one interactive bot share its surface. Lock heartbeat, result commit, and release compare the unique acquiring `run_id`.
+`db.acquireLock(surface, chatKey)` atomically inserts into `execution_locks` and returns an immutable lane handle, whose primary key is `(surface, chat_key)`. A conversation scope is `chatId:threadId` whenever Telegram supplies a thread ID, including private-chat topics. Standalone bots use distinct surfaces; all providers behind one interactive bot share its surface. Lock heartbeat, result commit, queue claim/completion, and release compare the exact per-acquisition `acquisition_id` captured by that handle.
 
 If a lane is busy, the incoming message is queued to `pending_messages` under the same explicit `(surface, chat_key)` ownership (max `MAX_QUEUE_DEPTH = 5`), surviving restarts. One transactional admission operation either acquires an empty lane for the current message or appends it and claims the oldest durable row. Legacy rows created before the surface migration are retained under the quarantined `legacy` surface and cannot drain into a live bot. Handoff retains the lane while the interactive router resolves the current provider, and deletes the row only after a committed outcome plus a same-run lock fence. Fenced and failed rows remain recoverable. Startup scans live-surface queues; handler failures receive three bounded retries. Lock release occurs transactionally only when the lane queue is empty, preventing new arrivals from overtaking FIFO work.
 
-Each service has a configuration-independent `service_id` and each process generation gets a unique `run_id`. Opening a second process never clears live locks. Engines renew their bounded lease while executing; a competing run may atomically take over only after `lease_expires_at`, proving the prior lock stale. The standalone service ID remains `telegram:standalone` when its enabled provider set changes.
+Each service has a configuration-independent `service_id`, each process generation gets a unique `run_id`, and every successful lane acquisition gets a unique `acquisition_id`. Opening a second process never clears live locks. Engines renew their bounded lease while executing; a competing run may atomically take over only after `lease_expires_at`, proving the prior lock stale. A delayed continuation from an earlier acquisition in the same process cannot mutate or unlock a later acquisition. The standalone service ID remains `telegram:standalone` when its enabled provider set changes.
 
 Parsed results commit session, failure counter, memory sidecars, and conversation turns in one transaction that first renews the acquiring run's lease. Hooks, generated-file upload, compaction session reset, and final response delivery each require another successful renewal. A displaced run reports a fenced outcome and cannot delete its claimed queue row.
 
@@ -304,6 +304,7 @@ CREATE TABLE execution_locks (
   chat_key TEXT NOT NULL,
   service_id TEXT NOT NULL,
   run_id TEXT NOT NULL,
+  acquisition_id TEXT NOT NULL,
   acquired_at TEXT NOT NULL,
   lease_expires_at TEXT NOT NULL,
   PRIMARY KEY (surface, chat_key)
@@ -343,6 +344,7 @@ CREATE TABLE pending_messages (
   user_id  INTEGER,
   state    TEXT NOT NULL DEFAULT 'queued',
   claim_run_id TEXT,
+  claim_acquisition_id TEXT,
   claimed_at TEXT,
   attachments_json TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP

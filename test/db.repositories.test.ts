@@ -177,26 +177,26 @@ describe("LockRepository", () => {
 
   it("acquires lock when chat is free", () => {
     const repo = new LockRepository(raw, options);
-    expect(repo.tryLock("test", "chat1")).toBe(true);
+    expect(repo.acquire("test", "chat1")).not.toBeNull();
   });
 
   it("rejects lock when chat is already locked", () => {
     const repo = new LockRepository(raw, options);
-    repo.tryLock("test", "chat1");
-    expect(repo.tryLock("test", "chat1")).toBe(false);
+    repo.acquire("test", "chat1");
+    expect(repo.acquire("test", "chat1")).toBeNull();
   });
 
   it("lock is released by unlock", () => {
     const repo = new LockRepository(raw, options);
-    repo.tryLock("test", "chat1");
-    repo.unlock("test", "chat1");
-    expect(repo.tryLock("test", "chat1")).toBe(true);
+    const handle = repo.acquire("test", "chat1")!;
+    repo.unlock(handle);
+    expect(repo.acquire("test", "chat1")).not.toBeNull();
   });
 
   it("lock is per chat — other chats are unaffected", () => {
     const repo = new LockRepository(raw, options);
-    repo.tryLock("test", "chat1");
-    expect(repo.tryLock("test", "chat2")).toBe(true);
+    repo.acquire("test", "chat1");
+    expect(repo.acquire("test", "chat2")).not.toBeNull();
   });
 });
 

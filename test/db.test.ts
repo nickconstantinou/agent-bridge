@@ -52,29 +52,29 @@ describe("BridgeDb sessions", () => {
 
 describe("BridgeDb execution lock", () => {
   it("acquires lock when chat is free", () => {
-    expect(db.tryLock("test", "chat1")).toBe(true);
+    expect(db.acquireLock("test", "chat1")).not.toBeNull();
   });
 
   it("rejects lock when chat is already locked", () => {
-    db.tryLock("test", "chat1");
-    expect(db.tryLock("test", "chat1")).toBe(false);
+    db.acquireLock("test", "chat1");
+    expect(db.acquireLock("test", "chat1")).toBeNull();
   });
 
   it("lock is released by unlock", () => {
-    db.tryLock("test", "chat1");
-    db.unlock("test", "chat1");
-    expect(db.tryLock("test", "chat1")).toBe(true);
+    const handle = db.acquireLock("test", "chat1")!;
+    db.unlock(handle);
+    expect(db.acquireLock("test", "chat1")).not.toBeNull();
   });
 
   it("lock is per chat — other chats are unaffected", () => {
-    db.tryLock("test", "chat1");
-    expect(db.tryLock("test", "chat2")).toBe(true);
+    db.acquireLock("test", "chat1");
+    expect(db.acquireLock("test", "chat2")).not.toBeNull();
   });
 
   it("isolates the same chat across bot surfaces", () => {
-    expect(db.tryLock("telegram:codex", "chat1")).toBe(true);
-    expect(db.tryLock("telegram:claude", "chat1")).toBe(true);
-    expect(db.tryLock("telegram:codex", "chat1")).toBe(false);
+    expect(db.acquireLock("telegram:codex", "chat1")).not.toBeNull();
+    expect(db.acquireLock("telegram:claude", "chat1")).not.toBeNull();
+    expect(db.acquireLock("telegram:codex", "chat1")).toBeNull();
   });
 
   it("keeps a live lock when another run of the same service opens the database", () => {
@@ -82,10 +82,10 @@ describe("BridgeDb execution lock", () => {
     const dbPath = join(dir, "bridge.sqlite");
     try {
       const first = openDb(dbPath, { serviceId: "telegram:interactive", runId: "run-a" });
-      expect(first.tryLock("telegram:codex", "chat1")).toBe(true);
+      expect(first.acquireLock("telegram:codex", "chat1")).not.toBeNull();
 
       const second = openDb(dbPath, { serviceId: "telegram:interactive", runId: "run-b" });
-      expect(second.tryLock("telegram:codex", "chat1")).toBe(false);
+      expect(second.acquireLock("telegram:codex", "chat1")).toBeNull();
       expect(first.raw.prepare(
         "SELECT service_id, run_id FROM execution_locks WHERE surface = ? AND chat_key = ?"
       ).get("telegram:codex", "chat1")).toEqual({ service_id: "telegram:interactive", run_id: "run-a" });
@@ -102,11 +102,11 @@ describe("BridgeDb execution lock", () => {
     const dbPath = join(dir, "bridge.sqlite");
     try {
       const first = openDb(dbPath, { serviceId: "telegram:interactive", runId: "run-a" });
-      expect(first.tryLock("telegram:codex", "chat1")).toBe(true);
+      const firstHandle = first.acquireLock("telegram:codex", "chat1")!;
 
       const second = openDb(dbPath, { serviceId: "telegram:interactive", runId: "run-b" });
-      second.unlock("telegram:codex", "chat1");
-      expect(second.tryLock("telegram:codex", "chat1")).toBe(false);
+      expect(second.unlock(firstHandle)).toBe(false);
+      expect(second.acquireLock("telegram:codex", "chat1")).toBeNull();
       expect(first.raw.prepare(
         "SELECT run_id FROM execution_locks WHERE surface = ? AND chat_key = ?"
       ).get("telegram:codex", "chat1")).toEqual({ run_id: "run-a" });
@@ -127,15 +127,15 @@ describe("BridgeDb execution lock", () => {
       const first = openDb(dbPath, {
         serviceId: "telegram:interactive", runId: "run-a", lockLeaseMs: 500, clock,
       });
-      expect(first.tryLock("telegram:interactive", "chat1")).toBe(true);
+      expect(first.acquireLock("telegram:interactive", "chat1")).not.toBeNull();
 
       const second = openDb(dbPath, {
         serviceId: "telegram:interactive", runId: "run-b", lockLeaseMs: 500, clock,
       });
-      expect(second.tryLock("telegram:interactive", "chat1")).toBe(false);
+      expect(second.acquireLock("telegram:interactive", "chat1")).toBeNull();
 
       now += 501;
-      expect(second.tryLock("telegram:interactive", "chat1")).toBe(true);
+      expect(second.acquireLock("telegram:interactive", "chat1")).not.toBeNull();
       expect(second.raw.prepare(
         "SELECT run_id FROM execution_locks WHERE surface = ? AND chat_key = ?"
       ).get("telegram:interactive", "chat1")).toEqual({ run_id: "run-b" });
@@ -159,11 +159,11 @@ describe("BridgeDb execution lock", () => {
       const second = openDb(dbPath, {
         serviceId: "telegram:interactive", runId: "run-b", lockLeaseMs: 500, clock,
       });
-      expect(first.tryLock("telegram:interactive", "chat1")).toBe(true);
+      const handle = first.acquireLock("telegram:interactive", "chat1")!;
       now += 400;
-      expect(first.heartbeatLock("telegram:interactive", "chat1")).toBe(true);
+      expect(first.heartbeatLock(handle)).toBe(true);
       now += 200;
-      expect(second.tryLock("telegram:interactive", "chat1")).toBe(false);
+      expect(second.acquireLock("telegram:interactive", "chat1")).toBeNull();
       second.close();
       first.close();
     } finally {
@@ -172,7 +172,7 @@ describe("BridgeDb execution lock", () => {
   });
 
   it("rejects lock and queue calls without an explicit surface", () => {
-    expect(() => (db.tryLock as any)("chat1")).toThrow("chatKey is required");
+    expect(() => (db.acquireLock as any)("chat1")).toThrow("chatKey is required");
     expect(() => (db.pendingMsgCount as any)("chat1")).toThrow("chatKey is required");
     expect(() => (db.dequeueMsgs as any)("chat1")).toThrow("chatKey is required");
   });
@@ -199,7 +199,7 @@ describe("BridgeDb execution-lane migration", () => {
       const migrated = openDb(dbPath, { serviceId: "migration-test", runId: "migration-run" });
       const columns = migrated.raw.prepare("PRAGMA table_info(execution_locks)").all() as Array<{ name: string }>;
       expect(columns.map((column) => column.name)).toEqual([
-        "surface", "chat_key", "service_id", "run_id", "acquired_at", "lease_expires_at",
+        "surface", "chat_key", "service_id", "run_id", "acquisition_id", "acquired_at", "lease_expires_at",
       ]);
       expect(migrated.raw.prepare("SELECT COUNT(*) AS count FROM execution_locks").get()).toEqual({ count: 0 });
       migrated.close();

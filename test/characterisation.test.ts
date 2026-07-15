@@ -206,15 +206,13 @@ describe("BridgeEngine /reset command", () => {
     expect(sent[0].toLowerCase()).toContain("reset");
   });
 
-  it("unlocks the chat so the next message is not queued indefinitely", async () => {
+  it("does not unlock a lane acquisition that is not owned by the reset lifecycle", async () => {
     const { BridgeEngine } = await import("../src/engine.js");
     const dbPath = join(tmpdir(), `char-test-reset-lock-${Date.now()}.sqlite`);
     const db = openDb(dbPath);
 
-    // Simulate a held lock — tryLock returns true on first call (acquired), false when already held
-    const acquired = db.tryLock("test", "100");
-    expect(acquired).toBe(true);
-    expect(db.tryLock("test", "100")).toBe(false); // still locked
+    const heldByAnotherLifecycle = db.acquireLock("test", "100")!;
+    expect(db.acquireLock("test", "100")).toBeNull();
 
     const client = {
       getUpdates: vi.fn().mockResolvedValue({ result: [], ok: true }),
@@ -248,8 +246,8 @@ describe("BridgeEngine /reset command", () => {
       text: "/reset",
     }]);
 
-    // After /reset, tryLock should succeed again (lock was released)
-    expect(db.tryLock("test", "100")).toBe(true);
+    expect(db.acquireLock("test", "100")).toBeNull();
+    expect(db.unlock(heldByAnotherLifecycle)).toBe(true);
 
     db.close();
     try { rmSync(dbPath); } catch {}

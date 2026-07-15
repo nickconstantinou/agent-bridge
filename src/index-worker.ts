@@ -24,6 +24,7 @@ import { runCliWithFallback } from "./workerDispatch.js";
 import { handleWorkerCallback } from "./workCallbacks.js";
 import {
   dispatchInteractiveWithFallback,
+  dispatchClaimedInteractiveWithFallback,
   getUserCliPreference,
   setUserCliPreference,
   handleCliSwitchCallback,
@@ -146,6 +147,21 @@ const engines = Object.fromEntries(
     ];
   }),
 ) as Record<string, BridgeEngine>;
+
+for (const engine of Object.values(engines)) {
+  engine.setQueuedMessageHandler(async (queued) => {
+    await dispatchClaimedInteractiveWithFallback(queued, queued.chatKey, {
+      engines, fallbackChain, exhaustedChats, db,
+      notify: async (msg: string) => {
+        await sendTelegramMessage({ client, kind: "worker-bot", chatId: queued.chatId, body: withThread({ text: msg }, queued.threadId ?? undefined) });
+      },
+      onCliSwitched: async (newCli: CliKind) => setUserCliPreference(db, queued.chatKey, newCli),
+      compactBeforeSwitch: (request) => runCapacityFallbackCompaction(request, {
+        db, runCli, bots: config.bots, configuredChain: compactionProviderChain, compactProfile: "engineering",
+      }),
+    });
+  });
+}
 
 // ── setMyCommands — merge worker + interactive (CLI) commands ─────────────────
 

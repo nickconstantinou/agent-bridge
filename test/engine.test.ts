@@ -1527,10 +1527,12 @@ describe("BridgeEngine", () => {
     it("uses the topic-aware chatKey for output dirs and uploads files back to the originating thread", async () => {
       const { BridgeEngine } = await import("../src/engine.js");
       const client = makeMockClient();
+      let runOutputDir = "";
       const runCli = vi.fn().mockImplementation(async (_command: string, args: string[]) => {
         const promptArg = args[args.length - 1];
         const match = String(promptArg).match(/save it to (\/tmp\/bridge-out\/\S+)/);
-        expect(match?.[1]).toBe("/tmp/bridge-out/claude-100:7");
+        expect(match?.[1]).toMatch(/^\/tmp\/bridge-out\/claude-100:7-[0-9a-f-]+$/);
+        runOutputDir = match![1];
         await import("node:fs/promises").then(({ writeFile }) => writeFile(join(match![1], "chart.png"), "PNG"));
         return "done";
       });
@@ -1554,7 +1556,7 @@ describe("BridgeEngine", () => {
 
       expect(client.sendPhoto).toHaveBeenCalledOnce();
       expect(client.sendPhoto.mock.calls[0][0]).toBe(100);
-      expect(client.sendPhoto.mock.calls[0][1]).toBe("/tmp/bridge-out/claude-100:7/chart.png");
+      expect(client.sendPhoto.mock.calls[0][1]).toBe(join(runOutputDir, "chart.png"));
       expect(client.sendPhoto.mock.calls[0][3]).toEqual({ message_thread_id: 7 });
     });
 

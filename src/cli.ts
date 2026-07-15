@@ -170,8 +170,18 @@ export function abortCliProcess(chatId: number | string): boolean {
   const child = activeProcesses.get(chatId);
   if (!child) return false;
   killChild(child);
-  activeProcesses.delete(chatId);
   return true;
+}
+
+export function abortCliProcessAndWait(chatId: number | string): Promise<boolean> {
+  const child = activeProcesses.get(chatId);
+  if (!child) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const done = () => resolve(true);
+    child.once("close", done);
+    child.once("error", done);
+    killChild(child);
+  });
 }
 
 export function shutdownCliProcesses(): number {

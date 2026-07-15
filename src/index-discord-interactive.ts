@@ -32,6 +32,7 @@ import {
   buildCliStatusText,
   handleCliSwitchCallback,
   dispatchInteractiveWithFallback,
+  dispatchClaimedInteractiveWithFallback,
   applyManualCliSwitchHandoff,
   type CliKind,
 } from "./interactiveBot.js";
@@ -210,6 +211,19 @@ const engines = Object.fromEntries(
     ),
   ]),
 ) as Record<CliKind, BridgeEngine>;
+
+for (const engine of Object.values(engines)) {
+  engine.setQueuedMessageHandler(async (queued) => {
+    await dispatchClaimedInteractiveWithFallback(queued, queued.chatKey, {
+      engines, fallbackChain, exhaustedChats, db,
+      notify: async (msg) => { await engineClient.sendMessage({ chat_id: queued.chatId, text: msg }); },
+      onCliSwitched: async (newCli) => setUserCliPreference(db, queued.chatKey, newCli),
+      compactBeforeSwitch: (request) => runCapacityFallbackCompaction(request, {
+        db, runCli, bots: config.bots, configuredChain: compactionProviderChain, compactProfile: "companion",
+      }),
+    });
+  });
+}
 
 // ── Slash command registration ────────────────────────────────────────────────
 

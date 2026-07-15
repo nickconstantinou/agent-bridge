@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { rmSync, readFileSync } from "node:fs";
 import { openDb } from "../src/db.js";
 import { BridgeEngine } from "../src/engine.js";
+import { runCli } from "../src/cli.js";
+import { dispatchClaimedInteractiveWithFallback, setUserCliPreference } from "../src/interactiveBot.js";
+import { WorkerFallbackChain } from "../src/workerFallback.js";
 
 function message(text: string, threadId: number) {
   return { message_id: Math.random(), chat: { id: 100, type: "private" }, from: { id: 42, first_name: "T" }, message_thread_id: threadId, text } as any;
@@ -30,6 +33,7 @@ describe("execution lane correctness", () => {
     expect(first?.prompt).toBe("oldest");
     expect(db.claimNextPendingMsg("telegram:interactive", "100:7")).toBeNull();
     expect(db.pendingMsgCount("telegram:interactive", "100:7")).toBe(2);
+    expect(db.unlockIfQueueEmpty("telegram:interactive", "100:7")).toBe(false);
     expect(db.completePendingMsg(first!.id)).toBe(true);
     expect(db.claimNextPendingMsg("telegram:interactive", "100:7")?.prompt).toBe("newest");
     db.close();
@@ -42,8 +46,11 @@ describe("execution lane correctness", () => {
     const runA = openDb(path, { serviceId: "telegram:interactive", runId: "run-a", lockLeaseMs: 500, clock });
     runA.tryLock("telegram:interactive", "100:7");
     runA.enqueueMsg("telegram:interactive", "100:7", { prompt: "durable", chatId: 100, threadId: 7, chatType: "private" });
-    expect(runA.claimNextPendingMsg("telegram:interactive", "100:7")?.prompt).toBe("durable");
-    runA.close(); now += 501;
+    const claimed = runA.claimNextPendingMsg("telegram:interactive", "100:7");
+    expect(claimed?.prompt).toBe("durable");
+    const earlyRunB = openDb(path, { serviceId: "telegram:interactive", runId: "run-b", lockLeaseMs: 500, clock });
+    expect(earlyRunB.completePendingMsg(claimed!.id)).toBe(false);
+    earlyRunB.close(); runA.close(); now += 501;
     const runB = openDb(path, { serviceId: "telegram:interactive", runId: "run-b", lockLeaseMs: 500, clock });
     expect(runB.tryLock("telegram:interactive", "100:7")).toBe(true);
     expect(runB.claimNextPendingMsg("telegram:interactive", "100:7")?.prompt).toBe("durable");
@@ -58,11 +65,19 @@ describe("execution lane correctness", () => {
     const first = new Promise<void>((resolve) => { release = resolve; });
     const codexRun = vi.fn().mockImplementationOnce(() => first.then(() => "codex done"));
     const claudeRun = vi.fn().mockResolvedValue("claude done");
-    let claude!: BridgeEngine;
-    const codex = new BridgeEngine(options("codex", { onQueuedMessage: (queued: any) => claude.executeClaimedMessage(queued) }), db, c, { runCli: codexRun });
-    claude = new BridgeEngine(options("claude"), db, c, { runCli: claudeRun });
+    const fallbackChain = new WorkerFallbackChain(["codex", "claude"], db);
+    const exhaustedChats = new Set<string>();
+    const engines = {} as Record<string, BridgeEngine>;
+    const codex = new BridgeEngine(options("codex", {
+      onQueuedMessage: (queued: any) => dispatchClaimedInteractiveWithFallback(queued, queued.chatKey, {
+        engines, fallbackChain, exhaustedChats, db, notify: vi.fn(),
+      }),
+    }), db, c, { runCli: codexRun });
+    const claude = new BridgeEngine(options("claude"), db, c, { runCli: claudeRun });
+    engines.codex = codex; engines.claude = claude;
     const active = codex.handleMessages([message("first", 7)]);
     await new Promise((r) => setTimeout(r, 20));
+    setUserCliPreference(db, "100:7", "claude");
     await claude.handleMessages([message("queued for current Claude", 7)]);
     release(); await active;
     expect(codexRun).toHaveBeenCalledOnce();
@@ -76,6 +91,7 @@ describe("execution lane correctness", () => {
     const db = openDb(path);
     const c = client();
     const engine = new BridgeEngine(options("claude"), db, c, { runCli: vi.fn().mockResolvedValue('{"summary_md":"topic eight summary","memory_candidates":[]}') });
+    db.addConvTurn("100", "user", "quarantined flat history");
     db.addConvTurn("100:7", "user", "topic seven"); db.addConvTurn("100:8", "user", "topic eight");
     db.tryLock("telegram:interactive", "100:7");
     await engine.handleMessages([message("/compact", 7)]);
@@ -83,8 +99,31 @@ describe("execution lane correctness", () => {
     await engine.handleMessages([message("/compact", 8)]);
     expect(db.getConvTurnsForCompaction("100:8")).toHaveLength(0);
     expect(db.getConvTurnsForCompaction("100:7")).toHaveLength(1);
+    expect(db.getConvTurnsForCompaction("100").map((turn) => turn.text)).toEqual(["quarantined flat history"]);
     db.close(); rmSync(path, { force: true });
   });
+
+  it("keeps the lane owned until a TERM-resistant child exits after SIGKILL", async () => {
+    const path = join(tmpdir(), `stop-grace-${Date.now()}-${Math.random()}.sqlite`);
+    const db = openDb(path);
+    const c = client();
+    const engine = new BridgeEngine(options("claude"), db, c, {
+      runCli: (_command, _args, cwd, cliOptions) => runCli(
+        process.execPath,
+        ["-e", "process.on('SIGTERM',()=>{}); setTimeout(()=>{},10000)"],
+        cwd,
+        cliOptions,
+      ),
+    });
+    const active = engine.handleMessages([message("long run", 7)]);
+    await new Promise((r) => setTimeout(r, 150));
+    const stopping = engine.handleUpdate({ update_id: 2, message: message("/stop", 7) });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(db.tryLock("telegram:interactive", "100:7")).toBe(false);
+    await stopping; await active;
+    expect(db.tryLock("telegram:interactive", "100:7")).toBe(true);
+    db.close(); rmSync(path, { force: true });
+  }, 8_000);
 
   it("fences a displaced run before it publishes or commits conversation state", async () => {
     const path = join(tmpdir(), `fence-${Date.now()}-${Math.random()}.sqlite`);

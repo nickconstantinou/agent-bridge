@@ -44,6 +44,17 @@ export class LockRepository {
     return changes === 1;
   }
 
+  owns(surface: string, chatKey: string): boolean {
+    return !!this.db.prepare(`
+      SELECT 1 FROM execution_locks
+      WHERE surface = ? AND chat_key = ? AND service_id = ? AND run_id = ?
+    `).get(surface, chatKey, this.options.serviceId, this.options.runId);
+  }
+
+  get runId(): string {
+    return this.options.runId;
+  }
+
   unlock(surface: string, chatKey: string): void {
     this.db.prepare(`
       DELETE FROM execution_locks

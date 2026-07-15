@@ -102,7 +102,7 @@ Sessions are stored per chat in SQLite and restored across service restarts. Eve
 
 ### 4.3 Process Registry & Kill Switch
 
-`runCli` and `runCliAsync` register each child process in `activeProcesses: Map<chatId, ChildProcess>`. `abortCliProcess(chatId)` marks the child in a `WeakSet` and SIGKILLs it. The close handler detects the abort mark and resolves cleanly (no error propagation).
+`runCli` and `runCliAsync` register each child process in `activeProcesses: Map<chatId, ChildProcess>`. Abort sends SIGTERM, escalates to SIGKILL after the grace period, and retains the process registration and execution lane until the close/error lifecycle confirms exit.
 
 `/stop` and `/cancel` are intercepted in `handleUpdate` before `db.tryLock()`, so they work even when a lock is held.
 
@@ -233,9 +233,9 @@ Manual `/cli` switching applies the same target-session-clear + handoff-mark (`a
 
 ### 4.6 Concurrency Lock & Message Queue
 
-`db.tryLock(surface, chatKey)` atomically inserts into `execution_locks`, whose primary key is `(surface, chat_key)`. A conversation scope is `chatId:threadId` whenever Telegram supplies a thread ID, including private-chat topics. Standalone bots use distinct surfaces; all providers behind one interactive bot share its surface. Lock heartbeat and release compare the unique acquiring `run_id`; release occurs in a `finally` block which also calls `drainQueue(chatKey)`.
+`db.tryLock(surface, chatKey)` atomically inserts into `execution_locks`, whose primary key is `(surface, chat_key)`. A conversation scope is `chatId:threadId` whenever Telegram supplies a thread ID, including private-chat topics. Standalone bots use distinct surfaces; all providers behind one interactive bot share its surface. Lock heartbeat, result commit, and release compare the unique acquiring `run_id`.
 
-If a lane is busy, the incoming message is queued to `pending_messages` under the same explicit `(surface, chat_key)` ownership (max `MAX_QUEUE_DEPTH = 5`), surviving restarts. Legacy rows created before the surface migration are retained under the quarantined `legacy` surface and cannot drain into a live bot. The user receives a position notice. When execution finishes, `drainQueue` pops only that lane's next item via `setImmediate` and calls `handleMessages` with a synthetic message. If the queue is full, the user receives "⏳ Queue is full."
+If a lane is busy, the incoming message is queued to `pending_messages` under the same explicit `(surface, chat_key)` ownership (max `MAX_QUEUE_DEPTH = 5`), surviving restarts. Legacy rows created before the surface migration are retained under the quarantined `legacy` surface and cannot drain into a live bot. Handoff transactionally claims the oldest row, retains the lane while the interactive router resolves the current provider, and deletes the row only after execution returns. A stale successor reclaims rows claimed by the displaced run. Lock release occurs transactionally only when the lane queue is empty, preventing new arrivals from overtaking FIFO work.
 
 Each service has a configuration-independent `service_id` and each process generation gets a unique `run_id`. Opening a second process never clears live locks. Engines renew their bounded lease while executing; a competing run may atomically take over only after `lease_expires_at`, proving the prior lock stale. The standalone service ID remains `telegram:standalone` when its enabled provider set changes.
 
@@ -332,12 +332,16 @@ CREATE TABLE conversation_turns (
 ```sql
 CREATE TABLE pending_messages (
   id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  surface  TEXT NOT NULL DEFAULT 'legacy',
   chat_key TEXT NOT NULL,
   prompt   TEXT NOT NULL,
   chat_id  INTEGER NOT NULL,
   thread_id INTEGER,
   chat_type TEXT,
   user_id  INTEGER,
+  state    TEXT NOT NULL DEFAULT 'queued',
+  claim_run_id TEXT,
+  claimed_at TEXT,
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```

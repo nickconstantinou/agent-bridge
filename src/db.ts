@@ -492,6 +492,9 @@ export function openDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
         thread_id   INTEGER,
         chat_type   TEXT    NOT NULL DEFAULT 'private',
         user_id     INTEGER,
+        state       TEXT    NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'claimed')),
+        claim_run_id TEXT,
+        claimed_at  TEXT,
         created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
       );
       CREATE TABLE IF NOT EXISTS conversation_summaries (
@@ -530,6 +533,9 @@ export function openDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
     migratedPendingSurface = true;
   } catch { /* column already exists */ }
   raw.exec(`CREATE INDEX IF NOT EXISTS idx_pending_msgs_surface_chat_key ON pending_messages(surface, chat_key, id)`);
+  try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'claimed'))`); } catch {}
+  try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN claim_run_id TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN claimed_at TEXT`); } catch {}
   if (migratedPendingSurface) {
     const { count } = raw.prepare(`SELECT COUNT(*) AS count FROM pending_messages WHERE surface = 'legacy'`).get() as { count: number };
     if (count > 0) console.warn(`[db] quarantined ${count} legacy pending message(s)`);
@@ -659,6 +665,11 @@ export class BridgeDb {
   heartbeatLock(surface: string, chatKey: string): boolean {
     assertExecutionScope(surface, chatKey);
     return this.locks.heartbeat(surface, chatKey);
+  }
+
+  ownsLock(surface: string, chatKey: string): boolean {
+    assertExecutionScope(surface, chatKey);
+    return this.locks.owns(surface, chatKey);
   }
 
   unlock(surface: string, chatKey: string): void {
@@ -1101,6 +1112,55 @@ export class BridgeDb {
 
   deletePendingMsg(id: number): void {
     this.raw.prepare(`DELETE FROM pending_messages WHERE id = ?`).run(id);
+  }
+
+  claimNextPendingMsg(surface: string, chatKey: string): {
+    id: number; chatKey: string; prompt: string; chatId: number; threadId: number | null; chatType: string; userId: number | null;
+  } | null {
+    assertExecutionScope(surface, chatKey);
+    return this.runInTransaction(() => {
+      if (!this.ownsLock(surface, chatKey)) return null;
+      this.raw.prepare(`
+        UPDATE pending_messages SET state = 'queued', claim_run_id = NULL, claimed_at = NULL
+        WHERE surface = ? AND chat_key = ? AND state = 'claimed' AND claim_run_id <> ?
+      `).run(surface, chatKey, this.locks.runId);
+      const active = this.raw.prepare(`
+        SELECT 1 FROM pending_messages
+        WHERE surface = ? AND chat_key = ? AND state = 'claimed' AND claim_run_id = ? LIMIT 1
+      `).get(surface, chatKey, this.locks.runId);
+      if (active) return null;
+      const row = this.raw.prepare(`
+        SELECT id, chat_key AS chatKey, prompt, chat_id AS chatId, thread_id AS threadId, chat_type AS chatType, user_id AS userId
+        FROM pending_messages WHERE surface = ? AND chat_key = ? AND state = 'queued' ORDER BY id ASC LIMIT 1
+      `).get(surface, chatKey) as any;
+      if (!row) return null;
+      const changed = this.raw.prepare(`
+        UPDATE pending_messages SET state = 'claimed', claim_run_id = ?, claimed_at = ?
+        WHERE id = ? AND state = 'queued'
+      `).run(this.locks.runId, new Date().toISOString(), row.id).changes;
+      return changed === 1 ? row : null;
+    });
+  }
+
+  completePendingMsg(id: number): boolean {
+    return this.raw.prepare(`DELETE FROM pending_messages WHERE id = ? AND state = 'claimed' AND claim_run_id = ?`)
+      .run(id, this.locks.runId).changes === 1;
+  }
+
+  releasePendingClaim(id: number): void {
+    this.raw.prepare(`UPDATE pending_messages SET state = 'queued', claim_run_id = NULL, claimed_at = NULL WHERE id = ? AND claim_run_id = ?`)
+      .run(id, this.locks.runId);
+  }
+
+  unlockIfQueueEmpty(surface: string, chatKey: string): boolean {
+    assertExecutionScope(surface, chatKey);
+    return this.runInTransaction(() => {
+      if (!this.ownsLock(surface, chatKey)) return false;
+      const pending = this.raw.prepare(`SELECT 1 FROM pending_messages WHERE surface = ? AND chat_key = ? LIMIT 1`).get(surface, chatKey);
+      if (pending) return false;
+      this.unlock(surface, chatKey);
+      return true;
+    });
   }
 
   getQuarantinedPendingMessageCount(): number {

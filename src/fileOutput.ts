@@ -4,8 +4,8 @@ import type { FileSendOptions, MessagingPlatform } from "./platform.js";
 
 const BRIDGE_OUT_BASE = "/tmp/bridge-out";
 
-export async function prepareOutputDir(chatId: number | string, kind: string): Promise<string> {
-  const dir = join(BRIDGE_OUT_BASE, `${kind}-${String(chatId)}`);
+export async function prepareOutputDir(chatId: number | string, kind: string, runId?: string): Promise<string> {
+  const dir = join(BRIDGE_OUT_BASE, `${kind}-${String(chatId)}${runId ? `-${runId}` : ""}`);
   // Wipe any files left by a previous partial run before handing the dir to the CLI.
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });

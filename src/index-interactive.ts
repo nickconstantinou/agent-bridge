@@ -36,6 +36,7 @@ import {
   describeInteractiveUpdateForLog,
   isGroupInteractiveUpdate,
   dispatchInteractiveWithFallback,
+  dispatchClaimedInteractiveWithFallback,
   resolveAvailableCliPreference,
   applyManualCliSwitchHandoff,
   type CliKind,
@@ -179,6 +180,25 @@ async function registerGroupChatCommands(pref: CliKind, chatId: number): Promise
     await client.setMyCommands(body)
       .catch((err: unknown) => console.warn(`[interactive] setMyCommands (${scopeName} ${chatId}) failed`, err));
   }
+}
+
+for (const engine of Object.values(engines)) {
+  engine.setQueuedMessageHandler(async (queued) => {
+    const chatKey = queued.chatKey;
+    await dispatchClaimedInteractiveWithFallback(queued, chatKey, {
+      engines, fallbackChain, exhaustedChats, db,
+      notify: async (msg) => {
+        await sendTelegramMessage({ client, kind: "interactive", chatId: queued.chatId, body: { text: msg, message_thread_id: queued.threadId ?? undefined } });
+      },
+      onCliSwitched: async (newCli) => {
+        await registerGlobalCommands(newCli, " during queued fallback");
+        if (queued.chatType === "group" || queued.chatType === "supergroup") await registerGroupChatCommands(newCli, queued.chatId);
+      },
+      compactBeforeSwitch: (request) => runCapacityFallbackCompaction(request, {
+        db, runCli, bots: config.bots, configuredChain: compactionProviderChain, compactProfile: "companion",
+      }),
+    });
+  });
 }
 
 await registerGlobalCommands(defaultPref, "");

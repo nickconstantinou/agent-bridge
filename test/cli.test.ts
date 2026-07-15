@@ -172,8 +172,8 @@ describe("abortCliProcess", () => {
 
   it("waits for child exit before resolving termination", async () => {
     const chatId = "test-abort-waits-for-exit";
-    const childRun = runCli("bash", ["-lc", "trap '' TERM; sleep 10"], process.cwd(), { chatId });
-    await new Promise((r) => setTimeout(r, 50));
+    const childRun = runCli(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); setTimeout(()=>{},10000)"], process.cwd(), { chatId });
+    await new Promise((r) => setTimeout(r, 100));
     let settled = false;
     const abort = abortCliProcessAndWait(chatId).then((value) => { settled = true; return value; });
     await new Promise((r) => setTimeout(r, 100));

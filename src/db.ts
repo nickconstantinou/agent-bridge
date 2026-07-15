@@ -7,6 +7,7 @@
  */
 
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { LockRepository } from "./repositories/lockRepository.js";
@@ -73,7 +74,12 @@ export function buildMemoryFtsQuery(raw: string): string {
   return normalizeMemoryTokens(raw).map((w) => `${w}*`).join(" OR ");
 }
 
-export function openDb(dbPath: string): BridgeDb {
+export interface OpenDbOptions {
+  /** Stable service identity used to recover only this service's stale execution locks. */
+  lockOwner?: string;
+}
+
+export function openDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
   if (dbPath !== ":memory:") {
     mkdirSync(dirname(dbPath), { recursive: true });
   }
@@ -90,6 +96,14 @@ export function openDb(dbPath: string): BridgeDb {
       active_execution_lock INTEGER NOT NULL DEFAULT 0,
       last_update_id        INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS execution_locks (
+      surface     TEXT NOT NULL,
+      chat_key    TEXT NOT NULL,
+      owner_id    TEXT NOT NULL,
+      acquired_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      PRIMARY KEY (surface, chat_key)
+    );
+    CREATE INDEX IF NOT EXISTS idx_execution_locks_owner ON execution_locks(owner_id);
     CREATE TABLE IF NOT EXISTS settings (
       key   TEXT PRIMARY KEY,
       value TEXT
@@ -441,6 +455,7 @@ export function openDb(dbPath: string): BridgeDb {
 
       CREATE TABLE IF NOT EXISTS pending_messages (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        surface     TEXT    NOT NULL DEFAULT 'legacy',
         chat_key    TEXT    NOT NULL,
         prompt      TEXT    NOT NULL,
         chat_id     INTEGER NOT NULL,
@@ -449,8 +464,6 @@ export function openDb(dbPath: string): BridgeDb {
         user_id     INTEGER,
         created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
       );
-      CREATE INDEX IF NOT EXISTS idx_pending_msgs_chat_key ON pending_messages(chat_key, id);
-
       CREATE TABLE IF NOT EXISTS conversation_summaries (
         id                  INTEGER PRIMARY KEY AUTOINCREMENT,
         chat_key            TEXT    NOT NULL,
@@ -481,6 +494,10 @@ export function openDb(dbPath: string): BridgeDb {
         ON compaction_attempts(chat_key, id);
     `);
   } catch { /* tables already exist on upgraded DBs */ }
+  try {
+    raw.exec(`ALTER TABLE pending_messages ADD COLUMN surface TEXT NOT NULL DEFAULT 'legacy'`);
+  } catch { /* column already exists */ }
+  raw.exec(`CREATE INDEX IF NOT EXISTS idx_pending_msgs_surface_chat_key ON pending_messages(surface, chat_key, id)`);
   raw.exec(`
     DELETE FROM conversation_turns
     WHERE id <= COALESCE((
@@ -537,8 +554,6 @@ export function openDb(dbPath: string): BridgeDb {
     raw.exec(`ALTER TABLE work_jobs ADD COLUMN phase_data_json TEXT`);
   } catch { /* column already exists */ }
 
-  // Clear any locks left held from a previous process that was killed mid-execution
-  raw.exec(`UPDATE bridge_state SET active_execution_lock = 0 WHERE active_execution_lock = 1`);
   // Expire sessions older than 7 days — prevents a stale/corrupt session from
   // being resumed indefinitely after a long gap without a /reset
   for (const bot of ["codex", "antigravity", "claude"] as const) {
@@ -549,7 +564,9 @@ export function openDb(dbPath: string): BridgeDb {
          AND ${bot}_session_created_at < datetime('now', '-7 days')`
     );
   }
-  return new BridgeDb(raw);
+  const bridgeDb = new BridgeDb(raw, options.lockOwner ?? randomUUID());
+  bridgeDb.recoverOwnedLocks();
+  return bridgeDb;
 }
 
 export class BridgeDb {
@@ -562,10 +579,10 @@ export class BridgeDb {
   private readonly memories: MemoryRepository;
   private readonly compactions: CompactionRepository;
 
-  constructor(raw: Database.Database) {
+  constructor(raw: Database.Database, lockOwner: string = randomUUID()) {
     this.raw = raw;
     this.sessions = new SessionRepository(raw);
-    this.locks = new LockRepository(raw);
+    this.locks = new LockRepository(raw, lockOwner);
     this.settings = new SettingsRepository(raw);
     this.runs = new RunRepository(raw);
     this.workQueue = new WorkQueueRepository(raw);
@@ -589,12 +606,23 @@ export class BridgeDb {
 
   // ── Per-chat execution lock ──────────────────────────────────────────────
 
-  tryLock(chatId: string): boolean {
-    return this.locks.tryLock(chatId);
+  recoverOwnedLocks(): void {
+    this.locks.recoverOwnedLocks();
   }
 
-  unlock(chatId: string): void {
-    this.locks.unlock(chatId);
+  tryLock(chatKey: string): boolean;
+  tryLock(surface: string, chatKey: string): boolean;
+  tryLock(surfaceOrChatKey: string, maybeChatKey?: string): boolean {
+    return maybeChatKey === undefined
+      ? this.locks.tryLock(surfaceOrChatKey)
+      : this.locks.tryLock(surfaceOrChatKey, maybeChatKey);
+  }
+
+  unlock(chatKey: string): void;
+  unlock(surface: string, chatKey: string): void;
+  unlock(surfaceOrChatKey: string, maybeChatKey?: string): void {
+    if (maybeChatKey === undefined) this.locks.unlock(surfaceOrChatKey);
+    else this.locks.unlock(surfaceOrChatKey, maybeChatKey);
   }
 
   // ── Global polling offset (per bot kind) ────────────────────────────────
@@ -998,32 +1026,57 @@ export class BridgeDb {
   }
 
   // ── Pending messages ────────────────────────────────────────────────────
-  pendingMsgCount(chatKey: string): number {
+  pendingMsgCount(chatKey: string): number;
+  pendingMsgCount(surface: string, chatKey: string): number;
+  pendingMsgCount(surfaceOrChatKey: string, maybeChatKey?: string): number {
+    const surface = maybeChatKey === undefined ? "legacy" : surfaceOrChatKey;
+    const chatKey = maybeChatKey ?? surfaceOrChatKey;
     const row = this.raw
-      .prepare(`SELECT COUNT(*) AS n FROM pending_messages WHERE chat_key = ?`)
-      .get(chatKey) as { n: number };
+      .prepare(`SELECT COUNT(*) AS n FROM pending_messages WHERE surface = ? AND chat_key = ?`)
+      .get(surface, chatKey) as { n: number };
     return row.n;
   }
 
   enqueueMsg(
     chatKey: string,
     msg: { prompt: string; chatId: number; threadId?: number; chatType: string; userId?: number },
+  ): void;
+  enqueueMsg(
+    surface: string,
+    chatKey: string,
+    msg: { prompt: string; chatId: number; threadId?: number; chatType: string; userId?: number },
+  ): void;
+  enqueueMsg(
+    surfaceOrChatKey: string,
+    chatKeyOrMsg: string | { prompt: string; chatId: number; threadId?: number; chatType: string; userId?: number },
+    maybeMsg?: { prompt: string; chatId: number; threadId?: number; chatType: string; userId?: number },
   ): void {
+    const surface = typeof chatKeyOrMsg === "string" ? surfaceOrChatKey : "legacy";
+    const chatKey = typeof chatKeyOrMsg === "string" ? chatKeyOrMsg : surfaceOrChatKey;
+    const msg = typeof chatKeyOrMsg === "string" ? maybeMsg! : chatKeyOrMsg;
     this.raw
       .prepare(
-        `INSERT INTO pending_messages (chat_key, prompt, chat_id, thread_id, chat_type, user_id)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO pending_messages (surface, chat_key, prompt, chat_id, thread_id, chat_type, user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(chatKey, msg.prompt, msg.chatId, msg.threadId ?? null, msg.chatType, msg.userId ?? null);
+      .run(surface, chatKey, msg.prompt, msg.chatId, msg.threadId ?? null, msg.chatType, msg.userId ?? null);
   }
 
   dequeueMsgs(chatKey: string): Array<{
     id: number; prompt: string; chatId: number; threadId: number | null; chatType: string; userId: number | null;
+  }>;
+  dequeueMsgs(surface: string, chatKey: string): Array<{
+    id: number; prompt: string; chatId: number; threadId: number | null; chatType: string; userId: number | null;
+  }>;
+  dequeueMsgs(surfaceOrChatKey: string, maybeChatKey?: string): Array<{
+    id: number; prompt: string; chatId: number; threadId: number | null; chatType: string; userId: number | null;
   }> {
+    const surface = maybeChatKey === undefined ? "legacy" : surfaceOrChatKey;
+    const chatKey = maybeChatKey ?? surfaceOrChatKey;
     return (this.raw
       .prepare(`SELECT id, prompt, chat_id AS chatId, thread_id AS threadId, chat_type AS chatType, user_id AS userId
-                FROM pending_messages WHERE chat_key = ? ORDER BY id ASC`)
-      .all(chatKey) as any);
+                FROM pending_messages WHERE surface = ? AND chat_key = ? ORDER BY id ASC`)
+      .all(surface, chatKey) as any);
   }
 
   deletePendingMsg(id: number): void {
@@ -1083,15 +1136,15 @@ export class BridgeDb {
     this.raw.prepare(`DELETE FROM conversation_summaries WHERE chat_key = ?`).run(chatKey);
   }
 
-  getConvStatus(chatKey: string): {
+  getConvStatus(chatKey: string, surface = "legacy"): {
     turnCount: number; pendingCount: number; latestSummaryAt: string | null; latestTurnAt: string | null;
   } {
     const tc = this.raw
       .prepare(`SELECT COUNT(*) AS n FROM conversation_turns WHERE chat_key = ?`)
       .get(chatKey) as { n: number };
     const pc = this.raw
-      .prepare(`SELECT COUNT(*) AS n FROM pending_messages WHERE chat_key = ?`)
-      .get(chatKey) as { n: number };
+      .prepare(`SELECT COUNT(*) AS n FROM pending_messages WHERE surface = ? AND chat_key = ?`)
+      .get(surface, chatKey) as { n: number };
     const lt = this.raw
       .prepare(`SELECT created_at FROM conversation_turns WHERE chat_key = ? ORDER BY id DESC LIMIT 1`)
       .get(chatKey) as { created_at: string } | undefined;

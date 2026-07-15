@@ -98,10 +98,12 @@ export function handleCommand(
     db,
     chatId,
     config,
+    surfaceIdentity = "legacy",
   }: {
     db: BridgeDb;
     chatId: string;
     config: BridgeConfig;
+    surfaceIdentity?: string;
   }
 ): CommandResult | null {
   const text = normalizeCommand(prompt);
@@ -191,7 +193,7 @@ export function handleCommand(
   }
 
   if (text === "/context") {
-    const status = db.getConvStatus(chatId);
+    const status = db.getConvStatus(chatId, surfaceIdentity);
     const summary = db.getLatestConvSummary(chatId);
     const latestAttempt = db.getLatestCompactionAttempt(chatId);
     const compactStartedAt = db.getSetting(compactInProgressSettingKey(chatId));

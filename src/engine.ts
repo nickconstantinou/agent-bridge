@@ -82,6 +82,8 @@ export interface BridgeEngineHooks {
 
 export interface BridgeEngineOptions {
   kind: string;
+  /** Stable delivery surface. Providers within one interactive bot share this value. */
+  surfaceIdentity?: string;
   /** CLI kind to invoke for non-agent engines such as health. Defaults to claude. */
   executionKind?: BotKind;
   botConfig: { command: string; modelPreference: string[]; token?: string };
@@ -128,8 +130,7 @@ function isRecoverableAntigravityExecutionError(error: Error): boolean {
 }
 
 function topicChatKey(chatId: number, chatType: string, threadId?: number): string {
-  const isGroup = chatType === "group" || chatType === "supergroup";
-  return isGroup && threadId != null ? `${chatId}:${threadId}` : String(chatId);
+  return threadId != null ? `${chatId}:${threadId}` : String(chatId);
 }
 
 function hookContext(chatId: number, chatKey: string, threadId?: number | string): HookContext {
@@ -215,6 +216,7 @@ export class BridgeEngine {
   readonly mediaBuffer: MediaGroupBuffer;
 
   private readonly opts: BridgeEngineOptions;
+  private readonly surfaceIdentity: string;
   private readonly db: BridgeDb;
   private readonly hooks: BridgeEngineHooks;
   private readonly exec: ExecFns;
@@ -232,6 +234,7 @@ export class BridgeEngine {
   ) {
     this.opts = opts;
     this.kind = opts.kind;
+    this.surfaceIdentity = opts.surfaceIdentity ?? "legacy";
     this.db = db;
     this.client = client;
     this.hooks = opts.hooks ?? {};
@@ -311,12 +314,13 @@ export class BridgeEngine {
       const chatId = message.chat.id;
       const threadId = message.message_thread_id;
       const chatKey = topicChatKey(chatId, message.chat.type, threadId);
-      const wasAborted = abortCliProcess(chatKey);
+      const executionLane = this._executionLane(chatKey);
+      const wasAborted = abortCliProcess(executionLane);
       if (wasAborted) {
-        this.db.unlock(chatKey);
-        this.abortedChats.add(chatKey);
+        this.db.unlock(this.surfaceIdentity, chatKey);
+        this.abortedChats.add(executionLane);
       }
-      const pendingStop = this.db.dequeueMsgs(chatKey);
+      const pendingStop = this.db.dequeueMsgs(this.surfaceIdentity, chatKey);
       for (const m of pendingStop) this.db.deletePendingMsg(m.id);
       await this.sendText(chatId, { text: "🛑 Execution aborted by user.", message_thread_id: threadId });
       return;
@@ -344,7 +348,7 @@ export class BridgeEngine {
     const chatId = primaryMessage.chat.id;
     const userId = primaryMessage.from?.id;
     const chatKey = topicChatKey(chatId, primaryMessage.chat.type, threadId);
-    this.abortedChats.delete(chatKey);
+    this.abortedChats.delete(this._executionLane(chatKey));
 
     const hookCtx: HookContext = { chatId, chatKey, threadId, userId };
 
@@ -371,15 +375,16 @@ export class BridgeEngine {
           db: this.db,
           chatId: chatKey,
           config: this._effectiveConfig(),
+          surfaceIdentity: this.surfaceIdentity,
         });
         if (commandResponse) {
           if (commandResponse.kind === "message") {
             if (commandText === "/reset") {
-              const pending = this.db.dequeueMsgs(chatKey);
+              const pending = this.db.dequeueMsgs(this.surfaceIdentity, chatKey);
               for (const m of pending) this.db.deletePendingMsg(m.id);
               this.db.setSetting(`ctx_suppress:${chatKey}`, "1");
-              abortCliProcess(chatKey);
-              this.db.unlock(chatKey);
+              abortCliProcess(this._executionLane(chatKey));
+              this.db.unlock(this.surfaceIdentity, chatKey);
             }
             await this.sendText(chatId, { text: commandResponse.text, message_thread_id: threadId });
             return;
@@ -588,8 +593,8 @@ export class BridgeEngine {
       : null;
     const useAsync = this.opts.asyncEnabled === true;
 
-    if (!this.db.tryLock(chatKey)) {
-      if (this.db.pendingMsgCount(chatKey) >= MAX_QUEUE_DEPTH) {
+    if (!this.db.tryLock(this.surfaceIdentity, chatKey)) {
+      if (this.db.pendingMsgCount(this.surfaceIdentity, chatKey) >= MAX_QUEUE_DEPTH) {
         if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
         await this.sendText(chatId, {
           text: `⏳ Queue is full (max ${MAX_QUEUE_DEPTH}). Please wait.`,
@@ -597,8 +602,8 @@ export class BridgeEngine {
         });
         return;
       }
-      this.db.enqueueMsg(chatKey, { prompt, chatId, threadId, chatType, userId });
-      const queuePos = this.db.pendingMsgCount(chatKey);
+      this.db.enqueueMsg(this.surfaceIdentity, chatKey, { prompt, chatId, threadId, chatType, userId });
+      const queuePos = this.db.pendingMsgCount(this.surfaceIdentity, chatKey);
       if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
       await this.sendText(chatId, {
         text: `⏳ Queued (position ${queuePos} of ${MAX_QUEUE_DEPTH}). Will process shortly.`,
@@ -616,7 +621,7 @@ export class BridgeEngine {
           chatId,
           body: { message_thread_id: threadId },
           showProgressNarration: this.kind === "antigravity" && isAntigravityNarrationVisible(this.db, chatKey),
-          isAborted: () => this.abortedChats.has(chatKey),
+          isAborted: () => this.abortedChats.has(this._executionLane(chatKey)),
           runId,
           onEvent: (e) => collect(e),
           execution: (onProgress: (text: string) => void) =>
@@ -651,7 +656,7 @@ export class BridgeEngine {
       }
     } finally {
       if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
-      this.db.unlock(chatKey);
+      this.db.unlock(this.surfaceIdentity, chatKey);
       this._drainQueue(chatKey);
     }
   }
@@ -694,7 +699,7 @@ export class BridgeEngine {
   }
 
   private _drainQueue(chatKey: string): void {
-    const msgs = this.db.dequeueMsgs(chatKey);
+    const msgs = this.db.dequeueMsgs(this.surfaceIdentity, chatKey);
     if (!msgs.length) return;
     const next = msgs[0];
     this.db.deletePendingMsg(next.id);
@@ -714,6 +719,10 @@ export class BridgeEngine {
         console.error(`[${this.kind}] drainQueue error`, err)
       );
     });
+  }
+
+  private _executionLane(chatKey: string): string {
+    return JSON.stringify([this.surfaceIdentity, chatKey]);
   }
 
   private _rememberTurn(chatKey: string, userPrompt: string, assistantText: string): void {
@@ -767,7 +776,7 @@ export class BridgeEngine {
 
   private _buildContextAccess(chatKey: string): { prompt: string; env: Record<string, string> } | null {
     const dbPath = this.opts.fullConfig?.dbPath;
-    const status = this.db.getConvStatus(chatKey);
+    const status = this.db.getConvStatus(chatKey, this.surfaceIdentity);
     const memoryCount = this.db.getMemoryCount();
     const hasContext = !!dbPath && (status.turnCount > 0 || !!status.latestSummaryAt || memoryCount > 0);
     const commandPath = join(process.cwd(), "bin", "agent-bridge-context");
@@ -932,7 +941,7 @@ export class BridgeEngine {
       const cliResult = await this.exec.runCliAsync(invocation.command, invocation.args, cwd, {
         ...buildExecutionOptions(executionKind),
         onProgress,
-        chatId: chatKey,
+        chatId: this._executionLane(chatKey),
         stdin: invocation.stdin,
         contextEnv: promptForCli.contextEnv,
         eventContext,
@@ -1061,7 +1070,7 @@ export class BridgeEngine {
       await typingTracker.start();
       const stdout = await this.exec.runCli(invocation.command, invocation.args, cwd, {
         ...buildExecutionOptions(executionKind),
-        chatId: chatKey,
+        chatId: this._executionLane(chatKey),
         stdin: invocation.stdin,
         contextEnv: promptForCli.contextEnv,
         eventContext,
@@ -1176,14 +1185,14 @@ export class BridgeEngine {
         ? (await this.exec.runCliAsync(retryInvocation.command, retryInvocation.args, retryCwd, {
             ...buildExecutionOptions(executionKind),
             onProgress,
-            chatId: chatKey,
+            chatId: this._executionLane(chatKey),
             stdin: retryInvocation.stdin,
             eventContext,
             onEvent: collect ?? undefined,
           })).text
         : await this.exec.runCli(retryInvocation.command, retryInvocation.args, retryCwd, {
             ...buildExecutionOptions(executionKind),
-            chatId: chatKey,
+            chatId: this._executionLane(chatKey),
             stdin: retryInvocation.stdin,
             eventContext,
             onEvent: collect ?? undefined,
@@ -1324,14 +1333,14 @@ export class BridgeEngine {
         ? (await this.exec.runCliAsync(fallbackInvocation.command, fallbackInvocation.args, fallbackCwd, {
             ...buildExecutionOptions(executionKind),
             onProgress,
-            chatId: chatKey,
+            chatId: this._executionLane(chatKey),
             stdin: fallbackInvocation.stdin,
             eventContext,
             onEvent: collect ?? undefined,
           })).text
         : await this.exec.runCli(fallbackInvocation.command, fallbackInvocation.args, fallbackCwd, {
             ...buildExecutionOptions(executionKind),
-            chatId: chatKey,
+            chatId: this._executionLane(chatKey),
             stdin: fallbackInvocation.stdin,
             eventContext,
             onEvent: collect ?? undefined,

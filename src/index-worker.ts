@@ -32,6 +32,7 @@ import {
   buildCliStatusText,
   buildCliKeyboard,
   applyManualCliSwitchHandoff,
+  resolveUpdateChatKey,
   type CliKind,
 } from "./interactiveBot.js";
 import { parseCompactionProviderChain, runCapacityFallbackCompaction } from "./fallbackCompaction.js";
@@ -87,7 +88,7 @@ const executionMode = (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") 
 const asyncEnabled = process.env.BRIDGE_ASYNC_ENABLED !== "false";
 const advisorConfig = parseAdvisorConfig(process.env);
 
-const db = openDb(dbPath);
+const db = openDb(dbPath, { lockOwner: "telegram:worker" });
 const client = new TelegramClient(token, fetch, 45_000);
 
 function withThread<T extends Record<string, unknown>>(body: T, threadId?: number): T & { message_thread_id?: number } {
@@ -125,6 +126,7 @@ const engines = Object.fromEntries(
       new BridgeEngine(
         {
           kind,
+          surfaceIdentity: "telegram:worker",
           botConfig: { ...botConfig, token },
           allowedUserIds,
           executionMode,
@@ -382,7 +384,7 @@ for (;;) {
             const cliSwitch = handleCliSwitchCallback(callbackQuery.data || "");
             if (cliSwitch) {
               const cbqChatId = callbackQuery.message?.chat?.id;
-              const cbqChatKey = cbqChatId ? String(cbqChatId) : null;
+              const cbqChatKey = resolveUpdateChatKey(update as TelegramUpdate);
               if (cbqChatKey) {
                 setUserCliPreference(db, cbqChatKey, cliSwitch);
                 fallbackChain.setActiveCli(cbqChatKey, cliSwitch);
@@ -416,7 +418,7 @@ for (;;) {
         const rawText = (message.text || "").trim();
         const chatId = message.chat.id;
         const threadId = message.message_thread_id;
-        const chatKey = String(chatId);
+        const chatKey = resolveUpdateChatKey(update as TelegramUpdate) ?? String(chatId);
         const userId = message.from ? String(message.from.id) : "unknown";
 
         // /cli — show active CLI with switch keyboard (same as interactive bot)

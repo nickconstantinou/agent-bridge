@@ -80,7 +80,7 @@ const soulContext = loadSoulContext({
 });
 if (soulContext) console.log(`[interactive] loaded SOUL.md context (${soulContext.length} chars)`);
 
-const db = openDb(dbPath);
+const db = openDb(dbPath, { lockOwner: "telegram:interactive" });
 const advisorBroker = await startConfiguredAdvisorBroker({ db, bots: config.bots, runCli });
 const client = new TelegramClient(token, fetch, 45_000);
 
@@ -141,6 +141,7 @@ const engines = Object.fromEntries(
       new BridgeEngine(
         {
           kind,
+          surfaceIdentity: "telegram:interactive",
           botConfig: { ...botConfig, token },
           allowedUserIds,
           executionMode: resolveExecutionMode(kind as BotKind, process.env),

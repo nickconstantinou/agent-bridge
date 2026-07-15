@@ -169,16 +169,15 @@ export function buildChatInteractiveCommandRegistrations(pref: CliKind, chatId: 
 
 // ── Update routing helpers ────────────────────────────────────────────────────
 
-/** Returns the chat key from an update. For group/supergroup messages with a thread, returns "chatId:threadId". */
+/** Returns the conversation scope from an update. Any Telegram topic returns "chatId:threadId". */
 export function resolveUpdateChatKey(update: TelegramUpdate): string | null {
   const msg = update.message;
   const cbqMsg = update.callback_query?.message;
   const chatId = msg?.chat?.id ?? cbqMsg?.chat?.id;
   if (chatId == null) return null;
   const source = msg ?? cbqMsg;
-  const isGroup = source?.chat?.type === "group" || source?.chat?.type === "supergroup";
   const threadId = source?.message_thread_id;
-  if (isGroup && threadId != null) return `${chatId}:${threadId}`;
+  if (threadId != null) return `${chatId}:${threadId}`;
   return String(chatId);
 }
 

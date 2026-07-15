@@ -1,24 +1,37 @@
 import Database from "better-sqlite3";
 
 export class LockRepository {
-  constructor(private readonly db: Database.Database) {}
+  constructor(
+    private readonly db: Database.Database,
+    private readonly ownerId = "legacy",
+  ) {}
 
-  tryLock(chatId: string): boolean {
-    this.db
-      .prepare(`INSERT INTO bridge_state (chat_id) VALUES (?) ON CONFLICT (chat_id) DO NOTHING`)
-      .run(chatId);
+  recoverOwnedLocks(): void {
+    this.db.prepare(`DELETE FROM execution_locks WHERE owner_id = ?`).run(this.ownerId);
+  }
+
+  tryLock(chatKey: string): boolean;
+  tryLock(surface: string, chatKey: string): boolean;
+  tryLock(surfaceOrChatKey: string, maybeChatKey?: string): boolean {
+    const surface = maybeChatKey === undefined ? "legacy" : surfaceOrChatKey;
+    const chatKey = maybeChatKey ?? surfaceOrChatKey;
     const { changes } = this.db
       .prepare(
-        `UPDATE bridge_state SET active_execution_lock = 1
-         WHERE chat_id = ? AND active_execution_lock = 0`
+        `INSERT INTO execution_locks (surface, chat_key, owner_id)
+         VALUES (?, ?, ?)
+         ON CONFLICT (surface, chat_key) DO NOTHING`
       )
-      .run(chatId);
+      .run(surface, chatKey, this.ownerId);
     return changes === 1;
   }
 
-  unlock(chatId: string): void {
+  unlock(chatKey: string): void;
+  unlock(surface: string, chatKey: string): void;
+  unlock(surfaceOrChatKey: string, maybeChatKey?: string): void {
+    const surface = maybeChatKey === undefined ? "legacy" : surfaceOrChatKey;
+    const chatKey = maybeChatKey ?? surfaceOrChatKey;
     this.db
-      .prepare(`UPDATE bridge_state SET active_execution_lock = 0 WHERE chat_id = ?`)
-      .run(chatId);
+      .prepare(`DELETE FROM execution_locks WHERE surface = ? AND chat_key = ? AND owner_id = ?`)
+      .run(surface, chatKey, this.ownerId);
   }
 }

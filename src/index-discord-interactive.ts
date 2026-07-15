@@ -83,7 +83,7 @@ const soulContext = loadSoulContext({
 });
 if (soulContext) console.log(`[discord-interactive] loaded SOUL.md context (${soulContext.length} chars)`);
 
-const db = openDb(dbPath);
+const db = openDb(dbPath, { lockOwner: "discord:interactive" });
 const advisorBroker = await startConfiguredAdvisorBroker({ db, bots: config.bots, runCli });
 
 // ── Fallback chain ────────────────────────────────────────────────────────────
@@ -189,6 +189,7 @@ const engines = Object.fromEntries(
     new BridgeEngine(
       {
         kind,
+        surfaceIdentity: "discord:interactive",
         botConfig: { ...config.bots[kind as BotKind], token },
         allowedUserIds: engineAllowedUserIds,
         executionMode,

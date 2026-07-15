@@ -233,9 +233,11 @@ Manual `/cli` switching applies the same target-session-clear + handoff-mark (`a
 
 ### 4.6 Concurrency Lock & Message Queue
 
-`db.tryLock(chatId)` is an atomic SQLite `UPDATE … WHERE active_execution_lock = 0` — only one execution per chat at a time. Lock is released in a `finally` block which also calls `drainQueue(chatKey)`.
+`db.tryLock(surface, chatKey)` atomically inserts into `execution_locks`, whose primary key is `(surface, chat_key)`. A conversation scope is `chatId:threadId` whenever Telegram supplies a thread ID, including private-chat topics. Standalone bots use distinct surfaces; all providers behind one interactive bot share its surface. Lock release is owner-checked and occurs in a `finally` block which also calls `drainQueue(chatKey)`.
 
-If a chat is busy, the incoming message is queued to `pending_messages` in SQLite (max `MAX_QUEUE_DEPTH = 5`), surviving restarts. The user receives a position notice. When execution finishes, `drainQueue` pops the next item via `setImmediate` and calls `handleMessages` with a synthetic message. If the queue is full, the user receives "⏳ Queue is full."
+If a lane is busy, the incoming message is queued to `pending_messages` under the same explicit `(surface, chat_key)` ownership (max `MAX_QUEUE_DEPTH = 5`), surviving restarts. Legacy rows created before the surface migration are retained under the quarantined `legacy` surface and cannot drain into a live bot. The user receives a position notice. When execution finishes, `drainQueue` pops only that lane's next item via `setImmediate` and calls `handleMessages` with a synthetic message. If the queue is full, the user receives "⏳ Queue is full."
+
+Each service opens SQLite with a stable lock-owner identity. Startup recovery deletes only locks owned by that restarting service; opening Codex, Claude, worker, health, interactive, or Discord storage never clears another live service's lock.
 
 ### 4.7 Rate Limit Handling
 
@@ -290,20 +292,23 @@ interface BridgeConfig {
 
 ### SQLite Schema
 
-**`bridge_state`** — settings, sessions, locks:
+**`bridge_state`** — settings and sessions. `active_execution_lock` remains as a legacy compatibility column and is not used for execution ownership.
+
+**`execution_locks`** — surface- and conversation-scoped execution ownership:
 
 ```sql
-CREATE TABLE bridge_state (
-  key TEXT PRIMARY KEY,
-  value TEXT,
-  active_execution_lock INTEGER NOT NULL DEFAULT 0
+CREATE TABLE execution_locks (
+  surface TEXT NOT NULL,
+  chat_key TEXT NOT NULL,
+  owner_id TEXT NOT NULL,
+  acquired_at TEXT NOT NULL,
+  PRIMARY KEY (surface, chat_key)
 );
 ```
 
 | Key pattern | Value | Purpose |
 |-------------|-------|---------|
 | `session:<chatId>:<bot>` | session ID | CLI session per chat |
-| `lock:<chatId>` | — | Row used for atomic lock |
 | `$polling:<bot>` | last update_id | Telegram polling offset |
 | `<bot>` | model name | Per-bot model override |
 

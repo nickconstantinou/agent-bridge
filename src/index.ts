@@ -67,7 +67,11 @@ const soulContext = loadSoulContext({
 });
 if (soulContext) console.log(`[bridge] loaded SOUL.md context (${soulContext.length} chars)`);
 
-const db = openDb(config.dbPath);
+const enabledBotKinds = (Object.entries(config.bots) as [BotKind, BotConfig][])
+  .filter(([, bot]) => bot.token)
+  .map(([kind]) => kind)
+  .sort();
+const db = openDb(config.dbPath, { lockOwner: `telegram:standalone:${enabledBotKinds.join(",")}` });
 const advisorBroker = await startConfiguredAdvisorBroker({ db, bots: config.bots, runCli });
 
 console.log("[bridge] starting bots...");
@@ -79,6 +83,7 @@ const engines = (Object.entries(config.bots) as [BotKind, BotConfig][])
     return new BridgeEngine(
       {
         kind,
+        surfaceIdentity: `telegram:${kind}`,
         botConfig,
         allowedUserIds: config.allowedUserIds,
         executionMode: resolveExecutionMode(kind, process.env),

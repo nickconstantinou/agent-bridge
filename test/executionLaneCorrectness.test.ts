@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { rmSync, readFileSync } from "node:fs";
+import { rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { openDb } from "../src/db.js";
 import { BridgeEngine } from "../src/engine.js";
 import { runCli } from "../src/cli.js";
@@ -124,6 +124,158 @@ describe("execution lane correctness", () => {
     expect(db.tryLock("telegram:interactive", "100:7")).toBe(true);
     db.close(); rmSync(path, { force: true });
   }, 8_000);
+
+  it("keeps the lane owned during /reset until a TERM-resistant child exits after SIGKILL", async () => {
+    const path = join(tmpdir(), `reset-grace-${Date.now()}-${Math.random()}.sqlite`);
+    const db = openDb(path);
+    const c = client();
+    const engine = new BridgeEngine(options("claude"), db, c, {
+      runCli: (_command, _args, cwd, cliOptions) => runCli(
+        process.execPath,
+        ["-e", "process.on('SIGTERM',()=>{}); setTimeout(()=>{},10000)"],
+        cwd,
+        cliOptions,
+      ),
+    });
+    const active = engine.handleMessages([message("long reset run", 7)]);
+    await new Promise((r) => setTimeout(r, 150));
+    const resetting = engine.handleMessages([message("/reset", 7)]);
+    await new Promise((r) => setTimeout(r, 100));
+    expect(db.tryLock("telegram:interactive", "100:7")).toBe(false);
+    await resetting; await active;
+    expect(db.tryLock("telegram:interactive", "100:7")).toBe(true);
+    db.close(); rmSync(path, { force: true });
+  }, 8_000);
+
+  it("does not let a displaced run delete its claimed row before the successor reclaims it", () => {
+    const path = join(tmpdir(), `claim-fence-${Date.now()}-${Math.random()}.sqlite`);
+    let now = Date.parse("2026-07-15T10:00:00.000Z");
+    const runA = openDb(path, { serviceId: "telegram:interactive", runId: "a", lockLeaseMs: 100, clock: () => now });
+    const runB = openDb(path, { serviceId: "telegram:interactive", runId: "b", lockLeaseMs: 100, clock: () => now });
+    runA.tryLock("telegram:interactive", "100:7");
+    runA.enqueueMsg("telegram:interactive", "100:7", { prompt: "must survive", chatId: 100, threadId: 7, chatType: "private" });
+    const claimed = runA.claimNextPendingMsg("telegram:interactive", "100:7")!;
+    now += 101;
+    expect(runB.tryLock("telegram:interactive", "100:7")).toBe(true);
+    expect(runA.completePendingMsg(claimed.id)).toBe(false);
+    expect(runB.pendingMsgCount("telegram:interactive", "100:7")).toBe(1);
+    expect(runB.claimNextPendingMsg("telegram:interactive", "100:7")?.prompt).toBe("must survive");
+    runA.close(); runB.close(); rmSync(path, { force: true });
+  });
+
+  it("returns a fenced queued outcome and preserves the row until successor recovery", async () => {
+    const path = join(tmpdir(), `queued-outcome-${Date.now()}-${Math.random()}.sqlite`);
+    let now = Date.parse("2026-07-15T10:00:00.000Z");
+    const runA = openDb(path, { serviceId: "telegram:interactive", runId: "a", lockLeaseMs: 100, clock: () => now });
+    const runB = openDb(path, { serviceId: "telegram:interactive", runId: "b", lockLeaseMs: 100, clock: () => now });
+    runA.tryLock("telegram:interactive", "100:7");
+    runA.enqueueMsg("telegram:interactive", "100:7", { prompt: "claimed work", chatId: 100, threadId: 7, chatType: "private" });
+    const claimed = runA.claimNextPendingMsg("telegram:interactive", "100:7")!;
+    let resume!: (value: string) => void;
+    const paused = new Promise<string>((resolve) => { resume = resolve; });
+    const engine = new BridgeEngine(options("claude"), runA, client(), { runCli: () => paused });
+    const execution = engine.executeClaimedMessage(claimed);
+    await new Promise((r) => setTimeout(r, 20)); now += 101;
+    expect(runB.tryLock("telegram:interactive", "100:7")).toBe(true);
+    resume(JSON.stringify({ result: "stale", session_id: "stale" }));
+    await expect(execution).resolves.toBe("fenced");
+    expect(runB.pendingMsgCount("telegram:interactive", "100:7")).toBe(1);
+    runA.close(); runB.close(); rmSync(path, { force: true });
+  });
+
+  it("executes a recovered durable row before a new arrival and preserves its attachment", async () => {
+    const path = join(tmpdir(), `restart-fifo-${Date.now()}-${Math.random()}.sqlite`);
+    const attachment = join(tmpdir(), `queued-attachment-${Date.now()}.txt`);
+    writeFileSync(attachment, "durable attachment");
+    const db = openDb(path);
+    db.enqueueMsg("telegram:interactive", "100:7", {
+      prompt: "oldest after restart", chatId: 100, threadId: 7, chatType: "private", attachments: [attachment],
+    });
+    const seen: Array<{ prompt: string; hasAttachment: boolean }> = [];
+    const engine = new BridgeEngine(options("claude"), db, client(), {
+      runCli: vi.fn().mockImplementation(async (_command: string, args: string[]) => {
+        const prompt = String(args.at(-1));
+        seen.push({ prompt, hasAttachment: prompt.includes(attachment) });
+        return "ok";
+      }),
+    });
+    await engine.handleMessages([message("new arrival", 7)]);
+    expect(seen.map((entry) => entry.prompt.includes("oldest after restart") ? "oldest" : "new")).toEqual(["oldest", "new"]);
+    expect(seen[0].hasAttachment).toBe(true);
+    expect(existsSync(attachment)).toBe(false);
+    db.close(); rmSync(path, { force: true }); rmSync(attachment, { force: true });
+  });
+
+  it("retries the oldest row before later arrivals after a queue handoff failure", async () => {
+    const path = join(tmpdir(), `handoff-retry-${Date.now()}-${Math.random()}.sqlite`);
+    const db = openDb(path);
+    db.enqueueMsg("telegram:interactive", "100:7", { prompt: "oldest", chatId: 100, threadId: 7, chatType: "private" });
+    const order: string[] = [];
+    let failOnce = true;
+    let engine!: BridgeEngine;
+    engine = new BridgeEngine(options("claude", {
+      onQueuedMessage: async (queued: any) => {
+        if (failOnce) { failOnce = false; throw new Error("router unavailable"); }
+        await engine.executeClaimedMessage(queued);
+      },
+    }), db, client(), {
+      runCli: vi.fn().mockImplementation(async (_command: string, args: string[]) => {
+        const prompt = String(args.at(-1));
+        order.push(prompt.includes("oldest") ? "oldest" : prompt.includes("arrival one") ? "one" : "two");
+        return "ok";
+      }),
+    });
+    await engine.handleMessages([message("arrival one", 7)]);
+    expect(order).toEqual([]);
+    await engine.handleMessages([message("arrival two", 7)]);
+    expect(order).toEqual(["oldest", "one", "two"]);
+    db.close(); rmSync(path, { force: true });
+  });
+
+  it("renews and fences atomically after parsing before the first state mutation", async () => {
+    const path = join(tmpdir(), `commit-fence-${Date.now()}-${Math.random()}.sqlite`);
+    let now = Date.parse("2026-07-15T10:00:00.000Z");
+    const runA = openDb(path, { serviceId: "telegram:interactive", runId: "a", lockLeaseMs: 100, clock: () => now });
+    const runB = openDb(path, { serviceId: "telegram:interactive", runId: "b", lockLeaseMs: 100, clock: () => now });
+    const c = client();
+    const original = (runA as any).runWithLockFence?.bind(runA);
+    (runA as any).runWithLockFence = (surface: string, chatKey: string, operation: () => unknown) => {
+      now += 101;
+      expect(runB.tryLock(surface, chatKey)).toBe(true);
+      return original(surface, chatKey, operation);
+    };
+    const engine = new BridgeEngine(options("claude"), runA, c, {
+      runCli: vi.fn().mockResolvedValue(JSON.stringify({ result: "parsed but fenced", session_id: "must-not-store" })),
+    });
+    await engine.handleMessages([message("race commit", 7)]);
+    expect(runB.getSession("100:7", "claude")).toBeNull();
+    expect(runB.getConvTurnsForCompaction("100:7")).toHaveLength(0);
+    expect(c.sendMessage.mock.calls.some((call: any[]) => String(call[0].text).includes("parsed but fenced"))).toBe(false);
+    runA.close(); runB.close(); rmSync(path, { force: true });
+  });
+
+  it("fences post-compaction session reset and success notification", async () => {
+    const path = join(tmpdir(), `compact-publish-fence-${Date.now()}-${Math.random()}.sqlite`);
+    let now = Date.parse("2026-07-15T10:00:00.000Z");
+    const runA = openDb(path, { serviceId: "telegram:interactive", runId: "a", lockLeaseMs: 100, clock: () => now });
+    const runB = openDb(path, { serviceId: "telegram:interactive", runId: "b", lockLeaseMs: 100, clock: () => now });
+    runA.addConvTurn("100:7", "user", "compact me");
+    runA.setSession("100:7", "claude", "keep-on-fence");
+    const c = client();
+    const original = (runA as any).runWithLockFence?.bind(runA);
+    (runA as any).runWithLockFence = (surface: string, chatKey: string, operation: () => unknown) => {
+      now += 101;
+      expect(runB.tryLock(surface, chatKey)).toBe(true);
+      return original(surface, chatKey, operation);
+    };
+    const engine = new BridgeEngine(options("claude"), runA, c, {
+      runCli: vi.fn().mockResolvedValue('{"summary_md":"safe summary","memory_candidates":[]}'),
+    });
+    await expect(engine.handleMessages([message("/compact", 7)])).rejects.toThrow();
+    expect(runB.getSession("100:7", "claude")).toBe("keep-on-fence");
+    expect(c.sendMessage.mock.calls.some((call: any[]) => String(call[0].text).includes("Context compacted"))).toBe(false);
+    runA.close(); runB.close(); rmSync(path, { force: true });
+  });
 
   it("fences a displaced run before it publishes or commits conversation state", async () => {
     const path = join(tmpdir(), `fence-${Date.now()}-${Math.random()}.sqlite`);

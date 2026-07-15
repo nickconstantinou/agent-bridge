@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
-import { runCli, runCliAsync, abortCliProcess, abortCliProcessAndWait, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage, buildCliInvocation, buildSafeChildEnv, buildAdvisorChildEnv, resolveKimchiSessionId, normalizeCliArgs } from "../src/cli.js";
+import { runCli, runCliAsync, abortCliProcess, abortCliProcessAndWait, shutdownCliProcesses, shutdownCliProcessesAndWait, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage, buildCliInvocation, buildSafeChildEnv, buildAdvisorChildEnv, resolveKimchiSessionId, normalizeCliArgs } from "../src/cli.js";
 import { isBridgeCommand, handleCommand } from "../src/commands.js";
 import { openDb } from "../src/db.js";
 import type { BridgeConfig } from "../src/types.js";
@@ -258,6 +258,18 @@ describe("model fallback", () => {
     )).toBe(true);
     expect(isCapacityExhaustedError(new Error("CLI hard timeout after 120000ms"))).toBe(false);
     expect(isCapacityExhaustedError(new Error("Network error"))).toBe(false);
+  });
+
+  it("awaits every tracked child close during deterministic shutdown", async () => {
+    const first = runCli(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); setTimeout(()=>{},10000)"], process.cwd(), { chatId: "shutdown-wait-a", killGraceMs: 50 });
+    const second = runCliAsync(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); setTimeout(()=>{},10000)"], process.cwd(), { chatId: "shutdown-wait-b", killGraceMs: 50 });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    await expect(shutdownCliProcessesAndWait()).resolves.toBe(2);
+    await expect(first).resolves.toEqual(expect.any(String));
+    await expect(second).resolves.toMatchObject({ text: expect.any(String) });
+    expect(abortCliProcess("shutdown-wait-a")).toBe(false);
+    expect(abortCliProcess("shutdown-wait-b")).toBe(false);
   });
 
   it("does not treat non-model 'not found' errors as capacity exhaustion", () => {

@@ -20,6 +20,8 @@ describe("compactConversation", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     db.close();
     try { rmSync(dbPath); } catch {}
   });
@@ -30,6 +32,17 @@ describe("compactConversation", () => {
     botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
     cliKind: "claude",
     trigger: "manual" as const,
+  });
+
+  it("clears the compact timeout after a fast provider result", async () => {
+    vi.useFakeTimers();
+    db.addConvTurn("chat:1", "user", "compact without leaking a timer");
+    const runCli = vi.fn().mockResolvedValue(compactJson("Current objective:\n- no timer leak"));
+
+    const result = await compactConversation("chat:1", deps(runCli));
+
+    expect(result.outcome).toBe("compacted");
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it.each(["manual", "preseed", "capacity_fallback"] as const)(

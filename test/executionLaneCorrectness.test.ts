@@ -1,10 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { openDb } from "../src/db.js";
 import { BridgeEngine } from "../src/engine.js";
-import { runCli } from "../src/cli.js";
+import { runCli, shutdownCliProcessesAndWait } from "../src/cli.js";
 import { dispatchClaimedInteractiveWithFallback, setUserCliPreference } from "../src/interactiveBot.js";
 import { WorkerFallbackChain } from "../src/workerFallback.js";
 
@@ -22,6 +22,12 @@ function client() {
 function options(kind: "codex" | "claude", hooks: any = {}) {
   return { surfaceIdentity: "telegram:interactive", kind, botConfig: { command: kind, modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe" as const, asyncEnabled: false, pollIntervalMs: 1000, hooks };
 }
+
+afterEach(async () => {
+  await shutdownCliProcessesAndWait();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe("execution lane correctness", () => {
   it("fences delayed work from a previous acquisition by the same process run", () => {
@@ -89,9 +95,12 @@ describe("execution lane correctness", () => {
     const path = join(tmpdir(), `route-claim-${Date.now()}-${Math.random()}.sqlite`);
     const db = openDb(path, { serviceId: "telegram:interactive", runId: "live-run" });
     const c = client();
-    let release!: () => void;
-    const first = new Promise<void>((resolve) => { release = resolve; });
-    const codexRun = vi.fn().mockImplementationOnce(() => first.then(() => "codex done"));
+    const codexRun = vi.fn().mockImplementationOnce((_command, _args, cwd, cliOptions) => runCli(
+      process.execPath,
+      ["-e", "setTimeout(()=>console.log('codex done'),200)"],
+      cwd,
+      cliOptions,
+    ));
     const claudeRun = vi.fn().mockResolvedValue("claude done");
     const fallbackChain = new WorkerFallbackChain(["codex", "claude"], db);
     const exhaustedChats = new Set<string>();
@@ -107,7 +116,7 @@ describe("execution lane correctness", () => {
     await new Promise((r) => setTimeout(r, 20));
     setUserCliPreference(db, "100:7", "claude");
     await claude.handleMessages([message("queued for current Claude", 7)]);
-    release(); await active;
+    await active;
     expect(codexRun).toHaveBeenCalledOnce();
     expect(claudeRun).toHaveBeenCalledOnce();
     expect(db.pendingMsgCount("telegram:interactive", "100:7")).toBe(0);

@@ -179,6 +179,35 @@ describe("BridgeDb execution lock", () => {
 });
 
 describe("BridgeDb execution-lane migration", () => {
+  it("replaces pre-lease lock rows because their liveness cannot be proven", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agent-bridge-lock-schema-migration-"));
+    const dbPath = join(dir, "bridge.sqlite");
+    try {
+      const legacy = new Database(dbPath);
+      legacy.exec(`
+        CREATE TABLE execution_locks (
+          surface TEXT NOT NULL,
+          chat_key TEXT NOT NULL,
+          owner_id TEXT NOT NULL,
+          acquired_at TEXT NOT NULL,
+          PRIMARY KEY (surface, chat_key)
+        );
+        INSERT INTO execution_locks VALUES ('telegram:interactive', 'chat1', 'old-owner', '2026-01-01T00:00:00.000Z');
+      `);
+      legacy.close();
+
+      const migrated = openDb(dbPath, { serviceId: "migration-test", runId: "migration-run" });
+      const columns = migrated.raw.prepare("PRAGMA table_info(execution_locks)").all() as Array<{ name: string }>;
+      expect(columns.map((column) => column.name)).toEqual([
+        "surface", "chat_key", "service_id", "run_id", "acquired_at", "lease_expires_at",
+      ]);
+      expect(migrated.raw.prepare("SELECT COUNT(*) AS count FROM execution_locks").get()).toEqual({ count: 0 });
+      migrated.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("quarantines legacy pending rows while enabling surface-owned queues", () => {
     const dir = mkdtempSync(join(tmpdir(), "agent-bridge-queue-migration-"));
     const dbPath = join(dir, "bridge.sqlite");

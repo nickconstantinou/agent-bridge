@@ -2113,6 +2113,53 @@ describe("BridgeEngine", () => {
   });
 
   describe("/compact command", () => {
+    it("compacts only the originating private topic and resets only its provider session", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+      db.addConvTurn("100:7", "user", "topic seven private objective");
+      db.addConvTurn("100:7", "assistant", "topic seven private response");
+      db.addConvTurn("100:8", "user", "topic eight must remain isolated");
+      db.addConvTurn("100:8", "assistant", "topic eight private response");
+      db.setSession("100:7", "claude", "session-topic-7");
+      db.setSession("100:8", "claude", "session-topic-8");
+      db.addMemory({
+        id: "instance-global-memory",
+        type: "decision",
+        scope: "project",
+        text: "Project memory remains instance-global across Telegram topics.",
+      });
+      const memoryCountBefore = db.getMemoryCount();
+      let capturedPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompt = String(args.at(-1));
+        return compactJson("Current objective:\n- topic seven only\n\nDurable facts:\n- none\n\nOpen state:\n- none");
+      });
+      const engine = new BridgeEngine({
+        kind: "claude",
+        surfaceIdentity: "telegram:interactive",
+        botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
+        allowedUserIds: new Set(["42"]),
+        executionMode: "safe",
+        asyncEnabled: false,
+        pollIntervalMs: 1000,
+      }, db, client, { runCli });
+
+      await engine.handleMessages([makePrivateTopicMessage("/compact", 7)]);
+
+      expect(capturedPrompt).toContain("topic seven private objective");
+      expect(capturedPrompt).not.toContain("topic eight must remain isolated");
+      expect(db.getRecentConvTurns("100:7", 10)).toEqual([]);
+      expect(db.getRecentConvTurns("100:8", 10).map((turn) => turn.text)).toEqual([
+        "topic eight must remain isolated", "topic eight private response",
+      ]);
+      expect(db.getLatestConvSummary("100:7")?.summary_md).toContain("topic seven only");
+      expect(db.getLatestConvSummary("100:8")).toBeNull();
+      expect(db.getSession("100:7", "claude")).toBeNull();
+      expect(db.getSession("100:8", "claude")).toBe("session-topic-8");
+      expect(db.getMemoryCount()).toBe(memoryCountBefore);
+      expect(db.searchMemories("instance-global Telegram topics")).toHaveLength(1);
+    });
+
     it("compact handler calls runCli for LLM summary and stores result", async () => {
       const { BridgeEngine } = await import("../src/engine.js");
       const client = makeMockClient();

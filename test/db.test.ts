@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { openDb, BridgeDb } from "../src/db.js";
 import Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -77,15 +77,18 @@ describe("BridgeDb execution lock", () => {
     expect(db.tryLock("telegram:codex", "chat1")).toBe(false);
   });
 
-  it("opening another service owner does not clear a live lock", () => {
+  it("keeps a live lock when another run of the same service opens the database", () => {
     const dir = mkdtempSync(join(tmpdir(), "agent-bridge-lock-owner-"));
     const dbPath = join(dir, "bridge.sqlite");
     try {
-      const first = openDb(dbPath, { lockOwner: "service:codex" });
+      const first = openDb(dbPath, { serviceId: "telegram:interactive", runId: "run-a" });
       expect(first.tryLock("telegram:codex", "chat1")).toBe(true);
 
-      const second = openDb(dbPath, { lockOwner: "service:claude" });
+      const second = openDb(dbPath, { serviceId: "telegram:interactive", runId: "run-b" });
       expect(second.tryLock("telegram:codex", "chat1")).toBe(false);
+      expect(first.raw.prepare(
+        "SELECT service_id, run_id FROM execution_locks WHERE surface = ? AND chat_key = ?"
+      ).get("telegram:codex", "chat1")).toEqual({ service_id: "telegram:interactive", run_id: "run-a" });
 
       second.close();
       first.close();
@@ -94,22 +97,50 @@ describe("BridgeDb execution lock", () => {
     }
   });
 
-  it("recovers only locks owned by the restarting service", () => {
+  it("does not let run B unlock run A's lock", () => {
     const dir = mkdtempSync(join(tmpdir(), "agent-bridge-lock-recovery-"));
     const dbPath = join(dir, "bridge.sqlite");
     try {
-      const first = openDb(dbPath, { lockOwner: "service:codex" });
+      const first = openDb(dbPath, { serviceId: "telegram:interactive", runId: "run-a" });
       expect(first.tryLock("telegram:codex", "chat1")).toBe(true);
 
-      const other = openDb(dbPath, { lockOwner: "service:claude" });
-      expect(other.tryLock("telegram:claude", "chat1")).toBe(true);
+      const second = openDb(dbPath, { serviceId: "telegram:interactive", runId: "run-b" });
+      second.unlock("telegram:codex", "chat1");
+      expect(second.tryLock("telegram:codex", "chat1")).toBe(false);
+      expect(first.raw.prepare(
+        "SELECT run_id FROM execution_locks WHERE surface = ? AND chat_key = ?"
+      ).get("telegram:codex", "chat1")).toEqual({ run_id: "run-a" });
 
-      const restarted = openDb(dbPath, { lockOwner: "service:codex" });
-      expect(restarted.tryLock("telegram:codex", "chat1")).toBe(true);
-      expect(restarted.tryLock("telegram:claude", "chat1")).toBe(false);
+      second.close();
+      first.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
-      restarted.close();
-      other.close();
+  it("allows atomic takeover only after the prior run's lease is stale", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agent-bridge-lock-lease-"));
+    const dbPath = join(dir, "bridge.sqlite");
+    let now = 1_000;
+    const clock = () => now;
+    try {
+      const first = openDb(dbPath, {
+        serviceId: "telegram:interactive", runId: "run-a", lockLeaseMs: 500, clock,
+      });
+      expect(first.tryLock("telegram:interactive", "chat1")).toBe(true);
+
+      const second = openDb(dbPath, {
+        serviceId: "telegram:interactive", runId: "run-b", lockLeaseMs: 500, clock,
+      });
+      expect(second.tryLock("telegram:interactive", "chat1")).toBe(false);
+
+      now += 501;
+      expect(second.tryLock("telegram:interactive", "chat1")).toBe(true);
+      expect(second.raw.prepare(
+        "SELECT run_id FROM execution_locks WHERE surface = ? AND chat_key = ?"
+      ).get("telegram:interactive", "chat1")).toEqual({ run_id: "run-b" });
+
+      second.close();
       first.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -138,8 +169,10 @@ describe("BridgeDb execution-lane migration", () => {
       `);
       legacy.close();
 
-      const migrated = openDb(dbPath, { lockOwner: "migration-test" });
-      expect(migrated.pendingMsgCount("legacy", "chat1")).toBe(1);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const migrated = openDb(dbPath, { serviceId: "migration-test", runId: "migration-run" });
+      expect(migrated.getQuarantinedPendingMessageCount()).toBe(1);
+      expect(warn).toHaveBeenCalledWith("[db] quarantined 1 legacy pending message(s)");
       expect(migrated.pendingMsgCount("telegram:codex", "chat1")).toBe(0);
       migrated.enqueueMsg("telegram:codex", "chat1", {
         prompt: "owned prompt", chatId: 1, chatType: "private",

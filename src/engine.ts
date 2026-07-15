@@ -88,6 +88,7 @@ export interface BridgeEngineHooks {
 export interface PendingMessage {
   id: number; chatKey: string; prompt: string; chatId: number; threadId: number | null; chatType: string; userId: number | null; attachments: string[];
   laneHandle?: ExecutionLaneHandle;
+  laneLifecycleManaged?: boolean;
 }
 
 export type ExecutionOutcome = "committed" | "queued" | "failed" | "fenced";
@@ -659,6 +660,8 @@ export class BridgeEngine {
     attachments: string[],
     attachmentLocalPath: string | null = null,
     laneHandle: ExecutionLaneHandle | null = null,
+    drainOnCompletion = true,
+    manageLifecycle = true,
   ): Promise<ExecutionOutcome> {
     // Apply onBeforeExecute hook
     let prompt = rawPrompt;
@@ -702,8 +705,8 @@ export class BridgeEngine {
     this._assertLaneOwned(laneHandle);
 
     const executionLane = this._executionLane(chatKey);
-    const lifecycleToken = beginExecutionLifecycle(executionLane, laneHandle);
-    const lockHeartbeat = setInterval(() => {
+    const lifecycleToken = manageLifecycle ? beginExecutionLifecycle(executionLane, laneHandle) : null;
+    const lockHeartbeat = manageLifecycle ? setInterval(() => {
       try {
         if (!this.db.heartbeatLock(laneHandle!)) {
           console.error(`[${this.kind}] execution lock lease lost surface=${this.surfaceIdentity} chatKey=${chatKey}`);
@@ -713,8 +716,8 @@ export class BridgeEngine {
       } catch (error) {
         console.error(`[${this.kind}] execution lock heartbeat failed surface=${this.surfaceIdentity} chatKey=${chatKey}`, error);
       }
-    }, this.db.lockHeartbeatMs);
-    lockHeartbeat.unref();
+    }, this.db.lockHeartbeatMs) : null;
+    lockHeartbeat?.unref();
 
     try {
       if (useAsync) {
@@ -771,11 +774,11 @@ export class BridgeEngine {
       }
       return "failed";
     } finally {
-      clearInterval(lockHeartbeat);
+      if (lockHeartbeat) clearInterval(lockHeartbeat);
       try {
-        if (!this.resettingChats.has(executionLane)) await this._drainQueueAndUnlock(laneHandle!);
+        if (drainOnCompletion && !this.resettingChats.has(executionLane)) await this._drainQueueAndUnlock(laneHandle!, undefined, 0, true);
       } finally {
-        completeExecutionLifecycle(executionLane, lifecycleToken);
+        if (lifecycleToken) completeExecutionLifecycle(executionLane, lifecycleToken);
       }
     }
   }
@@ -817,7 +820,7 @@ export class BridgeEngine {
     return { runId, eventContext, collect, finalize, events };
   }
 
-  private async _drainQueueAndUnlock(handle: ExecutionLaneHandle, initial?: PendingMessage, recoveryAttempt = 0): Promise<void> {
+  private async _drainQueueAndUnlock(handle: ExecutionLaneHandle, initial?: PendingMessage, recoveryAttempt = 0, lifecycleAlreadyManaged = false): Promise<void> {
     const chatKey = handle.chatKey;
     const scheduled = this.queueRecoveryTimers.get(chatKey);
     if (scheduled) {
@@ -836,8 +839,8 @@ export class BridgeEngine {
       try {
         await this.sendText(next.chatId, { text: "▶️ Processing your queued message...", message_thread_id: next.threadId ?? undefined });
         const outcome = this.queuedMessageHandler
-          ? await this.queuedMessageHandler({ ...next, laneHandle: handle })
-          : await this.executeClaimedMessage({ ...next, laneHandle: handle });
+          ? await this.queuedMessageHandler({ ...next, laneHandle: handle, laneLifecycleManaged: lifecycleAlreadyManaged })
+          : await this.executeClaimedMessage({ ...next, laneHandle: handle, laneLifecycleManaged: lifecycleAlreadyManaged });
         if (outcome === "fenced") return;
         if (outcome !== "committed") {
           this.db.releasePendingClaim(handle, next.id);
@@ -875,7 +878,11 @@ export class BridgeEngine {
     if (!next.laneHandle) throw new Error("claimed message requires its acquisition handle");
     const chatKey = next.chatKey;
     const hookCtx: HookContext = { chatId: next.chatId, chatKey, threadId: next.threadId ?? undefined, userId: next.userId ?? undefined };
-    return this._executeAndSend(next.prompt, next.chatId, chatKey, next.chatType, next.threadId ?? undefined, next.userId ?? undefined, hookCtx, next.attachments, null, next.laneHandle);
+    return this._executeAndSend(
+      next.prompt, next.chatId, chatKey, next.chatType, next.threadId ?? undefined,
+      next.userId ?? undefined, hookCtx, next.attachments, null, next.laneHandle,
+      false, !next.laneLifecycleManaged,
+    );
   }
 
   private _deleteQueuedAttachments(attachments: string[]): void {

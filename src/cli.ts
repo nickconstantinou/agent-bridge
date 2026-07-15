@@ -247,6 +247,27 @@ export function shutdownCliProcesses(): number {
   return count;
 }
 
+/** Test/process teardown variant that does not return until every tracked child exits. */
+export async function shutdownCliProcessesAndWait(): Promise<number> {
+  const children = [...new Set(
+    [...activeExecutions.values()].flatMap((active) => active.child ? [active.child] : []),
+  )];
+  const exits = children.map((child) => new Promise<void>((resolve) => {
+    const done = () => resolve();
+    child.once("close", done);
+    child.once("error", done);
+  }));
+  for (const child of children) {
+    abortedChildren.add(child);
+    killWithGrace(child, 100);
+  }
+  await Promise.all(exits);
+  for (const [chatId, active] of activeExecutions) {
+    if (!active.child && !active.lifecycleToken) activeExecutions.delete(chatId);
+  }
+  return children.length;
+}
+
 /**
  * Builds the CLI invocation for a bot.
  */

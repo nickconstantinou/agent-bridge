@@ -207,6 +207,42 @@ describe("execution lane correctness", () => {
     db.close(); rmSync(path, { force: true }); rmSync(attachment, { force: true });
   });
 
+  it("persists a downloaded busy-lane attachment and delivers it after the lane becomes free", async () => {
+    const path = join(tmpdir(), `busy-attachment-${Date.now()}-${Math.random()}.sqlite`);
+    const db = openDb(path);
+    db.setSetting("ctx_suppress:100:7", "1");
+    expect(db.tryLock("telegram:interactive", "100:7")).toBe(true);
+    const c = client();
+    c.getFilePath = vi.fn().mockResolvedValue("documents/queued.txt");
+    c.downloadFile = vi.fn().mockImplementation(async (_remote: string, destination: string) => {
+      writeFileSync(destination, "queued document payload");
+    });
+    let cliInput = "";
+    const runCli = vi.fn().mockImplementation(async (_command: string, args: string[], _cwd: string, cliOptions: any) => {
+      cliInput = `${args.join(" ")} ${cliOptions?.stdin ?? ""}`;
+      return "processed attachment";
+    });
+    const engine = new BridgeEngine(options("claude"), db, c, { runCli });
+    const attached = message("inspect this document", 7);
+    attached.document = { file_id: "queued-file", file_name: "queued.txt", mime_type: "text/plain", file_size: 23 };
+
+    await engine.handleMessages([attached]);
+    const queued = db.dequeueMsgs("telegram:interactive", "100:7");
+    expect(queued).toHaveLength(1);
+    expect(queued[0].attachments).toHaveLength(1);
+    const queuedPath = queued[0].attachments[0];
+    expect(existsSync(queuedPath)).toBe(true);
+    expect(runCli).not.toHaveBeenCalled();
+
+    db.unlock("telegram:interactive", "100:7");
+    await engine.recoverPendingQueues();
+    expect(runCli).toHaveBeenCalledOnce();
+    expect(cliInput).toContain(Buffer.from("queued document payload").toString("base64"));
+    expect(db.pendingMsgCount("telegram:interactive", "100:7")).toBe(0);
+    expect(existsSync(queuedPath)).toBe(false);
+    db.close(); rmSync(path, { force: true });
+  });
+
   it("retries the oldest row before later arrivals after a queue handoff failure", async () => {
     const path = join(tmpdir(), `handoff-retry-${Date.now()}-${Math.random()}.sqlite`);
     const db = openDb(path);

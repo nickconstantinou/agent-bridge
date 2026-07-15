@@ -83,7 +83,7 @@ export interface BridgeEngineHooks {
 export interface BridgeEngineOptions {
   kind: string;
   /** Stable delivery surface. Providers within one interactive bot share this value. */
-  surfaceIdentity?: string;
+  surfaceIdentity: string;
   /** CLI kind to invoke for non-agent engines such as health. Defaults to claude. */
   executionKind?: BotKind;
   botConfig: { command: string; modelPreference: string[]; token?: string };
@@ -232,9 +232,10 @@ export class BridgeEngine {
     client: MessagingPlatform,
     exec: Partial<ExecFns> = {},
   ) {
+    if (!opts.surfaceIdentity?.trim()) throw new Error("BridgeEngine surfaceIdentity is required");
     this.opts = opts;
     this.kind = opts.kind;
-    this.surfaceIdentity = opts.surfaceIdentity ?? "legacy";
+    this.surfaceIdentity = opts.surfaceIdentity;
     this.db = db;
     this.client = client;
     this.hooks = opts.hooks ?? {};
@@ -612,6 +613,20 @@ export class BridgeEngine {
       return;
     }
 
+    const executionLane = this._executionLane(chatKey);
+    const lockHeartbeat = setInterval(() => {
+      try {
+        if (!this.db.heartbeatLock(this.surfaceIdentity, chatKey)) {
+          console.error(`[${this.kind}] execution lock lease lost surface=${this.surfaceIdentity} chatKey=${chatKey}`);
+          this.abortedChats.add(executionLane);
+          abortCliProcess(executionLane);
+        }
+      } catch (error) {
+        console.error(`[${this.kind}] execution lock heartbeat failed surface=${this.surfaceIdentity} chatKey=${chatKey}`, error);
+      }
+    }, this.db.lockHeartbeatMs);
+    lockHeartbeat.unref();
+
     try {
       if (useAsync) {
         const { runId, eventContext, collect, finalize } = this._createEventContext(chatId, threadId);
@@ -655,6 +670,7 @@ export class BridgeEngine {
         });
       }
     } finally {
+      clearInterval(lockHeartbeat);
       if (attachmentLocalPath) { try { unlinkSync(attachmentLocalPath); } catch {} }
       this.db.unlock(this.surfaceIdentity, chatKey);
       this._drainQueue(chatKey);

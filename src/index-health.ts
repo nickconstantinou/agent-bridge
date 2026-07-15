@@ -75,7 +75,7 @@ const cliBotConfig = {
 const dbPath = process.env.HEALTH_DB_PATH || ".data-health/health.sqlite";
 
 // ── Infrastructure ───────────────────────────────────────────────────────────
-const bridgeDb = openDb(dbPath, { lockOwner: "telegram:health" });
+const bridgeDb = openDb(dbPath, { serviceId: "telegram:health" });
 const rawDb = bridgeDb.raw;
 const client = new TelegramClient(token, fetch, resolveTimeoutsForKind(cliBot).fetchTimeoutMs);
 

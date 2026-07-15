@@ -83,7 +83,7 @@ const soulContext = loadSoulContext({
 });
 if (soulContext) console.log(`[discord-interactive] loaded SOUL.md context (${soulContext.length} chars)`);
 
-const db = openDb(dbPath, { lockOwner: "discord:interactive" });
+const db = openDb(dbPath, { serviceId: "discord:interactive" });
 const advisorBroker = await startConfiguredAdvisorBroker({ db, bots: config.bots, runCli });
 
 // ── Fallback chain ────────────────────────────────────────────────────────────

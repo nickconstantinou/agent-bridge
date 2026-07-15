@@ -88,7 +88,7 @@ const executionMode = (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") 
 const asyncEnabled = process.env.BRIDGE_ASYNC_ENABLED !== "false";
 const advisorConfig = parseAdvisorConfig(process.env);
 
-const db = openDb(dbPath, { lockOwner: "telegram:worker" });
+const db = openDb(dbPath, { serviceId: "telegram:worker" });
 const client = new TelegramClient(token, fetch, 45_000);
 
 function withThread<T extends Record<string, unknown>>(body: T, threadId?: number): T & { message_thread_id?: number } {

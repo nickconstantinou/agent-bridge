@@ -21,6 +21,7 @@ import type { BridgeConfig, BotConfig, BotKind } from "./types.js";
 import { loadBotsConfig, validateTokenUniqueness, resolveExecutionMode } from "./config.js";
 import { runCli } from "./cli.js";
 import { startConfiguredAdvisorBroker } from "./advisorBroker.js";
+import { standaloneServiceId } from "./executionIdentity.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env",
@@ -67,11 +68,7 @@ const soulContext = loadSoulContext({
 });
 if (soulContext) console.log(`[bridge] loaded SOUL.md context (${soulContext.length} chars)`);
 
-const enabledBotKinds = (Object.entries(config.bots) as [BotKind, BotConfig][])
-  .filter(([, bot]) => bot.token)
-  .map(([kind]) => kind)
-  .sort();
-const db = openDb(config.dbPath, { lockOwner: `telegram:standalone:${enabledBotKinds.join(",")}` });
+const db = openDb(config.dbPath, { serviceId: standaloneServiceId() });
 const advisorBroker = await startConfiguredAdvisorBroker({ db, bots: config.bots, runCli });
 
 console.log("[bridge] starting bots...");

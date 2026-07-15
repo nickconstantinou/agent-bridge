@@ -233,11 +233,11 @@ Manual `/cli` switching applies the same target-session-clear + handoff-mark (`a
 
 ### 4.6 Concurrency Lock & Message Queue
 
-`db.tryLock(surface, chatKey)` atomically inserts into `execution_locks`, whose primary key is `(surface, chat_key)`. A conversation scope is `chatId:threadId` whenever Telegram supplies a thread ID, including private-chat topics. Standalone bots use distinct surfaces; all providers behind one interactive bot share its surface. Lock release is owner-checked and occurs in a `finally` block which also calls `drainQueue(chatKey)`.
+`db.tryLock(surface, chatKey)` atomically inserts into `execution_locks`, whose primary key is `(surface, chat_key)`. A conversation scope is `chatId:threadId` whenever Telegram supplies a thread ID, including private-chat topics. Standalone bots use distinct surfaces; all providers behind one interactive bot share its surface. Lock heartbeat and release compare the unique acquiring `run_id`; release occurs in a `finally` block which also calls `drainQueue(chatKey)`.
 
 If a lane is busy, the incoming message is queued to `pending_messages` under the same explicit `(surface, chat_key)` ownership (max `MAX_QUEUE_DEPTH = 5`), surviving restarts. Legacy rows created before the surface migration are retained under the quarantined `legacy` surface and cannot drain into a live bot. The user receives a position notice. When execution finishes, `drainQueue` pops only that lane's next item via `setImmediate` and calls `handleMessages` with a synthetic message. If the queue is full, the user receives "⏳ Queue is full."
 
-Each service opens SQLite with a stable lock-owner identity. Startup recovery deletes only locks owned by that restarting service; opening Codex, Claude, worker, health, interactive, or Discord storage never clears another live service's lock.
+Each service has a configuration-independent `service_id` and each process generation gets a unique `run_id`. Opening a second process never clears live locks. Engines renew their bounded lease while executing; a competing run may atomically take over only after `lease_expires_at`, proving the prior lock stale. The standalone service ID remains `telegram:standalone` when its enabled provider set changes.
 
 ### 4.7 Rate Limit Handling
 
@@ -300,8 +300,10 @@ interface BridgeConfig {
 CREATE TABLE execution_locks (
   surface TEXT NOT NULL,
   chat_key TEXT NOT NULL,
-  owner_id TEXT NOT NULL,
+  service_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
   acquired_at TEXT NOT NULL,
+  lease_expires_at TEXT NOT NULL,
   PRIMARY KEY (surface, chat_key)
 );
 ```

@@ -98,7 +98,7 @@ export function handleCommand(
     db,
     chatId,
     config,
-    surfaceIdentity = "legacy",
+    surfaceIdentity = "diagnostic",
   }: {
     db: BridgeDb;
     chatId: string;

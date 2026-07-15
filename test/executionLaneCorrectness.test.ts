@@ -34,7 +34,7 @@ describe("execution lane correctness", () => {
     expect(db.claimNextPendingMsg("telegram:interactive", "100:7")).toBeNull();
     expect(db.pendingMsgCount("telegram:interactive", "100:7")).toBe(2);
     expect(db.unlockIfQueueEmpty("telegram:interactive", "100:7")).toBe(false);
-    expect(db.completePendingMsg(first!.id)).toBe(true);
+    expect(db.completePendingMsg("telegram:interactive", "100:7", first!.id)).toBe(true);
     expect(db.claimNextPendingMsg("telegram:interactive", "100:7")?.prompt).toBe("newest");
     db.close();
   });
@@ -49,7 +49,7 @@ describe("execution lane correctness", () => {
     const claimed = runA.claimNextPendingMsg("telegram:interactive", "100:7");
     expect(claimed?.prompt).toBe("durable");
     const earlyRunB = openDb(path, { serviceId: "telegram:interactive", runId: "run-b", lockLeaseMs: 500, clock });
-    expect(earlyRunB.completePendingMsg(claimed!.id)).toBe(false);
+    expect(earlyRunB.completePendingMsg("telegram:interactive", "100:7", claimed!.id)).toBe(false);
     earlyRunB.close(); runA.close(); now += 501;
     const runB = openDb(path, { serviceId: "telegram:interactive", runId: "run-b", lockLeaseMs: 500, clock });
     expect(runB.tryLock("telegram:interactive", "100:7")).toBe(true);
@@ -157,7 +157,7 @@ describe("execution lane correctness", () => {
     const claimed = runA.claimNextPendingMsg("telegram:interactive", "100:7")!;
     now += 101;
     expect(runB.tryLock("telegram:interactive", "100:7")).toBe(true);
-    expect(runA.completePendingMsg(claimed.id)).toBe(false);
+    expect(runA.completePendingMsg("telegram:interactive", "100:7", claimed.id)).toBe(false);
     expect(runB.pendingMsgCount("telegram:interactive", "100:7")).toBe(1);
     expect(runB.claimNextPendingMsg("telegram:interactive", "100:7")?.prompt).toBe("must survive");
     runA.close(); runB.close(); rmSync(path, { force: true });
@@ -188,14 +188,15 @@ describe("execution lane correctness", () => {
     const attachment = join(tmpdir(), `queued-attachment-${Date.now()}.txt`);
     writeFileSync(attachment, "durable attachment");
     const db = openDb(path);
+    db.setSetting("ctx_suppress:100:7", "1");
     db.enqueueMsg("telegram:interactive", "100:7", {
       prompt: "oldest after restart", chatId: 100, threadId: 7, chatType: "private", attachments: [attachment],
     });
     const seen: Array<{ prompt: string; hasAttachment: boolean }> = [];
     const engine = new BridgeEngine(options("claude"), db, client(), {
-      runCli: vi.fn().mockImplementation(async (_command: string, args: string[]) => {
-        const prompt = String(args.at(-1));
-        seen.push({ prompt, hasAttachment: prompt.includes(attachment) });
+      runCli: vi.fn().mockImplementation(async (_command: string, args: string[], _cwd: string, cliOptions: any) => {
+        const prompt = `${args.join(" ")} ${cliOptions?.stdin ?? ""}`;
+        seen.push({ prompt, hasAttachment: prompt.includes("ZHVyYWJsZSBhdHRhY2htZW50") });
         return "ok";
       }),
     });
@@ -209,6 +210,7 @@ describe("execution lane correctness", () => {
   it("retries the oldest row before later arrivals after a queue handoff failure", async () => {
     const path = join(tmpdir(), `handoff-retry-${Date.now()}-${Math.random()}.sqlite`);
     const db = openDb(path);
+    db.setSetting("ctx_suppress:100:7", "1");
     db.enqueueMsg("telegram:interactive", "100:7", { prompt: "oldest", chatId: 100, threadId: 7, chatType: "private" });
     const order: string[] = [];
     let failOnce = true;
@@ -216,7 +218,7 @@ describe("execution lane correctness", () => {
     engine = new BridgeEngine(options("claude", {
       onQueuedMessage: async (queued: any) => {
         if (failOnce) { failOnce = false; throw new Error("router unavailable"); }
-        await engine.executeClaimedMessage(queued);
+        return engine.executeClaimedMessage(queued);
       },
     }), db, client(), {
       runCli: vi.fn().mockImplementation(async (_command: string, args: string[]) => {
@@ -229,6 +231,19 @@ describe("execution lane correctness", () => {
     expect(order).toEqual([]);
     await engine.handleMessages([message("arrival two", 7)]);
     expect(order).toEqual(["oldest", "one", "two"]);
+    db.close(); rmSync(path, { force: true });
+  });
+
+  it("automatically resumes durable queued work on startup without a new message", async () => {
+    const path = join(tmpdir(), `startup-recovery-${Date.now()}-${Math.random()}.sqlite`);
+    const db = openDb(path);
+    db.setSetting("ctx_suppress:100:7", "1");
+    db.enqueueMsg("telegram:interactive", "100:7", { prompt: "recover on startup", chatId: 100, threadId: 7, chatType: "private" });
+    const runCli = vi.fn().mockResolvedValue("recovered");
+    const engine = new BridgeEngine(options("claude"), db, client(), { runCli });
+    await engine.recoverPendingQueues();
+    expect(runCli).toHaveBeenCalledOnce();
+    expect(db.pendingMsgCount("telegram:interactive", "100:7")).toBe(0);
     db.close(); rmSync(path, { force: true });
   });
 

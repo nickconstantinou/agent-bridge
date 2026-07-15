@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { readFileSync } from "node:fs";
-import { runCli, runCliAsync, abortCliProcess, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage, buildCliInvocation, buildSafeChildEnv, buildAdvisorChildEnv, resolveKimchiSessionId, normalizeCliArgs } from "../src/cli.js";
+import { runCli, runCliAsync, abortCliProcess, abortCliProcessAndWait, shutdownCliProcesses, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage, buildCliInvocation, buildSafeChildEnv, buildAdvisorChildEnv, resolveKimchiSessionId, normalizeCliArgs } from "../src/cli.js";
 import { isBridgeCommand, handleCommand } from "../src/commands.js";
 import { openDb } from "../src/db.js";
 import type { BridgeConfig } from "../src/types.js";
@@ -169,6 +169,18 @@ describe("abortCliProcess", () => {
   it("returns false when no process is registered for the chatId", () => {
     expect(abortCliProcess("chat-does-not-exist")).toBe(false);
   });
+
+  it("waits for child exit before resolving termination", async () => {
+    const chatId = "test-abort-waits-for-exit";
+    const childRun = runCli("bash", ["-lc", "trap '' TERM; sleep 10"], process.cwd(), { chatId });
+    await new Promise((r) => setTimeout(r, 50));
+    let settled = false;
+    const abort = abortCliProcessAndWait(chatId).then((value) => { settled = true; return value; });
+    await new Promise((r) => setTimeout(r, 100));
+    expect(settled).toBe(false);
+    await expect(abort).resolves.toBe(true);
+    await expect(childRun).resolves.toEqual(expect.any(String));
+  }, 8_000);
 
   it("resolves cleanly when process is killed via abortCliProcess (runCliAsync)", async () => {
     const chatId = "test-abort-async";

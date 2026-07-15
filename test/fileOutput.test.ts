@@ -14,6 +14,19 @@ async function dirExists(p: string): Promise<boolean> {
 }
 
 describe("prepareOutputDir", () => {
+  it("uses a unique run-scoped directory so concurrent runs cannot wipe each other", async () => {
+    const first = await prepareOutputDir("100:7", "claude", "run-a");
+    await writeFile(join(first, "first.txt"), "keep");
+    const second = await prepareOutputDir("100:7", "claude", "run-b");
+    try {
+      expect(first).not.toBe(second);
+      expect(await readdir(first)).toEqual(["first.txt"]);
+    } finally {
+      await cleanOutputDir(first);
+      await cleanOutputDir(second);
+    }
+  });
+
   it("creates /tmp/bridge-out/<kind>-<chatId>/ and returns the path", async () => {
     const dir = await prepareOutputDir(99999, "claude");
     try {

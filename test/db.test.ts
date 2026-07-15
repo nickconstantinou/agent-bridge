@@ -117,6 +117,41 @@ describe("BridgeDb execution lock", () => {
   });
 });
 
+describe("BridgeDb execution-lane migration", () => {
+  it("quarantines legacy pending rows while enabling surface-owned queues", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agent-bridge-queue-migration-"));
+    const dbPath = join(dir, "bridge.sqlite");
+    try {
+      const legacy = new Database(dbPath);
+      legacy.exec(`
+        CREATE TABLE pending_messages (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          chat_key TEXT NOT NULL,
+          prompt TEXT NOT NULL,
+          chat_id INTEGER NOT NULL,
+          thread_id INTEGER,
+          chat_type TEXT NOT NULL DEFAULT 'private',
+          user_id INTEGER,
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO pending_messages (chat_key, prompt, chat_id) VALUES ('chat1', 'legacy prompt', 1);
+      `);
+      legacy.close();
+
+      const migrated = openDb(dbPath, { lockOwner: "migration-test" });
+      expect(migrated.pendingMsgCount("legacy", "chat1")).toBe(1);
+      expect(migrated.pendingMsgCount("telegram:codex", "chat1")).toBe(0);
+      migrated.enqueueMsg("telegram:codex", "chat1", {
+        prompt: "owned prompt", chatId: 1, chatType: "private",
+      });
+      expect(migrated.dequeueMsgs("telegram:codex", "chat1").map((msg) => msg.prompt)).toEqual(["owned prompt"]);
+      migrated.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("BridgeDb polling offset", () => {
   it("returns 0 for an unknown bot", () => {
     expect(db.getLastUpdateId("codex")).toBe(0);

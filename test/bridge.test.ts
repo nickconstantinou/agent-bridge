@@ -23,7 +23,7 @@ import {
   ensureAntigravityStateDirs,
 } from "../src/bridge.js";
 import { openDb, BridgeDb } from "../src/db.js";
-import { runCli } from "../src/cli.js";
+import { runCli, shutdownCliProcessesAndWait } from "../src/cli.js";
 import type { TelegramMessage, BridgeConfig } from "../src/types.js";
 
 describe("agent bridge MVP", () => {
@@ -367,9 +367,10 @@ describe("agent bridge MVP", () => {
         "sleep",
         ["10"],
         process.cwd(),
-        { timeoutMs: 1000, idleTimeoutMs: 100, killGraceMs: 100 },
+        { timeoutMs: 1000, idleTimeoutMs: 100, killGraceMs: 100, chatId: "bridge-idle-timeout" },
       ),
     ).rejects.toThrow(/CLI idle timeout/);
+    expect(await shutdownCliProcessesAndWait()).toBe(0);
   });
 
   it("parses codex JSONL output with item.completed agent_message", () => {

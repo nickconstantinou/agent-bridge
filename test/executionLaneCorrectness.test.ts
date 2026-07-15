@@ -24,6 +24,33 @@ function options(kind: "codex" | "claude", hooks: any = {}) {
 }
 
 describe("execution lane correctness", () => {
+  it("fences delayed work from a previous acquisition by the same process run", () => {
+    const db = openDb(":memory:", { serviceId: "telegram:interactive", runId: "same-process" });
+    const acquisitionA = db.acquireLock("telegram:interactive", "100:7");
+    expect(acquisitionA).not.toBeNull();
+    db.enqueueMsg("telegram:interactive", "100:7", { prompt: "claimed by A", chatId: 100, threadId: 7, chatType: "private" });
+    const claimedByA = db.claimNextPendingMsg(acquisitionA!);
+    expect(claimedByA?.prompt).toBe("claimed by A");
+
+    expect(db.unlock(acquisitionA!)).toBe(true);
+    const acquisitionB = db.acquireLock("telegram:interactive", "100:7");
+    expect(acquisitionB).not.toBeNull();
+    expect(acquisitionB!.acquisitionId).not.toBe(acquisitionA!.acquisitionId);
+
+    expect(() => db.runWithLockFence(acquisitionA!, () => db.setSetting("stale-commit", "bad")))
+      .toThrow("execution lock ownership lost");
+    expect(db.completePendingMsg(acquisitionA!, claimedByA!.id)).toBe(false);
+    expect(db.heartbeatLock(acquisitionA!)).toBe(false);
+    expect(db.unlock(acquisitionA!)).toBe(false);
+    expect(db.ownsLock(acquisitionB!)).toBe(true);
+
+    db.runWithLockFence(acquisitionB!, () => db.setSetting("current-commit", "good"));
+    expect(db.getSetting("stale-commit")).toBeNull();
+    expect(db.getSetting("current-commit")).toBe("good");
+    expect(db.unlock(acquisitionB!)).toBe(true);
+    db.close();
+  });
+
   it("claims FIFO queue rows only for the run that owns the lane and retains them until completion", () => {
     const db = openDb(":memory:", { serviceId: "telegram:interactive", runId: "run-a" });
     expect(db.tryLock("telegram:interactive", "100:7")).toBe(true);

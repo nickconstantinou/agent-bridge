@@ -995,6 +995,57 @@ describe("BridgeEngine", () => {
       expect(client.sendMessage.mock.calls.at(-1)?.[0].text).toBe("Recovered on second fresh retry");
     });
 
+    it.each(["sync", "async"] as const)("commits a recoverable Agy fresh-session retry exactly once in %s mode", async (mode) => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const memorySidecar = [
+        "Recovered exactly once.",
+        "<!-- agent-bridge-memory",
+        JSON.stringify([{ type: "decision", scope: "project", text: `Agy ${mode} recovery commits one memory candidate.`, confidence: 0.9 }]),
+        "-->",
+      ].join("\n");
+      let calls = 0;
+      const execute = vi.fn().mockImplementation(async () => {
+        calls += 1;
+        if (calls === 1) return "***\nPrior answer";
+        if (calls === 2) throw new Error("CORTEX_STEP_TYPE_COMMAND_STATUS: command retry/task not found");
+        return `***\n${memorySidecar}`;
+      });
+      const onAfterExecute = vi.fn();
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        {
+          surfaceIdentity: "test",
+          kind: "antigravity",
+          botConfig: { command: "agy", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: mode === "async",
+          pollIntervalMs: 1000,
+          fullConfig: makeFullConfig(dbPath),
+          hooks: { onAfterExecute },
+        },
+        db,
+        client,
+        mode === "async"
+          ? { runCliAsync: async (...args: any[]) => ({ text: await execute(...args) }) }
+          : { runCli: execute },
+      );
+
+      db.setSession("100", "antigravity", "stale-conversation");
+      await engine.handleMessages([makeMessage("first question")]);
+      const turnsBeforeRetry = db.raw.prepare("SELECT COUNT(*) AS count FROM conversation_turns WHERE chat_key = '100'").get() as { count: number };
+      const memoriesBeforeRetry = db.getMemoryCount();
+      onAfterExecute.mockClear();
+
+      await engine.handleMessages([makeMessage("second question")]);
+
+      const turnsAfterRetry = db.raw.prepare("SELECT COUNT(*) AS count FROM conversation_turns WHERE chat_key = '100'").get() as { count: number };
+      expect(turnsAfterRetry.count - turnsBeforeRetry.count).toBe(2);
+      expect(db.getMemoryCount() - memoriesBeforeRetry).toBe(1);
+      expect(onAfterExecute).toHaveBeenCalledOnce();
+      expect(client.sendMessage.mock.calls.at(-1)?.[0].text).toBe("Recovered exactly once.");
+    });
+
     it("surfaces a friendly error instead of the raw cascade error when all fresh retries fail", async () => {
       const { BridgeEngine } = await import("../src/engine.js");
 

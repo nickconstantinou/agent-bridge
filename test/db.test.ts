@@ -209,6 +209,7 @@ describe("BridgeDb execution-lane migration", () => {
       });
       expect(migrated.dequeueMsgs("telegram:codex", "chat1").map((msg) => msg.prompt)).toEqual(["owned prompt"]);
       migrated.close();
+      warn.mockRestore();
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -1128,11 +1128,11 @@ export async function runCli(command: string, args: string[], cwd: string, optio
         doResolve(stdout);
       } else if (signal) {
         if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI killed by signal ${signal}`, category: "cli" }));
-        const combined = [stderr.trim(), stdout.trim()].filter(Boolean).join("\n");
+        const combined = [stderr.trim(), stdout.slice(-2000).trim()].filter(Boolean).join("\n");
         doReject(new Error(`CLI killed by signal ${signal}: ${combined}`));
       } else if (code !== 0 && code !== null) {
         if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI exited with code ${code}`, category: "cli" }));
-        const combined = [stderr.trim(), stdout.trim()].filter(Boolean).join("\n");
+        const combined = [stderr.trim(), stdout.slice(-2000).trim()].filter(Boolean).join("\n");
         doReject(new Error(`CLI exited with code ${code}: ${combined}`));
       } else {
         if (evtCtx) emit(evtType.runCompleted({ ...evtCtx, text: stdout, sessionId: null }));

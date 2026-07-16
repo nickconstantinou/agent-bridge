@@ -194,25 +194,44 @@ describe("5. cancellation classification — no success event on abort", () => {
 });
 
 describe("6. single-shot close/error settlement under races", () => {
-  it("settles exactly once when hard timeout and natural completion race", async () => {
-    for (const runner of [runCli, runCliAsync] as const) {
-      const label = runner === runCli ? "sync" : "async";
-      const outcomes = await Promise.allSettled(
-        Array.from({ length: 5 }, (_, i) =>
-          runner(process.execPath, ["-e", "process.stdout.write('done')"], cliTestCwd, {
+  it("emits exactly one terminal lifecycle event per attempt when hard timeout and natural completion race, with no unhandled errors", async () => {
+    // Promise.allSettled always reports "fulfilled" or "rejected" no matter
+    // what happens internally — it cannot prove single settlement. Instead,
+    // capture the actual emitted BridgeEvents per attempt (via eventContext)
+    // and assert exactly one terminal event (run.completed/run.failed/
+    // run.cancelled) fires, which double-settlement or double-emit logic
+    // would violate. A short timeoutMs against a process that also exits
+    // on its own creates a real timer-vs-close race rather than a fixed
+    // artificial delay.
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandledRejection);
+
+    try {
+      for (const runner of [runCli, runCliAsync] as const) {
+        const label = runner === runCli ? "sync" : "async";
+        for (let i = 0; i < 8; i++) {
+          const events: BridgeEvent[] = [];
+          const chatId = `race-${label}-${i}`;
+          await runner(process.execPath, ["-e", "process.stdout.write('done')"], cliTestCwd, {
             timeoutMs: 1,
             killGraceMs: 25,
-            chatId: `race-${label}-${i}`,
-          }),
-        ),
-      );
-      // Every attempt must settle exactly once (Promise semantics guarantee this,
-      // but a throw from double-settlement logic inside the executor would
-      // surface here as an unexpected rejection shape or an unhandled error).
-      expect(outcomes).toHaveLength(5);
-      for (const outcome of outcomes) {
-        expect(["fulfilled", "rejected"]).toContain(outcome.status);
+            chatId,
+            eventContext: { runId: chatId, bot: "codex", chatId },
+            onEvent: (e) => events.push(e),
+          }).catch(() => "rejected");
+
+          const terminal = events.filter((e) =>
+            e.type === "run.completed" || e.type === "run.failed" || e.type === "run.cancelled",
+          );
+          expect(terminal, `${chatId} should emit exactly one terminal event, got: ${terminal.map((e) => e.type).join(",")}`).toHaveLength(1);
+        }
       }
+      // Give any stray timers/callbacks a tick to surface before asserting.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandledRejection);
     }
   }, 15_000);
 });

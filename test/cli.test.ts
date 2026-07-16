@@ -362,15 +362,21 @@ describe("cli.ts signal handler hygiene", () => {
     expect(src).not.toMatch(/process\.once\(["']SIGINT["']/);
   });
 
-  it("killWithGrace schedules SIGKILL and clears it via child close handler in the shared supervisor", () => {
+  it("killChildTree schedules a liveness-probed SIGKILL escalation in the shared supervisor", () => {
     // Issue #135 Phase 2: process-lifecycle ownership moved to
     // src/cliSupervisor.ts. cli.ts must not carry its own duplicate.
+    //
+    // CTO review blocker 2: escalation must NOT be cancelled merely because
+    // the direct child's "close" event fired — a TERM-resistant descendant in
+    // the same process group could still be alive. Escalation instead probes
+    // group liveness (process.kill(-pid, 0)) at the scheduled time.
     const supervisorSrc = readFileSync("src/cliSupervisor.ts", "utf-8");
-    expect(supervisorSrc).toContain("killWithGrace");
-    expect(supervisorSrc).toMatch(/child\.once\(["']close["'][^}]*clearTimeout/s);
+    expect(supervisorSrc).toContain("function killChildTree");
+    expect(supervisorSrc).toMatch(/setTimeout\(\(\) => \{[^}]*process\.kill\(-pid, 0\)/s);
+    expect(supervisorSrc).not.toMatch(/child\.once\(["']close["'][^}]*clearTimeout/s);
 
     const cliSrc = readFileSync("src/cli.ts", "utf-8");
-    expect(cliSrc).not.toContain("function killWithGrace");
+    expect(cliSrc).not.toContain("function killChildTree");
   });
 });
 

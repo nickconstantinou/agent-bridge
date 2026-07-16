@@ -335,3 +335,63 @@ describe("11. adapter-specific onProgress behaviour", () => {
     expect(onProgress).toHaveBeenCalled();
   });
 });
+
+describe("12. abort and shutdown terminate the full process tree", () => {
+  it("abortCliProcessAndWait kills grandchild processes, not just the direct child", async () => {
+    const pidFile = join(cliTestCwd, "abort-grandchild.pid");
+    const started = join(cliTestCwd, "abort-grandchild-started");
+    const p = runCliAsync(
+      "bash",
+      ["-c", `echo started > ${started}; sleep 30 & echo $! > ${pidFile}; wait`],
+      cliTestCwd,
+      { chatId: "abort-tree", killGraceMs: 150 },
+    );
+    await waitForFile(started);
+    await waitForFile(pidFile);
+
+    await expect(abortCliProcessAndWait("abort-tree")).resolves.toBe(true);
+    await p.catch(() => "rejected");
+    await new Promise((r) => setTimeout(r, 400));
+
+    const grandchildPid = parseInt(readFileSync(pidFile, "utf8").trim(), 10);
+    let alive = true;
+    try {
+      process.kill(grandchildPid, 0);
+    } catch {
+      alive = false;
+    }
+    if (alive) {
+      try { process.kill(grandchildPid, "SIGKILL"); } catch { /* cleanup */ }
+    }
+    expect(alive, "grandchild should be dead after abortCliProcessAndWait").toBe(false);
+  }, 8_000);
+
+  it("shutdownCliProcessesAndWait kills grandchild processes, not just the direct child", async () => {
+    const pidFile = join(cliTestCwd, "shutdown-grandchild.pid");
+    const started = join(cliTestCwd, "shutdown-grandchild-started");
+    const p = runCli(
+      "bash",
+      ["-c", `echo started > ${started}; sleep 30 & echo $! > ${pidFile}; wait`],
+      cliTestCwd,
+      { chatId: "shutdown-tree", killGraceMs: 150 },
+    );
+    await waitForFile(started);
+    await waitForFile(pidFile);
+
+    await shutdownCliProcessesAndWait();
+    await p.catch(() => "rejected");
+    await new Promise((r) => setTimeout(r, 400));
+
+    const grandchildPid = parseInt(readFileSync(pidFile, "utf8").trim(), 10);
+    let alive = true;
+    try {
+      process.kill(grandchildPid, 0);
+    } catch {
+      alive = false;
+    }
+    if (alive) {
+      try { process.kill(grandchildPid, "SIGKILL"); } catch { /* cleanup */ }
+    }
+    expect(alive, "grandchild should be dead after shutdownCliProcessesAndWait").toBe(false);
+  }, 10_000);
+});

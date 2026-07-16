@@ -67,21 +67,37 @@ function buildChildEnv(extraEnv?: Record<string, string>, advisorChild = false):
 const KILL_GRACE_MS = 5_000;
 const ANTIGRAVITY_STALLED_PLANNER_MARKER = "PlannerResponse without ModifiedResponse encountered";
 
-function killWithGrace(child: ChildProcess, graceMs: number = KILL_GRACE_MS): void {
-  try { child.kill("SIGTERM"); } catch { /* ignore */ }
-  const t = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* ignore */ } }, graceMs);
-  child.once("close", () => clearTimeout(t));
+/**
+ * Sends SIGTERM to the full process group (child spawned with detached:true
+ * is the group leader) and escalates to SIGKILL after graceMs — unless a
+ * liveness probe at escalation time shows nothing left in the group.
+ *
+ * Escalation deliberately does NOT cancel on the direct child's "close"
+ * event: the group leader can exit (and fire "close") while a TERM-resistant
+ * descendant in the same process group is still alive and still needs the
+ * SIGKILL. Falls back to signalling the direct child only when no pid is
+ * available (e.g. spawn failed before a pid was assigned).
+ */
+function killChildTree(child: ChildProcess, graceMs: number = KILL_GRACE_MS): void {
+  const pid = child.pid;
+  const signal = (sig: NodeJS.Signals) => {
+    if (pid) {
+      try { process.kill(-pid, sig); return; } catch { /* group may already be gone; fall through */ }
+    }
+    try { child.kill(sig); } catch { /* ignore */ }
+  };
+  signal("SIGTERM");
+  setTimeout(() => {
+    if (pid) {
+      try { process.kill(-pid, 0); } catch { return; } // ESRCH: group already empty, nothing to escalate
+    }
+    signal("SIGKILL");
+  }, graceMs);
 }
 
-function killChild(child: ChildProcess): void {
+function killChild(child: ChildProcess, graceMs: number = KILL_GRACE_MS): void {
   abortedChildren.add(child);
-  killWithGrace(child);
-}
-
-function killProcessTree(child: ChildProcess, pid: number, graceMs: number = KILL_GRACE_MS): void {
-  try { process.kill(-pid, "SIGTERM"); } catch { /* ignore — process may have already exited */ }
-  const t = setTimeout(() => { try { process.kill(-pid, "SIGKILL"); } catch { /* ignore */ } }, graceMs);
-  child.once("close", () => clearTimeout(t));
+  killChildTree(child, graceMs);
 }
 
 function getAntigravityStalledPlannerTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
@@ -214,7 +230,7 @@ export async function shutdownCliProcessesAndWait(): Promise<number> {
   }));
   for (const child of children) {
     abortedChildren.add(child);
-    killWithGrace(child, 100);
+    killChildTree(child, 100);
   }
   await Promise.all(exits);
   for (const [chatId, active] of activeExecutions) {
@@ -312,7 +328,7 @@ export async function runSupervisedProcess(
       console.error(`[HARD TIMEOUT] CLI hard timeout after ${timeoutMs}ms - killing process\n${formatSpawnLog(command, args, cwd, options.chatId)}`);
       if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI hard timeout after ${timeoutMs}ms`, category: "timeout" }));
       pendingError = new Error(`CLI hard timeout after ${timeoutMs}ms`);
-      if (pid) killProcessTree(child, pid, killGraceMs); else killWithGrace(child, killGraceMs);
+      killChildTree(child, killGraceMs);
     }, timeoutMs);
 
     let plannerStallTriggered = false;
@@ -323,7 +339,7 @@ export async function runSupervisedProcess(
           console.error(`[AGY STALL] Planner churn detected without usable output${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""}`);
           if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: "Agy stalled in planner loop without usable output", category: "timeout" }));
           pendingError = new Error("Agy stalled in planner loop without usable output");
-          if (pid) killProcessTree(child, pid, killGraceMs); else killWithGrace(child, killGraceMs);
+          killChildTree(child, killGraceMs);
         })
       : null;
 
@@ -336,7 +352,7 @@ export async function runSupervisedProcess(
         console.error(`[IDLE TIMEOUT] CLI idle timeout after ${idleTimeoutMs}ms with no stdout/stderr${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""}`);
         if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI idle timeout after ${idleTimeoutMs}ms`, category: "timeout" }));
         pendingError = new Error(`CLI idle timeout after ${idleTimeoutMs}ms`);
-        if (pid) killProcessTree(child, pid, killGraceMs); else killWithGrace(child, killGraceMs);
+        killChildTree(child, killGraceMs);
       }, idleTimeoutMs);
     };
 

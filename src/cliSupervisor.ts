@@ -426,11 +426,16 @@ export function normalizeCliArgs(command: string, args: string[]): string[] {
  * runCliAsync() in src/cli.ts are thin adapters over this function; both
  * share identical spawn/env/timer/registry/cancellation/settlement behaviour.
  */
-export async function runSupervisedProcess(command: string, args: string[], cwd: string, options: CliOptions = {}): Promise<{ stdout: string }> {
+export async function runSupervisedProcess(
+  command: string,
+  args: string[],
+  cwd: string,
+  options: CliOptions = {},
+  onProgress?: (text: string) => void,
+): Promise<{ stdout: string }> {
   const timeoutMs = options.timeoutMs ?? 300_000;
   const idleTimeoutMs = options.idleTimeoutMs ?? null;
   const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
-  const onProgress = options.onProgress;
   const onEvent = options.onEvent;
   const evtCtx = options.eventContext;
 

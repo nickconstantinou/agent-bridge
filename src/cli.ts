@@ -830,6 +830,6 @@ export async function runCliAsync(
   cwd: string,
   options: CliOptions = {}
 ): Promise<{ text: string }> {
-  const { stdout } = await runSupervisedProcess(command, args, cwd, options);
+  const { stdout } = await runSupervisedProcess(command, args, cwd, options, options.onProgress);
   return { text: stdout };
 }

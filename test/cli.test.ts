@@ -362,10 +362,15 @@ describe("cli.ts signal handler hygiene", () => {
     expect(src).not.toMatch(/process\.once\(["']SIGINT["']/);
   });
 
-  it("killWithGrace schedules SIGKILL and clears it via child close handler", () => {
-    const src = readFileSync("src/cli.ts", "utf-8");
-    expect(src).toContain("killWithGrace");
-    expect(src).toMatch(/child\.once\(["']close["'][^}]*clearTimeout/s);
+  it("killWithGrace schedules SIGKILL and clears it via child close handler in the shared supervisor", () => {
+    // Issue #135 Phase 2: process-lifecycle ownership moved to
+    // src/cliSupervisor.ts. cli.ts must not carry its own duplicate.
+    const supervisorSrc = readFileSync("src/cliSupervisor.ts", "utf-8");
+    expect(supervisorSrc).toContain("killWithGrace");
+    expect(supervisorSrc).toMatch(/child\.once\(["']close["'][^}]*clearTimeout/s);
+
+    const cliSrc = readFileSync("src/cli.ts", "utf-8");
+    expect(cliSrc).not.toContain("function killWithGrace");
   });
 });
 

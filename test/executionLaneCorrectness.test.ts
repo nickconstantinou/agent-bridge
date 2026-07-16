@@ -23,6 +23,14 @@ function options(kind: "codex" | "claude", hooks: any = {}) {
   return { surfaceIdentity: "telegram:interactive", kind, botConfig: { command: kind, modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe" as const, asyncEnabled: false, pollIntervalMs: 1000, hooks };
 }
 
+async function waitForFile(path: string, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(path)) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${path}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 afterEach(async () => {
   await shutdownCliProcessesAndWait();
   vi.useRealTimers();
@@ -142,46 +150,48 @@ describe("execution lane correctness", () => {
 
   it("keeps the lane owned until a TERM-resistant child exits after SIGKILL", async () => {
     const path = join(tmpdir(), `stop-grace-${Date.now()}-${Math.random()}.sqlite`);
+    const childReady = join(tmpdir(), `stop-grace-ready-${Date.now()}-${Math.random()}`);
     const db = openDb(path);
     const c = client();
     const engine = new BridgeEngine(options("claude"), db, c, {
       runCli: (_command, _args, cwd, cliOptions) => runCli(
         process.execPath,
-        ["-e", "process.on('SIGTERM',()=>{}); setTimeout(()=>{},10000)"],
+        ["-e", "process.on('SIGTERM',()=>{}); require('node:fs').writeFileSync(process.argv[1], 'ready'); setTimeout(()=>{},10000)", childReady],
         cwd,
         cliOptions,
       ),
     });
     const active = engine.handleMessages([message("long run", 7)]);
-    await new Promise((r) => setTimeout(r, 150));
+    await waitForFile(childReady);
     const stopping = engine.handleUpdate({ update_id: 2, message: message("/stop", 7) });
     await new Promise((r) => setTimeout(r, 100));
     expect(db.acquireLock("telegram:interactive", "100:7")).toBeNull();
     await stopping; await active;
     expect(db.acquireLock("telegram:interactive", "100:7")).not.toBeNull();
-    db.close(); rmSync(path, { force: true });
+    db.close(); rmSync(path, { force: true }); rmSync(childReady, { force: true });
   }, 8_000);
 
   it("keeps the lane owned during /reset until a TERM-resistant child exits after SIGKILL", async () => {
     const path = join(tmpdir(), `reset-grace-${Date.now()}-${Math.random()}.sqlite`);
+    const childReady = join(tmpdir(), `reset-grace-ready-${Date.now()}-${Math.random()}`);
     const db = openDb(path);
     const c = client();
     const engine = new BridgeEngine(options("claude"), db, c, {
       runCli: (_command, _args, cwd, cliOptions) => runCli(
         process.execPath,
-        ["-e", "process.on('SIGTERM',()=>{}); setTimeout(()=>{},10000)"],
+        ["-e", "process.on('SIGTERM',()=>{}); require('node:fs').writeFileSync(process.argv[1], 'ready'); setTimeout(()=>{},10000)", childReady],
         cwd,
         cliOptions,
       ),
     });
     const active = engine.handleMessages([message("long reset run", 7)]);
-    await new Promise((r) => setTimeout(r, 150));
+    await waitForFile(childReady);
     const resetting = engine.handleMessages([message("/reset", 7)]);
     await new Promise((r) => setTimeout(r, 100));
     expect(db.acquireLock("telegram:interactive", "100:7")).toBeNull();
     await resetting; await active;
     expect(db.acquireLock("telegram:interactive", "100:7")).not.toBeNull();
-    db.close(); rmSync(path, { force: true });
+    db.close(); rmSync(path, { force: true }); rmSync(childReady, { force: true });
   }, 8_000);
 
   it("keeps /reset fenced through delayed finalisation before allowing a new acquisition", async () => {

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -30,6 +30,14 @@ setTimeout(() => {
 const WRITE_AND_WAIT = String.raw`
 const fs = require("node:fs");
 const [started] = process.argv.slice(1);
+fs.writeFileSync(started, "started");
+setTimeout(() => {}, 10_000);
+`;
+
+const WRITE_AND_RESIST_TERM = String.raw`
+const fs = require("node:fs");
+const [started] = process.argv.slice(1);
+process.on("SIGTERM", () => {});
 fs.writeFileSync(started, "started");
 setTimeout(() => {}, 10_000);
 `;
@@ -69,12 +77,14 @@ describe("OS-backed workspace execution lock", () => {
     const marker = join(state, "active");
     const overlap = join(state, "overlap");
     const events = join(state, "events");
+    const nested = join(root, "nested", "path");
+    mkdirSync(nested, { recursive: true });
 
     const first = runCli(process.execPath, ["-e", CRITICAL_SECTION, marker, overlap, events, "first", "250"], root, {
       chatId: "workspace-lock-first",
     });
     await waitForFile(events);
-    const second = runCliAsync(process.execPath, ["-e", CRITICAL_SECTION, marker, overlap, events, "second", "25"], root, {
+    const second = runCliAsync(process.execPath, ["-e", CRITICAL_SECTION, marker, overlap, events, "second", "25"], nested, {
       chatId: "workspace-lock-second",
     });
 
@@ -133,13 +143,37 @@ describe("OS-backed workspace execution lock", () => {
     await holder;
   }, 8_000);
 
-  it("releases the worktree lock after a killed holder exits", async () => {
+  it("times out a supervised waiter before its CLI enters the worktree", async () => {
+    const root = initRepository();
+    roots.push(root);
+    const holderStarted = join(root, ".holder-started");
+    const waiterStarted = join(root, ".waiter-started");
+
+    const holder = runCliAsync(process.execPath, ["-e", WRITE_AND_WAIT, holderStarted], root, {
+      chatId: "workspace-lock-timeout-holder",
+      killGraceMs: 25,
+    });
+    await waitForFile(holderStarted);
+    const waiter = runCliAsync(process.execPath, ["-e", WRITE_AND_WAIT, waiterStarted], root, {
+      chatId: "workspace-lock-timeout-waiter",
+      timeoutMs: 75,
+      killGraceMs: 25,
+    });
+
+    await expect(waiter).rejects.toThrow(/hard timeout/i);
+    expect(existsSync(waiterStarted)).toBe(false);
+    await abortCliProcessAndWait("workspace-lock-timeout-holder");
+    await holder;
+  }, 8_000);
+
+  it("releases the worktree lock after a TERM-resistant holder is killed", async () => {
     const root = initRepository();
     roots.push(root);
     const holderStarted = join(root, ".holder-started");
 
-    const holder = runCliAsync(process.execPath, ["-e", WRITE_AND_WAIT, holderStarted], root, {
+    const holder = runCliAsync(process.execPath, ["-e", WRITE_AND_RESIST_TERM, holderStarted], root, {
       chatId: "workspace-lock-killed-holder",
+      timeoutMs: 150,
       killGraceMs: 25,
     });
     await waitForFile(holderStarted);
@@ -148,8 +182,7 @@ describe("OS-backed workspace execution lock", () => {
       timeoutMs: 2_000,
     });
 
-    await abortCliProcessAndWait("workspace-lock-killed-holder");
-    await holder;
+    await expect(holder).rejects.toThrow(/hard timeout/i);
     await expect(waiter).resolves.toBe("acquired");
   }, 8_000);
 });

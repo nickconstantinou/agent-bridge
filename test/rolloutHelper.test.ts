@@ -7,13 +7,14 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
@@ -96,6 +97,35 @@ function metadata(path: string) {
   return { uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o777, size: stat.size, sha256: sha256(path) };
 }
 
+function restoreArguments(source: string, backup: string, parent = statSync(dirname(source))): string[] {
+  const expected = metadata(backup);
+  return [
+    restoreHelperPath,
+    "--source", source,
+    "--backup", backup,
+    "--uid", String(expected.uid),
+    "--gid", String(expected.gid),
+    "--mode", expected.mode.toString(8),
+    "--size", String(expected.size),
+    "--sha256", expected.sha256,
+    "--parent-device", String(parent.dev),
+    "--parent-inode", String(parent.ino),
+    "--parent-uid", String(parent.uid),
+    "--parent-gid", String(parent.gid),
+    "--parent-mode", (parent.mode & 0o7777).toString(8),
+  ];
+}
+
+function runRestore(source: string, backup: string, environment: Record<string, string> = {}, parent = statSync(dirname(source))) {
+  return spawnSync("sudo", [
+    "-n",
+    "env",
+    "AGENT_BRIDGE_RESTORE_TEST_MODE=1",
+    ...Object.entries(environment).map(([key, value]) => `${key}=${value}`),
+    ...restoreArguments(source, backup, parent),
+  ], { encoding: "utf8" });
+}
+
 function rewriteConfig(fixture: Fixture, transform: (lines: string[]) => string[]): void {
   const lines = readFileSync(fixture.configFile, "utf8").trimEnd().split("\n");
   writeFileSync(fixture.configFile, `${transform(lines).join("\n")}\n`, { mode: 0o600 });
@@ -104,7 +134,9 @@ function rewriteConfig(fixture: Fixture, transform: (lines: string[]) => string[
 function writeFakeCommands(fixture: Fixture): void {
   const bin = join(fixture.root, "bin");
   mkdirSync(bin, { recursive: true });
-  symlinkSync(restoreHelperPath, join(bin, "rollout-restore"));
+  executable(join(bin, "rollout-restore"), `#!/usr/bin/env bash
+exec sudo -n env AGENT_BRIDGE_RESTORE_TEST_MODE=1 "${restoreHelperPath}" "$@"
+`);
   executable(join(bin, "systemctl"), `#!/usr/bin/env bash
 set -euo pipefail
 echo "systemctl:$*" >> "${fixture.actionLog}"
@@ -400,21 +432,11 @@ describe("guarded rollout helper", () => {
     writeFileSync(backup, readFileSync(source), { mode: 0o640 });
     writeFileSync(source, "mutated-database", { mode: 0o640 });
     writeFileSync(victim, "do-not-touch", { mode: 0o600 });
-    const expected = metadata(backup);
     const victimBefore = metadata(victim);
 
-    const result = spawnSync("python3", [
-      restoreHelperPath,
-      "--source", source,
-      "--backup", backup,
-      "--uid", String(expected.uid),
-      "--gid", String(expected.gid),
-      "--mode", expected.mode.toString(8),
-      "--size", String(expected.size),
-      "--sha256", expected.sha256,
-    ], {
-      encoding: "utf8",
-      env: { ...process.env, AGENT_BRIDGE_RESTORE_TEST_SWAP_TARGET: victim },
+    const result = runRestore(source, backup, {
+      AGENT_BRIDGE_RESTORE_TEST_SWAP_TARGET: victim,
+      AGENT_BRIDGE_RESTORE_TEST_SWAP_STAGE: "after-create",
     });
 
     expect(result.error).toBeUndefined();
@@ -422,6 +444,105 @@ describe("guarded rollout helper", () => {
     expect(`${result.stdout}\n${result.stderr}`).toMatch(/active substitution detected/i);
     expect(metadata(victim)).toEqual(victimBefore);
     expect(readFileSync(source, "utf8")).toBe("mutated-database");
+  });
+
+  it("rejects a source parent replaced by a symlink before descriptor open", () => {
+    const fixture = createFixture();
+    const source = fixture.dbPaths[0];
+    const sourceParent = dirname(source);
+    const expectedParent = statSync(sourceParent);
+    const backup = join(fixture.root, "parent-symlink-backup.sqlite");
+    writeFileSync(backup, readFileSync(source), { mode: 0o640 });
+    const originalParent = `${sourceParent}-original`;
+    const attackerParent = join(fixture.root, "attacker-parent");
+    renameSync(sourceParent, originalParent);
+    mkdirSync(attackerParent);
+    const victim = join(attackerParent, basename(source));
+    writeFileSync(victim, "do-not-touch", { mode: 0o640 });
+    const victimBefore = metadata(victim);
+    symlinkSync(attackerParent, sourceParent, "dir");
+
+    const result = runRestore(source, backup, {}, expectedParent);
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/source parent must not be a symlink/i);
+    expect(metadata(victim)).toEqual(victimBefore);
+  });
+
+  it("rejects a source parent replaced by a different directory inode", () => {
+    const fixture = createFixture();
+    const source = fixture.dbPaths[0];
+    const sourceParent = dirname(source);
+    const expectedParent = statSync(sourceParent);
+    const backup = join(fixture.root, "parent-inode-backup.sqlite");
+    writeFileSync(backup, readFileSync(source), { mode: 0o640 });
+    renameSync(sourceParent, `${sourceParent}-original`);
+    mkdirSync(sourceParent);
+    writeFileSync(source, "do-not-touch", { mode: 0o640 });
+    const victimBefore = metadata(source);
+
+    const result = runRestore(source, backup, {}, expectedParent);
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/parent directory identity mismatch/i);
+    expect(metadata(source)).toEqual(victimBefore);
+  });
+
+  it("blocks runtime-user restore-entry replacement after inode verification", () => {
+    const fixture = createFixture();
+    const source = fixture.dbPaths[0];
+    const backup = join(fixture.root, "blocked-substitution-backup.sqlite");
+    const victim = join(fixture.root, "blocked-substitution-victim");
+    writeFileSync(backup, readFileSync(source), { mode: 0o640 });
+    writeFileSync(source, "mutated-database", { mode: 0o640 });
+    writeFileSync(victim, "do-not-touch", { mode: 0o600 });
+    const victimBefore = metadata(victim);
+
+    const result = runRestore(source, backup, {
+      AGENT_BRIDGE_RESTORE_TEST_SWAP_TARGET: victim,
+      AGENT_BRIDGE_RESTORE_TEST_SWAP_STAGE: "after-inode-check",
+      AGENT_BRIDGE_RESTORE_TEST_ATTACKER_UID: String(process.getuid()),
+      AGENT_BRIDGE_RESTORE_TEST_ATTACKER_GID: String(process.getgid()),
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(readFileSync(source)).toEqual(readFileSync(backup));
+    expect(metadata(victim)).toEqual(victimBefore);
+  });
+
+  it("restores the exact parent mode after failure inside the write-disabled section", () => {
+    const fixture = createFixture();
+    const source = fixture.dbPaths[0];
+    const sourceParent = dirname(source);
+    chmodSync(sourceParent, 0o775);
+    const expectedMode = statSync(sourceParent).mode & 0o7777;
+    const backup = join(fixture.root, "critical-failure-backup.sqlite");
+    writeFileSync(backup, readFileSync(source), { mode: 0o640 });
+
+    const result = runRestore(source, backup, { AGENT_BRIDGE_RESTORE_TEST_FAIL_STAGE: "after-write-disable" });
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/injected failure/i);
+    expect(statSync(sourceParent).mode & 0o7777).toBe(expectedMode);
+  });
+
+  it("fails when the final destination is not the restored descriptor inode", () => {
+    const fixture = createFixture();
+    const source = fixture.dbPaths[0];
+    const backup = join(fixture.root, "final-inode-backup.sqlite");
+    const victim = join(fixture.root, "final-inode-victim");
+    writeFileSync(backup, readFileSync(source), { mode: 0o640 });
+    writeFileSync(source, "mutated-database", { mode: 0o640 });
+    writeFileSync(victim, "do-not-touch", { mode: 0o600 });
+    const victimBefore = metadata(victim);
+
+    const result = runRestore(source, backup, {
+      AGENT_BRIDGE_RESTORE_TEST_FINAL_TARGET: victim,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/final destination inode mismatch/i);
+    expect(metadata(victim)).toEqual(victimBefore);
   });
 
   it("supports a fixed selected-unit subset and de-duplicates shared databases", () => {

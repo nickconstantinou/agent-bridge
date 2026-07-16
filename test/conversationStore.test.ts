@@ -160,30 +160,40 @@ describe("buildConvContext", () => {
 
 describe("pending messages", () => {
   it("returns 0 when no pending messages", () => {
-    expect(db.pendingMsgCount("chat:1")).toBe(0);
+    expect(db.pendingMsgCount("test", "chat:1")).toBe(0);
   });
 
   it("enqueues and dequeues a message", () => {
-    db.enqueueMsg("chat:1", { prompt: "do work", chatId: 123, chatType: "private" });
-    expect(db.pendingMsgCount("chat:1")).toBe(1);
-    const msgs = db.dequeueMsgs("chat:1");
+    db.enqueueMsg("test", "chat:1", { prompt: "do work", chatId: 123, chatType: "private" });
+    expect(db.pendingMsgCount("test", "chat:1")).toBe(1);
+    const msgs = db.dequeueMsgs("test", "chat:1");
     expect(msgs).toHaveLength(1);
     expect(msgs[0].prompt).toBe("do work");
     expect(msgs[0].chatId).toBe(123);
   });
 
   it("deletePendingMsg removes the row", () => {
-    db.enqueueMsg("chat:1", { prompt: "x", chatId: 1, chatType: "private" });
-    const [msg] = db.dequeueMsgs("chat:1");
+    db.enqueueMsg("test", "chat:1", { prompt: "x", chatId: 1, chatType: "private" });
+    const [msg] = db.dequeueMsgs("test", "chat:1");
     db.deletePendingMsg(msg.id);
-    expect(db.pendingMsgCount("chat:1")).toBe(0);
+    expect(db.pendingMsgCount("test", "chat:1")).toBe(0);
   });
 
   it("isolates queue by chatKey", () => {
-    db.enqueueMsg("chat:1", { prompt: "a", chatId: 1, chatType: "private" });
-    db.enqueueMsg("chat:2", { prompt: "b", chatId: 2, chatType: "private" });
-    expect(db.pendingMsgCount("chat:1")).toBe(1);
-    expect(db.pendingMsgCount("chat:2")).toBe(1);
+    db.enqueueMsg("test", "chat:1", { prompt: "a", chatId: 1, chatType: "private" });
+    db.enqueueMsg("test", "chat:2", { prompt: "b", chatId: 2, chatType: "private" });
+    expect(db.pendingMsgCount("test", "chat:1")).toBe(1);
+    expect(db.pendingMsgCount("test", "chat:2")).toBe(1);
+  });
+
+  it("only exposes queued rows to their owning surface", () => {
+    db.enqueueMsg("telegram:codex", "chat:1", { prompt: "codex work", chatId: 1, chatType: "private" });
+    db.enqueueMsg("telegram:claude", "chat:1", { prompt: "claude work", chatId: 1, chatType: "private" });
+
+    expect(db.pendingMsgCount("telegram:codex", "chat:1")).toBe(1);
+    expect(db.pendingMsgCount("telegram:claude", "chat:1")).toBe(1);
+    expect(db.dequeueMsgs("telegram:codex", "chat:1").map((msg) => msg.prompt)).toEqual(["codex work"]);
+    expect(db.dequeueMsgs("telegram:claude", "chat:1").map((msg) => msg.prompt)).toEqual(["claude work"]);
   });
 });
 
@@ -242,7 +252,7 @@ describe("pruneConvTurns", () => {
 
 describe("getConvStatus", () => {
   it("returns zeros and nulls for new chatKey", () => {
-    const s = db.getConvStatus("chat:1");
+    const s = db.getConvStatus("chat:1", "test");
     expect(s.turnCount).toBe(0);
     expect(s.pendingCount).toBe(0);
     expect(s.latestSummaryAt).toBeNull();
@@ -251,8 +261,8 @@ describe("getConvStatus", () => {
 
   it("reflects stored data", () => {
     db.addConvTurn("chat:1", "user", "hi");
-    db.enqueueMsg("chat:1", { prompt: "q", chatId: 1, chatType: "private" });
-    const s = db.getConvStatus("chat:1");
+    db.enqueueMsg("test", "chat:1", { prompt: "q", chatId: 1, chatType: "private" });
+    const s = db.getConvStatus("chat:1", "test");
     expect(s.turnCount).toBe(1);
     expect(s.pendingCount).toBe(1);
     expect(s.latestTurnAt).not.toBeNull();

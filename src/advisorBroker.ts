@@ -107,6 +107,7 @@ export class AdvisorBroker implements AdvisorCapabilityIssuer {
     const server = this.server;
     this.server = null;
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     try { unlinkSync(this.socketPath); } catch { /* already removed */ }
     LOCAL_SOCKET_PATHS.delete(this.brokerId);
   }

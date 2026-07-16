@@ -102,9 +102,9 @@ Sessions are stored per chat in SQLite and restored across service restarts. Eve
 
 ### 4.3 Process Registry & Kill Switch
 
-`runCli` and `runCliAsync` register each child process in `activeProcesses: Map<chatId, ChildProcess>`. `abortCliProcess(chatId)` marks the child in a `WeakSet` and SIGKILLs it. The close handler detects the abort mark and resolves cleanly (no error propagation).
+`runCli` and `runCliAsync` register each child process in `activeProcesses: Map<chatId, ChildProcess>`. Abort sends SIGTERM, escalates to SIGKILL after the grace period, and retains the process registration and execution lane until the close/error lifecycle confirms exit.
 
-`/stop` and `/cancel` are intercepted in `handleUpdate` before `db.tryLock()`, so they work even when a lock is held.
+`/stop`, `/cancel`, and `/reset` retain the lane through the existing supervisor's confirmed close/error lifecycle. TERM-resistant children are escalated to SIGKILL before replacement work may start.
 
 ### 4.4 Conversation Persistence & Compaction
 
@@ -233,9 +233,13 @@ Manual `/cli` switching applies the same target-session-clear + handoff-mark (`a
 
 ### 4.6 Concurrency Lock & Message Queue
 
-`db.tryLock(chatId)` is an atomic SQLite `UPDATE … WHERE active_execution_lock = 0` — only one execution per chat at a time. Lock is released in a `finally` block which also calls `drainQueue(chatKey)`.
+`db.acquireLock(surface, chatKey)` atomically inserts into `execution_locks` and returns an immutable lane handle, whose primary key is `(surface, chat_key)`. A conversation scope is `chatId:threadId` whenever Telegram supplies a thread ID, including private-chat topics. Standalone bots use distinct surfaces; all providers behind one interactive bot share its surface. Lock heartbeat, result commit, queue claim/completion, and release compare the exact per-acquisition `acquisition_id` captured by that handle.
 
-If a chat is busy, the incoming message is queued to `pending_messages` in SQLite (max `MAX_QUEUE_DEPTH = 5`), surviving restarts. The user receives a position notice. When execution finishes, `drainQueue` pops the next item via `setImmediate` and calls `handleMessages` with a synthetic message. If the queue is full, the user receives "⏳ Queue is full."
+If a lane is busy, the incoming message is queued to `pending_messages` under the same explicit `(surface, chat_key)` ownership (max `MAX_QUEUE_DEPTH = 5`), surviving restarts. One transactional admission operation either acquires an empty lane for the current message or appends it and claims the oldest durable row. Legacy rows created before the surface migration are retained under the quarantined `legacy` surface and cannot drain into a live bot. Handoff retains the lane while the interactive router resolves the current provider, and deletes the row only after a committed outcome plus a same-run lock fence. Fenced and failed rows remain recoverable. Startup scans live-surface queues; handler failures receive three bounded retries. Lock release occurs transactionally only when the lane queue is empty, preventing new arrivals from overtaking FIFO work.
+
+Each service has a configuration-independent `service_id`, each process generation gets a unique `run_id`, and every successful lane acquisition gets a unique `acquisition_id`. Opening a second process never clears live locks. Engines renew their bounded lease while executing; a competing run may atomically take over only after `lease_expires_at`, proving the prior lock stale. A delayed continuation from an earlier acquisition in the same process cannot mutate or unlock a later acquisition. The standalone service ID remains `telegram:standalone` when its enabled provider set changes.
+
+Parsed results commit session, failure counter, memory sidecars, and conversation turns in one transaction that first renews the acquiring run's lease. Hooks, generated-file upload, compaction session reset, and final response delivery each require another successful renewal. A displaced run reports a fenced outcome and cannot delete its claimed queue row.
 
 ### 4.7 Rate Limit Handling
 
@@ -290,20 +294,26 @@ interface BridgeConfig {
 
 ### SQLite Schema
 
-**`bridge_state`** — settings, sessions, locks:
+**`bridge_state`** — settings and sessions. `active_execution_lock` remains as a legacy compatibility column and is not used for execution ownership.
+
+**`execution_locks`** — surface- and conversation-scoped execution ownership:
 
 ```sql
-CREATE TABLE bridge_state (
-  key TEXT PRIMARY KEY,
-  value TEXT,
-  active_execution_lock INTEGER NOT NULL DEFAULT 0
+CREATE TABLE execution_locks (
+  surface TEXT NOT NULL,
+  chat_key TEXT NOT NULL,
+  service_id TEXT NOT NULL,
+  run_id TEXT NOT NULL,
+  acquisition_id TEXT NOT NULL,
+  acquired_at TEXT NOT NULL,
+  lease_expires_at TEXT NOT NULL,
+  PRIMARY KEY (surface, chat_key)
 );
 ```
 
 | Key pattern | Value | Purpose |
 |-------------|-------|---------|
 | `session:<chatId>:<bot>` | session ID | CLI session per chat |
-| `lock:<chatId>` | — | Row used for atomic lock |
 | `$polling:<bot>` | last update_id | Telegram polling offset |
 | `<bot>` | model name | Per-bot model override |
 
@@ -325,12 +335,18 @@ CREATE TABLE conversation_turns (
 ```sql
 CREATE TABLE pending_messages (
   id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  surface  TEXT NOT NULL DEFAULT 'legacy',
   chat_key TEXT NOT NULL,
   prompt   TEXT NOT NULL,
   chat_id  INTEGER NOT NULL,
   thread_id INTEGER,
   chat_type TEXT,
   user_id  INTEGER,
+  state    TEXT NOT NULL DEFAULT 'queued',
+  claim_run_id TEXT,
+  claim_acquisition_id TEXT,
+  claimed_at TEXT,
+  attachments_json TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 ```

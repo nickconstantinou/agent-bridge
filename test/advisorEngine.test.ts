@@ -41,7 +41,7 @@ describe("BridgeEngine advisor command", () => {
       advice_md: "Use the smaller design.", risks: ["Scope"], suggested_next_steps: ["Test it"], confidence: "high",
     }));
     const engine = new BridgeEngine({
-      kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42"]),
+      surfaceIdentity: "test", kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42"]),
       executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000, fullConfig: config(),
     }, db, messaging, { runCli });
 
@@ -68,7 +68,7 @@ describe("BridgeEngine advisor command", () => {
       return "Executor result";
     });
     const engine = new BridgeEngine({
-      kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42"]),
+      surfaceIdentity: "test", kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42"]),
       executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000, fullConfig: config(),
     }, db, messaging, { runCli });
 
@@ -93,7 +93,7 @@ describe("BridgeEngine advisor command", () => {
       return "Executor result";
     });
     const engine = new BridgeEngine({
-      kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42"]),
+      surfaceIdentity: "test", kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42"]),
       executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000, fullConfig: config(),
     }, db, messaging, { runCli });
 
@@ -119,7 +119,7 @@ describe("BridgeEngine advisor command", () => {
     const messaging = client();
     const runCli = vi.fn().mockResolvedValue("Executor result");
     const engine = new BridgeEngine({
-      kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42", "43"]),
+      surfaceIdentity: "test", kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42", "43"]),
       executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000, fullConfig: config(),
     }, db, messaging, { runCli });
 
@@ -143,7 +143,7 @@ describe("BridgeEngine advisor command", () => {
     const messaging = client();
     const runCli = vi.fn().mockResolvedValue("Executor result");
     const engine = new BridgeEngine({
-      kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42"]),
+      surfaceIdentity: "test", kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42"]),
       executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000, fullConfig: config(),
     }, db, messaging, { runCli });
 
@@ -169,7 +169,7 @@ describe("BridgeEngine advisor command", () => {
       const messaging = client();
       const runCli = vi.fn().mockResolvedValue("Executor result");
       const engine = new BridgeEngine({
-        kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42"]),
+        surfaceIdentity: "test", kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42"]),
         executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000, fullConfig: config(),
       }, db, messaging, { runCli });
 
@@ -205,7 +205,7 @@ describe("BridgeEngine advisor command", () => {
         : "Executor result";
     });
     const engine = new BridgeEngine({
-      kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42"]),
+      surfaceIdentity: "test", kind: "codex", botConfig: config().bots.codex, allowedUserIds: new Set(["42"]),
       executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000, fullConfig: config(),
     }, db, messaging, { runCli });
 

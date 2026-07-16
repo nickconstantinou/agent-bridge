@@ -36,6 +36,7 @@ import {
   describeInteractiveUpdateForLog,
   isGroupInteractiveUpdate,
   dispatchInteractiveWithFallback,
+  dispatchClaimedInteractiveWithFallback,
   resolveAvailableCliPreference,
   applyManualCliSwitchHandoff,
   type CliKind,
@@ -80,7 +81,7 @@ const soulContext = loadSoulContext({
 });
 if (soulContext) console.log(`[interactive] loaded SOUL.md context (${soulContext.length} chars)`);
 
-const db = openDb(dbPath);
+const db = openDb(dbPath, { serviceId: "telegram:interactive" });
 const advisorBroker = await startConfiguredAdvisorBroker({ db, bots: config.bots, runCli });
 const client = new TelegramClient(token, fetch, 45_000);
 
@@ -141,6 +142,7 @@ const engines = Object.fromEntries(
       new BridgeEngine(
         {
           kind,
+          surfaceIdentity: "telegram:interactive",
           botConfig: { ...botConfig, token },
           allowedUserIds,
           executionMode: resolveExecutionMode(kind as BotKind, process.env),
@@ -179,6 +181,27 @@ async function registerGroupChatCommands(pref: CliKind, chatId: number): Promise
       .catch((err: unknown) => console.warn(`[interactive] setMyCommands (${scopeName} ${chatId}) failed`, err));
   }
 }
+
+for (const engine of Object.values(engines)) {
+  engine.setQueuedMessageHandler(async (queued) => {
+    const chatKey = queued.chatKey;
+    return dispatchClaimedInteractiveWithFallback(queued, chatKey, {
+      engines, fallbackChain, exhaustedChats, db,
+      notify: async (msg) => {
+        await sendTelegramMessage({ client, kind: "interactive", chatId: queued.chatId, body: { text: msg, message_thread_id: queued.threadId ?? undefined } });
+      },
+      onCliSwitched: async (newCli) => {
+        await registerGlobalCommands(newCli, " during queued fallback");
+        if (queued.chatType === "group" || queued.chatType === "supergroup") await registerGroupChatCommands(newCli, queued.chatId);
+      },
+      compactBeforeSwitch: (request) => runCapacityFallbackCompaction(request, {
+        db, runCli, bots: config.bots, configuredChain: compactionProviderChain, compactProfile: "companion",
+      }),
+    });
+  });
+}
+
+await engines[defaultPref].recoverPendingQueues();
 
 await registerGlobalCommands(defaultPref, "");
 // Tracks which group chat IDs have had per-chat commands registered this session.

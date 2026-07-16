@@ -1,24 +1,88 @@
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
+
+export interface ExecutionLaneHandle {
+  readonly surface: string;
+  readonly chatKey: string;
+  readonly serviceId: string;
+  readonly runId: string;
+  readonly acquisitionId: string;
+}
+
+export interface LockRepositoryOptions {
+  serviceId: string;
+  runId: string;
+  leaseMs: number;
+  clock?: () => number;
+}
 
 export class LockRepository {
-  constructor(private readonly db: Database.Database) {}
+  private readonly now: () => number;
 
-  tryLock(chatId: string): boolean {
-    this.db
-      .prepare(`INSERT INTO bridge_state (chat_id) VALUES (?) ON CONFLICT (chat_id) DO NOTHING`)
-      .run(chatId);
-    const { changes } = this.db
-      .prepare(
-        `UPDATE bridge_state SET active_execution_lock = 1
-         WHERE chat_id = ? AND active_execution_lock = 0`
-      )
-      .run(chatId);
+  constructor(
+    private readonly db: Database.Database,
+    private readonly options: LockRepositoryOptions,
+  ) {
+    this.now = options.clock ?? Date.now;
+  }
+
+  acquire(surface: string, chatKey: string): ExecutionLaneHandle | null {
+    const now = this.now();
+    const acquisitionId = randomUUID();
+    const acquiredAt = new Date(now).toISOString();
+    const leaseExpiresAt = new Date(now + this.options.leaseMs).toISOString();
+    const { changes } = this.db.prepare(`
+      INSERT INTO execution_locks (surface, chat_key, service_id, run_id, acquisition_id, acquired_at, lease_expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT (surface, chat_key) DO UPDATE SET
+        service_id = excluded.service_id,
+        run_id = excluded.run_id,
+        acquisition_id = excluded.acquisition_id,
+        acquired_at = excluded.acquired_at,
+        lease_expires_at = excluded.lease_expires_at
+      WHERE execution_locks.lease_expires_at <= excluded.acquired_at
+    `).run(surface, chatKey, this.options.serviceId, this.options.runId, acquisitionId, acquiredAt, leaseExpiresAt);
+    return changes === 1 ? Object.freeze({
+      surface, chatKey, serviceId: this.options.serviceId, runId: this.options.runId, acquisitionId,
+    }) : null;
+  }
+
+  heartbeat(handle: ExecutionLaneHandle): boolean {
+    if (!this.belongsToRun(handle)) return false;
+    const leaseExpiresAt = new Date(this.now() + this.options.leaseMs).toISOString();
+    const { changes } = this.db.prepare(`
+      UPDATE execution_locks
+      SET lease_expires_at = ?
+      WHERE surface = ? AND chat_key = ? AND service_id = ? AND run_id = ? AND acquisition_id = ?
+    `).run(leaseExpiresAt, handle.surface, handle.chatKey, handle.serviceId, handle.runId, handle.acquisitionId);
     return changes === 1;
   }
 
-  unlock(chatId: string): void {
-    this.db
-      .prepare(`UPDATE bridge_state SET active_execution_lock = 0 WHERE chat_id = ?`)
-      .run(chatId);
+  owns(handle: ExecutionLaneHandle): boolean {
+    if (!this.belongsToRun(handle)) return false;
+    return !!this.db.prepare(`
+      SELECT 1 FROM execution_locks
+      WHERE surface = ? AND chat_key = ? AND service_id = ? AND run_id = ? AND acquisition_id = ?
+    `).get(handle.surface, handle.chatKey, handle.serviceId, handle.runId, handle.acquisitionId);
+  }
+
+  get runId(): string {
+    return this.options.runId;
+  }
+
+  get serviceId(): string {
+    return this.options.serviceId;
+  }
+
+  unlock(handle: ExecutionLaneHandle): boolean {
+    if (!this.belongsToRun(handle)) return false;
+    return this.db.prepare(`
+      DELETE FROM execution_locks
+      WHERE surface = ? AND chat_key = ? AND service_id = ? AND run_id = ? AND acquisition_id = ?
+    `).run(handle.surface, handle.chatKey, handle.serviceId, handle.runId, handle.acquisitionId).changes === 1;
+  }
+
+  private belongsToRun(handle: ExecutionLaneHandle): boolean {
+    return handle.serviceId === this.options.serviceId && handle.runId === this.options.runId;
   }
 }

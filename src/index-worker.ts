@@ -24,6 +24,7 @@ import { runCliWithFallback } from "./workerDispatch.js";
 import { handleWorkerCallback } from "./workCallbacks.js";
 import {
   dispatchInteractiveWithFallback,
+  dispatchClaimedInteractiveWithFallback,
   getUserCliPreference,
   setUserCliPreference,
   handleCliSwitchCallback,
@@ -32,6 +33,7 @@ import {
   buildCliStatusText,
   buildCliKeyboard,
   applyManualCliSwitchHandoff,
+  resolveUpdateChatKey,
   type CliKind,
 } from "./interactiveBot.js";
 import { parseCompactionProviderChain, runCapacityFallbackCompaction } from "./fallbackCompaction.js";
@@ -87,7 +89,7 @@ const executionMode = (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") 
 const asyncEnabled = process.env.BRIDGE_ASYNC_ENABLED !== "false";
 const advisorConfig = parseAdvisorConfig(process.env);
 
-const db = openDb(dbPath);
+const db = openDb(dbPath, { serviceId: "telegram:worker" });
 const client = new TelegramClient(token, fetch, 45_000);
 
 function withThread<T extends Record<string, unknown>>(body: T, threadId?: number): T & { message_thread_id?: number } {
@@ -125,6 +127,7 @@ const engines = Object.fromEntries(
       new BridgeEngine(
         {
           kind,
+          surfaceIdentity: "telegram:worker",
           botConfig: { ...botConfig, token },
           allowedUserIds,
           executionMode,
@@ -145,9 +148,25 @@ const engines = Object.fromEntries(
   }),
 ) as Record<string, BridgeEngine>;
 
+for (const engine of Object.values(engines)) {
+  engine.setQueuedMessageHandler(async (queued) => {
+    return dispatchClaimedInteractiveWithFallback(queued, queued.chatKey, {
+      engines, fallbackChain, exhaustedChats, db,
+      notify: async (msg: string) => {
+        await sendTelegramMessage({ client, kind: "worker-bot", chatId: queued.chatId, body: withThread({ text: msg }, queued.threadId ?? undefined) });
+      },
+      onCliSwitched: async (newCli: CliKind) => setUserCliPreference(db, queued.chatKey, newCli),
+      compactBeforeSwitch: (request) => runCapacityFallbackCompaction(request, {
+        db, runCli, bots: config.bots, configuredChain: compactionProviderChain, compactProfile: "engineering",
+      }),
+    });
+  });
+}
+
 // ── setMyCommands — merge worker + interactive (CLI) commands ─────────────────
 
 const defaultCli: CliKind = "codex";
+await engines[defaultCli].recoverPendingQueues();
 const workerCmds = buildWorkerCommands();
 const interactiveCmds = buildInteractiveCommands(defaultCli);
 const workerCmdSet = new Set(workerCmds.map(c => c.command));
@@ -382,7 +401,7 @@ for (;;) {
             const cliSwitch = handleCliSwitchCallback(callbackQuery.data || "");
             if (cliSwitch) {
               const cbqChatId = callbackQuery.message?.chat?.id;
-              const cbqChatKey = cbqChatId ? String(cbqChatId) : null;
+              const cbqChatKey = resolveUpdateChatKey(update as TelegramUpdate);
               if (cbqChatKey) {
                 setUserCliPreference(db, cbqChatKey, cliSwitch);
                 fallbackChain.setActiveCli(cbqChatKey, cliSwitch);
@@ -416,7 +435,7 @@ for (;;) {
         const rawText = (message.text || "").trim();
         const chatId = message.chat.id;
         const threadId = message.message_thread_id;
-        const chatKey = String(chatId);
+        const chatKey = resolveUpdateChatKey(update as TelegramUpdate) ?? String(chatId);
         const userId = message.from ? String(message.from.id) : "unknown";
 
         // /cli — show active CLI with switch keyboard (same as interactive bot)

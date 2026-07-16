@@ -102,8 +102,15 @@ describe("Codex usage fetcher", () => {
   });
 
   it("reports auth failures without leaking response bodies", async () => {
-    const fetchMock = vi.fn(async () => new Response("secret body", { status: 401 }));
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 401,
+      body: { cancel },
+      json: vi.fn(),
+    }));
 
     await expect(fetchCodexUsage("access-token", fetchMock)).rejects.toThrow("Codex usage request failed with HTTP 401");
+    expect(cancel).toHaveBeenCalledOnce();
   });
 });

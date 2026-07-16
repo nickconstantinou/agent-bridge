@@ -68,6 +68,34 @@ describe("advisor context and output", () => {
 });
 
 describe("advisor request execution", () => {
+  it("clears the advisor timeout after a fast provider result", async () => {
+    vi.useFakeTimers();
+    const db = openDb(":memory:");
+    const runCli = vi.fn().mockResolvedValue(JSON.stringify({
+      advice_md: "Proceed.", risks: [], suggested_next_steps: [], confidence: "high",
+    }));
+
+    await executeAdvisorRequest({
+      db,
+      config: parseAdvisorConfig({
+        BRIDGE_ADVISOR_ENABLED: "true",
+        BRIDGE_ADVISOR_CHAIN: "claude:fable-5",
+      }),
+      request: {
+        requestId: "req-timeout-cleanup", scopeKey: "chat", turnKey: "chat:cleanup", origin: "manual",
+        mode: "review", task: "Review", activeProvider: "codex", activeModel: null,
+      },
+      bots: { claude: { command: "claude", modelPreference: [] } },
+      runCli,
+      cwd: "/repo",
+      executionProfile: "tool_free",
+    });
+
+    expect(vi.getTimerCount()).toBe(0);
+    db.close();
+    vi.useRealTimers();
+  });
+
   it("falls back once on operational failure and never persists an advisor session", async () => {
     const db = openDb(":memory:");
     db.setSession("chat", "codex", "executor-session");

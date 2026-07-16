@@ -209,7 +209,7 @@ describe("resolveUpdateChatKey", () => {
     expect(resolveUpdateChatKey(update)).toBe("100:42");
   });
 
-  it("returns plain chat id for private messages even if message_thread_id were set", () => {
+  it("includes thread id for private topic messages", () => {
     const update: TelegramUpdate = {
       update_id: 6,
       message: {
@@ -220,7 +220,51 @@ describe("resolveUpdateChatKey", () => {
         message_thread_id: 7,
       },
     };
-    expect(resolveUpdateChatKey(update)).toBe("200");
+    expect(resolveUpdateChatKey(update)).toBe("200:7");
+  });
+
+  it("keeps private topics independent across sessions, history, and CLI preferences", () => {
+    const db = openDb(":memory:");
+    const topic7: TelegramUpdate = {
+      update_id: 61,
+      message: {
+        message_id: 21,
+        chat: { id: 200, type: "private" },
+        from: { id: 99, first_name: "A" },
+        text: "topic seven",
+        message_thread_id: 7,
+      },
+    };
+    const topic8: TelegramUpdate = {
+      update_id: 62,
+      message: {
+        message_id: 22,
+        chat: { id: 200, type: "private" },
+        from: { id: 99, first_name: "A" },
+        text: "topic eight",
+        message_thread_id: 8,
+      },
+    };
+    const key7 = resolveUpdateChatKey(topic7)!;
+    const key8 = resolveUpdateChatKey(topic8)!;
+
+    try {
+      db.setSession(key7, "codex", "session-7");
+      db.setSession(key8, "codex", "session-8");
+      db.addConvTurn(key7, "user", "history-7");
+      db.addConvTurn(key8, "user", "history-8");
+      setUserCliPreference(db, key7, "codex");
+      setUserCliPreference(db, key8, "claude");
+
+      expect(db.getSession(key7, "codex")).toBe("session-7");
+      expect(db.getSession(key8, "codex")).toBe("session-8");
+      expect(db.getRecentConvTurns(key7, 10).map((turn) => turn.text)).toEqual(["history-7"]);
+      expect(db.getRecentConvTurns(key8, 10).map((turn) => turn.text)).toEqual(["history-8"]);
+      expect(getUserCliPreference(db, key7)).toBe("codex");
+      expect(getUserCliPreference(db, key8)).toBe("claude");
+    } finally {
+      db.close();
+    }
   });
 
   it("returns plain chat id for group messages without a thread", () => {

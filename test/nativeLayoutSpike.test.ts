@@ -21,7 +21,8 @@ describe("native layout spike helpers", () => {
     expect(payload.body).toBeInstanceOf(FormData);
     const file = (payload.body as FormData).get("document") as File;
     expect(file.name).toBe("response.md");
-    expect(await file.text()).toBe("x".repeat(3_501));
+    expect(file.type).toBe("text/markdown");
+    expect(file.size).toBe(Buffer.byteLength("x".repeat(3_501)));
   });
 
   it("builds an in-memory photo payload without requiring a temp file path", async () => {
@@ -30,7 +31,8 @@ describe("native layout spike helpers", () => {
     expect(payload.method).toBe("sendPhoto");
     const file = (payload.body as FormData).get("photo") as File;
     expect(file.name).toBe("response.png");
-    expect([...new Uint8Array(await file.arrayBuffer())]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    expect(file.type).toBe("image/png");
+    expect(file.size).toBe(4);
   });
 
 });

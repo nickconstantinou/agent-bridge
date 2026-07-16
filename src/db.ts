@@ -7,9 +7,11 @@
  */
 
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
-import { LockRepository } from "./repositories/lockRepository.js";
+import { LockRepository, type ExecutionLaneHandle } from "./repositories/lockRepository.js";
+export type { ExecutionLaneHandle } from "./repositories/lockRepository.js";
 import { MemoryRepository } from "./repositories/memoryRepository.js";
 import { RunRepository } from "./repositories/runRepository.js";
 import { SessionRepository } from "./repositories/sessionRepository.js";
@@ -73,7 +75,26 @@ export function buildMemoryFtsQuery(raw: string): string {
   return normalizeMemoryTokens(raw).map((w) => `${w}*`).join(" OR ");
 }
 
-export function openDb(dbPath: string): BridgeDb {
+function assertExecutionScope(surface: string, chatKey: string): void {
+  if (!surface?.trim()) throw new Error("surface is required");
+  if (!chatKey?.trim()) throw new Error("chatKey is required");
+}
+
+export interface OpenDbOptions {
+  /** Stable across configuration changes and restarts. */
+  serviceId?: string;
+  /** Unique to one live process generation. */
+  runId?: string;
+  lockLeaseMs?: number;
+  /** Test-only clock injection for deterministic lease expiry. */
+  clock?: () => number;
+}
+
+export class ExecutionLockLostError extends Error {
+  constructor() { super("execution lock ownership lost"); }
+}
+
+export function openDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
   if (dbPath !== ":memory:") {
     mkdirSync(dirname(dbPath), { recursive: true });
   }
@@ -89,6 +110,16 @@ export function openDb(dbPath: string): BridgeDb {
       antigravity_session_id TEXT,
       active_execution_lock INTEGER NOT NULL DEFAULT 0,
       last_update_id        INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS execution_locks (
+      surface     TEXT NOT NULL,
+      chat_key    TEXT NOT NULL,
+      service_id  TEXT NOT NULL,
+      run_id      TEXT NOT NULL,
+      acquisition_id TEXT NOT NULL,
+      acquired_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      lease_expires_at TEXT NOT NULL,
+      PRIMARY KEY (surface, chat_key)
     );
     CREATE TABLE IF NOT EXISTS settings (
       key   TEXT PRIMARY KEY,
@@ -233,6 +264,26 @@ export function openDb(dbPath: string): BridgeDb {
       FOREIGN KEY(request_id) REFERENCES advisor_calls(request_id)
     );
   `);
+  const lockColumns = raw.prepare(`PRAGMA table_info(execution_locks)`).all() as Array<{ name: string }>;
+  const requiredLockColumns = new Set(["surface", "chat_key", "service_id", "run_id", "acquisition_id", "acquired_at", "lease_expires_at"]);
+  if (!lockColumns.every((column) => requiredLockColumns.has(column.name)) || lockColumns.length !== requiredLockColumns.size) {
+    raw.exec(`
+      DROP TABLE IF EXISTS execution_locks_legacy_migration;
+      ALTER TABLE execution_locks RENAME TO execution_locks_legacy_migration;
+      CREATE TABLE execution_locks (
+        surface          TEXT NOT NULL,
+        chat_key         TEXT NOT NULL,
+        service_id       TEXT NOT NULL,
+        run_id           TEXT NOT NULL,
+        acquisition_id   TEXT NOT NULL,
+        acquired_at      TEXT NOT NULL,
+        lease_expires_at TEXT NOT NULL,
+        PRIMARY KEY (surface, chat_key)
+      );
+      DROP TABLE execution_locks_legacy_migration;
+    `);
+  }
+  raw.exec(`CREATE INDEX IF NOT EXISTS idx_execution_locks_lease ON execution_locks(lease_expires_at)`);
   try {
     raw.exec(`ALTER TABLE bridge_state ADD COLUMN claude_session_id TEXT`);
   } catch { /* column already exists in existing DBs */ }
@@ -441,16 +492,19 @@ export function openDb(dbPath: string): BridgeDb {
 
       CREATE TABLE IF NOT EXISTS pending_messages (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        surface     TEXT    NOT NULL DEFAULT 'legacy',
         chat_key    TEXT    NOT NULL,
         prompt      TEXT    NOT NULL,
         chat_id     INTEGER NOT NULL,
         thread_id   INTEGER,
         chat_type   TEXT    NOT NULL DEFAULT 'private',
         user_id     INTEGER,
+        state       TEXT    NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'claimed')),
+        claim_run_id TEXT,
+        claimed_at  TEXT,
+        attachments_json TEXT NOT NULL DEFAULT '[]',
         created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
       );
-      CREATE INDEX IF NOT EXISTS idx_pending_msgs_chat_key ON pending_messages(chat_key, id);
-
       CREATE TABLE IF NOT EXISTS conversation_summaries (
         id                  INTEGER PRIMARY KEY AUTOINCREMENT,
         chat_key            TEXT    NOT NULL,
@@ -481,6 +535,21 @@ export function openDb(dbPath: string): BridgeDb {
         ON compaction_attempts(chat_key, id);
     `);
   } catch { /* tables already exist on upgraded DBs */ }
+  let migratedPendingSurface = false;
+  try {
+    raw.exec(`ALTER TABLE pending_messages ADD COLUMN surface TEXT NOT NULL DEFAULT 'legacy'`);
+    migratedPendingSurface = true;
+  } catch { /* column already exists */ }
+  raw.exec(`CREATE INDEX IF NOT EXISTS idx_pending_msgs_surface_chat_key ON pending_messages(surface, chat_key, id)`);
+  try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'claimed'))`); } catch {}
+  try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN claim_run_id TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN claim_acquisition_id TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN claimed_at TEXT`); } catch {}
+  try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'`); } catch {}
+  if (migratedPendingSurface) {
+    const { count } = raw.prepare(`SELECT COUNT(*) AS count FROM pending_messages WHERE surface = 'legacy'`).get() as { count: number };
+    if (count > 0) console.warn(`[db] quarantined ${count} legacy pending message(s)`);
+  }
   raw.exec(`
     DELETE FROM conversation_turns
     WHERE id <= COALESCE((
@@ -537,8 +606,6 @@ export function openDb(dbPath: string): BridgeDb {
     raw.exec(`ALTER TABLE work_jobs ADD COLUMN phase_data_json TEXT`);
   } catch { /* column already exists */ }
 
-  // Clear any locks left held from a previous process that was killed mid-execution
-  raw.exec(`UPDATE bridge_state SET active_execution_lock = 0 WHERE active_execution_lock = 1`);
   // Expire sessions older than 7 days — prevents a stale/corrupt session from
   // being resumed indefinitely after a long gap without a /reset
   for (const bot of ["codex", "antigravity", "claude"] as const) {
@@ -549,11 +616,19 @@ export function openDb(dbPath: string): BridgeDb {
          AND ${bot}_session_created_at < datetime('now', '-7 days')`
     );
   }
-  return new BridgeDb(raw);
+  const leaseMs = options.lockLeaseMs ?? 90_000;
+  if (!Number.isFinite(leaseMs) || leaseMs <= 0) throw new Error("lockLeaseMs must be greater than zero");
+  return new BridgeDb(raw, {
+    serviceId: options.serviceId ?? "diagnostic",
+    runId: options.runId ?? randomUUID(),
+    leaseMs,
+    clock: options.clock,
+  });
 }
 
 export class BridgeDb {
   readonly raw: Database.Database;
+  readonly lockHeartbeatMs: number;
   private readonly sessions: SessionRepository;
   private readonly locks: LockRepository;
   private readonly settings: SettingsRepository;
@@ -562,10 +637,13 @@ export class BridgeDb {
   private readonly memories: MemoryRepository;
   private readonly compactions: CompactionRepository;
 
-  constructor(raw: Database.Database) {
+  constructor(raw: Database.Database, lockOptions: {
+    serviceId: string; runId: string; leaseMs: number; clock?: () => number;
+  } = { serviceId: "diagnostic", runId: randomUUID(), leaseMs: 90_000 }) {
     this.raw = raw;
     this.sessions = new SessionRepository(raw);
-    this.locks = new LockRepository(raw);
+    this.locks = new LockRepository(raw, lockOptions);
+    this.lockHeartbeatMs = Math.max(100, Math.floor(lockOptions.leaseMs / 3));
     this.settings = new SettingsRepository(raw);
     this.runs = new RunRepository(raw);
     this.workQueue = new WorkQueueRepository(raw);
@@ -575,6 +653,14 @@ export class BridgeDb {
 
   runInTransaction<T>(operation: () => T): T {
     return this.raw.transaction(operation)();
+  }
+
+  runWithLockFence<T>(handle: ExecutionLaneHandle, operation: () => T): T {
+    assertExecutionScope(handle.surface, handle.chatKey);
+    return this.runInTransaction(() => {
+      if (!this.locks.heartbeat(handle)) throw new ExecutionLockLostError();
+      return operation();
+    });
   }
 
   // ── Session management ───────────────────────────────────────────────────
@@ -589,12 +675,21 @@ export class BridgeDb {
 
   // ── Per-chat execution lock ──────────────────────────────────────────────
 
-  tryLock(chatId: string): boolean {
-    return this.locks.tryLock(chatId);
+  acquireLock(surface: string, chatKey: string): ExecutionLaneHandle | null {
+    assertExecutionScope(surface, chatKey);
+    return this.locks.acquire(surface, chatKey);
   }
 
-  unlock(chatId: string): void {
-    this.locks.unlock(chatId);
+  heartbeatLock(handle: ExecutionLaneHandle): boolean {
+    return this.locks.heartbeat(handle);
+  }
+
+  ownsLock(handle: ExecutionLaneHandle): boolean {
+    return this.locks.owns(handle);
+  }
+
+  unlock(handle: ExecutionLaneHandle): boolean {
+    return this.locks.unlock(handle);
   }
 
   // ── Global polling offset (per bot kind) ────────────────────────────────
@@ -998,36 +1093,139 @@ export class BridgeDb {
   }
 
   // ── Pending messages ────────────────────────────────────────────────────
-  pendingMsgCount(chatKey: string): number {
+  pendingMsgCount(surface: string, chatKey: string): number {
+    assertExecutionScope(surface, chatKey);
     const row = this.raw
-      .prepare(`SELECT COUNT(*) AS n FROM pending_messages WHERE chat_key = ?`)
-      .get(chatKey) as { n: number };
+      .prepare(`SELECT COUNT(*) AS n FROM pending_messages WHERE surface = ? AND chat_key = ?`)
+      .get(surface, chatKey) as { n: number };
     return row.n;
   }
 
   enqueueMsg(
+    surface: string,
     chatKey: string,
-    msg: { prompt: string; chatId: number; threadId?: number; chatType: string; userId?: number },
+    msg: { prompt: string; chatId: number; threadId?: number; chatType: string; userId?: number; attachments?: string[] },
   ): void {
+    assertExecutionScope(surface, chatKey);
     this.raw
       .prepare(
-        `INSERT INTO pending_messages (chat_key, prompt, chat_id, thread_id, chat_type, user_id)
-         VALUES (?, ?, ?, ?, ?, ?)`
+        `INSERT INTO pending_messages (surface, chat_key, prompt, chat_id, thread_id, chat_type, user_id, attachments_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
       )
-      .run(chatKey, msg.prompt, msg.chatId, msg.threadId ?? null, msg.chatType, msg.userId ?? null);
+      .run(surface, chatKey, msg.prompt, msg.chatId, msg.threadId ?? null, msg.chatType, msg.userId ?? null, JSON.stringify(msg.attachments ?? []));
   }
 
-  dequeueMsgs(chatKey: string): Array<{
-    id: number; prompt: string; chatId: number; threadId: number | null; chatType: string; userId: number | null;
+  dequeueMsgs(surface: string, chatKey: string): Array<{
+    id: number; prompt: string; chatId: number; threadId: number | null; chatType: string; userId: number | null; attachments: string[];
   }> {
+    assertExecutionScope(surface, chatKey);
     return (this.raw
-      .prepare(`SELECT id, prompt, chat_id AS chatId, thread_id AS threadId, chat_type AS chatType, user_id AS userId
-                FROM pending_messages WHERE chat_key = ? ORDER BY id ASC`)
-      .all(chatKey) as any);
+      .prepare(`SELECT id, prompt, chat_id AS chatId, thread_id AS threadId, chat_type AS chatType, user_id AS userId,
+                       attachments_json AS attachmentsJson
+                FROM pending_messages WHERE surface = ? AND chat_key = ? ORDER BY id ASC`)
+      .all(surface, chatKey) as any[]).map(({ attachmentsJson, ...row }) => ({ ...row, attachments: JSON.parse(attachmentsJson || "[]") }));
   }
 
   deletePendingMsg(id: number): void {
     this.raw.prepare(`DELETE FROM pending_messages WHERE id = ?`).run(id);
+  }
+
+  claimNextPendingMsg(handle: ExecutionLaneHandle): {
+    id: number; chatKey: string; prompt: string; chatId: number; threadId: number | null; chatType: string; userId: number | null; attachments: string[];
+  } | null {
+    const { surface, chatKey } = handle;
+    assertExecutionScope(surface, chatKey);
+    return this.runInTransaction(() => {
+      if (!this.ownsLock(handle)) return null;
+      this.raw.prepare(`
+        UPDATE pending_messages SET state = 'queued', claim_run_id = NULL, claim_acquisition_id = NULL, claimed_at = NULL
+        WHERE surface = ? AND chat_key = ? AND state = 'claimed' AND (claim_run_id IS NOT ? OR claim_acquisition_id IS NOT ?)
+      `).run(surface, chatKey, handle.runId, handle.acquisitionId);
+      const active = this.raw.prepare(`
+        SELECT 1 FROM pending_messages
+        WHERE surface = ? AND chat_key = ? AND state = 'claimed' AND claim_run_id = ? AND claim_acquisition_id = ? LIMIT 1
+      `).get(surface, chatKey, handle.runId, handle.acquisitionId);
+      if (active) return null;
+      const row = this.raw.prepare(`
+        SELECT id, chat_key AS chatKey, prompt, chat_id AS chatId, thread_id AS threadId, chat_type AS chatType, user_id AS userId,
+               attachments_json AS attachmentsJson
+        FROM pending_messages WHERE surface = ? AND chat_key = ? AND state = 'queued' ORDER BY id ASC LIMIT 1
+      `).get(surface, chatKey) as any;
+      if (!row) return null;
+      const changed = this.raw.prepare(`
+        UPDATE pending_messages SET state = 'claimed', claim_run_id = ?, claim_acquisition_id = ?, claimed_at = ?
+        WHERE id = ? AND state = 'queued'
+      `).run(handle.runId, handle.acquisitionId, new Date().toISOString(), row.id).changes;
+      if (changed !== 1) return null;
+      const { attachmentsJson, ...claimed } = row;
+      return { ...claimed, attachments: JSON.parse(attachmentsJson || "[]") };
+    });
+  }
+
+  completePendingMsg(handle: ExecutionLaneHandle, id: number): boolean {
+    const { surface, chatKey } = handle;
+    assertExecutionScope(surface, chatKey);
+    return this.runInTransaction(() => {
+      if (!this.locks.owns(handle)) return false;
+      return this.raw.prepare(`
+        DELETE FROM pending_messages
+        WHERE id = ? AND surface = ? AND chat_key = ? AND state = 'claimed' AND claim_run_id = ? AND claim_acquisition_id = ?
+      `).run(id, surface, chatKey, handle.runId, handle.acquisitionId).changes === 1;
+    });
+  }
+
+  admitMessage(
+    surface: string,
+    chatKey: string,
+    msg: { prompt: string; chatId: number; threadId?: number; chatType: string; userId?: number; attachments?: string[] },
+    maxDepth: number,
+  ): { kind: "execute_current"; handle: ExecutionLaneHandle } | { kind: "queued"; position: number } | { kind: "full" } |
+     { kind: "execute_claimed"; position: number; handle: ExecutionLaneHandle; claimed: ReturnType<BridgeDb["claimNextPendingMsg"]> & {} } {
+    assertExecutionScope(surface, chatKey);
+    return this.runInTransaction(() => {
+      const pending = this.pendingMsgCount(surface, chatKey);
+      const directHandle = pending === 0 ? this.locks.acquire(surface, chatKey) : null;
+      if (directHandle) return { kind: "execute_current" as const, handle: directHandle };
+      if (pending >= maxDepth) return { kind: "full" as const };
+      this.enqueueMsg(surface, chatKey, msg);
+      const position = pending + 1;
+      const queueHandle = this.locks.acquire(surface, chatKey);
+      if (queueHandle) {
+        const claimed = this.claimNextPendingMsg(queueHandle);
+        if (claimed) return { kind: "execute_claimed" as const, position, handle: queueHandle, claimed };
+      }
+      return { kind: "queued" as const, position };
+    });
+  }
+
+  releasePendingClaim(handle: ExecutionLaneHandle, id: number): void {
+    if (!this.locks.owns(handle)) return;
+    this.raw.prepare(`UPDATE pending_messages SET state = 'queued', claim_run_id = NULL, claim_acquisition_id = NULL, claimed_at = NULL WHERE id = ? AND claim_run_id = ? AND claim_acquisition_id = ?`)
+      .run(id, handle.runId, handle.acquisitionId);
+  }
+
+  unlockIfQueueEmpty(handle: ExecutionLaneHandle): boolean {
+    const { surface, chatKey } = handle;
+    assertExecutionScope(surface, chatKey);
+    return this.runInTransaction(() => {
+      if (!this.ownsLock(handle)) return false;
+      const pending = this.raw.prepare(`SELECT 1 FROM pending_messages WHERE surface = ? AND chat_key = ? LIMIT 1`).get(surface, chatKey);
+      if (pending) return false;
+      return this.unlock(handle);
+    });
+  }
+
+  getQuarantinedPendingMessageCount(): number {
+    const { count } = this.raw.prepare(
+      `SELECT COUNT(*) AS count FROM pending_messages WHERE surface = 'legacy'`
+    ).get() as { count: number };
+    return count;
+  }
+
+  getPendingLaneKeys(surface: string): string[] {
+    if (!surface?.trim()) throw new Error("surface is required");
+    return (this.raw.prepare(`SELECT DISTINCT chat_key AS chatKey FROM pending_messages WHERE surface = ? ORDER BY chat_key`)
+      .all(surface) as Array<{ chatKey: string }>).map((row) => row.chatKey);
   }
 
   // ── Conversation summaries ──────────────────────────────────────────────
@@ -1083,15 +1281,16 @@ export class BridgeDb {
     this.raw.prepare(`DELETE FROM conversation_summaries WHERE chat_key = ?`).run(chatKey);
   }
 
-  getConvStatus(chatKey: string): {
+  getConvStatus(chatKey: string, surface: string): {
     turnCount: number; pendingCount: number; latestSummaryAt: string | null; latestTurnAt: string | null;
   } {
+    assertExecutionScope(surface, chatKey);
     const tc = this.raw
       .prepare(`SELECT COUNT(*) AS n FROM conversation_turns WHERE chat_key = ?`)
       .get(chatKey) as { n: number };
     const pc = this.raw
-      .prepare(`SELECT COUNT(*) AS n FROM pending_messages WHERE chat_key = ?`)
-      .get(chatKey) as { n: number };
+      .prepare(`SELECT COUNT(*) AS n FROM pending_messages WHERE surface = ? AND chat_key = ?`)
+      .get(surface, chatKey) as { n: number };
     const lt = this.raw
       .prepare(`SELECT created_at FROM conversation_turns WHERE chat_key = ? ORDER BY id DESC LIMIT 1`)
       .get(chatKey) as { created_at: string } | undefined;

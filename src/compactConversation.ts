@@ -66,6 +66,8 @@ export interface CompactConversationDeps {
   exhaustedProviders?: readonly BotKind[];
   maxAttempts?: number;
   repairAttempts?: number;
+  /** Optional execution-lane fence, evaluated inside the persistence transaction. */
+  assertCanCommit?: () => void;
 }
 
 export type CompactConversationOutcome = "compacted" | "no_turns" | "failed";
@@ -182,12 +184,21 @@ export async function compactConversation(
       toolMode: "none",
     });
     cliCallCount++;
-    const raw = await Promise.race([
-      runCli(invocation.command, invocation.args, process.cwd(), buildExecutionOptions(target.provider)),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("compact timeout")), COMPACT_TIMEOUT_MS)
-      ),
-    ]);
+    let timeout: NodeJS.Timeout | null = null;
+    let cancelTimeout = (): void => {};
+    let raw: string;
+    try {
+      raw = await Promise.race([
+        runCli(invocation.command, invocation.args, process.cwd(), buildExecutionOptions(target.provider)),
+        new Promise<string>((resolve, reject) => {
+          cancelTimeout = () => resolve("");
+          timeout = setTimeout(() => reject(new Error("compact timeout")), COMPACT_TIMEOUT_MS);
+        }),
+      ]);
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      cancelTimeout();
+    }
     return typeof raw === "string" ? raw.trim() : "";
   };
 
@@ -260,6 +271,7 @@ export async function compactConversation(
   let rejectedCandidateCount = 0;
   try {
     db.runInTransaction(() => {
+      deps.assertCanCommit?.();
       db.addConvSummary(chatKey, startId, endId, finalOutput.summaryMd);
 
       for (const candidate of finalOutput.memoryCandidates) {

@@ -168,33 +168,35 @@ describe("BridgeDb repository wiring", () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe("LockRepository", () => {
+  const options = { serviceId: "test", runId: "test-run", leaseMs: 90_000 };
+
   it("can be instantiated with a raw Database connection", () => {
-    const repo = new LockRepository(raw);
+    const repo = new LockRepository(raw, options);
     expect(repo).toBeDefined();
   });
 
   it("acquires lock when chat is free", () => {
-    const repo = new LockRepository(raw);
-    expect(repo.tryLock("chat1")).toBe(true);
+    const repo = new LockRepository(raw, options);
+    expect(repo.acquire("test", "chat1")).not.toBeNull();
   });
 
   it("rejects lock when chat is already locked", () => {
-    const repo = new LockRepository(raw);
-    repo.tryLock("chat1");
-    expect(repo.tryLock("chat1")).toBe(false);
+    const repo = new LockRepository(raw, options);
+    repo.acquire("test", "chat1");
+    expect(repo.acquire("test", "chat1")).toBeNull();
   });
 
   it("lock is released by unlock", () => {
-    const repo = new LockRepository(raw);
-    repo.tryLock("chat1");
-    repo.unlock("chat1");
-    expect(repo.tryLock("chat1")).toBe(true);
+    const repo = new LockRepository(raw, options);
+    const handle = repo.acquire("test", "chat1")!;
+    repo.unlock(handle);
+    expect(repo.acquire("test", "chat1")).not.toBeNull();
   });
 
   it("lock is per chat — other chats are unaffected", () => {
-    const repo = new LockRepository(raw);
-    repo.tryLock("chat1");
-    expect(repo.tryLock("chat2")).toBe(true);
+    const repo = new LockRepository(raw, options);
+    repo.acquire("test", "chat1");
+    expect(repo.acquire("test", "chat2")).not.toBeNull();
   });
 });
 
@@ -587,8 +589,8 @@ describe("Repository constructor contracts", () => {
     expect(() => new SessionRepository(raw)).not.toThrow();
   });
 
-  it("LockRepository constructor signature accepts Database.Database", () => {
-    expect(() => new LockRepository(raw)).not.toThrow();
+  it("LockRepository constructor requires explicit run identity", () => {
+    expect(() => new LockRepository(raw, { serviceId: "test", runId: "test-run", leaseMs: 90_000 })).not.toThrow();
   });
 
   it("SettingsRepository constructor signature accepts Database.Database", () => {

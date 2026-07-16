@@ -68,7 +68,7 @@ describe("createRunCommand GH token fallback", () => {
     ) => {
       if (binary === "node" && args[0] === "-e") {
         cb(null, String(opts.env.GH_TOKEN || ""), "");
-        return;
+        return true;
       }
       return undefined;
     };

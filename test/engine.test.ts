@@ -20,6 +20,13 @@ function makeMessage(text: string, userId = 42, chatId = 100): TelegramMessage {
   };
 }
 
+function makePrivateTopicMessage(text: string, threadId: number, userId = 42, chatId = 100): TelegramMessage {
+  return {
+    ...makeMessage(text, userId, chatId),
+    message_thread_id: threadId,
+  };
+}
+
 function makeMockClient() {
   return {
     getUpdates: vi.fn().mockResolvedValue({ result: [], ok: true }),
@@ -87,6 +94,18 @@ describe("BridgeEngine", () => {
     try { rmSync(dbPath); } catch {}
   });
 
+  it("requires an explicit runtime surface identity", async () => {
+    const { BridgeEngine } = await import("../src/engine.js");
+    expect(() => new BridgeEngine({
+      kind: "claude",
+      botConfig: { command: "claude", modelPreference: [] },
+      allowedUserIds: new Set(["42"]),
+      executionMode: "safe",
+      asyncEnabled: false,
+      pollIntervalMs: 1000,
+    } as any, db, makeMockClient(), {})).toThrow("BridgeEngine surfaceIdentity is required");
+  });
+
   describe("handoff consumption", () => {
     it("clears a pending handoff mark after the first turn for that chat+CLI", async () => {
       const { BridgeEngine } = await import("../src/engine.js");
@@ -95,6 +114,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -122,6 +142,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -155,7 +176,7 @@ describe("BridgeEngine", () => {
       });
       const client = makeMockClient();
       const engine = new BridgeEngine(
-        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        { surfaceIdentity: "test", kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
         db, client, { runCli },
       );
 
@@ -176,7 +197,7 @@ describe("BridgeEngine", () => {
       });
       const client = makeMockClient();
       const engine = new BridgeEngine(
-        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        { surfaceIdentity: "test", kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
         db, client, { runCli },
       );
 
@@ -198,7 +219,7 @@ describe("BridgeEngine", () => {
       });
       const client = makeMockClient();
       const engine = new BridgeEngine(
-        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        { surfaceIdentity: "test", kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
         db, client, { runCli },
       );
 
@@ -219,7 +240,7 @@ describe("BridgeEngine", () => {
       });
       const client = makeMockClient();
       const engine = new BridgeEngine(
-        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        { surfaceIdentity: "test", kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
         db, client, { runCli },
       );
 
@@ -247,7 +268,7 @@ describe("BridgeEngine", () => {
       });
       const client = makeMockClient();
       const engine = new BridgeEngine(
-        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: true, pollIntervalMs: 1000 },
+        { surfaceIdentity: "test", kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: true, pollIntervalMs: 1000 },
         db, client, { runCliAsync },
       );
 
@@ -273,7 +294,7 @@ describe("BridgeEngine", () => {
       });
       const client = makeMockClient();
       const engine = new BridgeEngine(
-        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        { surfaceIdentity: "test", kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
         db, client, { runCli },
       );
 
@@ -298,7 +319,7 @@ describe("BridgeEngine", () => {
       });
       const client = makeMockClient();
       const engine = new BridgeEngine(
-        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        { surfaceIdentity: "test", kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
         db, client, { runCli },
       );
 
@@ -329,6 +350,7 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -376,7 +398,7 @@ describe("BridgeEngine", () => {
       });
       const client = makeMockClient();
       const engine = new BridgeEngine(
-        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        { surfaceIdentity: "test", kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
         db, client, { runCli },
       );
 
@@ -403,7 +425,7 @@ describe("BridgeEngine", () => {
       });
       const client = makeMockClient();
       const engine = new BridgeEngine(
-        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        { surfaceIdentity: "test", kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
         db, client, { runCli },
       );
 
@@ -434,6 +456,7 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: ["claude-primary"] },
           allowedUserIds: new Set(["42"]),
@@ -476,7 +499,7 @@ describe("BridgeEngine", () => {
       });
       const client = makeMockClient();
       const engine = new BridgeEngine(
-        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        { surfaceIdentity: "test", kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
         db, client, { runCli },
       );
 
@@ -501,7 +524,7 @@ describe("BridgeEngine", () => {
       });
       const client = makeMockClient();
       const engine = new BridgeEngine(
-        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        { surfaceIdentity: "test", kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
         db, client, { runCli },
       );
 
@@ -529,7 +552,7 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const engine = new BridgeEngine(
-        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
+        { surfaceIdentity: "test", kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000 },
         db, client, { runCli },
       );
 
@@ -563,7 +586,7 @@ describe("BridgeEngine", () => {
       });
       const client = makeMockClient();
       const engine = new BridgeEngine(
-        { kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: true, pollIntervalMs: 1000 },
+        { surfaceIdentity: "test", kind: "claude", botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: true, pollIntervalMs: 1000 },
         db, client, { runCli, runCliAsync },
       );
 
@@ -581,6 +604,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "health",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -611,6 +635,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -641,6 +666,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "codex",
           botConfig: { command: "codex", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -675,6 +701,7 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -705,6 +732,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -731,6 +759,7 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "health",
           executionKind: "antigravity",
           botConfig: { command: "agy", modelPreference: ["gemini-3-pro-preview"] },
@@ -773,6 +802,7 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "antigravity",
           botConfig: { command: "agy", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -818,6 +848,7 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "antigravity",
           botConfig: { command: "agy", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -861,6 +892,7 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "antigravity",
           botConfig: { command: "agy", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -904,6 +936,7 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "antigravity",
           botConfig: { command: "agy", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -940,6 +973,7 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "antigravity",
           botConfig: { command: "agy", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -961,6 +995,57 @@ describe("BridgeEngine", () => {
       expect(client.sendMessage.mock.calls.at(-1)?.[0].text).toBe("Recovered on second fresh retry");
     });
 
+    it.each(["sync", "async"] as const)("commits a recoverable Agy fresh-session retry exactly once in %s mode", async (mode) => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const memorySidecar = [
+        "Recovered exactly once.",
+        "<!-- agent-bridge-memory",
+        JSON.stringify([{ type: "decision", scope: "project", text: `Agy ${mode} recovery commits one memory candidate.`, confidence: 0.9 }]),
+        "-->",
+      ].join("\n");
+      let calls = 0;
+      const execute = vi.fn().mockImplementation(async () => {
+        calls += 1;
+        if (calls === 1) return "***\nPrior answer";
+        if (calls === 2) throw new Error("error executing cascade step: CORTEX_STEP_TYPE_COMMAND_STATUS: command retry/task not found");
+        return `***\n${memorySidecar}`;
+      });
+      const onAfterExecute = vi.fn();
+      const client = makeMockClient();
+      const engine = new BridgeEngine(
+        {
+          surfaceIdentity: "test",
+          kind: "antigravity",
+          botConfig: { command: "agy", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: mode === "async",
+          pollIntervalMs: 1000,
+          fullConfig: makeFullConfig(dbPath),
+          hooks: { onAfterExecute },
+        },
+        db,
+        client,
+        mode === "async"
+          ? { runCliAsync: async (...args: any[]) => ({ text: await execute(...args) }) }
+          : { runCli: execute },
+      );
+
+      db.setSession("100", "antigravity", "stale-conversation");
+      await engine.handleMessages([makeMessage("first question")]);
+      const turnsBeforeRetry = db.raw.prepare("SELECT COUNT(*) AS count FROM conversation_turns WHERE chat_key = '100'").get() as { count: number };
+      const memoriesBeforeRetry = db.getMemoryCount();
+      onAfterExecute.mockClear();
+
+      await engine.handleMessages([makeMessage("second question")]);
+
+      const turnsAfterRetry = db.raw.prepare("SELECT COUNT(*) AS count FROM conversation_turns WHERE chat_key = '100'").get() as { count: number };
+      expect(turnsAfterRetry.count - turnsBeforeRetry.count).toBe(2);
+      expect(db.getMemoryCount() - memoriesBeforeRetry).toBe(1);
+      expect(onAfterExecute).toHaveBeenCalledOnce();
+      expect(client.sendMessage.mock.calls.at(-1)?.[0].text).toBe("Recovered exactly once.");
+    });
+
     it("surfaces a friendly error instead of the raw cascade error when all fresh retries fail", async () => {
       const { BridgeEngine } = await import("../src/engine.js");
 
@@ -971,6 +1056,7 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "antigravity",
           botConfig: { command: "agy", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1004,6 +1090,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["99999"]), // only 99999 allowed
@@ -1030,6 +1117,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1059,10 +1147,11 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
 
       // Hold the lock externally to simulate an in-flight execution
-      db.tryLock("100");
+      db.acquireLock("test", "100");
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1086,12 +1175,137 @@ describe("BridgeEngine", () => {
       // This test verifies the queue is now backed by SQLite, not an in-memory Map.
       // After a new engine instance is created with the same db, the queued message
       // should be visible.
-      db.tryLock("chat:1");
-      db.enqueueMsg("chat:1", { prompt: "hello", chatId: 1, chatType: "private" });
+      db.acquireLock("test", "chat:1");
+      db.enqueueMsg("test", "chat:1", { prompt: "hello", chatId: 1, chatType: "private" });
       // Simulate engine restart: new instance, same db
-      expect(db.pendingMsgCount("chat:1")).toBe(1);
-      const msgs = db.dequeueMsgs("chat:1");
+      expect(db.pendingMsgCount("test", "chat:1")).toBe(1);
+      const msgs = db.dequeueMsgs("test", "chat:1");
       expect(msgs[0].prompt).toBe("hello");
+    });
+
+    it("lets standalone bot surfaces execute concurrently for the same chat", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      let releaseFirst!: () => void;
+      let markFirstStarted!: () => void;
+      const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
+      const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      const firstRun = vi.fn().mockImplementation(async () => {
+        markFirstStarted();
+        await firstBlocked;
+        return "codex done";
+      });
+      const secondRun = vi.fn().mockResolvedValue("claude done");
+      const codex = new BridgeEngine({
+        kind: "codex", surfaceIdentity: "telegram:codex",
+        botConfig: { command: "codex", modelPreference: [] }, allowedUserIds: new Set(["42"]),
+        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+      }, db, makeMockClient(), { runCli: firstRun });
+      const claude = new BridgeEngine({
+        kind: "claude", surfaceIdentity: "telegram:claude",
+        botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]),
+        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+      }, db, makeMockClient(), { runCli: secondRun });
+
+      const codexTask = codex.handleMessages([makeMessage("codex")]);
+      await firstStarted;
+      await claude.handleMessages([makeMessage("claude")]);
+
+      const ranConcurrently = secondRun.mock.calls.length === 1;
+      db.raw.exec("DELETE FROM pending_messages");
+      releaseFirst();
+      await codexTask;
+      expect(ranConcurrently).toBe(true);
+    });
+
+    it("lets different private topics execute concurrently on one interactive surface", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      let releaseFirst!: () => void;
+      let markFirstStarted!: () => void;
+      const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
+      const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      const firstRun = vi.fn().mockImplementation(async () => {
+        markFirstStarted();
+        await firstBlocked;
+        return "topic 7 done";
+      });
+      const secondRun = vi.fn().mockResolvedValue("topic 8 done");
+      const topic7 = new BridgeEngine({
+        kind: "codex", surfaceIdentity: "telegram:interactive",
+        botConfig: { command: "codex", modelPreference: [] }, allowedUserIds: new Set(["42"]),
+        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+      }, db, makeMockClient(), { runCli: firstRun });
+      const topic8 = new BridgeEngine({
+        kind: "claude", surfaceIdentity: "telegram:interactive",
+        botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]),
+        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+      }, db, makeMockClient(), { runCli: secondRun });
+
+      const topic7Task = topic7.handleMessages([makePrivateTopicMessage("seven", 7)]);
+      await firstStarted;
+      await topic8.handleMessages([makePrivateTopicMessage("eight", 8)]);
+
+      const ranConcurrently = secondRun.mock.calls.length === 1;
+      db.raw.exec("DELETE FROM pending_messages");
+      releaseFirst();
+      await topic7Task;
+      expect(ranConcurrently).toBe(true);
+    });
+
+    it("queues a second turn in the same private topic and interactive surface", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      let releaseFirst!: () => void;
+      let markFirstStarted!: () => void;
+      const firstStarted = new Promise<void>((resolve) => { markFirstStarted = resolve; });
+      const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      const firstRun = vi.fn().mockImplementation(async () => {
+        markFirstStarted();
+        await firstBlocked;
+        return "first done";
+      });
+      const secondRun = vi.fn().mockResolvedValue("second done");
+      const firstClient = makeMockClient();
+      const secondClient = makeMockClient();
+      const first = new BridgeEngine({
+        kind: "codex", surfaceIdentity: "telegram:interactive",
+        botConfig: { command: "codex", modelPreference: [] }, allowedUserIds: new Set(["42"]),
+        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+      }, db, firstClient, { runCli: firstRun });
+      const second = new BridgeEngine({
+        kind: "claude", surfaceIdentity: "telegram:interactive",
+        botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]),
+        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+      }, db, secondClient, { runCli: secondRun });
+
+      const firstTask = first.handleMessages([makePrivateTopicMessage("first", 7)]);
+      await firstStarted;
+      await second.handleMessages([makePrivateTopicMessage("second", 7)]);
+
+      expect(secondRun).not.toHaveBeenCalled();
+      expect(secondClient.sendMessage.mock.calls.some((call: any[]) => call[0]?.text?.includes("Queued"))).toBe(true);
+      db.raw.exec("DELETE FROM pending_messages");
+      releaseFirst();
+      await firstTask;
+    });
+
+    it("private-topic /stop clears only the queue owned by that topic lane", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const surface = "telegram:interactive";
+      db.enqueueMsg(surface, "100:7", {
+        prompt: "topic seven queued", chatId: 100, threadId: 7, chatType: "private",
+      });
+      db.enqueueMsg(surface, "100:8", {
+        prompt: "topic eight queued", chatId: 100, threadId: 8, chatType: "private",
+      });
+      const engine = new BridgeEngine({
+        kind: "codex", surfaceIdentity: surface,
+        botConfig: { command: "codex", modelPreference: [] }, allowedUserIds: new Set(["42"]),
+        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+      }, db, makeMockClient(), {});
+
+      await engine.handleUpdate({ update_id: 1, message: makePrivateTopicMessage("/stop", 7) });
+
+      expect(db.pendingMsgCount(surface, "100:7")).toBe(0);
+      expect(db.pendingMsgCount(surface, "100:8")).toBe(1);
     });
   });
 
@@ -1119,6 +1333,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "codex",
           botConfig: { command: "codex", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1159,6 +1374,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "codex",
           botConfig: { command: "codex", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1189,6 +1405,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "codex",
           botConfig: { command: "codex", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1220,6 +1437,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1267,6 +1485,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1305,6 +1524,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: {
             command: "claude",
@@ -1358,16 +1578,19 @@ describe("BridgeEngine", () => {
     it("uses the topic-aware chatKey for output dirs and uploads files back to the originating thread", async () => {
       const { BridgeEngine } = await import("../src/engine.js");
       const client = makeMockClient();
+      let runOutputDir = "";
       const runCli = vi.fn().mockImplementation(async (_command: string, args: string[]) => {
         const promptArg = args[args.length - 1];
         const match = String(promptArg).match(/save it to (\/tmp\/bridge-out\/\S+)/);
-        expect(match?.[1]).toBe("/tmp/bridge-out/claude-100:7");
+        expect(match?.[1]).toMatch(/^\/tmp\/bridge-out\/claude-100:7-[0-9a-f-]+$/);
+        runOutputDir = match![1];
         await import("node:fs/promises").then(({ writeFile }) => writeFile(join(match![1], "chart.png"), "PNG"));
         return "done";
       });
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1384,7 +1607,7 @@ describe("BridgeEngine", () => {
 
       expect(client.sendPhoto).toHaveBeenCalledOnce();
       expect(client.sendPhoto.mock.calls[0][0]).toBe(100);
-      expect(client.sendPhoto.mock.calls[0][1]).toBe("/tmp/bridge-out/claude-100:7/chart.png");
+      expect(client.sendPhoto.mock.calls[0][1]).toBe(join(runOutputDir, "chart.png"));
       expect(client.sendPhoto.mock.calls[0][3]).toEqual({ message_thread_id: 7 });
     });
 
@@ -1393,6 +1616,7 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "codex",
           botConfig: { command: "codex", modelPreference: ["gpt-5.5"] },
           allowedUserIds: new Set(["42"]),
@@ -1429,10 +1653,11 @@ describe("BridgeEngine", () => {
 
       // chatId=100, threadId=7 → topic-aware key is "100:7"
       const threadKey = "100:7";
-      db.tryLock(threadKey); // hold lock to force queueing
+      db.acquireLock("test", threadKey); // hold lock to force queueing
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1470,6 +1695,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1515,6 +1741,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1541,10 +1768,11 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
 
       const flatKey = "100";
-      db.tryLock(flatKey); // hold lock to force queueing
+      db.acquireLock("test", flatKey); // hold lock to force queueing
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1581,10 +1809,11 @@ describe("BridgeEngine", () => {
       const client = makeMockClient();
 
       const threadKey = "100:7";
-      db.tryLock(threadKey); // hold lock
+      db.acquireLock("test", threadKey); // hold lock
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1614,7 +1843,7 @@ describe("BridgeEngine", () => {
 
       // Hold lock only for thread 7
       const thread7Key = "100:7";
-      db.tryLock(thread7Key);
+      db.acquireLock("test", thread7Key);
 
       const runCliAsync = vi.fn().mockImplementation(async (
         _command: string,
@@ -1631,6 +1860,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1678,6 +1908,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1718,6 +1949,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1731,12 +1963,11 @@ describe("BridgeEngine", () => {
       );
 
       const topicKey = "100:7";
-      db.tryLock(topicKey);
+      const blockingHandle = db.acquireLock("test", topicKey)!;
       await engine.handleMessages([makeGroupMessage("queued topic message", 42, 100, 7)]);
 
-      db.unlock(topicKey);
-      (engine as any)._drainQueue(topicKey);
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      db.unlock(blockingHandle);
+      await engine.recoverPendingQueues();
 
       expect(runCliAsync).toHaveBeenCalledOnce();
       expect(db.getSession(topicKey, "claude")).toBe("queued-topic-session");
@@ -1751,6 +1982,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1795,6 +2027,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1831,6 +2064,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1874,6 +2108,7 @@ describe("BridgeEngine", () => {
 
         const engine = new BridgeEngine(
           {
+            surfaceIdentity: "test",
             kind: "claude",
             botConfig: { command: "claude", modelPreference: [] },
             allowedUserIds: new Set(["42"]),
@@ -1918,6 +2153,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1956,6 +2192,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -1981,6 +2218,53 @@ describe("BridgeEngine", () => {
   });
 
   describe("/compact command", () => {
+    it("compacts only the originating private topic and resets only its provider session", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+      db.addConvTurn("100:7", "user", "topic seven private objective");
+      db.addConvTurn("100:7", "assistant", "topic seven private response");
+      db.addConvTurn("100:8", "user", "topic eight must remain isolated");
+      db.addConvTurn("100:8", "assistant", "topic eight private response");
+      db.setSession("100:7", "claude", "session-topic-7");
+      db.setSession("100:8", "claude", "session-topic-8");
+      db.addMemory({
+        id: "instance-global-memory",
+        type: "decision",
+        scope: "project",
+        text: "Project memory remains instance-global across Telegram topics.",
+      });
+      const memoryCountBefore = db.getMemoryCount();
+      let capturedPrompt = "";
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompt = String(args.at(-1));
+        return compactJson("Current objective:\n- topic seven only\n\nDurable facts:\n- none\n\nOpen state:\n- none");
+      });
+      const engine = new BridgeEngine({
+        kind: "claude",
+        surfaceIdentity: "telegram:interactive",
+        botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
+        allowedUserIds: new Set(["42"]),
+        executionMode: "safe",
+        asyncEnabled: false,
+        pollIntervalMs: 1000,
+      }, db, client, { runCli });
+
+      await engine.handleMessages([makePrivateTopicMessage("/compact", 7)]);
+
+      expect(capturedPrompt).toContain("topic seven private objective");
+      expect(capturedPrompt).not.toContain("topic eight must remain isolated");
+      expect(db.getRecentConvTurns("100:7", 10)).toEqual([]);
+      expect(db.getRecentConvTurns("100:8", 10).map((turn) => turn.text)).toEqual([
+        "topic eight must remain isolated", "topic eight private response",
+      ]);
+      expect(db.getLatestConvSummary("100:7")?.summary_md).toContain("topic seven only");
+      expect(db.getLatestConvSummary("100:8")).toBeNull();
+      expect(db.getSession("100:7", "claude")).toBeNull();
+      expect(db.getSession("100:8", "claude")).toBe("session-topic-8");
+      expect(db.getMemoryCount()).toBe(memoryCountBefore);
+      expect(db.searchMemories("instance-global Telegram topics")).toHaveLength(1);
+    });
+
     it("compact handler calls runCli for LLM summary and stores result", async () => {
       const { BridgeEngine } = await import("../src/engine.js");
       const client = makeMockClient();
@@ -1997,6 +2281,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
           allowedUserIds: new Set(["42"]),
@@ -2036,6 +2321,7 @@ describe("BridgeEngine", () => {
       });
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: ["claude-primary"] },
           allowedUserIds: new Set(["42"]),
@@ -2075,6 +2361,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
           allowedUserIds: new Set(["42"]),
@@ -2120,6 +2407,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
           allowedUserIds: new Set(["42"]),
@@ -2149,6 +2437,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
           allowedUserIds: new Set(["42"]),
@@ -2181,6 +2470,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
           allowedUserIds: new Set(["42"]),
@@ -2217,6 +2507,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
           allowedUserIds: new Set(["42"]),
@@ -2249,6 +2540,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
           allowedUserIds: new Set(["42"]),
@@ -2290,6 +2582,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
           allowedUserIds: new Set(["42"]),
@@ -2326,6 +2619,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: ["claude-opus-4-5"] },
           allowedUserIds: new Set(["42"]),
@@ -2366,6 +2660,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -2406,6 +2701,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -2438,6 +2734,7 @@ describe("BridgeEngine", () => {
       });
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -2479,6 +2776,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -2493,7 +2791,7 @@ describe("BridgeEngine", () => {
       await engine.handleMessages([makeMessage("/reset")]);
 
       // Data must be preserved
-      const status = db.getConvStatus("100");
+      const status = db.getConvStatus("100", "test");
       expect(status.turnCount).toBe(1);
       const summary = db.getLatestConvSummary("100");
       expect(summary).not.toBeNull();
@@ -2516,6 +2814,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -2559,6 +2858,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -2594,6 +2894,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "codex",
           botConfig: { command: "codex", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -2627,6 +2928,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -2659,6 +2961,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "codex",
           botConfig: { command: "codex", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -2690,6 +2993,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "antigravity",
           botConfig: { command: "agy", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
@@ -2718,6 +3022,7 @@ describe("BridgeEngine", () => {
 
       const engine = new BridgeEngine(
         {
+          surfaceIdentity: "test",
           kind: "claude",
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),

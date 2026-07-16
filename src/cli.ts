@@ -7,6 +7,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, readdirSync, statSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname, basename } from "node:path";
@@ -18,8 +19,17 @@ import { type as evtType } from "./events/types.js";
 import type { BridgeEvent } from "./events/types.js";
 import { appendEffortArgs, type EffortLevel } from "./effort.js";
 import { isProviderFallbackEligibleError } from "./providers/fallbackEligibility.js";
+import type { ExecutionLaneHandle } from "./db.js";
 
-const activeProcesses = new Map<number | string, ChildProcess>();
+interface ActiveExecution {
+  child: ChildProcess | null;
+  lifecycleToken: string | null;
+  lifecycleHandle: ExecutionLaneHandle | null;
+  lifecycleDone: Promise<void> | null;
+  finishLifecycle: (() => void) | null;
+}
+
+const activeExecutions = new Map<number | string, ActiveExecution>();
 const abortedChildren = new WeakSet<ChildProcess>();
 
 const STRIPPED_ENV_KEYS = /^TELEGRAM_BOT_TOKEN|^TELEGRAM_ALLOWED_USER_IDS/;
@@ -161,27 +171,101 @@ function createAntigravityPlannerStallWatch(args: string[], stdoutRef: () => str
  * from the older child must not deregister the newer process.
  */
 function deregisterProcess(chatId: number | string, child: ChildProcess): void {
-  if (activeProcesses.get(chatId) === child) {
-    activeProcesses.delete(chatId);
+  const active = activeExecutions.get(chatId);
+  if (active?.child === child) {
+    active.child = null;
+    if (!active.lifecycleToken) activeExecutions.delete(chatId);
   }
 }
 
+function registerProcess(chatId: number | string, child: ChildProcess): void {
+  const active = activeExecutions.get(chatId);
+  if (active) active.child = child;
+  else activeExecutions.set(chatId, { child, lifecycleToken: null, lifecycleHandle: null, lifecycleDone: null, finishLifecycle: null });
+}
+
+export function beginExecutionLifecycle(chatId: number | string, handle: ExecutionLaneHandle): string {
+  const token = randomUUID();
+  let finishLifecycle!: () => void;
+  const lifecycleDone = new Promise<void>((resolve) => { finishLifecycle = resolve; });
+  const active = activeExecutions.get(chatId);
+  activeExecutions.set(chatId, {
+    child: active?.child ?? null,
+    lifecycleToken: token,
+    lifecycleHandle: handle,
+    lifecycleDone,
+    finishLifecycle,
+  });
+  return token;
+}
+
+export function completeExecutionLifecycle(chatId: number | string, token: string): void {
+  const active = activeExecutions.get(chatId);
+  if (!active || active.lifecycleToken !== token) return;
+  active.finishLifecycle?.();
+  active.lifecycleToken = null;
+  active.lifecycleHandle = null;
+  active.lifecycleDone = null;
+  active.finishLifecycle = null;
+  if (!active.child) activeExecutions.delete(chatId);
+}
+
 export function abortCliProcess(chatId: number | string): boolean {
-  const child = activeProcesses.get(chatId);
+  const child = activeExecutions.get(chatId)?.child;
   if (!child) return false;
   killChild(child);
-  activeProcesses.delete(chatId);
   return true;
 }
 
+export function abortCliProcessAndWait(chatId: number | string): Promise<boolean> {
+  const child = activeExecutions.get(chatId)?.child;
+  if (!child) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const done = () => resolve(true);
+    child.once("close", done);
+    child.once("error", done);
+    killChild(child);
+  });
+}
+
+export async function abortExecutionAndWait(chatId: number | string): Promise<ExecutionLaneHandle | null> {
+  const active = activeExecutions.get(chatId);
+  if (!active) return null;
+  const handle = active.lifecycleHandle;
+  if (active.child) await abortCliProcessAndWait(chatId);
+  await active.lifecycleDone;
+  return handle;
+}
+
 export function shutdownCliProcesses(): number {
-  const children = [...activeProcesses.values()];
+  const children = [...activeExecutions.values()].flatMap((active) => active.child ? [active.child] : []);
   for (const child of children) {
     killChild(child);
   }
   const count = children.length;
-  activeProcesses.clear();
+  activeExecutions.clear();
   return count;
+}
+
+/** Test/process teardown variant that does not return until every tracked child exits. */
+export async function shutdownCliProcessesAndWait(): Promise<number> {
+  const children = [...new Set(
+    [...activeExecutions.values()].flatMap((active) => active.child ? [active.child] : []),
+  )];
+  const exits = children.map((child) => new Promise<void>((resolve) => {
+    const done = () => resolve();
+    child.once("close", done);
+    child.once("error", done);
+  }));
+  for (const child of children) {
+    abortedChildren.add(child);
+    killWithGrace(child, 100);
+  }
+  await Promise.all(exits);
+  for (const [chatId, active] of activeExecutions) {
+    if (!active.child && !active.lifecycleToken) activeExecutions.delete(chatId);
+  }
+  return children.length;
 }
 
 /**
@@ -954,11 +1038,12 @@ export async function runCli(command: string, args: string[], cwd: string, optio
       child.stdin?.write(options.stdin);
     }
     child.stdin?.end();
-    if (options.chatId != null) activeProcesses.set(options.chatId, child);
+    if (options.chatId != null) registerProcess(options.chatId, child);
     const pid = child.pid;
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let pendingError: Error | null = null;
 
     if (evtCtx) emit(evtType.runStarted({ ...evtCtx, command, cwd, model: null }));
 
@@ -975,20 +1060,21 @@ export async function runCli(command: string, args: string[], cwd: string, optio
     };
 
     const timer = setTimeout(() => {
+      if (settled || pendingError) return;
       console.error(`[HARD TIMEOUT] CLI hard timeout after ${timeoutMs}ms - killing process\n${formatSpawnLog(command, args, cwd, options.chatId)}`);
       if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI hard timeout after ${timeoutMs}ms`, category: "timeout" }));
-      doReject(new Error(`CLI hard timeout after ${timeoutMs}ms`));
+      pendingError = new Error(`CLI hard timeout after ${timeoutMs}ms`);
       if (pid) killProcessTree(child, pid, killGraceMs); else killWithGrace(child, killGraceMs);
     }, timeoutMs);
 
     let plannerStallTriggered = false;
     const plannerStallTimer = command.includes("agy") || command.includes("antigravity")
       ? createAntigravityPlannerStallWatch(normalizedArgs, () => stdout, () => {
-          if (plannerStallTriggered || settled) return;
+          if (plannerStallTriggered || settled || pendingError) return;
           plannerStallTriggered = true;
           console.error(`[AGY STALL] Planner churn detected without usable output${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""}`);
           if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: "Agy stalled in planner loop without usable output", category: "timeout" }));
-          doReject(new Error("Agy stalled in planner loop without usable output"));
+          pendingError = new Error("Agy stalled in planner loop without usable output");
           if (pid) killProcessTree(child, pid, killGraceMs); else killWithGrace(child, killGraceMs);
         })
       : null;
@@ -998,9 +1084,10 @@ export async function runCli(command: string, args: string[], cwd: string, optio
       if (idleTimeoutMs === null) return;
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
+        if (settled || pendingError) return;
         console.error(`[IDLE TIMEOUT] CLI idle timeout after ${idleTimeoutMs}ms with no stdout/stderr${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""}`);
         if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI idle timeout after ${idleTimeoutMs}ms`, category: "timeout" }));
-        doReject(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`));
+        pendingError = new Error(`CLI idle timeout after ${idleTimeoutMs}ms`);
         if (pid) killProcessTree(child, pid, killGraceMs); else killWithGrace(child, killGraceMs);
       }, idleTimeoutMs);
     };
@@ -1029,6 +1116,10 @@ export async function runCli(command: string, args: string[], cwd: string, optio
       console.log(`[close]${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"} code=${code} signal=${signal ?? "none"}`);
 
       if (settled) return;
+      if (pendingError) {
+        doReject(pendingError);
+        return;
+      }
 
       if (signal && abortedChildren.has(child)) {
         if (evtCtx) emit(evtType.runCancelled({ ...evtCtx, reason: "user" }));
@@ -1100,7 +1191,7 @@ export async function runCliAsync(
       child.stdin?.write(options.stdin);
     }
     child.stdin?.end();
-    if (options.chatId != null) activeProcesses.set(options.chatId, child);
+    if (options.chatId != null) registerProcess(options.chatId, child);
     const pid = child.pid;
     let settled = false;
 

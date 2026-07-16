@@ -194,37 +194,49 @@ describe("5. cancellation classification — no success event on abort", () => {
 });
 
 describe("6. single-shot close/error settlement under races", () => {
-  it("emits exactly one terminal lifecycle event per attempt when hard timeout and natural completion race, with no unhandled errors", async () => {
+  it("emits exactly one terminal lifecycle event when the hard timeout fires and the killed child closes shortly after, with no unhandled errors", async () => {
     // Promise.allSettled always reports "fulfilled" or "rejected" no matter
-    // what happens internally — it cannot prove single settlement. Instead,
-    // capture the actual emitted BridgeEvents per attempt (via eventContext)
-    // and assert exactly one terminal event (run.completed/run.failed/
-    // run.cancelled) fires, which double-settlement or double-emit logic
-    // would violate. A short timeoutMs against a process that also exits
-    // on its own creates a real timer-vs-close race rather than a fixed
-    // artificial delay.
+    // what happens internally — it cannot prove single settlement, and a
+    // degenerate timeoutMs (e.g. 1ms) makes the "race" scheduler-dependent
+    // rather than controlled. Instead: the child writes a ready marker, runs
+    // with a generous timeoutMs, traps SIGTERM, and deliberately waits a
+    // short but fixed delay before exiting once signalled. This makes the
+    // sequence deterministic — hard-timeout fires first (pendingError set,
+    // kill sent), the child's close arrives predictably ~30ms later — while
+    // still exercising the exact pendingError-then-close ordering that a
+    // double-settlement or double-emit bug would violate.
     const unhandled: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => unhandled.push(reason);
     process.on("unhandledRejection", onUnhandledRejection);
 
+    const script = (ready: string) => [
+      `require('node:fs').writeFileSync(${JSON.stringify(ready)}, 'ready');`,
+      "process.on('SIGTERM', () => { setTimeout(() => process.exit(0), 30); });",
+      "setTimeout(() => {}, 10000);",
+    ].join("\n");
+
     try {
       for (const runner of [runCli, runCliAsync] as const) {
         const label = runner === runCli ? "sync" : "async";
-        for (let i = 0; i < 8; i++) {
+        for (let i = 0; i < 5; i++) {
+          const ready = join(cliTestCwd, `race-ready-${label}-${i}`);
           const events: BridgeEvent[] = [];
           const chatId = `race-${label}-${i}`;
-          await runner(process.execPath, ["-e", "process.stdout.write('done')"], cliTestCwd, {
-            timeoutMs: 1,
-            killGraceMs: 25,
+          const p = runner(process.execPath, ["-e", script(ready)], cliTestCwd, {
+            timeoutMs: 200,
+            killGraceMs: 1_000,
             chatId,
             eventContext: { runId: chatId, bot: "codex", chatId },
             onEvent: (e) => events.push(e),
-          }).catch(() => "rejected");
+          });
+          await waitForFile(ready);
+          await p.catch(() => "rejected");
 
           const terminal = events.filter((e) =>
             e.type === "run.completed" || e.type === "run.failed" || e.type === "run.cancelled",
           );
           expect(terminal, `${chatId} should emit exactly one terminal event, got: ${terminal.map((e) => e.type).join(",")}`).toHaveLength(1);
+          expect(terminal[0].type).toBe("run.failed");
         }
       }
       // Give any stray timers/callbacks a tick to surface before asserting.
@@ -233,7 +245,7 @@ describe("6. single-shot close/error settlement under races", () => {
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }
-  }, 15_000);
+  }, 20_000);
 });
 
 describe("7. stale-child deregistration protection", () => {
@@ -355,62 +367,69 @@ describe("11. adapter-specific onProgress behaviour", () => {
   });
 });
 
-describe("12. abort and shutdown terminate the full process tree", () => {
-  it("abortCliProcessAndWait kills grandchild processes, not just the direct child", async () => {
-    const pidFile = join(cliTestCwd, "abort-grandchild.pid");
-    const started = join(cliTestCwd, "abort-grandchild-started");
-    const p = runCliAsync(
-      "bash",
-      ["-c", `echo started > ${started}; sleep 30 & echo $! > ${pidFile}; wait`],
-      cliTestCwd,
-      { chatId: "abort-tree", killGraceMs: 150 },
-    );
-    await waitForFile(started);
-    await waitForFile(pidFile);
+describe("12. abort and shutdown wait for the full process tree, not just the leader", () => {
+  // The leader spawns a non-detached descendant (inherits the leader's
+  // process group) that traps and ignores SIGTERM, then the leader itself
+  // exits immediately on SIGTERM (no trap). This makes "leader closed" and
+  // "descendant dead" observably different instants: if the *AndWait APIs
+  // only waited for the leader, the descendant would still be alive at the
+  // moment the awaited promise resolves — checked with no buffer sleep.
+  function leaderScript(descendantPidFile: string, readyFile: string): string {
+    return [
+      "const { spawn } = require('node:child_process');",
+      "const fs = require('node:fs');",
+      `const d = spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{});setTimeout(()=>{},10000)"], { stdio: 'ignore' });`,
+      `fs.writeFileSync(${JSON.stringify(descendantPidFile)}, String(d.pid));`,
+      `fs.writeFileSync(${JSON.stringify(readyFile)}, 'ready');`,
+      "setTimeout(() => {}, 10000);",
+    ].join("\n");
+  }
+
+  function isAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  it("abortCliProcessAndWait does not resolve until the TERM-resistant descendant is confirmed dead", async () => {
+    const descendantPidFile = join(cliTestCwd, "abort-descendant.pid");
+    const ready = join(cliTestCwd, "abort-leader-ready");
+    const p = runCliAsync(process.execPath, ["-e", leaderScript(descendantPidFile, ready)], cliTestCwd, {
+      chatId: "abort-tree",
+      killGraceMs: 150,
+    });
+    await waitForFile(ready);
+    await waitForFile(descendantPidFile);
+    const descendantPid = parseInt(readFileSync(descendantPidFile, "utf8").trim(), 10);
 
     await expect(abortCliProcessAndWait("abort-tree")).resolves.toBe(true);
+    // No buffer sleep here — the assertion runs the instant the await above
+    // returns control, so it only passes if abortCliProcessAndWait itself
+    // waited for the descendant, not merely the leader's own close.
+    const alive = isAlive(descendantPid);
+    if (alive) { try { process.kill(descendantPid, "SIGKILL"); } catch { /* cleanup */ } }
+    expect(alive, "descendant should already be confirmed dead when abortCliProcessAndWait resolves").toBe(false);
     await p.catch(() => "rejected");
-    await new Promise((r) => setTimeout(r, 400));
-
-    const grandchildPid = parseInt(readFileSync(pidFile, "utf8").trim(), 10);
-    let alive = true;
-    try {
-      process.kill(grandchildPid, 0);
-    } catch {
-      alive = false;
-    }
-    if (alive) {
-      try { process.kill(grandchildPid, "SIGKILL"); } catch { /* cleanup */ }
-    }
-    expect(alive, "grandchild should be dead after abortCliProcessAndWait").toBe(false);
   }, 8_000);
 
-  it("shutdownCliProcessesAndWait kills grandchild processes, not just the direct child", async () => {
-    const pidFile = join(cliTestCwd, "shutdown-grandchild.pid");
-    const started = join(cliTestCwd, "shutdown-grandchild-started");
-    const p = runCli(
-      "bash",
-      ["-c", `echo started > ${started}; sleep 30 & echo $! > ${pidFile}; wait`],
-      cliTestCwd,
-      { chatId: "shutdown-tree", killGraceMs: 150 },
-    );
-    await waitForFile(started);
-    await waitForFile(pidFile);
+  it("shutdownCliProcessesAndWait does not resolve until the TERM-resistant descendant is confirmed dead", async () => {
+    const descendantPidFile = join(cliTestCwd, "shutdown-descendant.pid");
+    const ready = join(cliTestCwd, "shutdown-leader-ready");
+    const p = runCli(process.execPath, ["-e", leaderScript(descendantPidFile, ready)], cliTestCwd, {
+      chatId: "shutdown-tree",
+      killGraceMs: 150,
+    });
+    await waitForFile(ready);
+    await waitForFile(descendantPidFile);
+    const descendantPid = parseInt(readFileSync(descendantPidFile, "utf8").trim(), 10);
 
     await shutdownCliProcessesAndWait();
+    const alive = isAlive(descendantPid);
+    if (alive) { try { process.kill(descendantPid, "SIGKILL"); } catch { /* cleanup */ } }
+    expect(alive, "descendant should already be confirmed dead when shutdownCliProcessesAndWait resolves").toBe(false);
     await p.catch(() => "rejected");
-    await new Promise((r) => setTimeout(r, 400));
-
-    const grandchildPid = parseInt(readFileSync(pidFile, "utf8").trim(), 10);
-    let alive = true;
-    try {
-      process.kill(grandchildPid, 0);
-    } catch {
-      alive = false;
-    }
-    if (alive) {
-      try { process.kill(grandchildPid, "SIGKILL"); } catch { /* cleanup */ }
-    }
-    expect(alive, "grandchild should be dead after shutdownCliProcessesAndWait").toBe(false);
-  }, 10_000);
+  }, 8_000);
 });

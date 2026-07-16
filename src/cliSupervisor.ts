@@ -67,10 +67,15 @@ function buildChildEnv(extraEnv?: Record<string, string>, advisorChild = false):
 const KILL_GRACE_MS = 5_000;
 const ANTIGRAVITY_STALLED_PLANNER_MARKER = "PlannerResponse without ModifiedResponse encountered";
 
+const GROUP_EXIT_POLL_INTERVAL_MS = 25;
+const GROUP_EXIT_POLL_BOUND_MS = 1_000;
+
 /**
  * Sends SIGTERM to the full process group (child spawned with detached:true
  * is the group leader) and escalates to SIGKILL after graceMs — unless a
- * liveness probe at escalation time shows nothing left in the group.
+ * liveness probe at escalation time shows nothing left in the group. Returns
+ * a promise that resolves only once the whole group is confirmed dead (or
+ * the bounded poll gives up), not merely once SIGTERM/SIGKILL was sent.
  *
  * Escalation deliberately does NOT cancel on the direct child's "close"
  * event: the group leader can exit (and fire "close") while a TERM-resistant
@@ -78,7 +83,7 @@ const ANTIGRAVITY_STALLED_PLANNER_MARKER = "PlannerResponse without ModifiedResp
  * SIGKILL. Falls back to signalling the direct child only when no pid is
  * available (e.g. spawn failed before a pid was assigned).
  */
-function killChildTree(child: ChildProcess, graceMs: number = KILL_GRACE_MS): void {
+function killChildTree(child: ChildProcess, graceMs: number = KILL_GRACE_MS): Promise<void> {
   const pid = child.pid;
   const signal = (sig: NodeJS.Signals) => {
     if (pid) {
@@ -87,17 +92,40 @@ function killChildTree(child: ChildProcess, graceMs: number = KILL_GRACE_MS): vo
     try { child.kill(sig); } catch { /* ignore */ }
   };
   signal("SIGTERM");
-  setTimeout(() => {
-    if (pid) {
-      try { process.kill(-pid, 0); } catch { return; } // ESRCH: group already empty, nothing to escalate
-    }
-    signal("SIGKILL");
-  }, graceMs);
+  if (!pid) return Promise.resolve();
+
+  // Poll continuously from the moment SIGTERM is sent — do NOT wait until
+  // graceMs elapses before checking liveness. Most processes die well before
+  // the grace deadline; only a still-alive group at the deadline gets
+  // escalated to SIGKILL.
+  return new Promise((resolve) => {
+    const escalateAt = Date.now() + graceMs;
+    const giveUpAt = escalateAt + GROUP_EXIT_POLL_BOUND_MS;
+    let escalated = false;
+    const poll = () => {
+      try {
+        process.kill(-pid, 0);
+      } catch {
+        resolve(); // ESRCH: group empty, whether before or after escalation
+        return;
+      }
+      const now = Date.now();
+      if (!escalated && now >= escalateAt) {
+        escalated = true;
+        signal("SIGKILL");
+      } else if (escalated && now >= giveUpAt) {
+        resolve(); // bounded — give up on an unreapable/zombie entry
+        return;
+      }
+      setTimeout(poll, GROUP_EXIT_POLL_INTERVAL_MS);
+    };
+    poll();
+  });
 }
 
-function killChild(child: ChildProcess, graceMs: number = KILL_GRACE_MS): void {
+function killChild(child: ChildProcess, graceMs: number = KILL_GRACE_MS): Promise<void> {
   abortedChildren.add(child);
-  killChildTree(child, graceMs);
+  return killChildTree(child, graceMs);
 }
 
 function getAntigravityStalledPlannerTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
@@ -188,15 +216,19 @@ export function abortCliProcess(chatId: number | string): boolean {
   return true;
 }
 
-export function abortCliProcessAndWait(chatId: number | string): Promise<boolean> {
+export async function abortCliProcessAndWait(chatId: number | string): Promise<boolean> {
   const child = activeExecutions.get(chatId)?.child;
-  if (!child) return Promise.resolve(false);
-  return new Promise((resolve) => {
-    const done = () => resolve(true);
+  if (!child) return false;
+  const closed = new Promise<void>((resolve) => {
+    const done = () => resolve();
     child.once("close", done);
     child.once("error", done);
-    killChild(child);
   });
+  // Resolves only once BOTH the direct child has closed AND the full
+  // process-group kill (including any TERM-resistant descendant) is
+  // confirmed complete — not merely once the group leader has exited.
+  await Promise.all([closed, killChild(child)]);
+  return true;
 }
 
 export async function abortExecutionAndWait(chatId: number | string): Promise<ExecutionLaneHandle | null> {
@@ -218,20 +250,23 @@ export function shutdownCliProcesses(): number {
   return count;
 }
 
-/** Test/process teardown variant that does not return until every tracked child exits. */
+/**
+ * Test/process teardown variant that does not return until every tracked
+ * child, and every descendant in its process group, is confirmed dead.
+ */
 export async function shutdownCliProcessesAndWait(): Promise<number> {
   const children = [...new Set(
     [...activeExecutions.values()].flatMap((active) => active.child ? [active.child] : []),
   )];
-  const exits = children.map((child) => new Promise<void>((resolve) => {
-    const done = () => resolve();
-    child.once("close", done);
-    child.once("error", done);
-  }));
-  for (const child of children) {
+  const exits = children.map((child) => {
+    const closed = new Promise<void>((resolve) => {
+      const done = () => resolve();
+      child.once("close", done);
+      child.once("error", done);
+    });
     abortedChildren.add(child);
-    killChildTree(child, 100);
-  }
+    return Promise.all([closed, killChildTree(child, 100)]);
+  });
   await Promise.all(exits);
   for (const [chatId, active] of activeExecutions) {
     if (!active.child && !active.lifecycleToken) activeExecutions.delete(chatId);
@@ -308,6 +343,7 @@ export async function runSupervisedProcess(
     let stderr = "";
     let settled = false;
     let pendingError: Error | null = null;
+    let pendingKill: Promise<void> | null = null;
 
     if (evtCtx) emit(evtType.runStarted({ ...evtCtx, command, cwd, model: null }));
 
@@ -328,7 +364,7 @@ export async function runSupervisedProcess(
       console.error(`[HARD TIMEOUT] CLI hard timeout after ${timeoutMs}ms - killing process\n${formatSpawnLog(command, args, cwd, options.chatId)}`);
       if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI hard timeout after ${timeoutMs}ms`, category: "timeout" }));
       pendingError = new Error(`CLI hard timeout after ${timeoutMs}ms`);
-      killChildTree(child, killGraceMs);
+      pendingKill = killChildTree(child, killGraceMs);
     }, timeoutMs);
 
     let plannerStallTriggered = false;
@@ -339,7 +375,7 @@ export async function runSupervisedProcess(
           console.error(`[AGY STALL] Planner churn detected without usable output${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""}`);
           if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: "Agy stalled in planner loop without usable output", category: "timeout" }));
           pendingError = new Error("Agy stalled in planner loop without usable output");
-          killChildTree(child, killGraceMs);
+          pendingKill = killChildTree(child, killGraceMs);
         })
       : null;
 
@@ -352,7 +388,7 @@ export async function runSupervisedProcess(
         console.error(`[IDLE TIMEOUT] CLI idle timeout after ${idleTimeoutMs}ms with no stdout/stderr${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""}`);
         if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI idle timeout after ${idleTimeoutMs}ms`, category: "timeout" }));
         pendingError = new Error(`CLI idle timeout after ${idleTimeoutMs}ms`);
-        killChildTree(child, killGraceMs);
+        pendingKill = killChildTree(child, killGraceMs);
       }, idleTimeoutMs);
     };
 
@@ -382,7 +418,11 @@ export async function runSupervisedProcess(
 
       if (settled) return;
       if (pendingError) {
-        doReject(pendingError);
+        const err = pendingError;
+        // Don't settle until the full process-group kill is confirmed
+        // complete — the group leader closing here doesn't mean a
+        // TERM-resistant descendant has died yet.
+        (pendingKill ?? Promise.resolve()).then(() => doReject(err));
         return;
       }
 

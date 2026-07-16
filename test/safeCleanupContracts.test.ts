@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseModelPreference as bridgeParseModelPreference } from "../src/bridge.js";
+import { parseModelPreference as configParseModelPreference } from "../src/config.js";
 
 const repoRoot = process.cwd();
 
@@ -12,10 +14,16 @@ describe("Issue #135 Phase 1: safe cleanup contracts", () => {
     expect(existsSync(join(repoRoot, "AGENTS.md"))).toBe(true);
   });
 
-  it("does not define a duplicate parseModelPreference in src/bridge.ts", () => {
-    // The canonical implementation lives in src/config.ts.
+  it("re-exports the exact canonical parseModelPreference from src/config.ts, not a duplicate", () => {
+    // src/bridge.ts is a compatibility barrel: it must not define its own
+    // implementation, and its export must be config.ts's function by identity,
+    // not a lookalike.
     const source = readFileSync(join(repoRoot, "src/bridge.ts"), "utf8");
     expect(source).not.toMatch(/function\s+parseModelPreference\s*\(/);
+
+    expect(bridgeParseModelPreference).toBe(configParseModelPreference);
+    expect(bridgeParseModelPreference("a, b ,,c")).toEqual(["a", "b", "c"]);
+    expect(bridgeParseModelPreference(undefined)).toEqual([]);
   });
 
   it("has no production dependency resolving from test/", () => {

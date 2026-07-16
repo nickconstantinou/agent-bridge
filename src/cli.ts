@@ -1214,23 +1214,25 @@ export async function runCliAsync(
 
     let stdout = "";
     let stderr = "";
+    let pendingError: Error | null = null;
 
     const timer = setTimeout(() => {
+      if (settled || pendingError) return;
       console.error(`[HARD TIMEOUT] CLI hard timeout after ${timeoutMs}ms${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"}`);
       if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI hard timeout after ${timeoutMs}ms`, category: "timeout" }));
+      pendingError = new Error(`CLI hard timeout after ${timeoutMs}ms`);
       if (pid) killProcessTree(child, pid, killGraceMs);
-      doReject(new Error(`CLI hard timeout after ${timeoutMs}ms`));
     }, timeoutMs);
 
     let plannerStallTriggered = false;
     const plannerStallTimer = command.includes("agy") || command.includes("antigravity")
       ? createAntigravityPlannerStallWatch(normalizedArgs, () => stdout, () => {
-          if (plannerStallTriggered || settled) return;
+          if (plannerStallTriggered || settled || pendingError) return;
           plannerStallTriggered = true;
           console.error(`[AGY STALL] Planner churn detected without usable output${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"}`);
           if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: "Agy stalled in planner loop without usable output", category: "timeout" }));
+          pendingError = new Error("Agy stalled in planner loop without usable output");
           if (pid) killProcessTree(child, pid, killGraceMs);
-          doReject(new Error("Agy stalled in planner loop without usable output"));
         })
       : null;
 
@@ -1239,10 +1241,11 @@ export async function runCliAsync(
       if (idleTimeoutMs === null) return;
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
+        if (settled || pendingError) return;
         console.error(`[IDLE TIMEOUT] CLI idle timeout after ${idleTimeoutMs}ms with no stdout/stderr${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"}`);
         if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI idle timeout after ${idleTimeoutMs}ms`, category: "timeout" }));
+        pendingError = new Error(`CLI idle timeout after ${idleTimeoutMs}ms`);
         if (pid) killProcessTree(child, pid, killGraceMs);
-        doReject(new Error(`CLI idle timeout after ${idleTimeoutMs}ms`));
       }, idleTimeoutMs);
     };
     resetIdleTimer();
@@ -1269,6 +1272,10 @@ export async function runCliAsync(
       if (options.chatId != null) deregisterProcess(options.chatId, child);
       console.log(`[close]${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"} code=${code} signal=${signal ?? "none"}`);
       if (settled) return;
+      if (pendingError) {
+        doReject(pendingError);
+        return;
+      }
 
       if (signal && abortedChildren.has(child)) {
         if (evtCtx) emit(evtType.runCancelled({ ...evtCtx, reason: "user" }));

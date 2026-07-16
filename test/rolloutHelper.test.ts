@@ -3,11 +3,13 @@ import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   symlinkSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -41,6 +43,8 @@ interface Fixture {
   backupDir: string;
   logDir: string;
   lockFile: string;
+  configFile: string;
+  envDir: string;
 }
 
 const roots: string[] = [];
@@ -86,6 +90,16 @@ function sha256(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+function metadata(path: string) {
+  const stat = statSync(path);
+  return { uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o777, size: stat.size, sha256: sha256(path) };
+}
+
+function rewriteConfig(fixture: Fixture, transform: (lines: string[]) => string[]): void {
+  const lines = readFileSync(fixture.configFile, "utf8").trimEnd().split("\n");
+  writeFileSync(fixture.configFile, `${transform(lines).join("\n")}\n`, { mode: 0o600 });
+}
+
 function writeFakeCommands(fixture: Fixture): void {
   const bin = join(fixture.root, "bin");
   mkdirSync(bin, { recursive: true });
@@ -101,13 +115,37 @@ case "$cmd" in
   start)
     if [ "\${FAKE_FAIL_PHASE:-}" = start ]; then exit 1; fi
     printf '%s\n' "$@" > "${fixture.stateFile}"
+    : > "${fixture.root}/started"
     ;;
   is-active)
     if [ "\${1:-}" = --quiet ]; then shift; fi
     grep -Fxq "\${1:-}" "${fixture.stateFile}"
     ;;
+  is-failed) exit 1 ;;
+  show)
+    unit="$1"; shift
+    property=""
+    for arg in "$@"; do case "$arg" in --property=*) property="\${arg#--property=}";; esac; done
+    case "$property" in
+      ActiveState) grep -Fxq "$unit" "${fixture.stateFile}" && echo active || echo inactive ;;
+      SubState) grep -Fxq "$unit" "${fixture.stateFile}" && echo running || echo dead ;;
+      NRestarts)
+        if [ "\${FAKE_FAIL_PHASE:-}" = delayed ] && [ -f "${fixture.root}/started" ]; then echo 1; else echo 0; fi
+        ;;
+      *) exit 2 ;;
+    esac
+    ;;
   *) exit 2 ;;
 esac
+`);
+  executable(join(bin, "cp"), `#!/usr/bin/env bash
+set -euo pipefail
+/usr/bin/cp "$@"
+if [ "\${FAKE_FAIL_PHASE:-}" = backup ] && [ ! -e "${fixture.root}/backup-failed" ]; then
+  : > "${fixture.root}/backup-failed"
+  if [ -n "\${FAKE_CORRUPT_DB:-}" ]; then printf 'corrupt' > "$FAKE_CORRUPT_DB"; fi
+  exit 70
+fi
 `);
   executable(join(bin, "runuser"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -140,8 +178,13 @@ function createFixture(options: { pending?: number; unknownSchema?: boolean; mis
   const actionLog = join(root, "actions.log");
   const stateFile = join(root, "active-units");
   const lockFile = join(root, "run", "lock", "agent-bridge-rollout.lock");
+  const configFile = join(root, "etc", "agent-bridge", "rollout.conf");
+  const envDir = join(root, "etc", "default");
   mkdirSync(join(project, "scripts"), { recursive: true });
   mkdirSync(join(root, "etc", "agent-bridge"), { recursive: true });
+  mkdirSync(envDir, { recursive: true });
+  mkdirSync(backupDir, { recursive: true, mode: 0o700 });
+  mkdirSync(logDir, { recursive: true, mode: 0o700 });
   symlinkSync(sourceDir, join(project, "src"));
   symlinkSync(nodeModules, join(project, "node_modules"));
   if (existsSync(migrationScript)) symlinkSync(migrationScript, join(project, "scripts", "rollout-db.ts"));
@@ -164,18 +207,30 @@ function createFixture(options: { pending?: number; unknownSchema?: boolean; mis
     }
   }
 
-  writeFileSync(join(root, "etc", "agent-bridge", "rollout.conf"), [
+  writeFileSync(join(envDir, "agent-bridge-shared"), `DB_PATH=${dbPaths[0]}\n`, { mode: 0o600 });
+  for (const unit of units) {
+    const name = unit.replace(/\.service$/, "");
+    let content = "";
+    if (unit === "agent-bridge-discord-interactive.service") content = `DB_PATH=${dbPaths[1]}\n`;
+    if (unit === "agent-bridge-health.service") content = `HEALTH_DB_PATH=${dbPaths[2]}\n`;
+    if (unit === "agent-bridge-interactive.service") content = `DB_PATH=${dbPaths[3]}\n`;
+    if (unit === "agent-bridge-worker-bot.service") content = `DB_PATH=${dbPaths[4]}\n`;
+    writeFileSync(join(envDir, name), content, { mode: 0o600 });
+  }
+
+  writeFileSync(configFile, [
     `project_dir=${project}`,
     "runtime_user=rollout-test",
     `node_bin=${process.execPath}`,
     `backup_dir=${backupDir}`,
     `log_dir=${logDir}`,
+    ...units.map((unit) => `unit=${unit}`),
     ...dbPaths.map((path) => `database=${path}`),
     "",
   ].join("\n"), { mode: 0o600 });
   writeFileSync(stateFile, `${units.join("\n")}\n`);
   writeFileSync(actionLog, "");
-  const fixture = { root, project, expectedCommit, dbPaths, actionLog, stateFile, backupDir, logDir, lockFile };
+  const fixture = { root, project, expectedCommit, dbPaths, actionLog, stateFile, backupDir, logDir, lockFile, configFile, envDir };
   writeFakeCommands(fixture);
   return fixture;
 }
@@ -279,6 +334,93 @@ describe("guarded rollout helper", () => {
     expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
   });
 
+  it("restores byte content and original ownership, mode, and size", () => {
+    const fixture = createFixture();
+    chmodSync(fixture.dbPaths[0], 0o640);
+    const before = metadata(fixture.dbPaths[0]);
+
+    const result = runRollout(fixture, "migrate");
+
+    expect(result.status).not.toBe(0);
+    expect(metadata(fixture.dbPaths[0])).toEqual(before);
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+    expect(readFileSync(join(artifacts, "backup-manifest.tsv"), "utf8")).toContain("uid\tgid\tmode\tsize");
+  });
+
+  it("does not follow a planted predictable restore symlink", () => {
+    const fixture = createFixture();
+    const victim = join(fixture.root, "root-owned-victim");
+    writeFileSync(victim, "do-not-touch", { mode: 0o600 });
+    symlinkSync(victim, `${fixture.dbPaths[0]}.rollout-restore`);
+    const victimBefore = metadata(victim);
+    const databaseBefore = metadata(fixture.dbPaths[0]);
+
+    const result = runRollout(fixture, "migrate");
+
+    expect(result.status).not.toBe(0);
+    expect(metadata(victim)).toEqual(victimBefore);
+    expect(metadata(fixture.dbPaths[0])).toEqual(databaseBefore);
+    expect(lstatSync(`${fixture.dbPaths[0]}.rollout-restore`).isSymbolicLink()).toBe(true);
+  });
+
+  it("supports a fixed selected-unit subset and de-duplicates shared databases", () => {
+    const fixture = createFixture();
+    const selected = ["agent-bridge-antigravity.service", "agent-bridge-codex.service"];
+    rewriteConfig(fixture, (lines) => [
+      ...lines.filter((line) => !line.startsWith("unit=") && !line.startsWith("database=")),
+      ...selected.map((unit) => `unit=${unit}`),
+      `database=${fixture.dbPaths[0]}`,
+    ]);
+    writeFileSync(fixture.stateFile, `${selected.join("\n")}\n`);
+
+    const result = runRollout(fixture);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(readFileSync(fixture.stateFile, "utf8").trim().split("\n")).toEqual(selected);
+  });
+
+  it.each([
+    ["missing allowlist database", (fixture: Fixture) => rewriteConfig(fixture, (lines) => lines.filter((line) => line !== `database=${fixture.dbPaths[4]}`))],
+    ["extra allowlist database", (fixture: Fixture) => {
+      const extra = join(fixture.root, "databases", "extra.sqlite");
+      createLegacyDb(extra);
+      rewriteConfig(fixture, (lines) => [...lines, `database=${extra}`]);
+    }],
+    ["duplicate allowlist database", (fixture: Fixture) => rewriteConfig(fixture, (lines) => [...lines, `database=${fixture.dbPaths[0]}`])],
+    ["mismatched unit database", (fixture: Fixture) => writeFileSync(join(fixture.envDir, "agent-bridge-worker-bot"), `DB_PATH=${fixture.dbPaths[3]}\n`, { mode: 0o600 })],
+    ["defaulted unit database", (fixture: Fixture) => {
+      writeFileSync(join(fixture.envDir, "agent-bridge-shared"), "", { mode: 0o600 });
+      writeFileSync(join(fixture.envDir, "agent-bridge-codex"), "", { mode: 0o600 });
+    }],
+  ] as const)("aborts before stop for %s", (_name, mutate) => {
+    const fixture = createFixture();
+    mutate(fixture);
+    const result = runRollout(fixture);
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/database|inventory|duplicate|default/i);
+    expect(actions(fixture)).not.toContain("systemctl:stop");
+  });
+
+  it("runs every Git inspection through the runtime user", () => {
+    const fixture = createFixture();
+    const result = runRollout(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    const gitChecks = actions(fixture).split("\n").filter((line) => line.includes(" /usr/bin/git "));
+    expect(gitChecks.length).toBeGreaterThanOrEqual(6);
+    expect(gitChecks.every((line) => line.startsWith("runuser:"))).toBe(true);
+  });
+
+  it("rejects symlinked or writable evidence roots before stopping services", () => {
+    const fixture = createFixture();
+    rmSync(fixture.logDir, { recursive: true });
+    const target = join(fixture.root, "attacker-log-target");
+    mkdirSync(target, { mode: 0o777 });
+    symlinkSync(target, fixture.logDir);
+    const result = runRollout(fixture);
+    expect(result.status).not.toBe(0);
+    expect(actions(fixture)).not.toContain("systemctl:stop");
+  });
+
   it.each(["start", "smoke"])("stops services and preserves migrated evidence after a post-start %s failure", (phase) => {
     const fixture = createFixture();
     const before = fixture.dbPaths.map(sha256);
@@ -287,6 +429,16 @@ describe("guarded rollout helper", () => {
     expect(fixture.dbPaths.map(sha256)).not.toEqual(before);
     expect(actions(fixture).match(/systemctl:stop/g)?.length).toBeGreaterThanOrEqual(2);
     expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+  });
+
+  it("contains all services when one crashes during the smoke window", () => {
+    const fixture = createFixture();
+    const before = fixture.dbPaths.map(sha256);
+    const result = runRollout(fixture, "delayed");
+    expect(result.status).not.toBe(0);
+    expect(fixture.dbPaths.map(sha256)).not.toEqual(before);
+    expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+    expect(actions(fixture).match(/systemctl:stop/g)?.length).toBeGreaterThanOrEqual(2);
   });
 
   it("rejects a concurrent rollout through the exclusive OS lock", async () => {

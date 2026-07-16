@@ -215,7 +215,9 @@ describe("guarded rollout helper", () => {
 
     expect(result.status, result.stderr).toBe(0);
     const log = actions(fixture);
-    expect(log.indexOf("systemctl:stop")).toBeLessThan(log.indexOf("runuser:--user rollout-test --"));
+    const stopIndex = log.indexOf("systemctl:stop");
+    expect(log.slice(0, stopIndex)).toMatch(/\sinspect\s/);
+    expect(stopIndex).toBeLessThan(log.indexOf(" backup "));
     expect(log).toMatch(/\sbackup\s/);
     expect(log.indexOf(" backup ")).toBeLessThan(log.indexOf(" migrate "));
     expect(log.indexOf(" migrate ")).toBeLessThan(log.indexOf(" validate "));

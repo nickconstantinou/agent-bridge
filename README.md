@@ -596,6 +596,11 @@ The helper waits 5 seconds before restarting the fixed `agent-bridge-*` unit
 list, giving the current bot response time to reach Telegram. Do not grant
 `NOPASSWD: ALL` or passwordless raw `systemctl`.
 
+Schema-changing production deployments must not use the restart helper. Use the
+separately installed, reviewed guarded rollout helper and fixed inventory in
+[`docs/GUARDED-ROLLOUT.md`](docs/GUARDED-ROLLOUT.md). Its merge or installation
+does not authorize a rollout; production execution requires separate approval.
+
 Only enable optional services after their `/etc/default/agent-bridge-*` file
 exists and contains a real token.
 

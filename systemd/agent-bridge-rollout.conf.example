@@ -1,0 +1,12 @@
+# Install as /etc/agent-bridge/rollout.conf with root:root ownership and mode 0600.
+# This is a fixed allowlist, not a shell file. Values cannot contain newlines.
+project_dir=/home/content-crawler/agent-bridge
+runtime_user=content-crawler
+node_bin=/home/content-crawler/.nvm/versions/node/v24.15.0/bin/node
+backup_dir=/var/backups/agent-bridge
+log_dir=/var/log/agent-bridge-rollouts
+database=/home/content-crawler/agent-bridge/.data/bridge.sqlite
+database=/home/content-crawler/agent-bridge/.data/discord-interactive.sqlite
+database=/home/content-crawler/agent-bridge/.data-health/health.sqlite
+database=/home/content-crawler/runtime/agent-bridge/interactive/bridge.sqlite
+database=/home/content-crawler/runtime/agent-bridge/worker/bridge.sqlite

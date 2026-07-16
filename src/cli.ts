@@ -27,8 +27,8 @@ import {
   shutdownCliProcesses,
   shutdownCliProcessesAndWait,
   redactArgs,
-  normalizeCliArgs,
 } from "./cliSupervisor.js";
+import { normalizeCliArgs } from "./cliArgNormalization.js";
 
 export {
   buildSafeChildEnv,

@@ -57,4 +57,13 @@ describe("Issue #135 Phase 2: single CLI process registry ownership", () => {
     });
     expect(owners).toEqual(["cliSupervisor.ts"]);
   });
+
+  it("src/cliSupervisor.ts stays provider-agnostic — no Codex/Agy argument-shape policy", () => {
+    // normalizeCliArgs (Codex/Agy-specific flag reconstruction) lives in
+    // src/cliArgNormalization.ts. The supervisor calls it but must not own it.
+    const source = readFileSync(join(process.cwd(), "src/cliSupervisor.ts"), "utf8");
+    expect(source).not.toMatch(/isCodex|isAgy/);
+    expect(source).not.toContain("--skip-git-repo-check");
+    expect(source).not.toContain("function normalizeCliArgs");
+  });
 });

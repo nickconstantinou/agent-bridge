@@ -127,6 +127,8 @@ case "$cmd" in
     property=""
     for arg in "$@"; do case "$arg" in --property=*) property="\${arg#--property=}";; esac; done
     case "$property" in
+      EnvironmentFiles) printf '%s\n%s\n' "${fixture.envDir}/agent-bridge-shared (ignore_errors=yes)" "${fixture.envDir}/\${unit%.service} (ignore_errors=no)" ;;
+      Environment) echo NODE_ENV=production ;;
       ActiveState) grep -Fxq "$unit" "${fixture.stateFile}" && echo active || echo inactive ;;
       SubState) grep -Fxq "$unit" "${fixture.stateFile}" && echo running || echo dead ;;
       NRestarts)
@@ -140,10 +142,10 @@ esac
 `);
   executable(join(bin, "cp"), `#!/usr/bin/env bash
 set -euo pipefail
+echo "root: backup $*" >> "${fixture.actionLog}"
 /usr/bin/cp "$@"
 if [ "\${FAKE_FAIL_PHASE:-}" = backup ] && [ ! -e "${fixture.root}/backup-failed" ]; then
   : > "${fixture.root}/backup-failed"
-  if [ -n "\${FAKE_CORRUPT_DB:-}" ]; then printf 'corrupt' > "$FAKE_CORRUPT_DB"; fi
   exit 70
 fi
 `);
@@ -154,7 +156,7 @@ if [ "\${1:-}" = --user ]; then shift 2; fi
 if [ "\${1:-}" = -- ]; then shift; fi
 phase=""
 for arg in "$@"; do case "$arg" in inspect|backup|migrate|validate) phase="$arg";; esac; done
-if [ "\${FAKE_FAIL_PHASE:-}" = "$phase" ]; then
+if [ -n "\${FAKE_FAIL_PHASE:-}" ] && [ "\${FAKE_FAIL_PHASE:-}" = "$phase" ]; then
   "$@"
   if [ -n "\${FAKE_CORRUPT_DB:-}" ]; then printf 'corrupt' > "$FAKE_CORRUPT_DB"; fi
   exit 70

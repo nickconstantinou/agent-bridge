@@ -7,8 +7,7 @@ umask 077
 # with its root-owned inventory at:
 #   /etc/agent-bridge/rollout.conf
 
-readonly EXPECTED_DATABASE_COUNT=5
-readonly -a UNITS=(
+readonly -a ALLOWED_UNITS=(
   agent-bridge-antigravity.service
   agent-bridge-claude.service
   agent-bridge-codex.service
@@ -17,6 +16,12 @@ readonly -a UNITS=(
   agent-bridge-interactive.service
   agent-bridge-worker-bot.service
 )
+
+is_allowed_unit() {
+  local candidate="$1" allowed
+  for allowed in "${ALLOWED_UNITS[@]}"; do [[ "$candidate" == "$allowed" ]] && return 0; done
+  return 1
+}
 
 die() {
   echo "rollout-agent-bridge: $*" >&2
@@ -40,6 +45,8 @@ if [[ -n "$test_root" ]]; then
   systemctl_cmd="$test_root/bin/systemctl"
   runuser_cmd="$test_root/bin/runuser"
   journalctl_cmd="$test_root/bin/journalctl"
+  cp_cmd="$test_root/bin/cp"
+  defaults_dir="$test_root/etc/default"
   smoke_delay=0
   test_mode=1
 else
@@ -49,11 +56,13 @@ else
   systemctl_cmd="/usr/bin/systemctl"
   runuser_cmd="/usr/sbin/runuser"
   journalctl_cmd="/usr/bin/journalctl"
+  cp_cmd="/usr/bin/cp"
+  defaults_dir="/etc/default"
   smoke_delay=5
   test_mode=0
 fi
 
-for command_path in "$systemctl_cmd" "$runuser_cmd" "$journalctl_cmd" /usr/bin/flock /usr/bin/git /usr/bin/sha256sum /usr/bin/tee /usr/bin/realpath /usr/bin/stat /usr/bin/id /usr/bin/cp /usr/bin/mv /usr/bin/rm /usr/bin/cut /usr/bin/sleep /usr/bin/mkdir /usr/bin/chmod /usr/bin/dirname /usr/bin/date /usr/bin/chown; do
+for command_path in "$systemctl_cmd" "$runuser_cmd" "$journalctl_cmd" "$cp_cmd" /usr/bin/flock /usr/bin/git /usr/bin/sha256sum /usr/bin/tee /usr/bin/realpath /usr/bin/stat /usr/bin/id /usr/bin/mv /usr/bin/rm /usr/bin/cut /usr/bin/sleep /usr/bin/mkdir /usr/bin/chmod /usr/bin/dirname /usr/bin/date /usr/bin/chown /usr/bin/mktemp; do
   [[ -x "$command_path" ]] || die "required command is unavailable: $command_path"
 done
 [[ -f "$config_file" && ! -L "$config_file" ]] || die "missing fixed rollout config: $config_file"
@@ -69,6 +78,7 @@ node_bin=""
 backup_dir=""
 log_dir=""
 declare -a databases=()
+declare -a units=()
 while IFS='=' read -r key value || [[ -n "$key$value" ]]; do
   [[ -z "$key" || "$key" == \#* ]] && continue
   [[ -n "$value" ]] || die "empty rollout config value for $key"
@@ -78,6 +88,7 @@ while IFS='=' read -r key value || [[ -n "$key$value" ]]; do
     node_bin) [[ -z "$node_bin" ]] || die "duplicate node_bin"; node_bin="$value" ;;
     backup_dir) [[ -z "$backup_dir" ]] || die "duplicate backup_dir"; backup_dir="$value" ;;
     log_dir) [[ -z "$log_dir" ]] || die "duplicate log_dir"; log_dir="$value" ;;
+    unit) units+=("$value") ;;
     database) databases+=("$value") ;;
     *) die "unknown rollout config key: $key" ;;
   esac
@@ -86,12 +97,91 @@ done < "$config_file"
 for value_name in project_dir runtime_user node_bin backup_dir log_dir; do
   [[ -n "${!value_name}" ]] || die "missing rollout config key: $value_name"
 done
-(( ${#databases[@]} == EXPECTED_DATABASE_COUNT )) || die "fixed database allowlist must contain exactly $EXPECTED_DATABASE_COUNT entries"
+(( ${#units[@]} > 0 )) || die "fixed unit allowlist must select at least one service"
+(( ${#databases[@]} > 0 )) || die "fixed database allowlist must contain at least one entry"
 [[ "$project_dir" == /* && "$node_bin" == /* && "$backup_dir" == /* && "$log_dir" == /* ]] || die "configured paths must be absolute"
 [[ -d "$project_dir" && ! -L "$project_dir" ]] || die "project directory is missing or symlinked"
+[[ "$(/usr/bin/realpath -e "$project_dir")" == "$project_dir" ]] || die "project directory is not canonical"
 [[ -x "$node_bin" && ! -L "$node_bin" ]] || die "configured Node binary is missing or symlinked"
 [[ "$runtime_user" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] || die "invalid runtime user"
 if (( test_mode == 0 )); then /usr/bin/id -u "$runtime_user" >/dev/null || die "runtime user does not exist"; fi
+
+secure_owner_uid="$EUID"
+if (( test_mode == 0 )); then secure_owner_uid=0; fi
+validate_secure_path() {
+  local path="$1" kind="$2" mode owner canonical
+  if [[ "$kind" == directory ]]; then [[ -d "$path" && ! -L "$path" ]] || die "$path must be a non-symlink directory"
+  else [[ -f "$path" && ! -L "$path" ]] || die "$path must be a non-symlink regular file"
+  fi
+  canonical="$(/usr/bin/realpath -e "$path")"
+  [[ "$canonical" == "$path" ]] || die "$path is not canonical"
+  owner="$(/usr/bin/stat -c %u "$path")"
+  [[ "$owner" == "$secure_owner_uid" ]] || die "$path has unsafe ownership"
+  mode="$(/usr/bin/stat -c %a "$path")"
+  (( (8#$mode & 022) == 0 )) || die "$path must not be group/world writable"
+}
+validate_secure_path "$backup_dir" directory
+validate_secure_path "$log_dir" directory
+
+declare -A selected_units=()
+for unit in "${units[@]}"; do
+  is_allowed_unit "$unit" || die "unit is not in the compiled allowlist: $unit"
+  [[ -z "${selected_units[$unit]:-}" ]] || die "duplicate selected unit: $unit"
+  selected_units[$unit]=1
+done
+
+shared_env="$defaults_dir/agent-bridge-shared"
+if [[ -e "$shared_env" ]]; then validate_secure_path "$shared_env" file; fi
+read_env_key() {
+  local file="$1" target_key="$2" line value="$3"
+  [[ -e "$file" ]] || { resolved_env_value="$value"; return 0; }
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+    if [[ "$line" == "$target_key="* ]]; then
+      value="${line#*=}"
+      [[ -n "$value" && "$value" != *[[:space:]\"\'\\\$]* ]] || die "unsupported or empty $target_key in $file"
+    fi
+  done < "$file"
+  resolved_env_value="$value"
+}
+
+declare -A discovered_databases=()
+declare -A unit_databases=()
+for unit in "${units[@]}"; do
+  unit_env="$defaults_dir/${unit%.service}"
+  validate_secure_path "$unit_env" file
+  expected_environment_files="$shared_env (ignore_errors=yes)"$'\n'"$unit_env (ignore_errors=no)"
+  actual_environment_files="$("$systemctl_cmd" show "$unit" --property=EnvironmentFiles --value)"
+  [[ "$actual_environment_files" == "$expected_environment_files" ]] || die "effective EnvironmentFiles mismatch for $unit"
+  db_key=DB_PATH
+  [[ "$unit" == "agent-bridge-health.service" ]] && db_key=HEALTH_DB_PATH
+  explicit_environment="$("$systemctl_cmd" show "$unit" --property=Environment --value)"
+  [[ " $explicit_environment " != *" $db_key="* ]] || die "explicit systemd $db_key override is unsupported for $unit"
+  resolved_env_value=""
+  read_env_key "$shared_env" "$db_key" ""
+  inherited_value="$resolved_env_value"
+  read_env_key "$unit_env" "$db_key" "$inherited_value"
+  discovered="$resolved_env_value"
+  [[ "$discovered" == /* ]] || die "$unit would use a missing, relative, or defaulted $db_key"
+  [[ -f "$discovered" && ! -L "$discovered" ]] || die "missing database or symlinked database for $unit: $discovered"
+  canonical="$(/usr/bin/realpath -e "$discovered")"
+  [[ "$canonical" == "$discovered" ]] || die "database path for $unit is not canonical: $discovered"
+  unit_databases[$unit]="$canonical"
+  discovered_databases[$canonical]=1
+done
+
+declare -A canonical_databases=()
+for database in "${databases[@]}"; do
+  [[ "$database" == /* && "$database" != *[[:space:]]* ]] || die "database allowlist entries must be canonical absolute paths without whitespace"
+  [[ -f "$database" && ! -L "$database" ]] || die "missing database or symlinked database: $database"
+  canonical="$(/usr/bin/realpath -e "$database")"
+  [[ "$canonical" == "$database" ]] || die "database path is not canonical: $database"
+  [[ -z "${canonical_databases[$canonical]:-}" ]] || die "duplicate database allowlist entry: $database"
+  canonical_databases[$canonical]=1
+done
+(( ${#canonical_databases[@]} == ${#discovered_databases[@]} )) || die "configured and discovered database inventory counts differ"
+for database in "${!canonical_databases[@]}"; do [[ -n "${discovered_databases[$database]:-}" ]] || die "extra configured database not selected by any unit: $database"; done
+for database in "${!discovered_databases[@]}"; do [[ -n "${canonical_databases[$database]:-}" ]] || die "discovered database missing from root allowlist: $database"; done
 
 /usr/bin/mkdir -p "$(/usr/bin/dirname "$lock_file")"
 exec 9>"$lock_file"
@@ -100,127 +190,176 @@ exec 9>"$lock_file"
 timestamp="$(/usr/bin/date -u +%Y%m%dT%H%M%SZ)"
 artifact_dir="$log_dir/$timestamp-$expected_commit"
 [[ ! -e "$artifact_dir" ]] || die "rollout artifact directory already exists: $artifact_dir"
-/usr/bin/mkdir -p "$artifact_dir" "$backup_dir"
+/usr/bin/mkdir --mode=0700 -- "$artifact_dir"
 /usr/bin/chmod 0700 "$artifact_dir"
-/usr/bin/chmod 0711 "$backup_dir"
 log_file="$artifact_dir/rollout.log"
-printf '%s\n' "$artifact_dir" > "$log_dir/latest"
+latest_tmp="$(/usr/bin/mktemp --tmpdir="$log_dir" .latest.XXXXXX)"
+printf '%s\n' "$artifact_dir" > "$latest_tmp"
+/usr/bin/chmod 0600 "$latest_tmp"
+/usr/bin/mv -T -- "$latest_tmp" "$log_dir/latest"
 exec > >(/usr/bin/tee -a "$log_file") 2>&1
 
 echo "rollout start timestamp=$timestamp expected_commit=$expected_commit"
-echo "units=${UNITS[*]}"
+echo "units=${units[*]}"
 echo "database_count=${#databases[@]}"
 
 manifest="$artifact_dir/backup-manifest.tsv"
 backup_set="$backup_dir/$timestamp-$expected_commit"
-migration_committed=0
+start_attempted=0
+services_started=0
 stop_attempted=0
 completed=0
+declare -a expected_backups=()
+
+backup_databases() {
+  /usr/bin/mkdir --mode=0700 -- "$backup_set"
+  printf 'index\tsource\tbackup\tuid\tgid\tmode\tsize\tsource_sha256\tbackup_sha256\n' > "$manifest"
+  local index source backup uid gid mode size source_hash backup_hash backup_canonical
+  for index in "${!databases[@]}"; do
+    source="${databases[$index]}"
+    [[ ! -e "${source}-wal" && ! -e "${source}-shm" ]] || die "database has live WAL/SHM sidecars after service stop: $source"
+    backup="$backup_set/$(printf '%02d' "$((index + 1))")-${source##*/}"
+    expected_backups[$index]="$backup"
+    [[ ! -e "$backup" && ! -L "$backup" ]] || die "backup destination already exists: $backup"
+    uid="$(/usr/bin/stat -c %u "$source")"
+    gid="$(/usr/bin/stat -c %g "$source")"
+    mode="$(/usr/bin/stat -c %a "$source")"
+    size="$(/usr/bin/stat -c %s "$source")"
+    source_hash="$(/usr/bin/sha256sum "$source" | /usr/bin/cut -d' ' -f1)"
+    "$cp_cmd" --preserve=all --no-dereference -- "$source" "$backup"
+    [[ -f "$backup" && ! -L "$backup" ]] || die "backup is not a regular file: $backup"
+    backup_canonical="$(/usr/bin/realpath -e "$backup")"
+    [[ "$backup_canonical" == "$backup" && "$(/usr/bin/dirname "$backup")" == "$backup_set" ]] || die "backup escaped fixed backup directory: $backup"
+    backup_hash="$(/usr/bin/sha256sum "$backup" | /usr/bin/cut -d' ' -f1)"
+    [[ "$source_hash" == "$backup_hash" ]] || die "byte-exact backup verification failed: $source"
+    [[ "$(/usr/bin/stat -c %u "$backup")" == "$uid" && "$(/usr/bin/stat -c %g "$backup")" == "$gid" && "$(/usr/bin/stat -c %a "$backup")" == "$mode" && "$(/usr/bin/stat -c %s "$backup")" == "$size" ]] || die "backup metadata verification failed: $source"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$index" "$source" "$backup" "$uid" "$gid" "$mode" "$size" "$source_hash" "$backup_hash" >> "$manifest"
+  done
+}
 
 restore_backups() {
   [[ -s "$manifest" ]] || return 0
   echo "restoring pre-rollout databases from $manifest"
-  local restore_failed=0
-  while IFS=$'\t' read -r source backup source_hash backup_hash; do
-    [[ "$source" == "source" ]] && continue
-    [[ -f "$backup" ]] || { echo "missing rollback backup: $backup" >&2; restore_failed=1; continue; }
-    [[ "$source_hash" == "$backup_hash" ]] || { echo "backup manifest is not byte-exact: $backup" >&2; restore_failed=1; continue; }
+  local restore_failed=0 restored_count=0
+  local index source backup uid gid mode size source_hash backup_hash actual_backup_hash restore_tmp source_dir restored_hash
+  while IFS=$'\t' read -r index source backup uid gid mode size source_hash backup_hash; do
+    [[ "$index" == "index" ]] && continue
+    [[ "$index" =~ ^[0-9]+$ && "$index" == "$restored_count" ]] || { echo "invalid rollback manifest index: $index" >&2; restore_failed=1; continue; }
+    [[ "$source" == "${databases[$index]:-}" && "$backup" == "${expected_backups[$index]:-}" ]] || { echo "rollback manifest path mismatch at index $index" >&2; restore_failed=1; continue; }
+    [[ -f "$source" && ! -L "$source" && -f "$backup" && ! -L "$backup" ]] || { echo "unsafe rollback source or backup at index $index" >&2; restore_failed=1; continue; }
+    [[ "$(/usr/bin/realpath -e "$source")" == "$source" && "$(/usr/bin/realpath -e "$backup")" == "$backup" && "$(/usr/bin/dirname "$backup")" == "$backup_set" ]] || { echo "rollback path escaped fixed inventory at index $index" >&2; restore_failed=1; continue; }
     actual_backup_hash="$(/usr/bin/sha256sum "$backup" | /usr/bin/cut -d' ' -f1)"
-    [[ "$actual_backup_hash" == "$backup_hash" ]] || { echo "rollback backup hash mismatch: $backup" >&2; restore_failed=1; continue; }
-    restore_tmp="${source}.rollout-restore"
-    /usr/bin/cp --preserve=mode,ownership,timestamps "$backup" "$restore_tmp"
-    /usr/bin/mv "$restore_tmp" "$source"
-    /usr/bin/rm -f "${source}-wal" "${source}-shm"
-    restored_hash="$(/usr/bin/sha256sum "$source" | /usr/bin/cut -d' ' -f1)"
-    [[ "$restored_hash" == "$backup_hash" ]] || { echo "restored database hash mismatch: $source" >&2; restore_failed=1; }
+    [[ "$source_hash" == "$backup_hash" && "$actual_backup_hash" == "$backup_hash" && "$(/usr/bin/stat -c %u "$backup")" == "$uid" && "$(/usr/bin/stat -c %g "$backup")" == "$gid" && "$(/usr/bin/stat -c %a "$backup")" == "$mode" && "$(/usr/bin/stat -c %s "$backup")" == "$size" ]] || { echo "rollback backup metadata/hash mismatch at index $index" >&2; restore_failed=1; continue; }
+    source_dir="$(/usr/bin/dirname "$source")"
+    restore_tmp="$(/usr/bin/mktemp --tmpdir="$source_dir" .agent-bridge-restore.XXXXXX)" || { echo "cannot create secure rollback temporary file" >&2; restore_failed=1; continue; }
+    if ! "$cp_cmd" --no-preserve=all -- "$backup" "$restore_tmp" || ! /usr/bin/chown "$uid:$gid" "$restore_tmp" || ! /usr/bin/chmod "$mode" "$restore_tmp"; then
+      echo "cannot prepare rollback temporary file for $source" >&2; /usr/bin/rm -f -- "$restore_tmp"; restore_failed=1; continue
+    fi
+    restored_hash="$(/usr/bin/sha256sum "$restore_tmp" | /usr/bin/cut -d' ' -f1)"
+    if [[ "$restored_hash" != "$source_hash" || "$(/usr/bin/stat -c %u "$restore_tmp")" != "$uid" || "$(/usr/bin/stat -c %g "$restore_tmp")" != "$gid" || "$(/usr/bin/stat -c %a "$restore_tmp")" != "$mode" || "$(/usr/bin/stat -c %s "$restore_tmp")" != "$size" ]]; then
+      echo "prepared rollback file failed metadata/hash verification: $source" >&2; /usr/bin/rm -f -- "$restore_tmp"; restore_failed=1; continue
+    fi
+    if ! /usr/bin/mv -T -- "$restore_tmp" "$source"; then echo "atomic rollback replacement failed: $source" >&2; /usr/bin/rm -f -- "$restore_tmp"; restore_failed=1; continue; fi
+    /usr/bin/rm -f -- "${source}-wal" "${source}-shm"
+    [[ "$(/usr/bin/sha256sum "$source" | /usr/bin/cut -d' ' -f1)" == "$source_hash" && "$(/usr/bin/stat -c %u "$source")" == "$uid" && "$(/usr/bin/stat -c %g "$source")" == "$gid" && "$(/usr/bin/stat -c %a "$source")" == "$mode" && "$(/usr/bin/stat -c %s "$source")" == "$size" ]] || { echo "restored database verification failed: $source" >&2; restore_failed=1; continue; }
+    restored_count=$((restored_count + 1))
   done < "$manifest"
+  (( restored_count == ${#databases[@]} )) || restore_failed=1
   (( restore_failed == 0 )) || { echo "ROLLBACK INCOMPLETE; services remain stopped" >&2; return 1; }
-  echo "database rollback completed and hash-verified"
+  echo "database rollback completed with metadata and hashes verified"
 }
 
 contain_services() {
-  "$systemctl_cmd" stop "${UNITS[@]}" || true
+  "$systemctl_cmd" stop "${units[@]}" || true
 }
 
 on_exit() {
   status=$?
   if (( status == 0 && completed == 1 )); then return 0; fi
   set +e
-  echo "rollout failed status=$status migration_committed=$migration_committed; containing services"
+  echo "rollout failed status=$status start_attempted=$start_attempted services_started=$services_started; containing services"
   if (( stop_attempted == 1 )); then contain_services; fi
-  if (( test_mode == 0 )) && [[ -d "$backup_set" ]]; then /usr/bin/chown -R root:root "$backup_set"; fi
-  if (( migration_committed == 0 )); then restore_backups || status=1; fi
-  echo "services remain stopped; operator review required"
+  if (( start_attempted == 0 )); then restore_backups || status=1; fi
+  if (( stop_attempted == 1 )); then echo "services remain stopped; operator review required"; fi
   exit "${status:-1}"
 }
 trap on_exit EXIT
 
-[[ "$(/usr/bin/git -C "$project_dir" rev-parse --is-inside-work-tree)" == "true" ]] || die "project is not a Git worktree"
-[[ " $(/usr/bin/git -C "$project_dir" branch --show-current) " == " main " ]] || die "project must be on main"
-actual_commit="$(/usr/bin/git -C "$project_dir" rev-parse HEAD)"
-[[ "$actual_commit" == "$expected_commit" ]] || die "expected commit $expected_commit but found $actual_commit"
-[[ -z "$(/usr/bin/git -C "$project_dir" status --porcelain --untracked-files=normal)" ]] || die "project must have a clean working tree"
+run_as_runtime() {
+  "$runuser_cmd" --user "$runtime_user" -- "$@"
+}
+git_check() {
+  [[ "$(run_as_runtime /usr/bin/git -C "$project_dir" rev-parse --is-inside-work-tree)" == "true" ]] || die "project is not a Git worktree"
+  [[ "$(run_as_runtime /usr/bin/git -C "$project_dir" branch --show-current)" == "main" ]] || die "project must be on main"
+  actual_commit="$(run_as_runtime /usr/bin/git -C "$project_dir" rev-parse HEAD)"
+  [[ "$actual_commit" == "$expected_commit" ]] || die "expected commit $expected_commit but found $actual_commit"
+  [[ -z "$(run_as_runtime /usr/bin/git -C "$project_dir" status --porcelain --untracked-files=normal)" ]] || die "project must have a clean working tree"
+}
+git_check
 [[ -f "$project_dir/scripts/rollout-db.ts" ]] || die "migration helper is missing from expected commit"
 [[ -f "$project_dir/node_modules/tsx/dist/cli.mjs" ]] || die "tsx runtime is missing"
-
-declare -A canonical_databases=()
-for database in "${databases[@]}"; do
-  [[ "$database" == /* ]] || die "database allowlist entries must be absolute"
-  [[ -f "$database" && ! -L "$database" ]] || die "missing database or symlinked database: $database"
-  canonical="$(/usr/bin/realpath -e "$database")"
-  [[ "$canonical" == "$database" ]] || die "database path is not canonical: $database"
-  [[ -z "${canonical_databases[$canonical]:-}" ]] || die "duplicate database allowlist entry: $database"
-  canonical_databases[$canonical]=1
-done
 
 db_args=()
 for database in "${databases[@]}"; do db_args+=(--db "$database"); done
 run_db_tool() {
-  "$runuser_cmd" --user "$runtime_user" -- "$node_bin" "$project_dir/node_modules/tsx/dist/cli.mjs" "$project_dir/scripts/rollout-db.ts" "$@"
+  run_as_runtime "$node_bin" "$project_dir/node_modules/tsx/dist/cli.mjs" "$project_dir/scripts/rollout-db.ts" "$@"
 }
 
-for unit in "${UNITS[@]}"; do
-  "$systemctl_cmd" is-active --quiet "$unit" || die "required service is not active before rollout: $unit"
+assert_service_active() {
+  local unit="$1" active_state sub_state
+  "$systemctl_cmd" is-active --quiet "$unit" || die "service is not active: $unit"
+  if "$systemctl_cmd" is-failed --quiet "$unit"; then die "service is failed: $unit"; fi
+  active_state="$("$systemctl_cmd" show "$unit" --property=ActiveState --value)"
+  sub_state="$("$systemctl_cmd" show "$unit" --property=SubState --value)"
+  [[ "$active_state" == active && "$sub_state" == running ]] || die "service is not stably running: $unit state=$active_state/$sub_state"
+}
+
+declare -A restart_baseline=()
+for unit in "${units[@]}"; do
+  assert_service_active "$unit"
+  restart_baseline[$unit]="$("$systemctl_cmd" show "$unit" --property=NRestarts --value)"
+  [[ "${restart_baseline[$unit]}" =~ ^[0-9]+$ ]] || die "invalid NRestarts for $unit"
 done
 run_db_tool inspect --evidence - "${db_args[@]}" > "$artifact_dir/preflight-evidence.json"
 /usr/bin/sha256sum "$artifact_dir/preflight-evidence.json" > "$artifact_dir/preflight-evidence.sha256"
 
 echo "stopping all services"
 stop_attempted=1
-"$systemctl_cmd" stop "${UNITS[@]}"
-for unit in "${UNITS[@]}"; do
+"$systemctl_cmd" stop "${units[@]}"
+for unit in "${units[@]}"; do
   if "$systemctl_cmd" is-active --quiet "$unit"; then die "service remains active after stop: $unit"; fi
 done
 
-[[ "$(/usr/bin/git -C "$project_dir" rev-parse HEAD)" == "$expected_commit" ]] || die "expected commit changed after stop"
-[[ -z "$(/usr/bin/git -C "$project_dir" status --porcelain --untracked-files=normal)" ]] || die "project lost clean working tree after stop"
+git_check
 run_db_tool inspect --evidence - "${db_args[@]}" > "$artifact_dir/stopped-evidence.json"
 
 echo "backing up all databases"
-/usr/bin/mkdir -p "$backup_set"
-if (( test_mode == 0 )); then /usr/bin/chown "$runtime_user" "$backup_set"; fi
-run_db_tool backup --backup-dir "$backup_set" --manifest - "${db_args[@]}" > "$manifest"
-if (( test_mode == 0 )); then /usr/bin/chown -R root:root "$backup_set"; fi
+backup_databases
 /usr/bin/sha256sum "$manifest" > "$artifact_dir/backup-manifest.sha256"
 
 echo "migrating databases using pre-staged commit $expected_commit"
+git_check
 run_db_tool migrate --evidence - "${db_args[@]}" > "$artifact_dir/migration-evidence.json"
 echo "validating migrated databases"
 run_db_tool validate --evidence - "${db_args[@]}" > "$artifact_dir/validation-evidence.json"
 /usr/bin/sha256sum "$artifact_dir/migration-evidence.json" "$artifact_dir/validation-evidence.json" > "$artifact_dir/migration-evidence.sha256"
-migration_committed=1
 
 echo "starting all services"
 journal_since="$(/usr/bin/date -u '+%Y-%m-%d %H:%M:%S UTC')"
-"$systemctl_cmd" start "${UNITS[@]}"
-for unit in "${UNITS[@]}"; do
-  "$systemctl_cmd" is-active --quiet "$unit" || die "service failed active smoke check: $unit"
-done
+start_attempted=1
+"$systemctl_cmd" start "${units[@]}"
+for unit in "${units[@]}"; do assert_service_active "$unit"; done
+services_started=1
 if (( smoke_delay > 0 )); then /usr/bin/sleep "$smoke_delay"; fi
 journal_args=()
-for unit in "${UNITS[@]}"; do journal_args+=(-u "$unit"); done
+for unit in "${units[@]}"; do journal_args+=(-u "$unit"); done
 startup_errors="$("$journalctl_cmd" --since "$journal_since" --priority err --no-pager "${journal_args[@]}" 2>&1)" || die "journal smoke command failed"
 [[ -z "$startup_errors" ]] || die "startup journal smoke found errors: $startup_errors"
+for unit in "${units[@]}"; do
+  assert_service_active "$unit"
+  current_restarts="$("$systemctl_cmd" show "$unit" --property=NRestarts --value)"
+  [[ "$current_restarts" =~ ^[0-9]+$ && "$current_restarts" == "${restart_baseline[$unit]}" ]] || die "service restarted or crash-looped during smoke: $unit"
+done
 run_db_tool validate --evidence - "${db_args[@]}" > "$artifact_dir/post-start-evidence.json"
 
 completed=1

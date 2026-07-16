@@ -1,25 +1,23 @@
 /**
- * PURPOSE: Inspect, back up, migrate, and validate the fixed SQLite inventory used by guarded production rollouts.
- * INPUTS: A rollout phase, evidence/backup paths, and an explicit list of existing SQLite database files.
- * OUTPUTS: Consistent SQLite backups plus metadata-only schema, integrity, queue, and hash evidence.
+ * PURPOSE: Inspect, migrate, and validate the root-resolved SQLite inventory used by guarded production rollouts.
+ * INPUTS: A rollout phase, evidence path, and an explicit list of existing SQLite database files.
+ * OUTPUTS: Metadata-only schema, integrity, queue, and hash evidence.
  * NEIGHBORS: scripts/rollout-agent-bridge.sh, src/db.ts
- * LOGIC: Rejects unknown schemas before mutation, makes byte-exact stopped-database backups, runs existing openDb migrations, and validates the exact current lane/queue columns.
+ * LOGIC: Rejects unknown schemas before mutation, runs existing openDb migrations, and validates the exact current lane/queue columns.
  */
 
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { openDb } from "../src/db.js";
 
-type Mode = "inspect" | "backup" | "migrate" | "validate";
+type Mode = "inspect" | "migrate" | "validate";
 
 interface Options {
   mode: Mode;
   databases: string[];
   evidencePath: string | null;
-  backupDir: string | null;
-  manifestPath: string | null;
 }
 
 interface DbEvidence {
@@ -57,28 +55,21 @@ const CURRENT_LOCK_COLUMNS = new Set([
 
 function parseArgs(argv: string[]): Options {
   const mode = argv.shift() as Mode | undefined;
-  if (!mode || !["inspect", "backup", "migrate", "validate"].includes(mode)) {
-    throw new Error("usage: rollout-db.ts <inspect|backup|migrate|validate> --db PATH [--db PATH ...]");
+  if (!mode || !["inspect", "migrate", "validate"].includes(mode)) {
+    throw new Error("usage: rollout-db.ts <inspect|migrate|validate> --db PATH [--db PATH ...]");
   }
   const databases: string[] = [];
   let evidencePath: string | null = null;
-  let backupDir: string | null = null;
-  let manifestPath: string | null = null;
   while (argv.length > 0) {
     const flag = argv.shift();
     const value = argv.shift();
     if (!value) throw new Error(`missing value for ${flag}`);
     if (flag === "--db") databases.push(value);
     else if (flag === "--evidence") evidencePath = value;
-    else if (flag === "--backup-dir") backupDir = value;
-    else if (flag === "--manifest") manifestPath = value;
     else throw new Error(`unknown argument: ${flag}`);
   }
   if (databases.length === 0) throw new Error("at least one --db path is required");
-  if (mode === "backup" && (!backupDir || !manifestPath)) {
-    throw new Error("backup requires --backup-dir and --manifest");
-  }
-  return { mode, databases, evidencePath, backupDir, manifestPath };
+  return { mode, databases, evidencePath };
 }
 
 function hashFile(path: string): string {
@@ -140,26 +131,6 @@ function writeEvidence(path: string | null, mode: Mode, databases: DbEvidence[])
   writeFileSync(path, content, { mode: 0o600 });
 }
 
-function backupDatabases(options: Options): void {
-  mkdirSync(options.backupDir!, { recursive: true });
-  const manifest: string[] = ["source\tbackup\tsource_sha256\tbackup_sha256"];
-  for (const [index, source] of options.databases.entries()) {
-    if (existsSync(`${source}-wal`) || existsSync(`${source}-shm`)) {
-      throw new Error(`database has live WAL/SHM sidecars after service stop: ${source}`);
-    }
-    const backup = join(options.backupDir!, `${String(index + 1).padStart(2, "0")}-${basename(source)}`);
-    copyFileSync(source, backup);
-    chmodSync(backup, 0o600);
-    const sourceHash = hashFile(source);
-    const backupHash = hashFile(backup);
-    if (sourceHash !== backupHash) throw new Error(`byte-exact backup verification failed for ${source}`);
-    manifest.push([source, backup, sourceHash, backupHash].join("\t"));
-  }
-  const content = `${manifest.join("\n")}\n`;
-  if (options.manifestPath === "-") process.stdout.write(content);
-  else writeFileSync(options.manifestPath!, content, { mode: 0o600 });
-}
-
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   if (options.mode === "inspect") {
@@ -167,10 +138,6 @@ async function main(): Promise<void> {
     const legacyQueues = evidence.reduce((sum, database) => sum + database.legacyQueueCount, 0);
     if (legacyQueues !== 0) throw new Error(`legacy queue count is nonzero: ${legacyQueues}`);
     writeEvidence(options.evidencePath, options.mode, evidence);
-    return;
-  }
-  if (options.mode === "backup") {
-    backupDatabases(options);
     return;
   }
   if (options.mode === "migrate") {

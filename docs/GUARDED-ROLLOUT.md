@@ -9,15 +9,15 @@ Status: operational contract and installation guide. Installing or merging this 
 The enforced sequence is:
 
 1. Acquire the exclusive OS rollout lock.
-2. Verify the fixed config, all seven services, all five databases, clean `main`, and the exact expected commit.
-3. Reject unknown schemas, missing databases, non-canonical paths, integrity failures, or nonzero legacy queues.
+2. Verify the root-owned config, selected units from the compiled seven-unit allowlist, clean `main`, and the exact expected commit. Every Git command runs as the runtime user.
+3. Resolve each selected unit's effective `DB_PATH` or `HEALTH_DB_PATH` using shared-then-unit environment-file precedence. Reject defaults, unknown units, missing files, non-canonical paths, duplicates, inventory mismatches, unknown schemas, integrity failures, or nonzero legacy queues.
 4. Stop every service and prove each is inactive.
 5. Recheck Git and database preconditions.
-6. Create byte-exact, hash-recorded SQLite backups after proving no WAL/SHM sidecars remain.
+6. Create byte-exact SQLite backups after proving no WAL/SHM sidecars remain. Record and verify source/backup UID, GID, mode, size, canonical path, and SHA-256.
 7. Run the repository's additive migrations and validate the current schema.
 8. Start every service, verify active state, inspect startup error logs, and revalidate databases.
 
-Every phase writes a timestamped log plus JSON evidence and SHA-256 manifests. A failure before services start restores every database from the verified backup and leaves services stopped. A failure during or after start stops all services, preserves migrated databases and evidence, and requires operator review. The helper deliberately does not attempt an automatic post-start code/database rollback.
+Every phase writes a timestamped log plus JSON evidence and SHA-256 manifests beneath pre-existing, canonical, root-owned directories. A failure before the first start attempt restores every database through a securely created temporary file, atomically replaces it, reapplies the original metadata, verifies the result, and leaves services stopped. A failure during or after a start attempt stops all services, preserves migrated databases and evidence, and requires operator review. The helper deliberately does not attempt an automatic post-start code/database rollback.
 
 ## Installation
 
@@ -25,6 +25,7 @@ Review and install the helper and fixed inventory as root:
 
 ```bash
 sudo install -D -m 0750 -o root -g root scripts/rollout-agent-bridge.sh /usr/local/sbin/rollout-agent-bridge
+sudo install -d -m 0700 -o root -g root /var/backups/agent-bridge /var/log/agent-bridge-rollouts
 sudo install -D -m 0600 -o root -g root systemd/agent-bridge-rollout.conf.example /etc/agent-bridge/rollout.conf
 sudoedit /etc/agent-bridge/rollout.conf
 sudo visudo -f /etc/sudoers.d/agent-bridge-rollout
@@ -36,7 +37,7 @@ Sudoers content:
 content-crawler ALL=(root) NOPASSWD: /usr/local/sbin/rollout-agent-bridge
 ```
 
-The config must remain `root:root`, must not be group/world writable, and must contain exactly five canonical, non-symlink database paths. Confirm the Node binary and all paths match the host before requesting deployment approval.
+The config must remain `root:root` and must not be group/world writable. Select a fixed subset of the compiled unit allowlist and list the exact canonical, non-symlink database set those units resolve from `/etc/default/agent-bridge-shared` followed by their unit-specific environment file. Multiple units may intentionally share one database; duplicate `database=` entries are forbidden. The helper aborts if discovery and the allowlist differ. `backup_dir` and `log_dir` must already exist as canonical, root-owned directories with no group/world write bits.
 
 ## Authorized invocation
 

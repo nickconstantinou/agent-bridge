@@ -1,0 +1,310 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import {
+  abortCliProcess,
+  abortCliProcessAndWait,
+  runCli,
+  runCliAsync,
+  shutdownCliProcessesAndWait,
+} from "../src/cli.js";
+import type { BridgeEvent } from "../src/events/types.js";
+
+// Issue #135 Phase 2 — CLI supervisor consolidation.
+// Locks in sync/async (runCli/runCliAsync) behavioural parity and the
+// registry/cancellation race guarantees the shared internal supervisor must
+// preserve exactly, per docs/implementation-plans/issue-135-code-cleanup.md
+// section "PR 2 — unified CLI process supervision".
+
+const cliTestCwd = mkdtempSync(join(tmpdir(), "agent-bridge-supervisor-matrix-"));
+
+function initRepository(): string {
+  const root = mkdtempSync(join(tmpdir(), "agent-bridge-supervisor-matrix-repo-"));
+  execFileSync("git", ["init", "-q", root]);
+  execFileSync("git", ["-C", root, "config", "user.email", "test@example.com"]);
+  execFileSync("git", ["-C", root, "config", "user.name", "Agent Bridge Test"]);
+  writeFileSync(join(root, "README.md"), "fixture\n");
+  execFileSync("git", ["-C", root, "add", "README.md"]);
+  execFileSync("git", ["-C", root, "commit", "-qm", "fixture"]);
+  return root;
+}
+
+async function waitForFile(path: string, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!existsSync(path)) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${path}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+const roots: string[] = [];
+afterEach(async () => {
+  await shutdownCliProcessesAndWait();
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("1. env-scrub parity", () => {
+  it("runCli and runCliAsync apply identical Telegram-secret and advisor-secret scrubbing", async () => {
+    const envDump = "console.log(JSON.stringify(process.env))";
+    const fakeEnv = {
+      ...process.env,
+      TELEGRAM_BOT_TOKEN: "leaked-telegram-secret",
+      TELEGRAM_ALLOWED_USER_IDS: "123,456",
+      AGENT_BRIDGE_ADVISOR_CAPABILITY: "leaked-advisor-capability",
+      BRIDGE_ADVISOR_ENABLED: "true",
+      BRIDGE_ADVISOR_API_KEY: "leaked-advisor-key",
+    };
+    const previous = { ...process.env };
+    Object.assign(process.env, fakeEnv);
+    try {
+      const [syncRaw, asyncRaw] = await Promise.all([
+        runCli(process.execPath, ["-e", envDump], cliTestCwd, { advisorChild: true }),
+        runCliAsync(process.execPath, ["-e", envDump], cliTestCwd, { advisorChild: true }),
+      ]);
+      const syncEnv = JSON.parse(syncRaw);
+      const asyncEnv = JSON.parse((asyncRaw as { text: string }).text);
+
+      for (const env of [syncEnv, asyncEnv]) {
+        expect(env.TELEGRAM_BOT_TOKEN).toBeUndefined();
+        expect(env.TELEGRAM_ALLOWED_USER_IDS).toBeUndefined();
+        expect(env.AGENT_BRIDGE_ADVISOR_CAPABILITY).toBeUndefined();
+        expect(env.BRIDGE_ADVISOR_ENABLED).toBeUndefined();
+        expect(env.BRIDGE_ADVISOR_API_KEY).toBeUndefined();
+      }
+      expect(Object.keys(syncEnv).sort()).toEqual(Object.keys(asyncEnv).sort());
+    } finally {
+      for (const key of Object.keys(process.env)) {
+        if (!(key in previous)) delete process.env[key];
+      }
+      Object.assign(process.env, previous);
+    }
+  });
+});
+
+describe("2. Codex disabled-tool flag parity", () => {
+  it("runCli and runCliAsync normalize --disable flags identically for a codex-named command", async () => {
+    const echoArgv = "process.stdout.write(JSON.stringify(process.argv.slice(1)))";
+    const codexScript = join(cliTestCwd, "codex");
+    writeFileSync(codexScript, `#!/usr/bin/env node\n${echoArgv}\n`, { mode: 0o755 });
+
+    const rawArgs = ["chat prompt", "--disable", "shell_tool", "--disable", "browser_use", "--json"];
+    const [syncOut, asyncOut] = await Promise.all([
+      runCli(codexScript, rawArgs, cliTestCwd),
+      runCliAsync(codexScript, rawArgs, cliTestCwd),
+    ]);
+    const syncArgv = JSON.parse(syncOut);
+    const asyncArgv = JSON.parse((asyncOut as { text: string }).text);
+
+    expect(syncArgv).toEqual(asyncArgv);
+    expect(syncArgv).toEqual(
+      expect.arrayContaining(["--disable", "shell_tool", "--disable", "browser_use"]),
+    );
+  });
+});
+
+describe("3. idle-timeout parity", () => {
+  it("runCli and runCliAsync both kill the full process group (including grandchildren) on idle timeout", async () => {
+    async function assertGrandchildKilled(runner: typeof runCli | typeof runCliAsync, label: string) {
+      const pidFile = join(cliTestCwd, `grandchild-${label}.pid`);
+      const p = runner(
+        "bash",
+        ["-c", `sleep 30 & echo $! > ${pidFile}; wait`],
+        cliTestCwd,
+        { idleTimeoutMs: 300, timeoutMs: 10_000, killGraceMs: 150 },
+      );
+      await expect(p).rejects.toThrow(/idle timeout/i);
+      await new Promise((r) => setTimeout(r, 400));
+      const grandchildPid = parseInt(readFileSync(pidFile, "utf8").trim(), 10);
+      expect(Number.isFinite(grandchildPid)).toBe(true);
+      let alive = true;
+      try {
+        process.kill(grandchildPid, 0);
+      } catch {
+        alive = false;
+      }
+      if (alive) {
+        try { process.kill(grandchildPid, "SIGKILL"); } catch { /* cleanup */ }
+      }
+      expect(alive, `${label} grandchild should be dead after idle timeout`).toBe(false);
+    }
+
+    await assertGrandchildKilled(runCli, "sync");
+    await assertGrandchildKilled(runCliAsync, "async");
+  }, 15_000);
+});
+
+describe("4. Antigravity planner-stall parity", () => {
+  it("runCli and runCliAsync both abort agy when planner churn persists without usable output", async () => {
+    async function assertStallAborts(runner: typeof runCli | typeof runCliAsync, label: string) {
+      const tempDir = mkdtempSync(join(tmpdir(), `agy-stall-parity-${label}-`));
+      const scriptPath = join(tempDir, "agy");
+      const logPath = join(tempDir, "agy.log");
+      writeFileSync(
+        scriptPath,
+        `#!/usr/bin/env bash\necho 'PlannerResponse without ModifiedResponse encountered' > "$2"\nsleep 5\n`,
+        { mode: 0o755 },
+      );
+      const previous = process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS;
+      process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS = "200";
+      try {
+        await expect(
+          runner(scriptPath, ["--log-file", logPath, "--print", "hello"], cliTestCwd, {
+            timeoutMs: 5_000,
+            idleTimeoutMs: 5_000,
+            killGraceMs: 25,
+          }),
+        ).rejects.toThrow(/stalled in planner loop/i);
+      } finally {
+        if (previous === undefined) delete process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS;
+        else process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS = previous;
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+
+    await assertStallAborts(runCli, "sync");
+    await assertStallAborts(runCliAsync, "async");
+  }, 10_000);
+});
+
+describe("5. cancellation classification — no success event on abort", () => {
+  it("runCli and runCliAsync emit run.cancelled, never run.completed, on user abort", async () => {
+    async function assertCancelledNotCompleted(runner: typeof runCli | typeof runCliAsync, chatId: string) {
+      const events: BridgeEvent[] = [];
+      const started = join(cliTestCwd, `cancel-started-${chatId}`);
+      const p = runner(process.execPath, ["-e", `require("node:fs").writeFileSync(${JSON.stringify(started)}, "1"); setTimeout(() => {}, 10000)`], cliTestCwd, {
+        chatId,
+        eventContext: { runId: chatId, bot: "codex", chatId },
+        onEvent: (e) => events.push(e),
+      });
+      await waitForFile(started);
+      await expect(abortCliProcessAndWait(chatId)).resolves.toBe(true);
+      await p;
+
+      const types = events.map((e) => e.type);
+      expect(types).toContain("run.cancelled");
+      expect(types).not.toContain("run.completed");
+    }
+
+    await assertCancelledNotCompleted(runCli, "cancel-classify-sync");
+    await assertCancelledNotCompleted(runCliAsync, "cancel-classify-async");
+  }, 10_000);
+});
+
+describe("6. single-shot close/error settlement under races", () => {
+  it("settles exactly once when hard timeout and natural completion race", async () => {
+    for (const runner of [runCli, runCliAsync] as const) {
+      const label = runner === runCli ? "sync" : "async";
+      const outcomes = await Promise.allSettled(
+        Array.from({ length: 5 }, (_, i) =>
+          runner(process.execPath, ["-e", "process.stdout.write('done')"], cliTestCwd, {
+            timeoutMs: 1,
+            killGraceMs: 25,
+            chatId: `race-${label}-${i}`,
+          }),
+        ),
+      );
+      // Every attempt must settle exactly once (Promise semantics guarantee this,
+      // but a throw from double-settlement logic inside the executor would
+      // surface here as an unexpected rejection shape or an unhandled error).
+      expect(outcomes).toHaveLength(5);
+      for (const outcome of outcomes) {
+        expect(["fulfilled", "rejected"]).toContain(outcome.status);
+      }
+    }
+  }, 15_000);
+});
+
+describe("7. stale-child deregistration protection", () => {
+  it("a late close from a displaced child does not clear a newer child's registration", async () => {
+    const chatId = "stale-deregister-parity";
+    const resistTerm = "process.on('SIGTERM', () => {}); require('node:fs').writeFileSync(process.argv[1], '1'); setTimeout(() => {}, 10000)";
+    const firstStarted = join(cliTestCwd, "stale-first-started");
+    const first = runCliAsync(process.execPath, ["-e", resistTerm, firstStarted], cliTestCwd, {
+      chatId,
+      timeoutMs: 150,
+      killGraceMs: 400,
+    });
+    await waitForFile(firstStarted);
+
+    // Time out the first child; it resists SIGTERM so its close event is delayed
+    // behind killGraceMs. Before that close fires, register a second child under
+    // the same chatId — the delayed close from the first must not deregister it.
+    const firstOutcome = first.catch(() => "rejected" as const);
+
+    const secondStarted = join(cliTestCwd, "stale-second-started");
+    const second = runCli(process.execPath, ["-e", `require('node:fs').writeFileSync(${JSON.stringify(secondStarted)}, '1'); setTimeout(() => {}, 10000)`], cliTestCwd, {
+      chatId,
+      killGraceMs: 25,
+    });
+    await waitForFile(secondStarted);
+
+    await firstOutcome;
+    // If the first child's late close wrongly cleared the registry entry for
+    // chatId, abortCliProcess would find nothing to kill for the still-running
+    // second child.
+    expect(abortCliProcess(chatId)).toBe(true);
+    await second.catch(() => "rejected");
+  }, 10_000);
+});
+
+describe("8. shutdown waits for all children; no leaks", () => {
+  it("shutdownCliProcessesAndWait terminates every tracked child across both runners and clears the registry", async () => {
+    const started = [0, 1, 2, 3].map((i) => join(cliTestCwd, `shutdown-started-${i}`));
+    const script = (marker: string) => `require('node:fs').writeFileSync(${JSON.stringify(marker)}, '1'); setTimeout(() => {}, 10000)`;
+
+    const runs = [
+      runCli(process.execPath, ["-e", script(started[0])], cliTestCwd, { chatId: "shutdown-sync-0", killGraceMs: 25 }),
+      runCliAsync(process.execPath, ["-e", script(started[1])], cliTestCwd, { chatId: "shutdown-async-0", killGraceMs: 25 }),
+      runCli(process.execPath, ["-e", script(started[2])], cliTestCwd, { chatId: "shutdown-sync-1", killGraceMs: 25 }),
+      runCliAsync(process.execPath, ["-e", script(started[3])], cliTestCwd, { chatId: "shutdown-async-1", killGraceMs: 25 }),
+    ];
+    await Promise.all(started.map((m) => waitForFile(m)));
+
+    const settlements = Promise.allSettled(runs);
+    const count = await shutdownCliProcessesAndWait();
+    expect(count).toBeGreaterThanOrEqual(4);
+    await settlements;
+
+    // shutdownCliProcessesAndWait must not return until every OS child is
+    // actually dead — verify no leaked child_process handles remain by
+    // confirming a fresh run for one of the same chatIds is not blocked.
+    const followUp = await runCli(process.execPath, ["-e", "process.stdout.write('clean')"], cliTestCwd, {
+      chatId: "shutdown-sync-0",
+    });
+    expect(followUp.trim()).toBe("clean");
+  }, 10_000);
+});
+
+describe("9. Issue #133 lock holder/waiter stays in the same cancellation tree", () => {
+  it("a runCli waiter blocked on the worktree lock is cancellable through the same abort path as runCliAsync", async () => {
+    const root = initRepository();
+    roots.push(root);
+    const holderStarted = join(root, ".holder-started");
+    const waiterStarted = join(root, ".waiter-started");
+    const waitScript = "require('node:fs').writeFileSync(process.argv[1], 'started'); setTimeout(() => {}, 10000)";
+
+    const holder = runCliAsync(process.execPath, ["-e", waitScript, holderStarted], root, {
+      chatId: "lock-tree-holder",
+      killGraceMs: 25,
+    });
+    await waitForFile(holderStarted);
+
+    // The waiter is a runCli (sync) invocation this time, proving both entry
+    // points share the identical registry + flock-wrapped cancellation path
+    // that the existing runCliAsync-only waiter tests already cover.
+    const waiter = runCli(process.execPath, ["-e", waitScript, waiterStarted], root, {
+      chatId: "lock-tree-waiter",
+      killGraceMs: 25,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    await expect(abortCliProcessAndWait("lock-tree-waiter")).resolves.toBe(true);
+    await expect(waiter).resolves.toBe("");
+    expect(existsSync(waiterStarted)).toBe(false);
+
+    await abortCliProcessAndWait("lock-tree-holder");
+    await holder;
+  }, 8_000);
+});

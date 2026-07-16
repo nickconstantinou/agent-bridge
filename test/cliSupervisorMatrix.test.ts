@@ -308,3 +308,12 @@ describe("9. Issue #133 lock holder/waiter stays in the same cancellation tree",
     await holder;
   }, 8_000);
 });
+
+describe("10. error-message truncation parity", () => {
+  it("runCli truncates stdout in exit-code error messages the same way runCliAsync does", async () => {
+    const bigOutput = "x".repeat(5_000);
+    await expect(
+      runCli(process.execPath, ["-e", `process.stdout.write(${JSON.stringify(bigOutput)}); process.exit(1)`], cliTestCwd),
+    ).rejects.toThrow(new RegExp(`CLI exited with code 1: x{2000}$`));
+  });
+});

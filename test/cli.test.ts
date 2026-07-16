@@ -1,17 +1,19 @@
-import { describe, expect, it, vi, afterEach } from "vitest";
-import { readFileSync } from "node:fs";
+import { describe, expect, it, vi, afterAll, afterEach } from "vitest";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { runCli, runCliAsync, abortCliProcess, abortCliProcessAndWait, shutdownCliProcesses, shutdownCliProcessesAndWait, isCapacityExhaustedError, getNextFallbackModel, toAntigravityModelLabel, setAntigravityModel, parseCliResult, toUserMessage, buildCliInvocation, buildSafeChildEnv, buildAdvisorChildEnv, resolveKimchiSessionId, normalizeCliArgs } from "../src/cli.js";
 import { isBridgeCommand, handleCommand } from "../src/commands.js";
 import { openDb } from "../src/db.js";
 import type { BridgeConfig } from "../src/types.js";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+const cliTestCwd = mkdtempSync(join(tmpdir(), "agent-bridge-cli-tests-"));
+afterAll(() => rmSync(cliTestCwd, { recursive: true, force: true }));
 
 describe("runCliAsync idle timeout", () => {
   it("rejects with idle timeout when process is silent and idleTimeoutMs is set", async () => {
     await expect(
-      runCliAsync("bash", ["-lc", "sleep 5"], process.cwd(), {
+      runCliAsync("bash", ["-lc", "sleep 5"], cliTestCwd, {
         timeoutMs: 500,
         idleTimeoutMs: 50,
         killGraceMs: 25,
@@ -33,7 +35,7 @@ describe("runCliAsync idle timeout", () => {
     process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS = "200";
     try {
       await expect(
-        runCliAsync(scriptPath, ["--log-file", logPath, "--print", "hello"], process.cwd(), {
+        runCliAsync(scriptPath, ["--log-file", logPath, "--print", "hello"], cliTestCwd, {
           timeoutMs: 5_000,
           idleTimeoutMs: 5_000,
           killGraceMs: 25,
@@ -113,7 +115,7 @@ describe("CLI Runner", () => {
     const output = await runCli(
       process.execPath,
       ["-e", "console.log(process.env.AGENT_BRIDGE_CONTEXT_AVAILABLE + ':' + process.env.AGENT_BRIDGE_CHAT_KEY)"],
-      process.cwd(),
+      cliTestCwd,
       { contextEnv: { AGENT_BRIDGE_CONTEXT_AVAILABLE: "1", AGENT_BRIDGE_CHAT_KEY: "chat:1" } } as any,
     );
 
@@ -121,12 +123,12 @@ describe("CLI Runner", () => {
   });
 
   it("runs a simple command and returns stdout", async () => {
-    const output = await runCli("echo", ["hello"], process.cwd());
+    const output = await runCli("echo", ["hello"], cliTestCwd);
     expect(output.trim()).toBe("hello");
   });
 
   it("closes stdin so commands that wait for input can finish", async () => {
-    const output = await runCli("bash", ["-lc", "read -r _ || true; echo done"], process.cwd(), {
+    const output = await runCli("bash", ["-lc", "read -r _ || true; echo done"], cliTestCwd, {
       timeoutMs: 2000,
     });
     expect(output).toContain("done");
@@ -134,18 +136,18 @@ describe("CLI Runner", () => {
 
   it("logs spawn details for debugging", async () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    await runCli("echo", ["hello world"], process.cwd(), { chatId: "debug-chat" });
+    await runCli("echo", ["hello world"], cliTestCwd, { chatId: "debug-chat" });
     expect(spy.mock.calls.some((call) => String(call[0]).includes("[spawn]") && String(call[0]).includes("debug-chat"))).toBe(true);
     spy.mockRestore();
   });
 
   it("throws on non-zero exit code", async () => {
-    await expect(runCli("false", [], process.cwd())).rejects.toThrow();
+    await expect(runCli("false", [], cliTestCwd)).rejects.toThrow();
   });
 
   it("handles async progress", async () => {
     const chunks: string[] = [];
-    const result = await runCliAsync("echo", ["hello world"], process.cwd(), {
+    const result = await runCliAsync("echo", ["hello world"], cliTestCwd, {
       onProgress: (c) => chunks.push(c),
     });
     expect(result.text).toContain("hello world");
@@ -154,7 +156,7 @@ describe("CLI Runner", () => {
 
   it("resolves cleanly when aborted mid-run", async () => {
     const chatId = "test-cancel-midrun";
-    const p = runCliAsync("sleep", ["10"], process.cwd(), { chatId });
+    const p = runCliAsync("sleep", ["10"], cliTestCwd, { chatId });
     await new Promise((r) => setTimeout(r, 50));
     abortCliProcess(chatId);
     await expect(p).resolves.toMatchObject({ text: expect.any(String) });
@@ -172,7 +174,7 @@ describe("abortCliProcess", () => {
 
   it("waits for child exit before resolving termination", async () => {
     const chatId = "test-abort-waits-for-exit";
-    const childRun = runCli(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); setTimeout(()=>{},10000)"], process.cwd(), { chatId });
+    const childRun = runCli(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); setTimeout(()=>{},10000)"], cliTestCwd, { chatId });
     await new Promise((r) => setTimeout(r, 300));
     let settled = false;
     const abort = abortCliProcessAndWait(chatId).then((value) => { settled = true; return value; });
@@ -184,7 +186,7 @@ describe("abortCliProcess", () => {
 
   it("resolves cleanly when process is killed via abortCliProcess (runCliAsync)", async () => {
     const chatId = "test-abort-async";
-    const p = runCliAsync("sleep", ["10"], process.cwd(), { chatId });
+    const p = runCliAsync("sleep", ["10"], cliTestCwd, { chatId });
     // Give spawn a tick to register
     await new Promise((r) => setTimeout(r, 50));
     const aborted = abortCliProcess(chatId);
@@ -195,7 +197,7 @@ describe("abortCliProcess", () => {
 
   it("resolves cleanly when process is killed via abortCliProcess (runCli)", async () => {
     const chatId = "test-abort-sync";
-    const p = runCli("sleep", ["10"], process.cwd(), { chatId });
+    const p = runCli("sleep", ["10"], cliTestCwd, { chatId });
     await new Promise((r) => setTimeout(r, 50));
     const aborted = abortCliProcess(chatId);
     expect(aborted).toBe(true);
@@ -204,8 +206,8 @@ describe("abortCliProcess", () => {
 
   it("keeps a newer process registered when an older process for the same chat closes late", async () => {
     const chatId = "test-reregister-race";
-    const first = runCli("echo", ["fast"], process.cwd(), { chatId });
-    const second = runCli("sleep", ["10"], process.cwd(), { chatId });
+    const first = runCli("echo", ["fast"], cliTestCwd, { chatId });
+    const second = runCli("sleep", ["10"], cliTestCwd, { chatId });
     await first;
     await new Promise((r) => setTimeout(r, 50));
     // The stale close of the first process must not deregister the second.
@@ -215,13 +217,13 @@ describe("abortCliProcess", () => {
 
   it("returns false for already-completed process", async () => {
     const chatId = "test-abort-done";
-    await runCli("echo", ["hi"], process.cwd(), { chatId });
+    await runCli("echo", ["hi"], cliTestCwd, { chatId });
     expect(abortCliProcess(chatId)).toBe(false);
   });
 
   it("kills all tracked processes during shutdown", async () => {
-    const asyncPromise = runCliAsync("sleep", ["10"], process.cwd(), { chatId: "shutdown-async" });
-    const syncPromise = runCli("sleep", ["10"], process.cwd(), { chatId: "shutdown-sync" });
+    const asyncPromise = runCliAsync("sleep", ["10"], cliTestCwd, { chatId: "shutdown-async" });
+    const syncPromise = runCli("sleep", ["10"], cliTestCwd, { chatId: "shutdown-sync" });
     await new Promise((r) => setTimeout(r, 50));
 
     expect(shutdownCliProcesses()).toBe(2);
@@ -261,8 +263,8 @@ describe("model fallback", () => {
   });
 
   it("awaits every tracked child close during deterministic shutdown", async () => {
-    const first = runCli(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); setTimeout(()=>{},10000)"], process.cwd(), { chatId: "shutdown-wait-a", killGraceMs: 50 });
-    const second = runCliAsync(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); setTimeout(()=>{},10000)"], process.cwd(), { chatId: "shutdown-wait-b", killGraceMs: 50 });
+    const first = runCli(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); setTimeout(()=>{},10000)"], cliTestCwd, { chatId: "shutdown-wait-a", killGraceMs: 50 });
+    const second = runCliAsync(process.execPath, ["-e", "process.on('SIGTERM',()=>{}); setTimeout(()=>{},10000)"], cliTestCwd, { chatId: "shutdown-wait-b", killGraceMs: 50 });
     await new Promise((resolve) => setTimeout(resolve, 300));
 
     await expect(shutdownCliProcessesAndWait()).resolves.toBe(2);
@@ -337,7 +339,7 @@ sleep 5
         runCliAsync(
           fakeAgy,
           ["--log-file", tmpLog, "--print", "hello"],
-          process.cwd(),
+          cliTestCwd,
           {
             timeoutMs: 5_000,
             idleTimeoutMs: 5_000,
@@ -1125,7 +1127,7 @@ describe("runCli process tree kill on timeout", () => {
     const p = runCli(
       "bash",
       ["-c", `sleep 30 & echo $! > ${pidFile}; wait`],
-      process.cwd(),
+      cliTestCwd,
       { idleTimeoutMs: 500, timeoutMs: 10_000, killGraceMs: 200 },
     );
     await expect(p).rejects.toThrow(/idle timeout/);

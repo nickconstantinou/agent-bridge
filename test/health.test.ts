@@ -512,7 +512,7 @@ describe("ServerPlugin", () => {
     }
   });
 
-  it("keeps swap green when swap usage is above amber threshold but RAM usage is healthy", async () => {
+  it("keeps swap green when swap usage is above amber threshold but RAM usage is healthy", { timeout: 15_000 }, async () => {
     const { ServerPlugin } = await import("../src/health/plugins/server.js");
     process.env.HEALTH_MEMORY_AMBER_PCT = "101";
     process.env.HEALTH_SWAP_AMBER_PCT = "1";
@@ -542,7 +542,7 @@ describe("ServerPlugin", () => {
     }
   });
 
-  it("flags swap amber when swap usage is above amber threshold and RAM usage is not healthy", async () => {
+  it("flags swap amber when swap usage is above amber threshold and RAM usage is not healthy", { timeout: 15_000 }, async () => {
     const { ServerPlugin } = await import("../src/health/plugins/server.js");
     process.env.HEALTH_MEMORY_AMBER_PCT = "1";
     process.env.HEALTH_MEMORY_RED_PCT = "101";

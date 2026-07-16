@@ -19,6 +19,7 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 
 const helperPath = fileURLToPath(new URL("../scripts/rollout-agent-bridge.sh", import.meta.url));
+const restoreHelperPath = fileURLToPath(new URL("../scripts/rollout-restore.py", import.meta.url));
 const migrationScript = fileURLToPath(new URL("../scripts/rollout-db.ts", import.meta.url));
 const sourceDir = fileURLToPath(new URL("../src", import.meta.url));
 const nodeModules = fileURLToPath(new URL("../node_modules", import.meta.url));
@@ -109,8 +110,17 @@ echo "systemctl:$*" >> "${fixture.actionLog}"
 cmd="$1"; shift
 case "$cmd" in
   stop)
+    count=0
+    [ ! -f "${fixture.root}/stop-count" ] || count="$(cat "${fixture.root}/stop-count")"
+    count=$((count + 1))
+    printf '%s\n' "$count" > "${fixture.root}/stop-count"
     if [ -n "\${FAKE_SYSTEMCTL_STOP_DELAY:-}" ]; then sleep "$FAKE_SYSTEMCTL_STOP_DELAY"; fi
-    if [ "\${FAKE_FAIL_PHASE:-}" = stop ]; then printf '%s\n' "\${1:-}" > "${fixture.stateFile}"; else : > "${fixture.stateFile}"; fi
+    if [ "\${FAKE_FAIL_PHASE:-}" = stop ] || { [ "$count" -gt 1 ] && [ "\${FAKE_CONTAINMENT_MODE:-}" = active ]; }; then
+      printf '%s\n' "\${1:-}" > "${fixture.stateFile}"
+    else
+      : > "${fixture.stateFile}"
+    fi
+    if [ "$count" -gt 1 ] && [ "\${FAKE_CONTAINMENT_MODE:-}" = stop-error ]; then exit 1; fi
     ;;
   start)
     if [ "\${FAKE_FAIL_PHASE:-}" = start ]; then exit 1; fi
@@ -131,6 +141,8 @@ case "$cmd" in
       Environment) echo NODE_ENV=production ;;
       ActiveState) grep -Fxq "$unit" "${fixture.stateFile}" && echo active || echo inactive ;;
       SubState) grep -Fxq "$unit" "${fixture.stateFile}" && echo running || echo dead ;;
+      MainPID) grep -Fxq "$unit" "${fixture.stateFile}" && echo 4242 || echo 0 ;;
+      ControlPID) echo 0 ;;
       NRestarts)
         if [ "\${FAKE_FAIL_PHASE:-}" = delayed ] && [ -f "${fixture.root}/started" ]; then echo 1; else echo 0; fi
         ;;
@@ -237,13 +249,14 @@ function createFixture(options: { pending?: number; unknownSchema?: boolean; mis
   return fixture;
 }
 
-function runRollout(fixture: Fixture, failPhase?: string) {
+function runRollout(fixture: Fixture, failPhase?: string, containmentMode?: string) {
   return spawnSync("bash", [helperPath, "--expected-commit", fixture.expectedCommit], {
     encoding: "utf8",
     env: {
       ...process.env,
       AGENT_BRIDGE_ROLLOUT_TEST_ROOT: fixture.root,
       ...(failPhase ? { FAKE_FAIL_PHASE: failPhase } : {}),
+      ...(containmentMode ? { FAKE_CONTAINMENT_MODE: containmentMode } : {}),
       FAKE_CORRUPT_DB: fixture.dbPaths[0],
     },
   });
@@ -365,6 +378,38 @@ describe("guarded rollout helper", () => {
     expect(lstatSync(`${fixture.dbPaths[0]}.rollout-restore`).isSymbolicLink()).toBe(true);
   });
 
+  it("rejects active substitution of the generated restore file without modifying the victim", () => {
+    const fixture = createFixture();
+    const source = fixture.dbPaths[0];
+    const backup = join(fixture.root, "restore-source.sqlite");
+    const victim = join(fixture.root, "root-owned-victim");
+    writeFileSync(backup, readFileSync(source), { mode: 0o640 });
+    writeFileSync(source, "mutated-database", { mode: 0o640 });
+    writeFileSync(victim, "do-not-touch", { mode: 0o600 });
+    const expected = metadata(backup);
+    const victimBefore = metadata(victim);
+
+    const result = spawnSync("python3", [
+      restoreHelperPath,
+      "--source", source,
+      "--backup", backup,
+      "--uid", String(expected.uid),
+      "--gid", String(expected.gid),
+      "--mode", expected.mode.toString(8),
+      "--size", String(expected.size),
+      "--sha256", expected.sha256,
+    ], {
+      encoding: "utf8",
+      env: { ...process.env, AGENT_BRIDGE_RESTORE_TEST_SWAP_TARGET: victim },
+    });
+
+    expect(result.error).toBeUndefined();
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/active substitution detected/i);
+    expect(metadata(victim)).toEqual(victimBefore);
+    expect(readFileSync(source, "utf8")).toBe("mutated-database");
+  });
+
   it("supports a fixed selected-unit subset and de-duplicates shared databases", () => {
     const fixture = createFixture();
     const selected = ["agent-bridge-antigravity.service", "agent-bridge-codex.service"];
@@ -441,6 +486,33 @@ describe("guarded rollout helper", () => {
     expect(fixture.dbPaths.map(sha256)).not.toEqual(before);
     expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
     expect(actions(fixture).match(/systemctl:stop/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it.each(["stop-error", "active"])("skips pre-start rollback when containment is incomplete: %s", (mode) => {
+    const fixture = createFixture();
+    const before = fixture.dbPaths.map(sha256);
+    const result = runRollout(fixture, "migrate", mode);
+    const output = `${result.stdout}\n${result.stderr}`;
+
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/CONTAINMENT INCOMPLETE/);
+    expect(output).toMatch(/rollback skipped/i);
+    expect(fixture.dbPaths.map(sha256)).not.toEqual(before);
+    expect(output).not.toContain("services remain stopped");
+  });
+
+  it("preserves migrated evidence when post-start containment cannot be proven", () => {
+    const fixture = createFixture();
+    const before = fixture.dbPaths.map(sha256);
+    const result = runRollout(fixture, "smoke", "stop-error");
+    const output = `${result.stdout}\n${result.stderr}`;
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/CONTAINMENT INCOMPLETE/);
+    expect(output).not.toContain("services remain stopped");
+    expect(fixture.dbPaths.map(sha256)).not.toEqual(before);
+    expect(existsSync(join(artifacts, "migration-evidence.json"))).toBe(true);
   });
 
   it("rejects a concurrent rollout through the exclusive OS lock", async () => {

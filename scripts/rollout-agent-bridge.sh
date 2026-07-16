@@ -46,6 +46,7 @@ if [[ -n "$test_root" ]]; then
   runuser_cmd="$test_root/bin/runuser"
   journalctl_cmd="$test_root/bin/journalctl"
   cp_cmd="$test_root/bin/cp"
+  restore_cmd="$test_root/bin/rollout-restore"
   defaults_dir="$test_root/etc/default"
   smoke_delay=0
   test_mode=1
@@ -57,12 +58,13 @@ else
   runuser_cmd="/usr/sbin/runuser"
   journalctl_cmd="/usr/bin/journalctl"
   cp_cmd="/usr/bin/cp"
+  restore_cmd="/usr/local/libexec/agent-bridge-rollout-restore"
   defaults_dir="/etc/default"
   smoke_delay=5
   test_mode=0
 fi
 
-for command_path in "$systemctl_cmd" "$runuser_cmd" "$journalctl_cmd" "$cp_cmd" /usr/bin/flock /usr/bin/git /usr/bin/sha256sum /usr/bin/tee /usr/bin/realpath /usr/bin/stat /usr/bin/id /usr/bin/mv /usr/bin/rm /usr/bin/cut /usr/bin/sleep /usr/bin/mkdir /usr/bin/chmod /usr/bin/dirname /usr/bin/date /usr/bin/chown /usr/bin/mktemp; do
+for command_path in "$systemctl_cmd" "$runuser_cmd" "$journalctl_cmd" "$cp_cmd" "$restore_cmd" /usr/bin/flock /usr/bin/git /usr/bin/sha256sum /usr/bin/tee /usr/bin/realpath /usr/bin/stat /usr/bin/id /usr/bin/mv /usr/bin/rm /usr/bin/cut /usr/bin/sleep /usr/bin/mkdir /usr/bin/chmod /usr/bin/dirname /usr/bin/date /usr/bin/mktemp; do
   [[ -x "$command_path" ]] || die "required command is unavailable: $command_path"
 done
 [[ -f "$config_file" && ! -L "$config_file" ]] || die "missing fixed rollout config: $config_file"
@@ -241,7 +243,7 @@ restore_backups() {
   [[ -s "$manifest" ]] || return 0
   echo "restoring pre-rollout databases from $manifest"
   local restore_failed=0 restored_count=0
-  local index source backup uid gid mode size source_hash backup_hash actual_backup_hash restore_tmp source_dir restored_hash
+  local index source backup uid gid mode size source_hash backup_hash actual_backup_hash
   while IFS=$'\t' read -r index source backup uid gid mode size source_hash backup_hash; do
     [[ "$index" == "index" ]] && continue
     [[ "$index" =~ ^[0-9]+$ && "$index" == "$restored_count" ]] || { echo "invalid rollback manifest index: $index" >&2; restore_failed=1; continue; }
@@ -250,16 +252,9 @@ restore_backups() {
     [[ "$(/usr/bin/realpath -e "$source")" == "$source" && "$(/usr/bin/realpath -e "$backup")" == "$backup" && "$(/usr/bin/dirname "$backup")" == "$backup_set" ]] || { echo "rollback path escaped fixed inventory at index $index" >&2; restore_failed=1; continue; }
     actual_backup_hash="$(/usr/bin/sha256sum "$backup" | /usr/bin/cut -d' ' -f1)"
     [[ "$source_hash" == "$backup_hash" && "$actual_backup_hash" == "$backup_hash" && "$(/usr/bin/stat -c %u "$backup")" == "$uid" && "$(/usr/bin/stat -c %g "$backup")" == "$gid" && "$(/usr/bin/stat -c %a "$backup")" == "$mode" && "$(/usr/bin/stat -c %s "$backup")" == "$size" ]] || { echo "rollback backup metadata/hash mismatch at index $index" >&2; restore_failed=1; continue; }
-    source_dir="$(/usr/bin/dirname "$source")"
-    restore_tmp="$(/usr/bin/mktemp --tmpdir="$source_dir" .agent-bridge-restore.XXXXXX)" || { echo "cannot create secure rollback temporary file" >&2; restore_failed=1; continue; }
-    if ! "$cp_cmd" --no-preserve=all -- "$backup" "$restore_tmp" || ! /usr/bin/chown "$uid:$gid" "$restore_tmp" || ! /usr/bin/chmod "$mode" "$restore_tmp"; then
-      echo "cannot prepare rollback temporary file for $source" >&2; /usr/bin/rm -f -- "$restore_tmp"; restore_failed=1; continue
+    if ! "$restore_cmd" --source "$source" --backup "$backup" --uid "$uid" --gid "$gid" --mode "$mode" --size "$size" --sha256 "$source_hash"; then
+      echo "descriptor-based rollback failed: $source" >&2; restore_failed=1; continue
     fi
-    restored_hash="$(/usr/bin/sha256sum "$restore_tmp" | /usr/bin/cut -d' ' -f1)"
-    if [[ "$restored_hash" != "$source_hash" || "$(/usr/bin/stat -c %u "$restore_tmp")" != "$uid" || "$(/usr/bin/stat -c %g "$restore_tmp")" != "$gid" || "$(/usr/bin/stat -c %a "$restore_tmp")" != "$mode" || "$(/usr/bin/stat -c %s "$restore_tmp")" != "$size" ]]; then
-      echo "prepared rollback file failed metadata/hash verification: $source" >&2; /usr/bin/rm -f -- "$restore_tmp"; restore_failed=1; continue
-    fi
-    if ! /usr/bin/mv -T -- "$restore_tmp" "$source"; then echo "atomic rollback replacement failed: $source" >&2; /usr/bin/rm -f -- "$restore_tmp"; restore_failed=1; continue; fi
     /usr/bin/rm -f -- "${source}-wal" "${source}-shm"
     [[ "$(/usr/bin/sha256sum "$source" | /usr/bin/cut -d' ' -f1)" == "$source_hash" && "$(/usr/bin/stat -c %u "$source")" == "$uid" && "$(/usr/bin/stat -c %g "$source")" == "$gid" && "$(/usr/bin/stat -c %a "$source")" == "$mode" && "$(/usr/bin/stat -c %s "$source")" == "$size" ]] || { echo "restored database verification failed: $source" >&2; restore_failed=1; continue; }
     restored_count=$((restored_count + 1))
@@ -269,8 +264,30 @@ restore_backups() {
   echo "database rollback completed with metadata and hashes verified"
 }
 
-contain_services() {
-  "$systemctl_cmd" stop "${units[@]}" || true
+stop_and_verify_all_services() {
+  local stop_ok=1 verify_ok=1 unit active_state sub_state main_pid control_pid state_output
+  local -a state_fields=()
+  if ! "$systemctl_cmd" stop "${units[@]}"; then stop_ok=0; fi
+  for unit in "${units[@]}"; do
+    if "$systemctl_cmd" is-active --quiet "$unit"; then verify_ok=0; fi
+    if state_output="$("$systemctl_cmd" show "$unit" --property=ActiveState --property=SubState --property=MainPID --property=ControlPID --value 2>/dev/null)"; then
+      mapfile -t state_fields <<< "$state_output"
+      active_state="${state_fields[0]:-unknown}"
+      sub_state="${state_fields[1]:-unknown}"
+      main_pid="${state_fields[2]:-unknown}"
+      control_pid="${state_fields[3]:-unknown}"
+    else
+      verify_ok=0; active_state=unknown; sub_state=unknown; main_pid=unknown; control_pid=unknown
+    fi
+    [[ "$active_state" == inactive ]] || verify_ok=0
+    [[ "$sub_state" == dead || "$sub_state" == exited ]] || verify_ok=0
+    [[ "$main_pid" == 0 && "$control_pid" == 0 ]] || verify_ok=0
+  done
+  if (( stop_ok == 0 || verify_ok == 0 )); then
+    echo "CONTAINMENT INCOMPLETE: stop_ok=$stop_ok verify_ok=$verify_ok" >&2
+    return 1
+  fi
+  echo "all selected services verified stopped"
 }
 
 on_exit() {
@@ -278,9 +295,18 @@ on_exit() {
   if (( status == 0 && completed == 1 )); then return 0; fi
   set +e
   echo "rollout failed status=$status start_attempted=$start_attempted services_started=$services_started; containing services"
-  if (( stop_attempted == 1 )); then contain_services; fi
-  if (( start_attempted == 0 )); then restore_backups || status=1; fi
-  if (( stop_attempted == 1 )); then echo "services remain stopped; operator review required"; fi
+  containment_verified=0
+  if (( stop_attempted == 1 )); then
+    if stop_and_verify_all_services; then containment_verified=1; else status=1; fi
+  fi
+  if (( start_attempted == 0 )) && [[ -s "$manifest" ]]; then
+    if (( containment_verified == 1 )); then
+      restore_backups || status=1
+    else
+      echo "rollback skipped: stopped state could not be proven" >&2
+    fi
+  fi
+  if (( containment_verified == 1 )); then echo "services remain stopped; operator review required"; fi
   exit "${status:-1}"
 }
 trap on_exit EXIT
@@ -325,10 +351,7 @@ run_db_tool inspect --evidence - "${db_args[@]}" > "$artifact_dir/preflight-evid
 
 echo "stopping all services"
 stop_attempted=1
-"$systemctl_cmd" stop "${units[@]}"
-for unit in "${units[@]}"; do
-  if "$systemctl_cmd" is-active --quiet "$unit"; then die "service remains active after stop: $unit"; fi
-done
+stop_and_verify_all_services || die "CONTAINMENT INCOMPLETE during primary stop"
 
 git_check
 run_db_tool inspect --evidence - "${db_args[@]}" > "$artifact_dir/stopped-evidence.json"

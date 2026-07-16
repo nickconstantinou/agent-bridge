@@ -17,7 +17,7 @@ The enforced sequence is:
 7. Run the repository's additive migrations and validate the current schema.
 8. Start every service, verify active state, inspect startup error logs, and revalidate databases.
 
-Every phase writes a timestamped log plus JSON evidence and SHA-256 manifests beneath pre-existing, canonical, root-owned directories. A failure before the first start attempt restores every database through a securely created temporary file, atomically replaces it, reapplies the original metadata, verifies the result, and leaves services stopped. A failure during or after a start attempt stops all services, preserves migrated databases and evidence, and requires operator review. The helper deliberately does not attempt an automatic post-start code/database rollback.
+Every phase writes a timestamped log plus JSON evidence and SHA-256 manifests beneath pre-existing, canonical, root-owned directories. A failure before the first start attempt restores every database only after all services are proven stopped. The fixed root-owned restore helper uses directory and file descriptors, creates with `O_CREAT|O_EXCL|O_NOFOLLOW`, copies and verifies through the open descriptor, and atomically renames directory-relative without reopening the temporary pathname. A containment failure skips rollback and reports `CONTAINMENT INCOMPLETE`. A failure during or after a start attempt stops and verifies all services, preserves migrated databases and evidence, and requires operator review. The helper deliberately does not attempt an automatic post-start code/database rollback.
 
 ## Installation
 
@@ -25,6 +25,7 @@ Review and install the helper and fixed inventory as root:
 
 ```bash
 sudo install -D -m 0750 -o root -g root scripts/rollout-agent-bridge.sh /usr/local/sbin/rollout-agent-bridge
+sudo install -D -m 0750 -o root -g root scripts/rollout-restore.py /usr/local/libexec/agent-bridge-rollout-restore
 sudo install -d -m 0700 -o root -g root /var/backups/agent-bridge /var/log/agent-bridge-rollouts
 sudo install -D -m 0600 -o root -g root systemd/agent-bridge-rollout.conf.example /etc/agent-bridge/rollout.conf
 sudoedit /etc/agent-bridge/rollout.conf

@@ -104,6 +104,7 @@ function rewriteConfig(fixture: Fixture, transform: (lines: string[]) => string[
 function writeFakeCommands(fixture: Fixture): void {
   const bin = join(fixture.root, "bin");
   mkdirSync(bin, { recursive: true });
+  symlinkSync(restoreHelperPath, join(bin, "rollout-restore"));
   executable(join(bin, "systemctl"), `#!/usr/bin/env bash
 set -euo pipefail
 echo "systemctl:$*" >> "${fixture.actionLog}"
@@ -134,20 +135,22 @@ case "$cmd" in
   is-failed) exit 1 ;;
   show)
     unit="$1"; shift
-    property=""
-    for arg in "$@"; do case "$arg" in --property=*) property="\${arg#--property=}";; esac; done
-    case "$property" in
-      EnvironmentFiles) printf '%s\n%s\n' "${fixture.envDir}/agent-bridge-shared (ignore_errors=yes)" "${fixture.envDir}/\${unit%.service} (ignore_errors=no)" ;;
-      Environment) echo NODE_ENV=production ;;
-      ActiveState) grep -Fxq "$unit" "${fixture.stateFile}" && echo active || echo inactive ;;
-      SubState) grep -Fxq "$unit" "${fixture.stateFile}" && echo running || echo dead ;;
-      MainPID) grep -Fxq "$unit" "${fixture.stateFile}" && echo 4242 || echo 0 ;;
-      ControlPID) echo 0 ;;
-      NRestarts)
-        if [ "\${FAKE_FAIL_PHASE:-}" = delayed ] && [ -f "${fixture.root}/started" ]; then echo 1; else echo 0; fi
-        ;;
-      *) exit 2 ;;
-    esac
+    properties=()
+    for arg in "$@"; do case "$arg" in --property=*) properties+=("\${arg#--property=}");; esac; done
+    for property in "\${properties[@]}"; do
+      case "$property" in
+        EnvironmentFiles) printf '%s\n%s\n' "${fixture.envDir}/agent-bridge-shared (ignore_errors=yes)" "${fixture.envDir}/\${unit%.service} (ignore_errors=no)" ;;
+        Environment) echo NODE_ENV=production ;;
+        ActiveState) grep -Fxq "$unit" "${fixture.stateFile}" && echo active || echo inactive ;;
+        SubState) grep -Fxq "$unit" "${fixture.stateFile}" && echo running || echo dead ;;
+        MainPID) grep -Fxq "$unit" "${fixture.stateFile}" && echo 4242 || echo 0 ;;
+        ControlPID) echo 0 ;;
+        NRestarts)
+          if [ "\${FAKE_FAIL_PHASE:-}" = delayed ] && [ -f "${fixture.root}/started" ]; then echo 1; else echo 0; fi
+          ;;
+        *) exit 2 ;;
+      esac
+    done
     ;;
   *) exit 2 ;;
 esac
@@ -262,6 +265,17 @@ function runRollout(fixture: Fixture, failPhase?: string, containmentMode?: stri
   });
 }
 
+function useMinimalInventory(fixture: Fixture): Fixture {
+  const selectedUnit = units[0];
+  rewriteConfig(fixture, (lines) => [
+    ...lines.filter((line) => !line.startsWith("unit=") && !line.startsWith("database=")),
+    `unit=${selectedUnit}`,
+    `database=${fixture.dbPaths[0]}`,
+  ]);
+  writeFileSync(fixture.stateFile, `${selectedUnit}\n`);
+  return fixture;
+}
+
 function actions(fixture: Fixture): string {
   return readFileSync(fixture.actionLog, "utf8");
 }
@@ -340,7 +354,7 @@ describe("guarded rollout helper", () => {
   });
 
   it.each(["backup", "migrate", "validate"])("restores every database after a pre-start %s failure", (phase) => {
-    const fixture = createFixture();
+    const fixture = useMinimalInventory(createFixture());
     const before = fixture.dbPaths.map(sha256);
     const result = runRollout(fixture, phase);
     expect(result.status).not.toBe(0);
@@ -350,7 +364,7 @@ describe("guarded rollout helper", () => {
   });
 
   it("restores byte content and original ownership, mode, and size", () => {
-    const fixture = createFixture();
+    const fixture = useMinimalInventory(createFixture());
     chmodSync(fixture.dbPaths[0], 0o640);
     const before = metadata(fixture.dbPaths[0]);
 
@@ -363,7 +377,7 @@ describe("guarded rollout helper", () => {
   });
 
   it("does not follow a planted predictable restore symlink", () => {
-    const fixture = createFixture();
+    const fixture = useMinimalInventory(createFixture());
     const victim = join(fixture.root, "root-owned-victim");
     writeFileSync(victim, "do-not-touch", { mode: 0o600 });
     symlinkSync(victim, `${fixture.dbPaths[0]}.rollout-restore`);
@@ -449,7 +463,7 @@ describe("guarded rollout helper", () => {
   });
 
   it("runs every Git inspection through the runtime user", () => {
-    const fixture = createFixture();
+    const fixture = useMinimalInventory(createFixture());
     const result = runRollout(fixture);
     expect(result.status, result.stderr).toBe(0);
     const gitChecks = actions(fixture).split("\n").filter((line) => line.includes(" /usr/bin/git "));
@@ -469,7 +483,7 @@ describe("guarded rollout helper", () => {
   });
 
   it.each(["start", "smoke"])("stops services and preserves migrated evidence after a post-start %s failure", (phase) => {
-    const fixture = createFixture();
+    const fixture = useMinimalInventory(createFixture());
     const before = fixture.dbPaths.map(sha256);
     const result = runRollout(fixture, phase);
     expect(result.status).not.toBe(0);
@@ -479,7 +493,7 @@ describe("guarded rollout helper", () => {
   });
 
   it("contains all services when one crashes during the smoke window", () => {
-    const fixture = createFixture();
+    const fixture = useMinimalInventory(createFixture());
     const before = fixture.dbPaths.map(sha256);
     const result = runRollout(fixture, "delayed");
     expect(result.status).not.toBe(0);
@@ -489,7 +503,7 @@ describe("guarded rollout helper", () => {
   });
 
   it.each(["stop-error", "active"])("skips pre-start rollback when containment is incomplete: %s", (mode) => {
-    const fixture = createFixture();
+    const fixture = useMinimalInventory(createFixture());
     const before = fixture.dbPaths.map(sha256);
     const result = runRollout(fixture, "migrate", mode);
     const output = `${result.stdout}\n${result.stderr}`;
@@ -502,7 +516,7 @@ describe("guarded rollout helper", () => {
   });
 
   it("preserves migrated evidence when post-start containment cannot be proven", () => {
-    const fixture = createFixture();
+    const fixture = useMinimalInventory(createFixture());
     const before = fixture.dbPaths.map(sha256);
     const result = runRollout(fixture, "smoke", "stop-error");
     const output = `${result.stdout}\n${result.stderr}`;
@@ -521,7 +535,8 @@ describe("guarded rollout helper", () => {
       env: {
         ...process.env,
         AGENT_BRIDGE_ROLLOUT_TEST_ROOT: fixture.root,
-        FAKE_SYSTEMCTL_STOP_DELAY: "1",
+        FAKE_SYSTEMCTL_STOP_DELAY: "0.5",
+        FAKE_FAIL_PHASE: "stop",
       },
       stdio: "ignore",
     });

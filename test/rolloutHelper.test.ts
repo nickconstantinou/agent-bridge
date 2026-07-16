@@ -406,6 +406,7 @@ describe("guarded rollout helper", () => {
     expect(metadata(fixture.dbPaths[0])).toEqual(before);
     const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
     expect(readFileSync(join(artifacts, "backup-manifest.tsv"), "utf8")).toContain("uid\tgid\tmode\tsize");
+    expect(readFileSync(join(artifacts, "backup-manifest.tsv"), "utf8")).toContain("parent_device\tparent_inode\tparent_uid\tparent_gid\tparent_mode");
   });
 
   it("does not follow a planted predictable restore symlink", () => {

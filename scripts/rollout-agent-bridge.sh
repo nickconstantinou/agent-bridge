@@ -215,10 +215,13 @@ declare -a expected_backups=()
 
 backup_databases() {
   /usr/bin/mkdir --mode=0700 -- "$backup_set"
-  printf 'index\tsource\tbackup\tuid\tgid\tmode\tsize\tsource_sha256\tbackup_sha256\n' > "$manifest"
-  local index source backup uid gid mode size source_hash backup_hash backup_canonical
+  printf 'index\tsource\tbackup\tuid\tgid\tmode\tsize\tsource_sha256\tbackup_sha256\tparent_device\tparent_inode\tparent_uid\tparent_gid\tparent_mode\n' > "$manifest"
+  local index source source_dir backup uid gid mode size source_hash backup_hash backup_canonical
+  local parent_device parent_inode parent_uid parent_gid parent_mode
   for index in "${!databases[@]}"; do
     source="${databases[$index]}"
+    source_dir="$(/usr/bin/dirname "$source")"
+    [[ -d "$source_dir" && ! -L "$source_dir" && "$(/usr/bin/realpath -e "$source_dir")" == "$source_dir" ]] || die "database parent is unsafe: $source_dir"
     [[ ! -e "${source}-wal" && ! -e "${source}-shm" ]] || die "database has live WAL/SHM sidecars after service stop: $source"
     backup="$backup_set/$(printf '%02d' "$((index + 1))")-${source##*/}"
     expected_backups[$index]="$backup"
@@ -228,6 +231,11 @@ backup_databases() {
     mode="$(/usr/bin/stat -c %a "$source")"
     size="$(/usr/bin/stat -c %s "$source")"
     source_hash="$(/usr/bin/sha256sum "$source" | /usr/bin/cut -d' ' -f1)"
+    parent_device="$(/usr/bin/stat -c %d "$source_dir")"
+    parent_inode="$(/usr/bin/stat -c %i "$source_dir")"
+    parent_uid="$(/usr/bin/stat -c %u "$source_dir")"
+    parent_gid="$(/usr/bin/stat -c %g "$source_dir")"
+    parent_mode="$(/usr/bin/stat -c %a "$source_dir")"
     "$cp_cmd" --preserve=all --no-dereference -- "$source" "$backup"
     [[ -f "$backup" && ! -L "$backup" ]] || die "backup is not a regular file: $backup"
     backup_canonical="$(/usr/bin/realpath -e "$backup")"
@@ -235,7 +243,7 @@ backup_databases() {
     backup_hash="$(/usr/bin/sha256sum "$backup" | /usr/bin/cut -d' ' -f1)"
     [[ "$source_hash" == "$backup_hash" ]] || die "byte-exact backup verification failed: $source"
     [[ "$(/usr/bin/stat -c %u "$backup")" == "$uid" && "$(/usr/bin/stat -c %g "$backup")" == "$gid" && "$(/usr/bin/stat -c %a "$backup")" == "$mode" && "$(/usr/bin/stat -c %s "$backup")" == "$size" ]] || die "backup metadata verification failed: $source"
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$index" "$source" "$backup" "$uid" "$gid" "$mode" "$size" "$source_hash" "$backup_hash" >> "$manifest"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$index" "$source" "$backup" "$uid" "$gid" "$mode" "$size" "$source_hash" "$backup_hash" "$parent_device" "$parent_inode" "$parent_uid" "$parent_gid" "$parent_mode" >> "$manifest"
   done
 }
 
@@ -243,16 +251,19 @@ restore_backups() {
   [[ -s "$manifest" ]] || return 0
   echo "restoring pre-rollout databases from $manifest"
   local restore_failed=0 restored_count=0
-  local index source backup uid gid mode size source_hash backup_hash actual_backup_hash
-  while IFS=$'\t' read -r index source backup uid gid mode size source_hash backup_hash; do
+  local index source source_dir backup uid gid mode size source_hash backup_hash actual_backup_hash
+  local parent_device parent_inode parent_uid parent_gid parent_mode
+  while IFS=$'\t' read -r index source backup uid gid mode size source_hash backup_hash parent_device parent_inode parent_uid parent_gid parent_mode; do
     [[ "$index" == "index" ]] && continue
     [[ "$index" =~ ^[0-9]+$ && "$index" == "$restored_count" ]] || { echo "invalid rollback manifest index: $index" >&2; restore_failed=1; continue; }
     [[ "$source" == "${databases[$index]:-}" && "$backup" == "${expected_backups[$index]:-}" ]] || { echo "rollback manifest path mismatch at index $index" >&2; restore_failed=1; continue; }
+    source_dir="$(/usr/bin/dirname "$source")"
     [[ -f "$source" && ! -L "$source" && -f "$backup" && ! -L "$backup" ]] || { echo "unsafe rollback source or backup at index $index" >&2; restore_failed=1; continue; }
     [[ "$(/usr/bin/realpath -e "$source")" == "$source" && "$(/usr/bin/realpath -e "$backup")" == "$backup" && "$(/usr/bin/dirname "$backup")" == "$backup_set" ]] || { echo "rollback path escaped fixed inventory at index $index" >&2; restore_failed=1; continue; }
+    [[ -d "$source_dir" && ! -L "$source_dir" && "$(/usr/bin/realpath -e "$source_dir")" == "$source_dir" && "$(/usr/bin/stat -c %d "$source_dir")" == "$parent_device" && "$(/usr/bin/stat -c %i "$source_dir")" == "$parent_inode" && "$(/usr/bin/stat -c %u "$source_dir")" == "$parent_uid" && "$(/usr/bin/stat -c %g "$source_dir")" == "$parent_gid" && "$(/usr/bin/stat -c %a "$source_dir")" == "$parent_mode" ]] || { echo "rollback parent metadata mismatch at index $index" >&2; restore_failed=1; continue; }
     actual_backup_hash="$(/usr/bin/sha256sum "$backup" | /usr/bin/cut -d' ' -f1)"
     [[ "$source_hash" == "$backup_hash" && "$actual_backup_hash" == "$backup_hash" && "$(/usr/bin/stat -c %u "$backup")" == "$uid" && "$(/usr/bin/stat -c %g "$backup")" == "$gid" && "$(/usr/bin/stat -c %a "$backup")" == "$mode" && "$(/usr/bin/stat -c %s "$backup")" == "$size" ]] || { echo "rollback backup metadata/hash mismatch at index $index" >&2; restore_failed=1; continue; }
-    if ! "$restore_cmd" --source "$source" --backup "$backup" --uid "$uid" --gid "$gid" --mode "$mode" --size "$size" --sha256 "$source_hash"; then
+    if ! "$restore_cmd" --source "$source" --backup "$backup" --uid "$uid" --gid "$gid" --mode "$mode" --size "$size" --sha256 "$source_hash" --parent-device "$parent_device" --parent-inode "$parent_inode" --parent-uid "$parent_uid" --parent-gid "$parent_gid" --parent-mode "$parent_mode"; then
       echo "descriptor-based rollback failed: $source" >&2; restore_failed=1; continue
     fi
     /usr/bin/rm -f -- "${source}-wal" "${source}-shm"

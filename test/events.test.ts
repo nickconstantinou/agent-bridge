@@ -3,7 +3,13 @@
  * Phase 2 — Event emission from runCliAsync (red until implementation).
  */
 
-import { describe, it, expect, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, it, expect, vi } from "vitest";
+
+const cliTestCwd = mkdtempSync(join(tmpdir(), "agent-bridge-event-tests-"));
+afterAll(() => rmSync(cliTestCwd, { recursive: true, force: true }));
 
 // ── Type contract ─────────────────────────────────────────────────────────────
 
@@ -173,7 +179,7 @@ describe("runCliAsync — event emission", () => {
   it("emits run.started then text.delta then run.completed for a successful command", async () => {
     const { runCliAsync } = await import("../src/cli.js");
     const events: any[] = [];
-    await runCliAsync("node", ["-e", "process.stdout.write('hello')"], process.cwd(), {
+    await runCliAsync("node", ["-e", "process.stdout.write('hello')"], cliTestCwd, {
       eventContext: eventCtx,
       onEvent: (e) => events.push(e),
     });
@@ -191,7 +197,7 @@ describe("runCliAsync — event emission", () => {
   it("logs structured events to the console", async () => {
     const { runCliAsync } = await import("../src/cli.js");
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    await runCliAsync("node", ["-e", "process.stdout.write('hello')"], process.cwd(), {
+    await runCliAsync("node", ["-e", "process.stdout.write('hello')"], cliTestCwd, {
       eventContext: eventCtx,
       onEvent: () => {},
     });
@@ -203,7 +209,7 @@ describe("runCliAsync — event emission", () => {
   it("text.delta events carry the stdout chunk text", async () => {
     const { runCliAsync } = await import("../src/cli.js");
     const deltas: string[] = [];
-    await runCliAsync("node", ["-e", "process.stdout.write('ping')"], process.cwd(), {
+    await runCliAsync("node", ["-e", "process.stdout.write('ping')"], cliTestCwd, {
       eventContext: eventCtx,
       onEvent: (e) => { if (e.type === "text.delta") deltas.push(e.text); },
     });
@@ -213,7 +219,7 @@ describe("runCliAsync — event emission", () => {
   it("run.completed carries the full stdout text", async () => {
     const { runCliAsync } = await import("../src/cli.js");
     const events: any[] = [];
-    await runCliAsync("node", ["-e", "process.stdout.write('final')"], process.cwd(), {
+    await runCliAsync("node", ["-e", "process.stdout.write('final')"], cliTestCwd, {
       eventContext: eventCtx,
       onEvent: (e) => events.push(e),
     });
@@ -224,7 +230,7 @@ describe("runCliAsync — event emission", () => {
   it("emits run.failed with category=cli when process exits non-zero", async () => {
     const { runCliAsync } = await import("../src/cli.js");
     const events: any[] = [];
-    await runCliAsync("node", ["-e", "process.exit(1)"], process.cwd(), {
+    await runCliAsync("node", ["-e", "process.exit(1)"], cliTestCwd, {
       eventContext: eventCtx,
       onEvent: (e) => events.push(e),
     }).catch(() => {});
@@ -236,7 +242,7 @@ describe("runCliAsync — event emission", () => {
   it("emits run.failed with category=timeout on idle timeout", async () => {
     const { runCliAsync } = await import("../src/cli.js");
     const events: any[] = [];
-    await runCliAsync("node", ["-e", "setTimeout(()=>{},30000)"], process.cwd(), {
+    await runCliAsync("node", ["-e", "setTimeout(()=>{},30000)"], cliTestCwd, {
       eventContext: eventCtx,
       idleTimeoutMs: 100,
       onEvent: (e) => events.push(e),
@@ -249,7 +255,7 @@ describe("runCliAsync — event emission", () => {
   it("emits run.cancelled when process is aborted", async () => {
     const { runCliAsync, abortCliProcess } = await import("../src/cli.js");
     const events: any[] = [];
-    const runPromise = runCliAsync("node", ["-e", "setTimeout(()=>{},30000)"], process.cwd(), {
+    const runPromise = runCliAsync("node", ["-e", "setTimeout(()=>{},30000)"], cliTestCwd, {
       chatId: "abort-test-phase2",
       eventContext: { ...eventCtx, runId: "r-abort" },
       onEvent: (e) => events.push(e),
@@ -266,7 +272,7 @@ describe("runCliAsync — event emission", () => {
     const { runCliAsync } = await import("../src/cli.js");
     // Should not throw even when eventContext is absent
     await expect(
-      runCliAsync("node", ["-e", "process.stdout.write('ok')"], process.cwd(), {})
+      runCliAsync("node", ["-e", "process.stdout.write('ok')"], cliTestCwd, {})
     ).resolves.toBeDefined();
   });
 
@@ -275,7 +281,7 @@ describe("runCliAsync — event emission", () => {
     const { runCliAsync } = await import("../src/cli.js");
     const events: any[] = [];
     const ctx = { runId: "my-run-id", bot: "codex" as const, chatId: "chat-42" };
-    await runCliAsync("node", ["-e", "process.stdout.write('x')"], process.cwd(), {
+    await runCliAsync("node", ["-e", "process.stdout.write('x')"], cliTestCwd, {
       eventContext: ctx,
       onEvent: (e) => events.push(e),
     });

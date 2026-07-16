@@ -20,6 +20,7 @@ import type { BridgeEvent } from "./events/types.js";
 import { appendEffortArgs, type EffortLevel } from "./effort.js";
 import { isProviderFallbackEligibleError } from "./providers/fallbackEligibility.js";
 import type { ExecutionLaneHandle } from "./db.js";
+import { buildWorkspaceLockedInvocation } from "./workspaceLock.js";
 
 interface ActiveExecution {
   child: ChildProcess | null;
@@ -1029,11 +1030,12 @@ export async function runCli(command: string, args: string[], cwd: string, optio
 
   return new Promise((resolve, reject) => {
     const normalizedArgs = normalizeCliArgs(command, args);
+    const spawnInvocation = buildWorkspaceLockedInvocation(command, normalizedArgs, cwd);
     console.log(formatSpawnLog(command, normalizedArgs, cwd, options.chatId, options.stdin));
     // detached:true puts the child in its own process group so timeout kills
     // can signal the whole subtree (process.kill(-pid)) instead of stranding
     // grandchildren, mirroring runCliAsync.
-    const child = spawn(command, normalizedArgs, { cwd, shell: false, detached: true, env: buildChildEnv(options.contextEnv, options.advisorChild) });
+    const child = spawn(spawnInvocation.command, spawnInvocation.args, { cwd, shell: false, detached: true, env: buildChildEnv(options.contextEnv, options.advisorChild) });
     if (options.stdin) {
       child.stdin?.write(options.stdin);
     }
@@ -1185,8 +1187,9 @@ export async function runCliAsync(
 
   const normalizedArgs = normalizeCliArgs(command, args);
   return new Promise((resolve, reject) => {
+    const spawnInvocation = buildWorkspaceLockedInvocation(command, normalizedArgs, cwd);
     console.log(formatSpawnLog(command, normalizedArgs, cwd, options.chatId, options.stdin));
-    const child = spawn(command, normalizedArgs, { cwd, shell: false, detached: true, env: buildChildEnv(options.contextEnv, options.advisorChild) });
+    const child = spawn(spawnInvocation.command, spawnInvocation.args, { cwd, shell: false, detached: true, env: buildChildEnv(options.contextEnv, options.advisorChild) });
     if (options.stdin) {
       child.stdin?.write(options.stdin);
     }

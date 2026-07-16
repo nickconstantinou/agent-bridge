@@ -1,6 +1,12 @@
-import { describe, expect, it, afterEach } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, afterAll, afterEach } from "vitest";
 import { resolveTimeoutsForKind } from "../src/timeouts.js";
 import { buildExecutionOptions } from "../src/cli.js";
+
+const cliTestCwd = mkdtempSync(join(tmpdir(), "agent-bridge-timeout-tests-"));
+afterAll(() => rmSync(cliTestCwd, { recursive: true, force: true }));
 
 // Save and restore env after each test
 const savedEnv: Record<string, string | undefined> = {};
@@ -110,7 +116,7 @@ describe("idle timeout fires on silence (integration)", () => {
   it("rejects with idle timeout label when process produces no output", async () => {
     const { runCliAsync } = await import("../src/cli.js");
     await expect(
-      runCliAsync("bash", ["-lc", "sleep 5"], process.cwd(), {
+      runCliAsync("bash", ["-lc", "sleep 5"], cliTestCwd, {
         timeoutMs: 2000,
         idleTimeoutMs: 80,
         killGraceMs: 25,
@@ -122,7 +128,7 @@ describe("idle timeout fires on silence (integration)", () => {
     const { runCliAsync } = await import("../src/cli.js");
     const result = await runCliAsync(
       "bash", ["-lc", "for i in 1 2 3; do echo $i; sleep 0.1; done"],
-      process.cwd(),
+      cliTestCwd,
       { timeoutMs: 5000, idleTimeoutMs: 1000, killGraceMs: 25 },
     );
     expect(result.text).toContain("3");

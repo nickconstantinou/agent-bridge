@@ -1,6 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "entry": [
+    "src/index.ts",
     "src/index-interactive.ts",
     "src/index-worker.ts",
     "src/index-health.ts",

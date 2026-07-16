@@ -62,3 +62,4 @@ export { runCli, runCliAsync, parseCliResult, validateBridgeConfig, buildCliInvo
 export { classifyAnyProviderError, classifyProviderError, isFallbackEligibleProviderError } from "./providers/errorClassification.js";
 export { openDb, BridgeDb };
 export { buildTelegramCommands, handleCommand, isBridgeCommand } from "./commands.js";
+export { parseModelPreference } from "./config.js";

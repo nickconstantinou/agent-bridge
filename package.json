@@ -12,18 +12,20 @@
     "doctor": "tsx src/doctorCli.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
+    "typecheck:unused": "tsc --noEmit -p tsconfig.unused.json",
+    "cleanup:check": "knip",
     "skills": "tsx scripts/skill-manager.ts",
     "scan-token-savings": "tsx scripts/scan-token-savings.ts",
     "smoke:advisor-fallback": "tsx scripts/smoke-advisor-fallback.ts"
   },
   "dependencies": {
-    "@google/agy-cli": "file:test/mocks/mock-agy-cli",
     "better-sqlite3": "^12.9.0",
     "dotenv": "^17.2.3",
     "tsx": "^4.21.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "knip": "^6.27.0",
     "typescript": "^5.8.3",
     "vitest": "^4.1.9"
   }

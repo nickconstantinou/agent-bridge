@@ -1,0 +1,24 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/index.ts",
+    "src/index-interactive.ts",
+    "src/index-worker.ts",
+    "src/index-health.ts",
+    "src/index-discord-interactive.ts",
+    "scripts/*.ts",
+    "scripts/*.sh",
+    "test/**/*.test.ts"
+  ],
+  "project": [
+    "src/**/*.ts",
+    "scripts/**/*.ts",
+    "test/**/*.ts"
+  ],
+  "ignoreBinaries": [
+    "journalctl",
+    "agy",
+    "ps",
+    "which"
+  ]
+}

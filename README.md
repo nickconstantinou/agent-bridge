@@ -145,9 +145,9 @@ Worker commands: `/review`, `/feature`, `/issues`, `/issue`, `/jobs`, `/job`,
 `/chain` shows the worker fallback order. The worker also schedules `pr_watch` jobs to react to
 CI status, stale PRs, and held/refresh/close decisions.
 
-Full guide: `docs/WORKER-GUIDE.md`. Architecture: `agents.md` → "Autonomous
-Worker Lane". Design history and Phase 9 implementation record:
-`docs/autonomous-agent-bridge-research.md`.
+Full guide: `docs/WORKER-GUIDE.md`. Architecture:
+`docs/architecture/engineering-worker.md`. Design history and Phase 9
+implementation record: `docs/autonomous-agent-bridge-research.md`.
 
 ## Configuration
 

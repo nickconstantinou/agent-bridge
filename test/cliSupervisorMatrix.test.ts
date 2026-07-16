@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   abortCliProcess,
   abortCliProcessAndWait,
@@ -11,6 +11,7 @@ import {
   shutdownCliProcessesAndWait,
 } from "../src/cli.js";
 import type { BridgeEvent } from "../src/events/types.js";
+import type { CliOptions } from "../src/types.js";
 
 // Issue #135 Phase 2 — CLI supervisor consolidation.
 // Locks in sync/async (runCli/runCliAsync) behavioural parity and the
@@ -315,5 +316,22 @@ describe("10. error-message truncation parity", () => {
     await expect(
       runCli(process.execPath, ["-e", `process.stdout.write(${JSON.stringify(bigOutput)}); process.exit(1)`], cliTestCwd),
     ).rejects.toThrow(new RegExp(`CLI exited with code 1: x{2000}$`));
+  });
+});
+
+describe("11. adapter-specific onProgress behaviour", () => {
+  it("runCli never invokes onProgress even if a caller sets it on options", async () => {
+    const onProgress = vi.fn();
+    const options: CliOptions = { onProgress };
+    await runCli(process.execPath, ["-e", "process.stdout.write('a'); process.stdout.write('b')"], cliTestCwd, options);
+    expect(onProgress).not.toHaveBeenCalled();
+  });
+
+  it("runCliAsync invokes onProgress for each stdout chunk", async () => {
+    const onProgress = vi.fn();
+    await runCliAsync(process.execPath, ["-e", "process.stdout.write('a'); process.stdout.write('b')"], cliTestCwd, {
+      onProgress,
+    });
+    expect(onProgress).toHaveBeenCalled();
   });
 });

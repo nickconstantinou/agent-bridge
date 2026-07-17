@@ -13,6 +13,9 @@ import type { CliOptions, CliResult, BotKind } from "./types.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { renderSoulContract } from "./soul.js";
 import { buildClaudeStreamJsonInput, parseClaudeStreamJsonOutput } from "./claudeStreamJson.js";
+import { buildClaudeSettingsArg, buildClaudeExcludedPluginSettings } from "./claudeSettings.js";
+
+export { buildClaudeExcludedPluginSettings };
 import { appendEffortArgs, type EffortLevel } from "./effort.js";
 import { isProviderFallbackEligibleError } from "./providers/fallbackEligibility.js";
 import {
@@ -200,8 +203,7 @@ export function buildCliInvocation({
     const finalPrompt = appendOutputDirInstruction(wrapPromptContext(prompt, soulContext), outputDir);
     if (attachments.length > 0) {
       // Multimodal path: pipe stream-json with base64 images to stdin
-      const pluginSettings = buildClaudeExcludedPluginSettings();
-      if (pluginSettings) args.push("--settings", pluginSettings);
+      args.push(...buildClaudeSettingsArg());
       if (model) args.push("--model", model);
       if (sessionId) args.push("--resume", sessionId);
       if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
@@ -213,8 +215,7 @@ export function buildCliInvocation({
     if (toolMode === "none") {
       args.push("--tools", "", "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}');
     }
-    const pluginSettings = buildClaudeExcludedPluginSettings();
-    if (pluginSettings) args.push("--settings", pluginSettings);
+    args.push(...buildClaudeSettingsArg());
     if (model) args.push("--model", model);
     if (sessionId) args.push("--resume", sessionId);
     if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
@@ -268,39 +269,7 @@ export function buildCliInvocation({
   return { command, args: appendEffortArgs(command, args, effort) };
 }
 
-const DEFAULT_CLAUDE_EXCLUDED_PLUGINS = ["telegram@claude-plugins-official"];
-
-export function buildClaudeExcludedPluginSettings(env: NodeJS.ProcessEnv = process.env): string | null {
-  const raw = env.CLAUDE_EXCLUDED_PLUGINS;
-  const plugins = raw === undefined
-    ? DEFAULT_CLAUDE_EXCLUDED_PLUGINS
-    : raw.split(",").map((plugin) => plugin.trim()).filter(Boolean);
-
-  if (!plugins.length) return null;
-
-  return JSON.stringify({
-    enabledPlugins: Object.fromEntries(plugins.map((plugin) => [plugin, false])),
-  });
-}
-
-/**
- * Validates the bridge configuration.
- */
-export function validateBridgeConfig(config: any): { ok: boolean; errors: string[] } {
-  const errors: string[] = [];
-
-  if (!config.allowedUserIds?.size) {
-    errors.push("TELEGRAM_ALLOWED_USER_IDS is required");
-  }
-
-  // Skip bot validation - each service validates its own bot in index.ts
-  // This allows antigravity service to run without codex token and vice versa
-
-  return {
-    ok: errors.length === 0,
-    errors,
-  };
-}
+export { validateBridgeConfig } from "./config.js";
 
 /**
  * Resolve CLI execution options for a specific bot kind.

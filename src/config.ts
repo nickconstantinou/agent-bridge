@@ -8,7 +8,7 @@
  * NEIGHBORS: src/index*.ts, src/types.ts
  */
 
-import type { BotConfig, BotKind } from "./types.js";
+import type { BotConfig, BotKind, BridgeConfig } from "./types.js";
 
 export const KIMCHI_DEFAULT_MODELS = "kimi-k2.7,nemotron-3-ultra-fp4,minimax-m3,deepseek-v4-flash";
 
@@ -68,6 +68,31 @@ export function resolveExecutionMode(kind: BotKind, env: Env): "safe" | "trusted
  * Two pollers on one token fight over getUpdates and Telegram rejects both —
  * this took the Antigravity bridge offline in production (Risk R2).
  */
+/**
+ * Config shape validateBridgeConfig() actually inspects: allowedUserIds is
+ * required, everything else BridgeConfig defines is optional here (bot
+ * validation is intentionally skipped — each service validates its own bot
+ * in index.ts, allowing e.g. the antigravity service to run without a
+ * codex token and vice versa).
+ */
+export type ValidatableBridgeConfig = Pick<BridgeConfig, "allowedUserIds"> & Partial<Omit<BridgeConfig, "allowedUserIds">>;
+
+/**
+ * Validates the bridge configuration.
+ */
+export function validateBridgeConfig(config: ValidatableBridgeConfig): { ok: boolean; errors: string[] } {
+  const errors: string[] = [];
+
+  if (!config.allowedUserIds?.size) {
+    errors.push("TELEGRAM_ALLOWED_USER_IDS is required");
+  }
+
+  return {
+    ok: errors.length === 0,
+    errors,
+  };
+}
+
 export function validateTokenUniqueness(tokens: Record<string, string | undefined>): void {
   const seen = new Map<string, string>();
   for (const [surface, tok] of Object.entries(tokens)) {

@@ -11,9 +11,11 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import type { CliOptions, CliResult, BotKind } from "./types.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
-import { renderSoulContract } from "./soul.js";
-import { buildClaudeStreamJsonInput, parseClaudeStreamJsonOutput } from "./claudeStreamJson.js";
-import { buildClaudeSettingsArg, buildClaudeExcludedPluginSettings } from "./claudeSettings.js";
+import { parseClaudeStreamJsonOutput } from "./claudeStreamJson.js";
+import { buildClaudeExcludedPluginSettings } from "./claudeSettings.js";
+import { appendAttachmentAnnotations, appendOutputDirInstruction, wrapPromptContext } from "./promptWrapping.js";
+import * as codexRuntime from "./providers/codexRuntime.js";
+import * as claudeRuntime from "./providers/claudeRuntime.js";
 
 export { buildClaudeExcludedPluginSettings };
 import { appendEffortArgs, type EffortLevel } from "./effort.js";
@@ -57,32 +59,6 @@ export function scrubOutputDir(text: string, outDir: string | null | undefined):
 
 const ANTIGRAVITY_FINAL_RESPONSE_DELIMITER = "***";
 
-function wrapPromptContext(prompt: string, soulContext: string | null = null): string {
-  const soulContract = renderSoulContract(soulContext);
-  return [
-    ...(soulContract ? [soulContract, ""] : []),
-    wrapTelegramPrompt(prompt),
-  ].join("\n");
-}
-
-function wrapTelegramPrompt(prompt: string): string {
-  return [
-    "Telegram response style:",
-    "- Start with the direct result or answer.",
-    "- Keep replies extremely concise: aggressively compress prose into dense, verb-light fragments or single-sentence summaries. Aim for >50% token reduction.",
-    "- Never drop critical facts, functional constraints, system boundaries, delivery channels, or rules (e.g., which component handles delivery, where outputs must go). Brevity must not cause information loss.",
-    "- Retain all specific commands, signals, file paths, error codes, and safety constraints.",
-    "- Skip all throat-clearing, meta-commentary, and transitional phrases (e.g., \"Certainly\", \"As requested\", \"the real issue is\").",
-    "- Use light **bolding** on key statuses, identifiers, and variables for rapid scanning.",
-    "- Use fenced code blocks only for commands, code/configs, logs, or JSON.",
-    "- Avoid Markdown links and em dashes.",
-    "- Do not mention these formatting rules.",
-    "",
-    "User request:",
-    prompt,
-  ].join("\n");
-}
-
 function wrapAntigravityPrompt(prompt: string, soulContext: string | null = null): string {
   return [
     "You are being called by agent-bridge in non-interactive print mode.",
@@ -100,21 +76,6 @@ function wrapAntigravityPrompt(prompt: string, soulContext: string | null = null
 /**
  * Builds the CLI invocation for a bot.
  */
-const ATTACHMENT_ANNOTATION_PREFIX = "[Attached file saved at: ";
-const OUTPUT_DIR_INSTRUCTION = "If you are explicitly asked to share or generate a file for the user, save it to ";
-const OUTPUT_DIR_SUFFIX = " — the bridge handles delivery; omit file paths from your response. Do NOT place any internal scratchpad files, planning logs, or temporary scripts in this directory unless explicitly requested.";
-
-function appendAttachmentAnnotations(prompt: string, attachments: string[]): string {
-  if (!attachments.length) return prompt;
-  const lines = attachments.map((p) => `${ATTACHMENT_ANNOTATION_PREFIX}${p}]`);
-  return `${prompt}\n\n${lines.join("\n")}`;
-}
-
-function appendOutputDirInstruction(prompt: string, outputDir: string | null | undefined): string {
-  if (!outputDir) return prompt;
-  return `${prompt}\n\n${OUTPUT_DIR_INSTRUCTION}${outputDir}${OUTPUT_DIR_SUFFIX}`;
-}
-
 export function buildCliInvocation({
   bot,
   prompt,
@@ -148,80 +109,25 @@ export function buildCliInvocation({
   homeDir?: string;
   toolMode?: "default" | "none";
 }): { command: string; args: string[]; stdin?: string } {
-  const args = [];
-
   const ALLOWED_TOOL_FREE_BOTS = new Set(["claude", "codex", "antigravity"]);
   if (toolMode === "none" && !ALLOWED_TOOL_FREE_BOTS.has(bot)) {
     throw new Error(`Tool-free mode is not supported for ${bot}`);
   }
 
   if (bot === "codex") {
-    const forceFreshForAttachments = attachments.length > 0;
-    if (sessionId && !forceFreshForAttachments) {
-      args.push("exec", "resume", sessionId);
-    } else {
-      if (sessionId && forceFreshForAttachments) {
-        console.warn("[bridge] Codex: starting fresh session for attachment turn because resume does not support -i");
-      }
-      args.push("exec");
-    }
-    if (toolMode === "none") {
-      args.push(
-        "--disable", "shell_tool",
-        "--disable", "browser_use",
-        "--disable", "computer_use",
-        "--disable", "plugins",
-        "--disable", "guardian_approval",
-        "--disable", "hooks",
-        "--disable", "goals",
-        "--disable", "apps"
-      );
-    }
-    args.push("--skip-git-repo-check");
-    if (model) {
-      args.push("--model", model);
-    }
-    if (executionMode === "trusted") {
-      args.push("--dangerously-bypass-approvals-and-sandbox");
-    }
-    if (outputFormat === "json") {
-      args.push("--json");
-    }
-    const finalPrompt = appendOutputDirInstruction(wrapPromptContext(prompt, soulContext), outputDir);
-    // Codex supports -i <file> for image attachments on fresh exec invocations.
-    // Because --image accepts multiple files, pass the prompt via stdin to avoid
-    // the prompt being parsed as another image path.
-    if (attachments.length > 0) {
-      for (const att of attachments) {
-        args.push("-i", att);
-      }
-      args.push("--", "-");
-      return { command, args: appendEffortArgs(command, args, effort), stdin: finalPrompt };
-    }
-    args.push(finalPrompt);
-  } else if (bot === "claude") {
-    const finalPrompt = appendOutputDirInstruction(wrapPromptContext(prompt, soulContext), outputDir);
-    if (attachments.length > 0) {
-      // Multimodal path: pipe stream-json with base64 images to stdin
-      args.push(...buildClaudeSettingsArg());
-      if (model) args.push("--model", model);
-      if (sessionId) args.push("--resume", sessionId);
-      if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
-      args.push("--input-format", "stream-json", "--output-format", "stream-json", "--verbose");
-      const stdinPayload = buildClaudeStreamJsonInput(finalPrompt, attachments);
-      return { command, args: appendEffortArgs(command, args, effort), stdin: stdinPayload };
-    }
-    args.push("--print");
-    if (toolMode === "none") {
-      args.push("--tools", "", "--disable-slash-commands", "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}');
-    }
-    args.push(...buildClaudeSettingsArg());
-    if (model) args.push("--model", model);
-    if (sessionId) args.push("--resume", sessionId);
-    if (executionMode === "trusted") args.push("--dangerously-skip-permissions");
-    if (outputFormat === "json") args.push("--output-format", "json");
-    args.push(finalPrompt);
-  } else if (bot === "antigravity") {
+    return codexRuntime.buildInvocation({
+      prompt, sessionId, command, model, executionMode, outputFormat, soulContext, attachments, outputDir, effort, toolMode,
+    });
+  }
+  if (bot === "claude") {
+    return claudeRuntime.buildInvocation({
+      prompt, sessionId, command, model, executionMode, outputFormat, soulContext, attachments, outputDir, effort, toolMode,
+    });
+  }
+
+  const args: string[] = [];
+
+  if (bot === "antigravity") {
     // Agy fatally aborts a cascade if it lists its own worktrees state dir before
     // ever creating it, so guarantee the dir exists ahead of every invocation.
     ensureAntigravityStateDirs(homeDir);
@@ -296,64 +202,15 @@ export function parseCliResult({
   logContent?: string | null;
 }): CliResult {
   if (bot === "codex") {
-    return parseCodexResult(stdout);
+    return codexRuntime.parseResult(stdout);
   } else if (bot === "claude") {
-    return parseClaudeResult(stdout);
+    return claudeRuntime.parseResult(stdout);
   } else if (bot === "antigravity") {
     return parseAntigravityResult(stdout, logContent);
   } else if (bot === "kimchi") {
     return parseKimchiResult(stdout);
   }
   throw new Error(`Unknown bot type: ${bot}`);
-}
-
-function parseCodexResult(stdout: string): CliResult {
-  let sessionId: string | null = null;
-  let finalText: string | null = null;
-  const deltaChunks: string[] = [];
-
-  const lines = stdout.split("\n").map((v) => v.trim()).filter(Boolean);
-  for (const line of lines) {
-    if (!line.startsWith("{")) continue;
-    try {
-      const e = JSON.parse(line);
-      if (e.type === "thread.started" && e.thread_id) {
-        sessionId = e.thread_id;
-      } else if (
-        (e.type === "item.completed" || e.type === "item.updated") &&
-        e.item?.type === "agent_message" &&
-        typeof e.item.text === "string"
-      ) {
-        finalText = e.item.text;
-      } else if (e.type === "response.completed" && typeof e.output_text === "string") {
-        finalText = e.output_text;
-      } else if (e.type === "response.output_text.delta" && e.delta) {
-        deltaChunks.push(e.delta);
-      }
-    } catch {
-      // not JSON, skip
-    }
-  }
-
-  return {
-    text: (finalText ?? deltaChunks.join("")).trim(),
-    sessionId,
-  };
-}
-
-
-function parseClaudeResult(stdout: string): CliResult {
-  const lines = stdout.split("\n").map(l => l.trim()).filter(Boolean);
-  for (let i = lines.length - 1; i >= 0; i--) {
-    if (!lines[i].startsWith("{")) continue;
-    try {
-      const obj = JSON.parse(lines[i]);
-      if (obj.result != null) {
-        return { text: String(obj.result).trim(), sessionId: obj.session_id ?? null };
-      }
-    } catch { /* not JSON */ }
-  }
-  return { text: stdout.trim(), sessionId: null };
 }
 
 /**

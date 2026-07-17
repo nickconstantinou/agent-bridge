@@ -14,7 +14,6 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import type { CliOptions } from "./types.js";
 import { type as evtType } from "./events/types.js";
 import type { BridgeEvent } from "./events/types.js";
@@ -65,8 +64,6 @@ function buildChildEnv(extraEnv?: Record<string, string>, advisorChild = false):
 }
 
 const KILL_GRACE_MS = 5_000;
-const ANTIGRAVITY_STALLED_PLANNER_MARKER = "PlannerResponse without ModifiedResponse encountered";
-
 const GROUP_EXIT_POLL_INTERVAL_MS = 25;
 const GROUP_EXIT_POLL_BOUND_MS = 1_000;
 
@@ -126,42 +123,6 @@ function killChildTree(child: ChildProcess, graceMs: number = KILL_GRACE_MS): Pr
 function killChild(child: ChildProcess, graceMs: number = KILL_GRACE_MS): Promise<void> {
   abortedChildren.add(child);
   return killChildTree(child, graceMs);
-}
-
-function getAntigravityStalledPlannerTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
-  const raw = Number(env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS || 300_000);
-  return Number.isFinite(raw) && raw > 0 ? raw : 300_000;
-}
-
-function extractLogFileArg(args: string[]): string | null {
-  for (let i = 0; i < args.length - 1; i += 1) {
-    if (args[i] === "--log-file") return args[i + 1] || null;
-  }
-  return null;
-}
-
-function createAntigravityPlannerStallWatch(args: string[], stdoutRef: () => string, onStall: () => void): NodeJS.Timeout | null {
-  const logFile = extractLogFileArg(args);
-  if (!logFile) return null;
-  const stallTimeoutMs = getAntigravityStalledPlannerTimeoutMs();
-  const startedAt = Date.now();
-  const intervalMs = Math.max(250, Math.min(stallTimeoutMs, 1_000));
-
-  return setInterval(() => {
-    if (stdoutRef().trim()) return;
-    if (Date.now() - startedAt < stallTimeoutMs) return;
-
-    let logContent = "";
-    try {
-      logContent = readFileSync(logFile, "utf8");
-    } catch {
-      return;
-    }
-
-    if (logContent.includes(ANTIGRAVITY_STALLED_PLANNER_MARKER)) {
-      onStall();
-    }
-  }, intervalMs);
 }
 
 /**
@@ -367,17 +328,17 @@ export async function runSupervisedProcess(
       pendingKill = killChildTree(child, killGraceMs);
     }, timeoutMs);
 
-    let plannerStallTriggered = false;
-    const plannerStallTimer = command.includes("agy") || command.includes("antigravity")
-      ? createAntigravityPlannerStallWatch(normalizedArgs, () => stdout, () => {
-          if (plannerStallTriggered || settled || pendingError) return;
-          plannerStallTriggered = true;
-          console.error(`[AGY STALL] Planner churn detected without usable output${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""}`);
-          if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: "Agy stalled in planner loop without usable output", category: "timeout" }));
-          pendingError = new Error("Agy stalled in planner loop without usable output");
-          pendingKill = killChildTree(child, killGraceMs);
-        })
-      : null;
+    const processWatchTimer = options.processWatch?.({
+      args: normalizedArgs,
+      readStdout: () => stdout,
+      onFailure: (error, category = "unknown") => {
+        if (settled || pendingError) return;
+        console.error(`[PROCESS WATCH] ${error.message}${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""}`);
+        if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: error.message, category }));
+        pendingError = error;
+        pendingKill = killChildTree(child, killGraceMs);
+      },
+    }) ?? null;
 
     let idleTimer: NodeJS.Timeout | null = null;
     const resetIdleTimer = () => {
@@ -411,7 +372,7 @@ export async function runSupervisedProcess(
 
     child.on("close", (code, signal) => {
       clearTimeout(timer);
-      if (plannerStallTimer) clearInterval(plannerStallTimer);
+      if (processWatchTimer) clearInterval(processWatchTimer);
       if (idleTimer) clearTimeout(idleTimer);
       if (options.chatId != null) deregisterProcess(options.chatId, child);
       console.log(`[close]${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""} pid=${pid ?? "?"} code=${code} signal=${signal ?? "none"}`);
@@ -445,7 +406,7 @@ export async function runSupervisedProcess(
 
     child.on("error", (err) => {
       clearTimeout(timer);
-      if (plannerStallTimer) clearInterval(plannerStallTimer);
+      if (processWatchTimer) clearInterval(processWatchTimer);
       if (idleTimer) clearTimeout(idleTimer);
       if (options.chatId != null) deregisterProcess(options.chatId, child);
       if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: err.message, category: "cli" }));

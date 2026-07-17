@@ -8,11 +8,9 @@
 
 import dotenv from "dotenv";
 import {
-  validateBridgeConfig,
   getBridgeProjectDir,
-  openDb,
-  shutdownCliProcesses,
 } from "./bridge.js";
+import { openDb } from "./db.js";
 import { TelegramClient } from "./telegram.js";
 import { BridgeEngine } from "./engine.js";
 import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";

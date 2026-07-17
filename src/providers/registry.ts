@@ -1,8 +1,10 @@
+import { basename } from "node:path";
 import {
   type ProviderAdapter,
   type ProviderId,
   PROVIDER_IDS,
 } from "./types.js";
+import { createPlannerStallWatch } from "./antigravityRuntime.js";
 
 const ADAPTERS: Readonly<Record<ProviderId, ProviderAdapter>> = {
   codex: {
@@ -43,6 +45,7 @@ const ADAPTERS: Readonly<Record<ProviderId, ProviderAdapter>> = {
       fallbackTarget: true,
       toolFree: true,
     },
+    processWatch: createPlannerStallWatch,
   },
   kimchi: {
     id: "kimchi",
@@ -69,6 +72,7 @@ const ADAPTERS: Readonly<Record<ProviderId, ProviderAdapter>> = {
 const BOT_NAME_TO_PROVIDER_ID: Record<string, ProviderId> = {
   codex: "codex",
   claude: "claude",
+  agy: "agy",
   antigravity: "agy",
   kimchi: "kimchi",
 };
@@ -76,6 +80,19 @@ const BOT_NAME_TO_PROVIDER_ID: Record<string, ProviderId> = {
 export function supportsToolFreeMode(bot: string): boolean {
   const id = BOT_NAME_TO_PROVIDER_ID[bot];
   return id ? ADAPTERS[id].capabilities.toolFree : false;
+}
+
+export function getProcessWatchForCommand(command: string): ProviderAdapter["processWatch"] {
+  const executable = basename(command).toLowerCase();
+  const commandText = command.toLowerCase();
+  const adapter = getProviderAdapters().find((candidate) =>
+    candidate.processWatch && (
+      candidate.executable === executable
+      || commandText.includes(candidate.executable)
+      || (candidate.id === "agy" && commandText.includes("antigravity"))
+    ),
+  );
+  return adapter?.processWatch;
 }
 
 export function getProviderAdapter(id: ProviderId): ProviderAdapter {

@@ -127,7 +127,17 @@ export interface CliOptions {
   eventContext?: { runId: string; bot: "codex" | "antigravity" | "claude" | "kimchi"; chatId: string; threadId?: string };
   /** Called with each emitted BridgeEvent. Requires eventContext to be set. */
   onEvent?: (event: import("./events/types.js").BridgeEvent) => void;
+  /** Optional provider-supplied failure watch; supervisor only owns lifecycle/settlement. */
+  processWatch?: CliProcessWatch;
 }
+
+export interface CliProcessWatchContext {
+  args: string[];
+  readStdout: () => string;
+  onFailure: (error: Error, category?: "cli" | "timeout" | "transport" | "render" | "unknown") => void;
+}
+
+export type CliProcessWatch = (context: CliProcessWatchContext) => NodeJS.Timeout | null;
 
 /**
  * CLI Invocation result.

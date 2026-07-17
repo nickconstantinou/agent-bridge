@@ -8,7 +8,8 @@
  */
 
 import type { BridgeDb } from "./db.js";
-import { buildCliInvocation, buildExecutionOptions, parseCliResult, setAntigravityModel } from "./cli.js";
+import { buildCliInvocation, buildExecutionOptions, parseCliResult } from "./cli.js";
+import { setAntigravityModel } from "./providers/antigravityRuntime.js";
 import { resolveEffort } from "./effort.js";
 import type { BotKind, CliOptions } from "./types.js";
 import { mapWithConcurrency } from "./concurrency.js";
@@ -25,12 +26,11 @@ import {
 import { storeProjectMemoryCandidate } from "./projectMemory.js";
 import type { CompactionErrorCategory } from "./repositories/compactionRepository.js";
 import { classifyProviderError } from "./providers/errorClassification.js";
+import { supportsToolFreeMode } from "./providers/registry.js";
 
 const DEFAULT_COMPACTION_MAX_ATTEMPTS = 3;
 const MAX_COMPACTION_MAX_ATTEMPTS = 8;
 const DEFAULT_COMPACTION_REPAIR_ATTEMPTS = 1;
-const TOOL_FREE_PROVIDERS = new Set<BotKind>(["codex", "claude", "antigravity"]);
-
 function boundedEnvInt(name: string, fallback: number, maximum: number, allowZero = false): number {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -144,7 +144,7 @@ export async function compactConversation(
   const seenTargets = new Set<string>();
   const addTarget = (target: CompactionFallbackTarget, initial = false): void => {
     if (exhausted.has(target.provider)) return;
-    if (!initial && !TOOL_FREE_PROVIDERS.has(target.provider)) return;
+    if (!initial && !supportsToolFreeMode(target.provider)) return;
     const key = `${target.provider}:${target.model ?? ""}`;
     if (seenTargets.has(key)) return;
     seenTargets.add(key);

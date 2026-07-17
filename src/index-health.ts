@@ -20,7 +20,7 @@ import { formatReport } from "./health/reporter.js";
 import { openDb } from "./db.js";
 import { BridgeEngine } from "./engine.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
-import { shutdownCliProcesses } from "./bridge.js";
+import { shutdownCliProcesses } from "./cliSupervisor.js";
 import { autoUpdateClis } from "./health/autoRemediate.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";

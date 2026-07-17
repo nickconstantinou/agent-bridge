@@ -24,11 +24,10 @@ import {
   beginExecutionLifecycle,
   completeExecutionLifecycle,
   toUserMessage,
-  resolveAntigravityConversationId,
-  resolveKimchiSessionId,
-  setAntigravityModel,
   scrubOutputDir,
 } from "./cli.js";
+import { resolveAntigravityConversationId, setAntigravityModel } from "./providers/antigravityRuntime.js";
+import { resolveKimchiSessionId } from "./providers/kimchiRuntime.js";
 import { MediaGroupBuffer } from "./telegram.js";
 import type { MessagingPlatform } from "./platform.js";
 import { downloadTelegramAttachment } from "./fileDownload.js";

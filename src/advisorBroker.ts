@@ -187,7 +187,7 @@ export async function startConfiguredAdvisorBroker(deps: {
   const config = parseAdvisorConfig(deps.env ?? process.env);
   if (!config.enabled || config.chain.length === 0) return null;
   if (!chainSupportsProfile(config.chain, "tool_free")) {
-    console.warn("[advisor] agent-direct access disabled: every target must support tool-free mode (currently claude only)");
+  console.warn("[advisor] agent-direct access disabled: every target must support tool-free mode");
     return null;
   }
   const broker = new AdvisorBroker({ db: deps.db, config, bots: deps.bots, runCli: deps.runCli });

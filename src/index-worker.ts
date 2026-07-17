@@ -10,10 +10,9 @@
 import dotenv from "dotenv";
 import {
   getBridgeProjectDir,
-  openDb,
   isAuthorizedMessage,
-  shutdownCliProcesses,
 } from "./bridge.js";
+import { openDb } from "./db.js";
 import { loadBotsConfig } from "./config.js";
 import { TelegramClient } from "./telegram.js";
 import { BridgeEngine } from "./engine.js";

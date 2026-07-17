@@ -15,13 +15,45 @@
 import { existsSync, readFileSync, readdirSync, statSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
-import type { CliResult } from "../types.js";
+import type { CliProcessWatchContext, CliResult } from "../types.js";
 import { appendEffortArgs } from "../effort.js";
 import { resolveTimeoutsForKind } from "../timeouts.js";
 import { appendAttachmentAnnotations, appendOutputDirInstruction, wrapPromptContext } from "../promptWrapping.js";
 import type { AntigravityInvocationRequest, ProviderInvocation } from "./types.js";
 
 const ANTIGRAVITY_FINAL_RESPONSE_DELIMITER = "***";
+const ANTIGRAVITY_STALLED_PLANNER_MARKER = "PlannerResponse without ModifiedResponse encountered";
+
+function getAntigravityStalledPlannerTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = Number(env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS || 300_000);
+  return Number.isFinite(raw) && raw > 0 ? raw : 300_000;
+}
+
+function extractLogFileArg(args: string[]): string | null {
+  for (let i = 0; i < args.length - 1; i += 1) {
+    if (args[i] === "--log-file") return args[i + 1] || null;
+  }
+  return null;
+}
+
+/** Provider-owned output-failure watch; the supervisor only settles and kills. */
+export function createPlannerStallWatch({ args, readStdout, onFailure }: CliProcessWatchContext): NodeJS.Timeout | null {
+  const logFile = extractLogFileArg(args);
+  if (!logFile) return null;
+  const stallTimeoutMs = getAntigravityStalledPlannerTimeoutMs();
+  const startedAt = Date.now();
+  const intervalMs = Math.max(250, Math.min(stallTimeoutMs, 1_000));
+  let triggered = false;
+
+  return setInterval(() => {
+    if (triggered || readStdout().trim() || Date.now() - startedAt < stallTimeoutMs) return;
+    let logContent = "";
+    try { logContent = readFileSync(logFile, "utf8"); } catch { return; }
+    if (!logContent.includes(ANTIGRAVITY_STALLED_PLANNER_MARKER)) return;
+    triggered = true;
+    onFailure(new Error("Agy stalled in planner loop without usable output"), "timeout");
+  }, intervalMs);
+}
 
 function wrapAntigravityPrompt(prompt: string, soulContext: string | null = null): string {
   return [

@@ -4,7 +4,7 @@ Status: guarded deployment contract for Issue #131. This document does not autho
 
 ## Required sequence
 
-Use a strict **stop-all → migrate → start-all** sequence. Confirm every old service process has exited before migration and do not allow old/new binary overlap. Starting one provider at a time is not safe because all surfaces share the SQLite schema.
+Use the separately installed root-owned helper documented in [GUARDED-ROLLOUT.md](GUARDED-ROLLOUT.md). It enforces the strict **preflight → stop-all → verify stopped → backup → migrate → validate → start-all → smoke** sequence. Confirm every old service process has exited before migration and do not allow old/new binary overlap. Starting one provider at a time is not safe because all surfaces share the SQLite schema.
 
 Before stopping services, record the **legacy queue count** reported by migration diagnostics. Require an **explicit discard decision** from the operator; quarantined rows must never drain automatically. Preserve a database backup and rollback binary before schema migration.
 
@@ -18,4 +18,4 @@ Deployment, restart, legacy-row discard, and production acceptance each require 
 
 ## Wider parallelism gate
 
-Shared repository/worktree concurrency is a separate high-priority issue. Record and resolve workspace ownership, git mutation, and concurrent tool execution risks before enabling wider parallel surface execution; it is intentionally outside PR #131.
+Shared repository/worktree concurrency is guarded by the OS-backed canonical-worktree lock delivered for Issue #133. Same-checkout CLI runs serialize across services and databases; genuinely different checkouts remain independent.

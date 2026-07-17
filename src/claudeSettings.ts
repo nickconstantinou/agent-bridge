@@ -25,7 +25,7 @@ export interface ClaudeSettings {
 export function resolveClaudeSettings(env: NodeJS.ProcessEnv = process.env): ClaudeSettings {
   const raw = env.CLAUDE_EXCLUDED_PLUGINS;
   const excludedPlugins = raw === undefined
-    ? DEFAULT_EXCLUDED_PLUGINS
+    ? [...DEFAULT_EXCLUDED_PLUGINS]
     : raw.split(",").map((plugin) => plugin.trim()).filter(Boolean);
   return { profile: "default", excludedPlugins };
 }
@@ -50,4 +50,14 @@ export function describeClaudeSettings(env: NodeJS.ProcessEnv = process.env): st
   const { profile, excludedPlugins } = resolveClaudeSettings(env);
   if (!excludedPlugins.length) return `Claude settings: ${profile} profile, no plugins excluded`;
   return `Claude settings: ${profile} profile, excluding [${excludedPlugins.join(", ")}]`;
+}
+
+/**
+ * @deprecated Compatibility alias for buildClaudeSettingsJson(), kept in case
+ * external OSS consumers import it directly from src/cli.js. Byte-identical
+ * output; prefer buildClaudeSettingsJson() or buildClaudeSettingsArg() in new
+ * code.
+ */
+export function buildClaudeExcludedPluginSettings(env: NodeJS.ProcessEnv = process.env): string | null {
+  return buildClaudeSettingsJson(env);
 }

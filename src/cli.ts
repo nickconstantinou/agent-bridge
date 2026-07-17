@@ -13,7 +13,9 @@ import type { CliOptions, CliResult, BotKind } from "./types.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { renderSoulContract } from "./soul.js";
 import { buildClaudeStreamJsonInput, parseClaudeStreamJsonOutput } from "./claudeStreamJson.js";
-import { buildClaudeSettingsArg } from "./claudeSettings.js";
+import { buildClaudeSettingsArg, buildClaudeExcludedPluginSettings } from "./claudeSettings.js";
+
+export { buildClaudeExcludedPluginSettings };
 import { appendEffortArgs, type EffortLevel } from "./effort.js";
 import { isProviderFallbackEligibleError } from "./providers/fallbackEligibility.js";
 import {

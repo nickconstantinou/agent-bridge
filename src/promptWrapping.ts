@@ -20,7 +20,7 @@ export function wrapPromptContext(prompt: string, soulContext: string | null = n
   ].join("\n");
 }
 
-export function wrapTelegramPrompt(prompt: string): string {
+function wrapTelegramPrompt(prompt: string): string {
   return [
     "Telegram response style:",
     "- Start with the direct result or answer.",

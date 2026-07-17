@@ -114,13 +114,63 @@ describe("Issue #135 Phase 3B: codex/claude runtime ownership", () => {
     expect(source).toContain("claudeRuntime.parseResult(stdout)");
   });
 
-  it("only src/providers/codexRuntime.ts and src/providers/claudeRuntime.ts export buildInvocation", () => {
+});
+
+describe("Issue #135 Phase 3C: antigravity/kimchi runtime ownership", () => {
+  it("src/cli.ts no longer defines Antigravity/Kimchi argument-shape branches or result-parsing markers (moved to src/providers/)", () => {
+    const source = readFileSync(join(process.cwd(), "src/cli.ts"), "utf8");
+    // Antigravity-specific: --print-timeout/--conversation only ever appeared
+    // in the antigravity branch of buildCliInvocation; the *** delimiter and
+    // 🧠 Memory Loaded: markers only ever appeared in parseAntigravityResult.
+    expect(source).not.toContain("--print-timeout");
+    expect(source).not.toContain("--conversation");
+    expect(source).not.toContain("🧠 Memory Loaded");
+    expect(source).not.toContain("agent executor error:");
+    // Kimchi-specific: --no-session and the thought/tool-call stripping
+    // markers only ever appeared in the kimchi branch/parseKimchiResult.
+    expect(source).not.toContain("--no-session");
+    expect(source).not.toContain("thought_section_begin");
+  });
+
+  it("buildCliInvocation dispatches antigravity/kimchi to their provider runtime modules", () => {
+    const source = readFileSync(join(process.cwd(), "src/cli.ts"), "utf8");
+    expect(source).toMatch(/bot === "antigravity"[\s\S]{0,80}antigravityRuntime\.buildInvocation/);
+    expect(source).toMatch(/bot === "kimchi"[\s\S]{0,80}kimchiRuntime\.buildInvocation/);
+  });
+
+  it("parseCliResult dispatches antigravity/kimchi to their provider runtime modules", () => {
+    const source = readFileSync(join(process.cwd(), "src/cli.ts"), "utf8");
+    expect(source).toContain("antigravityRuntime.parseResult(stdout, logContent)");
+    expect(source).toContain("kimchiRuntime.parseResult(stdout)");
+  });
+});
+
+describe("Issue #135 Phase 3: all four provider runtimes own buildInvocation and parseResult", () => {
+  it("exactly codexRuntime/claudeRuntime/antigravityRuntime/kimchiRuntime export buildInvocation", () => {
     const dir = join(process.cwd(), "src/providers");
     const owners = readdirSync(dir).filter((f) => {
       if (!f.endsWith(".ts")) return false;
       const source = readFileSync(join(dir, f), "utf8");
       return /export function buildInvocation/.test(source);
     });
-    expect(owners.sort()).toEqual(["claudeRuntime.ts", "codexRuntime.ts"]);
+    expect(owners.sort()).toEqual(["antigravityRuntime.ts", "claudeRuntime.ts", "codexRuntime.ts", "kimchiRuntime.ts"]);
+  });
+
+  it("exactly codexRuntime/claudeRuntime/antigravityRuntime/kimchiRuntime export parseResult", () => {
+    const dir = join(process.cwd(), "src/providers");
+    const owners = readdirSync(dir).filter((f) => {
+      if (!f.endsWith(".ts")) return false;
+      const source = readFileSync(join(dir, f), "utf8");
+      return /export function parseResult/.test(source);
+    });
+    expect(owners.sort()).toEqual(["antigravityRuntime.ts", "claudeRuntime.ts", "codexRuntime.ts", "kimchiRuntime.ts"]);
+  });
+
+  it("src/cli.ts's buildCliInvocation and parseCliResult are pure dispatchers for all four bot kinds", () => {
+    const source = readFileSync(join(process.cwd(), "src/cli.ts"), "utf8");
+    for (const bot of ["codex", "claude", "antigravity", "kimchi"]) {
+      expect(source, `${bot} buildInvocation dispatch`).toMatch(new RegExp(`bot === "${bot}"[\\s\\S]{0,100}${bot}Runtime\\.buildInvocation`));
+      expect(source, `${bot} parseResult dispatch`).toContain(`${bot}Runtime.parseResult(`);
+    }
   });
 });

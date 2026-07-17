@@ -84,8 +84,13 @@ export function supportsToolFreeMode(bot: string): boolean {
 
 export function getProcessWatchForCommand(command: string): ProviderAdapter["processWatch"] {
   const executable = basename(command).toLowerCase();
+  const commandText = command.toLowerCase();
   const adapter = getProviderAdapters().find((candidate) =>
-    candidate.executable === executable || (candidate.id === "agy" && executable === "antigravity"),
+    candidate.processWatch && (
+      candidate.executable === executable
+      || commandText.includes(candidate.executable)
+      || (candidate.id === "agy" && commandText.includes("antigravity"))
+    ),
   );
   return adapter?.processWatch;
 }

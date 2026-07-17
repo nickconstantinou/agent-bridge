@@ -55,3 +55,12 @@ export interface ProviderInvocation {
   args: string[];
   stdin?: string;
 }
+
+// Issue #135 Phase 3C — Antigravity is the only provider using logFile/
+// homeDir (state-dir bootstrap, settings.json model override, conversation
+// log scanning), so those two fields extend the shared request only here
+// rather than widening ProviderInvocationRequest for every provider.
+export interface AntigravityInvocationRequest extends ProviderInvocationRequest {
+  logFile: string | null;
+  homeDir: string;
+}

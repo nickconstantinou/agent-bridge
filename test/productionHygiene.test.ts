@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 describe("production source hygiene", () => {
@@ -30,5 +30,40 @@ describe("production source hygiene", () => {
       expect(source, `${file} duplicates engine context injection`).not.toContain("buildContextPreamble");
       expect(source, `${file} duplicates engine context injection`).not.toContain("contextPreambles");
     }
+  });
+});
+
+describe("Issue #135 Phase 2: single CLI process registry ownership", () => {
+  it("only src/cliSupervisor.ts declares the process registry", () => {
+    const files = readdirSync(join(process.cwd(), "src")).filter((f) => f.endsWith(".ts"));
+    const owners = files.filter((f) => {
+      const source = readFileSync(join(process.cwd(), "src", f), "utf8");
+      return /activeExecutions\s*=\s*new Map/.test(source);
+    });
+    expect(owners).toEqual(["cliSupervisor.ts"]);
+  });
+
+  it("src/cli.ts does not spawn child processes directly", () => {
+    const source = readFileSync(join(process.cwd(), "src/cli.ts"), "utf8");
+    expect(source).not.toMatch(/from ["']node:child_process["']/);
+    expect(source).not.toContain("spawn(");
+  });
+
+  it("only src/cliSupervisor.ts exports runSupervisedProcess", () => {
+    const files = readdirSync(join(process.cwd(), "src")).filter((f) => f.endsWith(".ts"));
+    const owners = files.filter((f) => {
+      const source = readFileSync(join(process.cwd(), "src", f), "utf8");
+      return /export (async )?function runSupervisedProcess/.test(source);
+    });
+    expect(owners).toEqual(["cliSupervisor.ts"]);
+  });
+
+  it("src/cliSupervisor.ts stays provider-agnostic — no Codex/Agy argument-shape policy", () => {
+    // normalizeCliArgs (Codex/Agy-specific flag reconstruction) lives in
+    // src/cliArgNormalization.ts. The supervisor calls it but must not own it.
+    const source = readFileSync(join(process.cwd(), "src/cliSupervisor.ts"), "utf8");
+    expect(source).not.toMatch(/isCodex|isAgy/);
+    expect(source).not.toContain("--skip-git-repo-check");
+    expect(source).not.toContain("function normalizeCliArgs");
   });
 });

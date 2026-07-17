@@ -18,7 +18,8 @@ A second, separate **appliance** deployment lives outside this repo at `/opt/age
 
 ### Companion / execution core
 - `src/engine.ts` (1,337 lines) — BridgeEngine: polling loop, update handling, command dispatch, execution orchestration, retry/fallback, memory sidecars, event emission. Largest module; owns too many concerns (see Gap Analysis).
-- `src/cli.ts` (1,322 lines) — child process lifecycle, per-CLI arg builders (`buildCliArgs`), per-CLI result parsers (`parseCliResult`, `parseKimchiResult`), session resolution (`resolveKimchiSessionId`, antigravity conversation id readers), `isCapacityExhaustedError`, `getNextFallbackModel`, safe child env.
+- `src/cli.ts` (835 lines) — per-CLI arg builders (`buildCliInvocation`), per-CLI result parsers (`parseCliResult`, `parseKimchiResult`), session resolution (`resolveKimchiSessionId`, antigravity conversation id readers), `isCapacityExhaustedError`, `getNextFallbackModel`. `runCli`/`runCliAsync` are thin adapters over `cliSupervisor.runSupervisedProcess()`.
+- `src/cliSupervisor.ts` (576 lines) — Issue #135 Phase 2: the single authoritative child-process lifecycle. Owns argument normalisation (`normalizeCliArgs`), workspace-lock wrapping, child env/advisor-secret scrubbing (`buildSafeChildEnv`, `buildAdvisorChildEnv`), the one process registry and identity-checked registration/deregistration, hard/idle/planner-stall timers, event emission, cancellation/termination (`abortCliProcess*`, `shutdownCliProcesses*`), and close/error settlement (`runSupervisedProcess`). Re-exported from `src/cli.ts` for existing callers.
 - `src/interactiveBot.ts` — CliKind type, per-chat CLI preference (SQLite), /cli switch keyboard, fallback dispatch helper.
 - `src/workerFallback.ts` — CLI-to-CLI fallback chain with conversation-context preamble handoff.
 - `src/commands.ts` — /models /effort /reset /stop /compact /context /usage /narration.

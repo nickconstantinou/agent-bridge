@@ -71,3 +71,18 @@ describe("describeClaudeSettings", () => {
     expect(describeClaudeSettings({})).toBe("Claude settings: default profile, excluding [telegram@claude-plugins-official]");
   });
 });
+
+describe("buildClaudeExcludedPluginSettings — compatibility alias", () => {
+  it("is still importable from src/cli.js for external OSS consumers", async () => {
+    const cliModule = await import("../src/cli.js");
+    expect(typeof cliModule.buildClaudeExcludedPluginSettings).toBe("function");
+  });
+
+  it("produces the exact same payload as buildClaudeSettingsJson", async () => {
+    const { buildClaudeExcludedPluginSettings } = await import("../src/cli.js");
+    expect(buildClaudeExcludedPluginSettings({})).toBe(buildClaudeSettingsJson({}));
+    expect(buildClaudeExcludedPluginSettings({ CLAUDE_EXCLUDED_PLUGINS: "a@x,b@y" }))
+      .toBe(buildClaudeSettingsJson({ CLAUDE_EXCLUDED_PLUGINS: "a@x,b@y" }));
+    expect(buildClaudeExcludedPluginSettings({ CLAUDE_EXCLUDED_PLUGINS: "" })).toBeNull();
+  });
+});

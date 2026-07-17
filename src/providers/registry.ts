@@ -69,6 +69,7 @@ const ADAPTERS: Readonly<Record<ProviderId, ProviderAdapter>> = {
 const BOT_NAME_TO_PROVIDER_ID: Record<string, ProviderId> = {
   codex: "codex",
   claude: "claude",
+  agy: "agy",
   antigravity: "agy",
   kimchi: "kimchi",
 };

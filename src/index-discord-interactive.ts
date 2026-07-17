@@ -19,7 +19,9 @@
  */
 
 import dotenv from "dotenv";
-import { getBridgeProjectDir, openDb, shutdownCliProcesses } from "./bridge.js";
+import { getBridgeProjectDir } from "./bridge.js";
+import { openDb } from "./db.js";
+import { shutdownCliProcesses } from "./cliSupervisor.js";
 import { loadBotsConfig } from "./config.js";
 import { DiscordClient, type DiscordUpdate } from "./discord.js";
 import { BridgeEngine } from "./engine.js";

@@ -1,6 +1,7 @@
 import type { BridgeDb } from "./db.js";
 import type { BotConfig, BotKind } from "./types.js";
-import { buildCliInvocation, parseCliResult, setAntigravityModel } from "./cli.js";
+import { buildCliInvocation, parseCliResult } from "./cli.js";
+import { setAntigravityModel } from "./providers/antigravityRuntime.js";
 import { classifyProviderError, isFallbackEligibleProviderError } from "./providers/errorClassification.js";
 import type { ProviderId } from "./providers/types.js";
 import { assertChainSupportsProfile, shouldAllowAdvisorCall, type AdvisorExecutionProfile } from "./advisorPolicy.js";

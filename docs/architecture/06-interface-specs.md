@@ -6,6 +6,7 @@ Design-only. No implementation in this PR.
 
 ```ts
 export interface ProviderCapabilities {
+  toolFree: boolean;          // verified support for invocation toolMode: "none"
   streaming: boolean;        // emits incremental output usable as text.delta
   resume: boolean;           // supports session continuation
   interrupt: boolean;        // supports safe mid-run abort with partial result

@@ -15,6 +15,7 @@ const ADAPTERS: Readonly<Record<ProviderId, ProviderAdapter>> = {
       worker: true,
       workerChain: true,
       fallbackTarget: true,
+      toolFree: true,
     },
   },
   claude: {
@@ -27,6 +28,7 @@ const ADAPTERS: Readonly<Record<ProviderId, ProviderAdapter>> = {
       worker: true,
       workerChain: true,
       fallbackTarget: true,
+      toolFree: true,
     },
   },
   agy: {
@@ -39,6 +41,7 @@ const ADAPTERS: Readonly<Record<ProviderId, ProviderAdapter>> = {
       worker: false,
       workerChain: true,
       fallbackTarget: true,
+      toolFree: true,
     },
   },
   kimchi: {
@@ -51,9 +54,29 @@ const ADAPTERS: Readonly<Record<ProviderId, ProviderAdapter>> = {
       worker: false,
       workerChain: false,
       fallbackTarget: true,
+      toolFree: false,
     },
   },
 };
+
+/**
+ * buildCliInvocation()'s `bot` parameter uses CLI-kind vocabulary
+ * ("antigravity"), not provider ids ("agy") — see ChainCliKind in types.ts.
+ * Unrecognized bot names are treated as not supporting tool-free mode
+ * rather than throwing, matching the original ALLOWED_TOOL_FREE_BOTS
+ * Set-membership behaviour it replaces.
+ */
+const BOT_NAME_TO_PROVIDER_ID: Record<string, ProviderId> = {
+  codex: "codex",
+  claude: "claude",
+  antigravity: "agy",
+  kimchi: "kimchi",
+};
+
+export function supportsToolFreeMode(bot: string): boolean {
+  const id = BOT_NAME_TO_PROVIDER_ID[bot];
+  return id ? ADAPTERS[id].capabilities.toolFree : false;
+}
 
 export function getProviderAdapter(id: ProviderId): ProviderAdapter {
   const adapter = ADAPTERS[id];

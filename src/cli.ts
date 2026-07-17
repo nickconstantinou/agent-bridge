@@ -39,6 +39,7 @@ export {
 };
 import { appendEffortArgs, type EffortLevel } from "./effort.js";
 import { isProviderFallbackEligibleError } from "./providers/fallbackEligibility.js";
+import { supportsToolFreeMode } from "./providers/registry.js";
 import {
   runSupervisedProcess,
   buildSafeChildEnv,
@@ -113,8 +114,7 @@ export function buildCliInvocation({
   homeDir?: string;
   toolMode?: "default" | "none";
 }): { command: string; args: string[]; stdin?: string } {
-  const ALLOWED_TOOL_FREE_BOTS = new Set(["claude", "codex", "antigravity"]);
-  if (toolMode === "none" && !ALLOWED_TOOL_FREE_BOTS.has(bot)) {
+  if (toolMode === "none" && !supportsToolFreeMode(bot)) {
     throw new Error(`Tool-free mode is not supported for ${bot}`);
   }
 

@@ -16,6 +16,8 @@ export interface ProviderCapabilities {
   /** Allowed in worker-bot fallback chains (interactive/scribe duty). */
   readonly workerChain: boolean;
   readonly fallbackTarget: boolean;
+  /** Supports buildCliInvocation's toolMode: "none" (tool-free mode). */
+  readonly toolFree: boolean;
 }
 
 

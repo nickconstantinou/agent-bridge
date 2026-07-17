@@ -27,6 +27,7 @@ export interface ProviderAdapter {
   readonly executable: string;
   readonly defaultArgs: readonly string[];
   readonly capabilities: ProviderCapabilities;
+  readonly processWatch?: import("../types.js").CliProcessWatch;
 }
 
 /** CLI kind vocabulary used in fallback-chain env vars; "antigravity" maps to provider id "agy". */

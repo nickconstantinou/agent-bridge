@@ -9,7 +9,6 @@
 import { homedir } from "node:os";
 import type { CliOptions, CliResult, BotKind } from "./types.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
-import { parseClaudeStreamJsonOutput } from "./claudeStreamJson.js";
 import { buildClaudeExcludedPluginSettings } from "./claudeSettings.js";
 import * as codexRuntime from "./providers/codexRuntime.js";
 import * as claudeRuntime from "./providers/claudeRuntime.js";
@@ -39,7 +38,7 @@ export {
 };
 import { appendEffortArgs, type EffortLevel } from "./effort.js";
 import { isProviderFallbackEligibleError } from "./providers/fallbackEligibility.js";
-import { supportsToolFreeMode } from "./providers/registry.js";
+import { getProcessWatchForCommand, supportsToolFreeMode } from "./providers/registry.js";
 import {
   runSupervisedProcess,
   buildSafeChildEnv,
@@ -224,7 +223,10 @@ export function getNextFallbackModel(currentModel: string | null, modelPreferenc
  * supervised process core in src/cliSupervisor.ts.
  */
 export async function runCli(command: string, args: string[], cwd: string, options: CliOptions = {}): Promise<string> {
-  const { stdout } = await runSupervisedProcess(command, args, cwd, options);
+  const { stdout } = await runSupervisedProcess(command, args, cwd, {
+    ...options,
+    processWatch: options.processWatch ?? getProcessWatchForCommand(command),
+  });
   return stdout;
 }
 
@@ -238,6 +240,9 @@ export async function runCliAsync(
   cwd: string,
   options: CliOptions = {}
 ): Promise<{ text: string }> {
-  const { stdout } = await runSupervisedProcess(command, args, cwd, options, options.onProgress);
+  const { stdout } = await runSupervisedProcess(command, args, cwd, {
+    ...options,
+    processWatch: options.processWatch ?? getProcessWatchForCommand(command),
+  }, options.onProgress);
   return { text: stdout };
 }

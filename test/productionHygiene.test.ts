@@ -83,3 +83,44 @@ describe("Issue #135 Phase 3A: validateBridgeConfig ownership", () => {
     expect(source).toMatch(/function validateBridgeConfig\(config: (?!any\b)/);
   });
 });
+
+describe("Issue #135 Phase 3B: codex/claude runtime ownership", () => {
+  it("src/cli.ts no longer defines Codex/Claude argument-shape branches (moved to src/providers/)", () => {
+    const source = readFileSync(join(process.cwd(), "src/cli.ts"), "utf8");
+    // Codex-specific: the disabled-tool-set flags and --skip-git-repo-check
+    // only ever appeared inside the codex branch of buildCliInvocation.
+    expect(source).not.toContain("guardian_approval");
+    expect(source).not.toContain("--skip-git-repo-check");
+    // Claude-specific: the stream-json attachment path and --disable-slash-commands
+    // only ever appeared inside the claude branch of buildCliInvocation.
+    expect(source).not.toContain("stream-json");
+    expect(source).not.toContain("--disable-slash-commands");
+    // Result parsing: Codex's thread.started/response.completed handling and
+    // Claude's session_id JSON-result handling only ever appeared in
+    // parseCodexResult/parseClaudeResult.
+    expect(source).not.toContain("thread.started");
+    expect(source).not.toContain("obj.session_id");
+  });
+
+  it("buildCliInvocation dispatches codex/claude to their provider runtime modules", () => {
+    const source = readFileSync(join(process.cwd(), "src/cli.ts"), "utf8");
+    expect(source).toMatch(/bot === "codex"[\s\S]{0,80}codexRuntime\.buildInvocation/);
+    expect(source).toMatch(/bot === "claude"[\s\S]{0,80}claudeRuntime\.buildInvocation/);
+  });
+
+  it("parseCliResult dispatches codex/claude to their provider runtime modules", () => {
+    const source = readFileSync(join(process.cwd(), "src/cli.ts"), "utf8");
+    expect(source).toContain("codexRuntime.parseResult(stdout)");
+    expect(source).toContain("claudeRuntime.parseResult(stdout)");
+  });
+
+  it("only src/providers/codexRuntime.ts and src/providers/claudeRuntime.ts export buildInvocation", () => {
+    const dir = join(process.cwd(), "src/providers");
+    const owners = readdirSync(dir).filter((f) => {
+      if (!f.endsWith(".ts")) return false;
+      const source = readFileSync(join(dir, f), "utf8");
+      return /export function buildInvocation/.test(source);
+    });
+    expect(owners.sort()).toEqual(["claudeRuntime.ts", "codexRuntime.ts"]);
+  });
+});

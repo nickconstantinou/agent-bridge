@@ -16,6 +16,8 @@ export interface ProviderCapabilities {
   /** Allowed in worker-bot fallback chains (interactive/scribe duty). */
   readonly workerChain: boolean;
   readonly fallbackTarget: boolean;
+  /** Supports buildCliInvocation's toolMode: "none" (tool-free mode). */
+  readonly toolFree: boolean;
 }
 
 
@@ -54,4 +56,13 @@ export interface ProviderInvocation {
   command: string;
   args: string[];
   stdin?: string;
+}
+
+// Issue #135 Phase 3C — Antigravity is the only provider using logFile/
+// homeDir (state-dir bootstrap, settings.json model override, conversation
+// log scanning), so those two fields extend the shared request only here
+// rather than widening ProviderInvocationRequest for every provider.
+export interface AntigravityInvocationRequest extends ProviderInvocationRequest {
+  logFile: string | null;
+  homeDir: string;
 }

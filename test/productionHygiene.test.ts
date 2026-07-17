@@ -67,3 +67,19 @@ describe("Issue #135 Phase 2: single CLI process registry ownership", () => {
     expect(source).not.toContain("function normalizeCliArgs");
   });
 });
+
+describe("Issue #135 Phase 3A: validateBridgeConfig ownership", () => {
+  it("only src/config.ts defines validateBridgeConfig", () => {
+    const files = readdirSync(join(process.cwd(), "src")).filter((f) => f.endsWith(".ts"));
+    const owners = files.filter((f) => {
+      const source = readFileSync(join(process.cwd(), "src", f), "utf8");
+      return /export function validateBridgeConfig/.test(source);
+    });
+    expect(owners).toEqual(["config.ts"]);
+  });
+
+  it("validateBridgeConfig no longer takes an untyped 'any' parameter", () => {
+    const source = readFileSync(join(process.cwd(), "src/config.ts"), "utf8");
+    expect(source).toMatch(/function validateBridgeConfig\(config: (?!any\b)/);
+  });
+});

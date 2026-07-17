@@ -37,7 +37,7 @@ describe("Issue #135 Phase 3D: internal ownership boundaries", () => {
     const text = source("src/bridge.ts");
     expect(text).not.toMatch(/function\s+parseModelPreference\s*\(/);
     expect(text).not.toMatch(/function\s+(buildInvocation|parseResult)\s*\(/);
-    expect(text).toContain('export { validateBridgeConfig, parseModelPreference } from "./config.js";');
+    expect(text).toContain('import { validateBridgeConfig, parseModelPreference } from "./config.js";');
   });
 
   it("provider capability policy has one registry owner", () => {

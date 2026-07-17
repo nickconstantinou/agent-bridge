@@ -7,7 +7,20 @@
  */
 
 import type { TelegramMessage, BridgeConfig } from "./types.js";
-import type { BridgeDb } from "./db.js";
+import {
+  runCli, runCliAsync, parseCliResult, buildCliInvocation, buildExecutionOptions,
+  isCapacityExhaustedError, getNextFallbackModel, toUserMessage, scrubOutputDir,
+} from "./cli.js";
+import { abortCliProcess, abortCliProcessAndWait, shutdownCliProcesses } from "./cliSupervisor.js";
+import { validateBridgeConfig, parseModelPreference } from "./config.js";
+import { openDb, BridgeDb } from "./db.js";
+import {
+  resolveAntigravityConversationId, extractAntigravityConversationId,
+  readAntigravityLastConversation, readLatestAntigravityConversationFromLogs,
+  setAntigravityModel, ensureAntigravityStateDirs, toAntigravityModelLabel,
+} from "./providers/antigravityRuntime.js";
+import { normalizeCliArgs } from "./cliArgNormalization.js";
+import { classifyAnyProviderError, classifyProviderError, isFallbackEligibleProviderError } from "./providers/errorClassification.js";
 
 export function getBridgeProjectDir(): string {
   return process.env.BRIDGE_PROJECT_DIR || process.cwd();
@@ -59,11 +72,14 @@ export function buildModelsText(kind: string, { db, config }: { db: BridgeDb; co
 
 // Compatibility barrel: preserve the historical bridge imports, but point each
 // name at its stable owning module so internal callers can import owners directly.
-export { runCli, runCliAsync, parseCliResult, buildCliInvocation, buildExecutionOptions, isCapacityExhaustedError, getNextFallbackModel, toUserMessage, scrubOutputDir } from "./cli.js";
-export { abortCliProcess, abortCliProcessAndWait, shutdownCliProcesses } from "./cliSupervisor.js";
-export { validateBridgeConfig, parseModelPreference } from "./config.js";
-export { openDb, BridgeDb } from "./db.js";
-export { resolveAntigravityConversationId, extractAntigravityConversationId, readAntigravityLastConversation, readLatestAntigravityConversationFromLogs, setAntigravityModel, ensureAntigravityStateDirs, toAntigravityModelLabel } from "./providers/antigravityRuntime.js";
-export { normalizeCliArgs } from "./cliArgNormalization.js";
-export { classifyAnyProviderError, classifyProviderError, isFallbackEligibleProviderError } from "./providers/errorClassification.js";
+export {
+  runCli, runCliAsync, parseCliResult, buildCliInvocation, buildExecutionOptions,
+  isCapacityExhaustedError, getNextFallbackModel, toUserMessage, scrubOutputDir,
+  abortCliProcess, abortCliProcessAndWait, shutdownCliProcesses,
+  validateBridgeConfig, parseModelPreference, openDb, BridgeDb,
+  resolveAntigravityConversationId, extractAntigravityConversationId,
+  readAntigravityLastConversation, readLatestAntigravityConversationFromLogs,
+  setAntigravityModel, ensureAntigravityStateDirs, toAntigravityModelLabel,
+  normalizeCliArgs, classifyAnyProviderError, classifyProviderError, isFallbackEligibleProviderError,
+};
 export { buildTelegramCommands, handleCommand, isBridgeCommand } from "./commands.js";

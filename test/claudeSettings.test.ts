@@ -32,6 +32,13 @@ describe("resolveClaudeSettings", () => {
   it("only 'default' is a valid profile — this is not Issue #88's lean/custom feature", () => {
     expect(resolveClaudeSettings({}).profile).toBe("default");
   });
+
+  it("mutating one caller's excludedPlugins array does not affect a later resolution", () => {
+    const first = resolveClaudeSettings({});
+    first.excludedPlugins.push("mutated@evil");
+    const second = resolveClaudeSettings({});
+    expect(second.excludedPlugins).toEqual(["telegram@claude-plugins-official"]);
+  });
 });
 
 describe("buildClaudeSettingsJson", () => {

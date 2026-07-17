@@ -29,3 +29,29 @@ export interface ProviderAdapter {
 
 /** CLI kind vocabulary used in fallback-chain env vars; "antigravity" maps to provider id "agy". */
 export type ChainCliKind = "codex" | "claude" | "antigravity" | "kimchi";
+
+// Issue #135 Phase 3B — provider runtime invocation/parsing boundary.
+// Shared request/result shapes for src/providers/codexRuntime.ts and
+// src/providers/claudeRuntime.ts. Deliberately narrower than
+// buildCliInvocation()'s full parameter set: no bot/sessionMode/logFile/
+// homeDir, since only antigravity uses logFile/homeDir and bot is already
+// implied by which runtime module is called.
+export interface ProviderInvocationRequest {
+  prompt: string;
+  sessionId: string | null;
+  command: string;
+  model: string | null;
+  executionMode: "safe" | "trusted";
+  outputFormat: "json" | null;
+  soulContext: string | null;
+  attachments: string[];
+  outputDir: string | null;
+  effort: import("../effort.js").EffortLevel | null;
+  toolMode: "default" | "none";
+}
+
+export interface ProviderInvocation {
+  command: string;
+  args: string[];
+  stdin?: string;
+}

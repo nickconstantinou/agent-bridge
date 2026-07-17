@@ -267,24 +267,7 @@ export function buildCliInvocation({
   return { command, args: appendEffortArgs(command, args, effort) };
 }
 
-/**
- * Validates the bridge configuration.
- */
-export function validateBridgeConfig(config: any): { ok: boolean; errors: string[] } {
-  const errors: string[] = [];
-
-  if (!config.allowedUserIds?.size) {
-    errors.push("TELEGRAM_ALLOWED_USER_IDS is required");
-  }
-
-  // Skip bot validation - each service validates its own bot in index.ts
-  // This allows antigravity service to run without codex token and vice versa
-
-  return {
-    ok: errors.length === 0,
-    errors,
-  };
-}
+export { validateBridgeConfig } from "./config.js";
 
 /**
  * Resolve CLI execution options for a specific bot kind.

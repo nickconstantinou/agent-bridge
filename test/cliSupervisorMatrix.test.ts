@@ -167,6 +167,41 @@ describe("4. Antigravity planner-stall parity", () => {
     await assertStallAborts(runCli, "sync");
     await assertStallAborts(runCliAsync, "async");
   }, 10_000);
+
+  it("matches configured Agy wrapper commands and terminates the stalled child", async () => {
+    async function assertWrapperAborts(runner: typeof runCli | typeof runCliAsync, label: string) {
+      const tempDir = mkdtempSync(join(tmpdir(), `agy-wrapper-stall-${label}-`));
+      const scriptPath = join(tempDir, "agy-wrapper");
+      const logPath = join(tempDir, "agy.log");
+      const pidPath = join(tempDir, "child.pid");
+      writeFileSync(
+        scriptPath,
+        `#!/usr/bin/env bash\necho $$ > "${pidPath}"\necho 'PlannerResponse without ModifiedResponse encountered' > "$2"\nsleep 5\n`,
+        { mode: 0o755 },
+      );
+      const previous = process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS;
+      process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS = "200";
+      try {
+        await expect(
+          runner(scriptPath, ["--log-file", logPath, "--print", "hello"], cliTestCwd, {
+            timeoutMs: 5_000,
+            idleTimeoutMs: 5_000,
+            killGraceMs: 25,
+          }),
+        ).rejects.toThrow(/stalled in planner loop/i);
+        const pid = Number(readFileSync(pidPath, "utf8").trim());
+        expect(Number.isFinite(pid)).toBe(true);
+        expect(() => process.kill(pid, 0)).toThrow();
+      } finally {
+        if (previous === undefined) delete process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS;
+        else process.env.ANTIGRAVITY_STALLED_PLANNER_TIMEOUT_MS = previous;
+        rmSync(tempDir, { recursive: true, force: true });
+      }
+    }
+
+    await assertWrapperAborts(runCli, "sync");
+    await assertWrapperAborts(runCliAsync, "async");
+  }, 10_000);
 });
 
 describe("5. cancellation classification — no success event on abort", () => {

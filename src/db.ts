@@ -22,6 +22,7 @@ import {
   type CompactionAttemptInput,
   type CompactionAttemptRecord,
 } from "./repositories/compactionRepository.js";
+import { applyMigrations, CURRENT_SCHEMA_VERSION, UnsupportedSchemaVersionError } from "./db/schema.js";
 
 // Sentinel row keys stored in bridge_state for non-chat state
 const pollingKey = (bot: string) => `$polling:${bot}`;
@@ -101,6 +102,8 @@ export function openDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
   const raw = new Database(dbPath);
   raw.pragma("journal_mode = WAL");
   raw.pragma("foreign_keys = ON");
+  const schemaVersion = Number(raw.pragma("user_version", { simple: true }));
+  if (schemaVersion > CURRENT_SCHEMA_VERSION) throw new UnsupportedSchemaVersionError(schemaVersion);
   raw.exec(`
     CREATE TABLE IF NOT EXISTS bridge_state (
       chat_id               TEXT    PRIMARY KEY,
@@ -616,6 +619,7 @@ export function openDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
          AND ${bot}_session_created_at < datetime('now', '-7 days')`
     );
   }
+  applyMigrations(raw);
   const leaseMs = options.lockLeaseMs ?? 90_000;
   if (!Number.isFinite(leaseMs) || leaseMs <= 0) throw new Error("lockLeaseMs must be greater than zero");
   return new BridgeDb(raw, {

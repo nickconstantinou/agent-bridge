@@ -46,7 +46,8 @@ A second, separate **appliance** deployment lives outside this repo at `/opt/age
 - `src/skills.ts` + `skills/` + `scripts/skill-manager.ts` — named prompt skill packs.
 
 ### Persistence
-- `src/db.ts` (1,103) — BridgeDb monolith: schema DDL + migrations inline; session/lock/settings/queue/memory methods implemented directly.
+- `src/db.ts` — BridgeDb compatibility façade: existing schema bootstrap and historical repairs remain behaviorally intact while callers continue using the public database API.
+- `src/db/schema.ts` — explicit SQLite schema boundary. `CURRENT_SCHEMA_VERSION` is `1`; existing `user_version = 0` files are the legacy baseline, future versions fail closed, and numbered migrations advance the marker transactionally.
 - `src/repositories/` — 6 repository classes (session, lock, settings, runRepository, workQueue, memory). Partially wired: `settingsRepository` and `sessionRepository` are delegated to; `BridgeDb` still owns most SQL directly (`openDb()` returns `new BridgeDb(raw)`).
 - `src/events/` — `types.ts` (BridgeEvent union: run.started, text.delta, run.completed, run.failed, run.cancelled), `store.ts` (EventStore persisting to `bridge_runs`/`bridge_events`), `reducer.ts`, `telegramAdapter.ts`.
 - `src/projectMemory.ts`, `src/contextCommand.ts`, `src/compactSummary.ts` — memory capture, retrieval, /compact, context command CLI. `/compact` is the single automatic durable-memory distillation path; the former post-turn extractor (`src/memoryExtractor.ts`, `BRIDGE_MEMORY_EXTRACTOR_ENABLED`) has been removed.

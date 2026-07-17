@@ -11,6 +11,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { openDb } from "../src/db.js";
+import { CURRENT_SCHEMA_VERSION } from "../src/db/schema.js";
 
 type Mode = "inspect" | "migrate" | "validate";
 
@@ -24,6 +25,7 @@ interface DbEvidence {
   path: string;
   sha256: string;
   integrity: string;
+  schemaVersion: number;
   schema: "legacy" | "migratable" | "current";
   legacyQueueCount: number;
   pendingQueueCount: number;
@@ -90,7 +92,12 @@ function inspectDatabase(path: string, requireCurrent: boolean): DbEvidence {
     const integrity = String(db.pragma("integrity_check", { simple: true }));
     if (integrity !== "ok") throw new Error(`integrity check failed for ${path}: ${integrity}`);
     const userVersion = Number(db.pragma("user_version", { simple: true }));
-    if (userVersion !== 0) throw new Error(`unknown schema version ${userVersion} for ${path}`);
+    if (userVersion > CURRENT_SCHEMA_VERSION) {
+      throw new Error(`unsupported future schema version ${userVersion} for ${path}`);
+    }
+    if (!Number.isInteger(userVersion) || userVersion < 0) {
+      throw new Error(`invalid schema version ${userVersion} for ${path}`);
+    }
     const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as Array<{ name: string }>).map((row) => row.name);
     const unknownTables = tables.filter((table) => !ALLOWED_TABLES.has(table));
     const missingTables = [...REQUIRED_TABLES].filter((table) => !tables.includes(table));
@@ -104,8 +111,10 @@ function inspectDatabase(path: string, requireCurrent: boolean): DbEvidence {
     const lockColumns = tables.includes("execution_locks") ? columnNames(db, "execution_locks") : [];
     const currentPending = sameSet(pendingColumns, CURRENT_PENDING_COLUMNS);
     const currentLocks = sameSet(lockColumns, CURRENT_LOCK_COLUMNS);
-    const schema = currentPending && currentLocks
-      ? "current"
+    const schema = userVersion === 0
+      ? "legacy"
+      : currentPending && currentLocks
+        ? "current"
       : sameSet(pendingColumns, LEGACY_PENDING_COLUMNS) && lockColumns.length === 0
         ? "legacy"
         : "migratable";
@@ -114,7 +123,7 @@ function inspectDatabase(path: string, requireCurrent: boolean): DbEvidence {
       ? Number((db.prepare("SELECT COUNT(*) AS count FROM pending_messages WHERE surface = 'legacy'").get() as { count: number }).count)
       : Number((db.prepare("SELECT COUNT(*) AS count FROM pending_messages").get() as { count: number }).count);
     const pendingQueueCount = Number((db.prepare("SELECT COUNT(*) AS count FROM pending_messages").get() as { count: number }).count);
-    return { path, sha256: hashFile(path), integrity, schema, legacyQueueCount, pendingQueueCount, tables, pendingColumns, lockColumns };
+    return { path, sha256: hashFile(path), integrity, schemaVersion: userVersion, schema, legacyQueueCount, pendingQueueCount, tables, pendingColumns, lockColumns };
   } finally {
     db.close();
   }

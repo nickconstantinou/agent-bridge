@@ -1,5 +1,11 @@
 # 07 — Database & Event Model
 
+## Schema versioning boundary
+
+SQLite `PRAGMA user_version` is the authoritative schema marker. `user_version = 0` denotes the pre-versioned legacy baseline. Phase 4A establishes `CURRENT_SCHEMA_VERSION = 1` and advances legacy databases to version 1 after the existing compatibility initializer completes. Unknown future versions fail closed. The migration runner applies sequential numbered migrations in a transaction and rolls back both DDL and the version marker on failure.
+
+The five guarded rollout database roles (shared, Discord, health, interactive, and worker) use the same schema contract. `scripts/rollout-db.ts` reports version 0 explicitly as `legacy`, accepts only version 1 as current, and rejects future versions. Historical repair logic is intentionally retained in `src/db.ts` for this foundation PR; later Phase 4 PRs will move each repair into its own numbered migration without deleting compatibility behavior.
+
 ## Current schema (from src/db.ts DDL)
 
 | Table | Owner (target repository) | Purpose |
@@ -15,6 +21,12 @@
 | project_memories | memoryRepository | memory store |
 
 ## Planned migrations (additive only; better-sqlite3 try/alter pattern already established)
+
+| Version | Status | Purpose |
+|---|---|---|
+| 0 | legacy | Existing unversioned databases |
+| 1 | Phase 4A | Compatibility baseline marker |
+| 2+ | future PRs | Individual historical repairs and additive schema changes |
 
 ```sql
 -- M-013 memory kinds (Epic 7)

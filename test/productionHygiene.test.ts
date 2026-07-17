@@ -173,4 +173,15 @@ describe("Issue #135 Phase 3: all four provider runtimes own buildInvocation and
       expect(source, `${bot} parseResult dispatch`).toContain(`${bot}Runtime.parseResult(`);
     }
   });
+
+  it("src/cli.ts does not encode a provider-name allow-list or tool-free capability matrix", () => {
+    // CTO review on PR #144: ALLOWED_TOOL_FREE_BOTS was provider-specific
+    // policy (which bots support toolMode:"none") sitting directly in the
+    // dispatcher. That capability now lives in the provider registry
+    // (src/providers/registry.ts), not as a hardcoded Set/allow-list in
+    // cli.ts.
+    const source = readFileSync(join(process.cwd(), "src/cli.ts"), "utf8");
+    expect(source).not.toMatch(/ALLOWED_TOOL_FREE_BOTS/);
+    expect(source).not.toMatch(/new Set\(\s*\[\s*["']claude["']/);
+  });
 });

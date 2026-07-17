@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildCliInvocation, parseCliResult, isCapacityExhaustedError } from "../src/cli.js";
+import { buildCliInvocation, parseCliResult, isCapacityExhaustedError, setAntigravityModel } from "../src/cli.js";
 
 function withTempImage(fn: (path: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), "agent-bridge-fixture-attachment-"));
@@ -26,41 +26,44 @@ function withTempImage(fn: (path: string) => void): void {
 // PR 3B/3C. A behavioural difference introduced by that later move must show
 // up here first.
 
+// Wrapped prompts embed the full soul contract + Telegram response-style
+// block, which is itself characterized elsewhere (wrapAntigravityPrompt /
+// wrapTelegramPrompt tests in test/cli.test.ts) — matched positionally here
+// with expect.stringContaining() rather than reproduced verbatim, so these
+// stay exact on flag identity, order, and count (catching a duplicated flag,
+// reordering, or an unexpected extra argument) without being brittle against
+// unrelated prompt-wrapping copy changes.
+const anyPrompt = () => expect.stringContaining("hi") as unknown as string;
+
 describe("provider invocation fixtures — codex", () => {
-  it("fresh session, safe mode, no model", () => {
+  it("fresh session, safe mode, no model — exact arg order", () => {
     const inv = buildCliInvocation({ bot: "codex", prompt: "hi", sessionId: null, command: "codex" });
     expect(inv.command).toBe("codex");
-    expect(inv.args[0]).toBe("exec");
-    expect(inv.args).not.toContain("resume");
-    expect(inv.args).toContain("--skip-git-repo-check");
-    expect(inv.args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(inv.args).toEqual(["exec", "--skip-git-repo-check", anyPrompt()]);
   });
 
-  it("resumes an existing session when sessionId is set and there are no attachments", () => {
+  it("resumes an existing session when sessionId is set and there are no attachments — exact arg order", () => {
     const inv = buildCliInvocation({ bot: "codex", prompt: "hi", sessionId: "sess-1", command: "codex" });
-    expect(inv.args.slice(0, 3)).toEqual(["exec", "resume", "sess-1"]);
+    expect(inv.args).toEqual(["exec", "resume", "sess-1", "--skip-git-repo-check", anyPrompt()]);
   });
 
-  it("forces a fresh session when attachments are present even with a sessionId", () => {
+  it("forces a fresh session when attachments are present even with a sessionId — exact arg order, stdin carries the prompt", () => {
     const inv = buildCliInvocation({
       bot: "codex", prompt: "hi", sessionId: "sess-1", command: "codex", attachments: ["/tmp/a.png"],
     });
-    expect(inv.args[0]).toBe("exec");
-    expect(inv.args).not.toContain("resume");
-    expect(inv.args).toContain("-i");
-    expect(inv.args[inv.args.indexOf("-i") + 1]).toBe("/tmp/a.png");
-    expect(inv.args.slice(-2)).toEqual(["--", "-"]);
+    expect(inv.args).toEqual(["exec", "--skip-git-repo-check", "-i", "/tmp/a.png", "--", "-"]);
     expect(inv.stdin).toBeTruthy();
   });
 
-  it("trusted mode adds the approvals/sandbox bypass flag", () => {
+  it("trusted mode — exact arg order", () => {
     const inv = buildCliInvocation({ bot: "codex", prompt: "hi", sessionId: null, command: "codex", executionMode: "trusted" });
-    expect(inv.args).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(inv.args).toEqual(["exec", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", anyPrompt()]);
   });
 
-  it("tool-free mode disables the documented Codex tool set", () => {
+  it("tool-free mode — exact arg order, full documented Codex tool set, nothing extra", () => {
     const inv = buildCliInvocation({ bot: "codex", prompt: "hi", sessionId: null, command: "codex", toolMode: "none" });
-    expect(inv.args).toEqual(expect.arrayContaining([
+    expect(inv.args).toEqual([
+      "exec",
       "--disable", "shell_tool",
       "--disable", "browser_use",
       "--disable", "computer_use",
@@ -69,112 +72,120 @@ describe("provider invocation fixtures — codex", () => {
       "--disable", "hooks",
       "--disable", "goals",
       "--disable", "apps",
-    ]));
+      "--skip-git-repo-check",
+      anyPrompt(),
+    ]);
   });
 
-  it("json output format adds --json", () => {
+  it("json output format — exact arg order", () => {
     const inv = buildCliInvocation({ bot: "codex", prompt: "hi", sessionId: null, command: "codex", outputFormat: "json" });
-    expect(inv.args).toContain("--json");
+    expect(inv.args).toEqual(["exec", "--skip-git-repo-check", "--json", anyPrompt()]);
   });
 });
 
 describe("provider invocation fixtures — claude", () => {
-  it("fresh session, safe mode: --print, plugin settings, prompt as last arg", () => {
+  it("fresh session, safe mode — exact arg order: --print, settings, prompt last", () => {
     const inv = buildCliInvocation({ bot: "claude", prompt: "hi", sessionId: null, command: "claude" });
     expect(inv.args[0]).toBe("--print");
-    expect(inv.args).toContain("--settings");
-    const settingsJson = inv.args[inv.args.indexOf("--settings") + 1];
-    expect(JSON.parse(settingsJson)).toEqual({ enabledPlugins: { "telegram@claude-plugins-official": false } });
-    expect(inv.args).not.toContain("--resume");
+    expect(inv.args[1]).toBe("--settings");
+    expect(JSON.parse(inv.args[2])).toEqual({ enabledPlugins: { "telegram@claude-plugins-official": false } });
+    expect(inv.args.slice(3)).toEqual([anyPrompt()]);
     expect(inv.stdin).toBeUndefined();
   });
 
-  it("resumes an existing session with --resume", () => {
+  it("resumes an existing session — exact arg order", () => {
     const inv = buildCliInvocation({ bot: "claude", prompt: "hi", sessionId: "sess-9", command: "claude" });
-    expect(inv.args).toContain("--resume");
-    expect(inv.args[inv.args.indexOf("--resume") + 1]).toBe("sess-9");
+    expect(inv.args[0]).toBe("--print");
+    expect(inv.args[1]).toBe("--settings");
+    expect(inv.args.slice(3)).toEqual(["--resume", "sess-9", anyPrompt()]);
   });
 
-  it("trusted mode adds --dangerously-skip-permissions", () => {
+  it("trusted mode — exact arg order", () => {
     const inv = buildCliInvocation({ bot: "claude", prompt: "hi", sessionId: null, command: "claude", executionMode: "trusted" });
-    expect(inv.args).toContain("--dangerously-skip-permissions");
+    expect(inv.args.slice(3)).toEqual(["--dangerously-skip-permissions", anyPrompt()]);
   });
 
-  it("tool-free mode disables tools and slash commands with a strict empty MCP config", () => {
+  it("tool-free mode — exact arg order, strict empty MCP config", () => {
     const inv = buildCliInvocation({ bot: "claude", prompt: "hi", sessionId: null, command: "claude", toolMode: "none" });
-    expect(inv.args).toEqual(expect.arrayContaining(["--tools", "", "--disable-slash-commands", "--strict-mcp-config"]));
-    expect(inv.args[inv.args.indexOf("--mcp-config") + 1]).toBe('{"mcpServers":{}}');
+    expect(inv.args[0]).toBe("--print");
+    expect(inv.args.slice(1, 6)).toEqual(["--tools", "", "--disable-slash-commands", "--strict-mcp-config", "--mcp-config"]);
+    expect(inv.args[6]).toBe('{"mcpServers":{}}');
+    expect(inv.args[7]).toBe("--settings");
+    expect(inv.args.slice(9)).toEqual([anyPrompt()]);
   });
 
-  it("attachments switch to the stream-json stdin contract with base64 images, not a trailing prompt arg", () => {
+  it("attachments switch to the stream-json stdin contract — exact arg order, no trailing prompt arg", () => {
     withTempImage((path) => {
       const inv = buildCliInvocation({
         bot: "claude", prompt: "hi", sessionId: "sess-1", command: "claude", attachments: [path],
       });
-      expect(inv.args).toEqual(expect.arrayContaining(["--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]));
-      expect(inv.args).toContain("--resume");
+      expect(inv.args[0]).toBe("--settings");
+      expect(inv.args.slice(2)).toEqual([
+        "--resume", "sess-1", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+      ]);
       expect(inv.stdin).toBeTruthy();
-      expect(inv.args).not.toContain("hi");
     });
   });
 
-  it("json output format uses --output-format json (not the stream-json attachment contract)", () => {
+  it("json output format — exact arg order (not the stream-json attachment contract)", () => {
     const inv = buildCliInvocation({ bot: "claude", prompt: "hi", sessionId: null, command: "claude", outputFormat: "json" });
-    expect(inv.args).toEqual(expect.arrayContaining(["--output-format", "json"]));
+    expect(inv.args.slice(3)).toEqual(["--output-format", "json", anyPrompt()]);
   });
 });
 
 describe("provider invocation fixtures — antigravity", () => {
-  it("fresh session: no --conversation flag, includes --print-timeout and the prompt on --print", () => {
+  it("fresh session — exact arg order, no --conversation flag", () => {
     const inv = buildCliInvocation({ bot: "antigravity", prompt: "hi", sessionId: null, command: "agy" });
-    expect(inv.args).not.toContain("--conversation");
-    expect(inv.args).toContain("--print-timeout");
-    expect(inv.args[inv.args.length - 2]).toBe("--print");
+    expect(inv.args[0]).toBe("--print-timeout");
+    expect(inv.args[2]).toBe("--print");
+    expect(inv.args).toHaveLength(4);
   });
 
-  it("resumes an existing conversation with --conversation", () => {
+  it("resumes an existing conversation — exact arg order", () => {
     const inv = buildCliInvocation({ bot: "antigravity", prompt: "hi", sessionId: "conv-1", command: "agy" });
-    expect(inv.args).toContain("--conversation");
-    expect(inv.args[inv.args.indexOf("--conversation") + 1]).toBe("conv-1");
+    expect(inv.args[0]).toBe("--conversation");
+    expect(inv.args[1]).toBe("conv-1");
+    expect(inv.args[2]).toBe("--print-timeout");
+    expect(inv.args[4]).toBe("--print");
+    expect(inv.args).toHaveLength(6);
   });
 
-  it("trusted mode adds --dangerously-skip-permissions", () => {
+  it("trusted mode — exact arg order", () => {
     const inv = buildCliInvocation({ bot: "antigravity", prompt: "hi", sessionId: null, command: "agy", executionMode: "trusted" });
-    expect(inv.args).toContain("--dangerously-skip-permissions");
+    expect(inv.args[0]).toBe("--dangerously-skip-permissions");
+    expect(inv.args[1]).toBe("--print-timeout");
   });
 
-  it("tool-free mode adds --sandbox", () => {
+  it("tool-free mode — exact arg order, --sandbox present", () => {
     const inv = buildCliInvocation({ bot: "antigravity", prompt: "hi", sessionId: null, command: "agy", toolMode: "none" });
-    expect(inv.args).toContain("--sandbox");
+    expect(inv.args[0]).toBe("--sandbox");
+    expect(inv.args[1]).toBe("--print-timeout");
   });
 
   it("attachments are annotated inline into the prompt text, not passed as separate flags", () => {
     const inv = buildCliInvocation({
       bot: "antigravity", prompt: "hi", sessionId: null, command: "agy", attachments: ["/tmp/a.png"],
     });
-    const promptArg = inv.args[inv.args.length - 1];
-    expect(promptArg).toContain("/tmp/a.png");
+    expect(inv.args).toHaveLength(4);
+    expect(inv.args[inv.args.length - 1]).toContain("/tmp/a.png");
     expect(inv.stdin).toBeUndefined();
   });
 });
 
 describe("provider invocation fixtures — kimchi", () => {
-  it("fresh session uses --no-session", () => {
+  it("fresh session — exact arg order, --no-session", () => {
     const inv = buildCliInvocation({ bot: "kimchi", prompt: "hi", sessionId: null, command: "kimchi" });
-    expect(inv.args).toContain("--no-session");
-    expect(inv.args).not.toContain("--resume");
+    expect(inv.args).toEqual(["--print", "--no-session", anyPrompt()]);
   });
 
-  it("resumes an existing session with --resume", () => {
+  it("resumes an existing session — exact arg order", () => {
     const inv = buildCliInvocation({ bot: "kimchi", prompt: "hi", sessionId: "kim-1", command: "kimchi" });
-    expect(inv.args).toContain("--resume");
-    expect(inv.args[inv.args.indexOf("--resume") + 1]).toBe("kim-1");
-    expect(inv.args).not.toContain("--no-session");
+    expect(inv.args).toEqual(["--print", "--resume", "kim-1", anyPrompt()]);
   });
 
-  it("trusted mode maps to --yolo", () => {
+  it("trusted mode — exact arg order, --yolo", () => {
     const inv = buildCliInvocation({ bot: "kimchi", prompt: "hi", sessionId: null, command: "kimchi", executionMode: "trusted" });
-    expect(inv.args).toContain("--yolo");
+    expect(inv.args).toEqual(["--print", "--yolo", "--no-session", anyPrompt()]);
   });
 
   it("tool-free mode is not supported for kimchi", () => {
@@ -182,12 +193,12 @@ describe("provider invocation fixtures — kimchi", () => {
       .toThrow(/tool-free mode.*kimchi/i);
   });
 
-  it("attachments are annotated inline into the prompt text (no native attachment support)", () => {
+  it("attachments are annotated inline into the prompt text (no native attachment support) — exact arg order", () => {
     const inv = buildCliInvocation({
       bot: "kimchi", prompt: "hi", sessionId: null, command: "kimchi", attachments: ["/tmp/a.png"],
     });
-    const promptArg = inv.args[inv.args.length - 1];
-    expect(promptArg).toContain("/tmp/a.png");
+    expect(inv.args).toHaveLength(3);
+    expect(inv.args[inv.args.length - 1]).toContain("/tmp/a.png");
   });
 });
 
@@ -228,6 +239,52 @@ describe("provider result parsing fixtures", () => {
 
   it("unknown bot type throws", () => {
     expect(() => parseCliResult({ bot: "unknown-bot", stdout: "x" })).toThrow(/Unknown bot type/);
+  });
+});
+
+describe("provider result parsing fixtures — antigravity gaps (CTO review blocker 3)", () => {
+  // Antigravity's JSON/fenced-JSON/legacy-***-delimiter/🧠-memory-marker/
+  // STATUS-line-stripping/RESOURCE_EXHAUSTED-error parsing, and Kimchi's
+  // thought/tool-call stripping and newest-session-file resolution, are
+  // already exhaustively characterized in test/cli.test.ts ("antigravity
+  // model mapping and settings override", "kimchi integration") and
+  // test/bridge.test.ts (ensureAntigravityStateDirs, readAntigravityLastConversation,
+  // readLatestAntigravityConversationFromLogs, resolveAntigravityConversationId,
+  // extractAntigravityConversationId). These three were genuinely missing:
+
+  it("timeout: stdout containing a timed-out marker throws a structured timeout error, not silent success", () => {
+    expect(() => parseCliResult({ bot: "antigravity", stdout: "Error: timed out waiting for response from model" }))
+      .toThrow(/timed out/i);
+    expect(() => parseCliResult({ bot: "antigravity", stdout: "  error: timed out  " }))
+      .toThrow(/timed out/i);
+  });
+
+  it("session: sessionId is extracted from logContent alongside the parsed text, not just text alone", () => {
+    const stdout = JSON.stringify({ reasoning: "ok", response: "The answer." });
+    const logContent = "Print mode: conversation=c107dfbd-181e-4cf0-a840-894662adee43, sending message";
+    const result = parseCliResult({ bot: "antigravity", stdout, logContent });
+    expect(result.text).toBe("The answer.");
+    expect(result.sessionId).toBe("c107dfbd-181e-4cf0-a840-894662adee43");
+  });
+
+  it("settings-file preservation: setAntigravityModel only touches the 'model' key, leaving unrelated settings intact", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "agy-settings-preserve-"));
+    try {
+      const settingsDir = join(tempDir, ".gemini", "antigravity-cli");
+      const settingsPath = join(settingsDir, "settings.json");
+      mkdirSync(settingsDir, { recursive: true });
+      writeFileSync(settingsPath, JSON.stringify({ theme: "dark", telemetry: false }));
+
+      setAntigravityModel("gemini-3.5-flash-high", tempDir);
+      let data = JSON.parse(readFileSync(settingsPath, "utf8"));
+      expect(data).toEqual({ theme: "dark", telemetry: false, model: "Gemini 3.5 Flash (High)" });
+
+      setAntigravityModel(null, tempDir);
+      data = JSON.parse(readFileSync(settingsPath, "utf8"));
+      expect(data).toEqual({ theme: "dark", telemetry: false });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
 

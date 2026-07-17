@@ -65,6 +65,7 @@ describe("Issue #135 Phase 2: single CLI process registry ownership", () => {
     expect(source).not.toMatch(/isCodex|isAgy/);
     expect(source).not.toContain("--skip-git-repo-check");
     expect(source).not.toContain("function normalizeCliArgs");
+    expect(source).not.toMatch(/ANTIGRAVITY|antigravity|PlannerResponse|\bAGY\b|command\.includes\(/);
   });
 });
 
@@ -183,5 +184,23 @@ describe("Issue #135 Phase 3: all four provider runtimes own buildInvocation and
     const source = readFileSync(join(process.cwd(), "src/cli.ts"), "utf8");
     expect(source).not.toMatch(/ALLOWED_TOOL_FREE_BOTS/);
     expect(source).not.toMatch(/new Set\(\s*\[\s*["']claude["']/);
+  });
+});
+
+describe("Issue #135 Phase 3D: settings and compatibility ownership", () => {
+  it("Claude settings environment parsing has one owner", () => {
+    const files = readdirSync(join(process.cwd(), "src"), { recursive: true })
+      .filter((file): file is string => file.endsWith(".ts"));
+    const envOwners = files.filter((file) => readFileSync(join(process.cwd(), "src", file), "utf8").includes("CLAUDE_EXCLUDED_PLUGINS"));
+    expect(envOwners).toEqual(["claudeSettings.ts"]);
+    const settingsOwners = files.filter((file) => /function\s+(resolveClaudeSettings|buildClaudeSettingsJson|buildClaudeSettingsArg|describeClaudeSettings)\s*\(/.test(readFileSync(join(process.cwd(), "src", file), "utf8")));
+    expect(settingsOwners).toEqual(["claudeSettings.ts"]);
+  });
+
+  it("bridge.ts exposes only named compatibility surfaces, never wildcard implementation barrels", () => {
+    const source = readFileSync(join(process.cwd(), "src/bridge.ts"), "utf8");
+    expect(source).not.toMatch(/export\s+\*\s+from/);
+    expect(source).not.toContain("runSupervisedProcess");
+    expect(source).not.toContain("activeExecutions");
   });
 });

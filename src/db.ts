@@ -24,7 +24,7 @@ import {
 } from "./repositories/compactionRepository.js";
 import { AdvisorRepository } from "./repositories/advisorRepository.js";
 import { ConversationRepository, DEFAULT_CONTEXT_MAX_CHARS } from "./repositories/conversationRepository.js";
-export { DEFAULT_CONTEXT_MAX_CHARS } from "./repositories/conversationRepository.js";
+export { DEFAULT_CONTEXT_MAX_CHARS, DEFAULT_CONTEXT_RECENT_TURN_LIMIT } from "./repositories/conversationRepository.js";
 import { applyMigrations, CURRENT_SCHEMA_VERSION, UnsupportedSchemaVersionError } from "./db/schema.js";
 
 // Sentinel row keys stored in bridge_state for non-chat state

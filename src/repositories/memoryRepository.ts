@@ -69,12 +69,13 @@ export class MemoryRepository {
     ).get(text) as { id: string } | undefined) ?? null;
   }
 
-  // arch-lint-allow-legacy-sql: pre-existing cross-domain read, predates
-  // Phase 4B (issue #135). MemoryRepository needs the latest conversation
-  // turn id to source-tag new memories; not moved here to keep this PR's
-  // scope to advisor/conversation-turn extraction only. Candidate for a
-  // future Phase 4C cleanup, not a regression introduced by this PR.
+  // Pre-existing cross-domain read, predates Phase 4B (issue #135).
+  // MemoryRepository needs the latest conversation turn id to source-tag
+  // new memories; not moved here to keep this PR's scope to
+  // advisor/conversation-turn extraction only. Candidate for a future
+  // Phase 4C cleanup, not a regression introduced by this PR.
   getLatestConvTurnId(chatKey: string): number | null {
+    // arch-lint-allow-legacy-sql: see note above.
     const row = this.db.prepare(
       `SELECT id FROM conversation_turns WHERE chat_key = ? ORDER BY id DESC LIMIT 1`,
     ).get(chatKey) as { id: number } | undefined;

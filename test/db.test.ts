@@ -1,9 +1,21 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { openDb, BridgeDb } from "../src/db.js";
+import { openDb, BridgeDb, DEFAULT_CONTEXT_MAX_CHARS, DEFAULT_CONTEXT_RECENT_TURN_LIMIT } from "../src/db.js";
 import Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Public-API compatibility: both constants were exported from src/db.ts
+// before conversation persistence moved into ConversationRepository, and
+// remain part of db.ts's public surface even though DEFAULT_CONTEXT_RECENT_TURN_LIMIT
+// has no internal caller — an OSS module's exports are a compatibility
+// contract, not just an internal-usage graph.
+describe("db.ts public export compatibility", () => {
+  it("still exports DEFAULT_CONTEXT_MAX_CHARS and DEFAULT_CONTEXT_RECENT_TURN_LIMIT", () => {
+    expect(DEFAULT_CONTEXT_MAX_CHARS).toBe(8_000);
+    expect(DEFAULT_CONTEXT_RECENT_TURN_LIMIT).toBe(200);
+  });
+});
 
 let db: BridgeDb;
 
@@ -1418,13 +1430,28 @@ describe("BridgeDb advisor call persistence", () => {
     expect(db.reserveAdvisorCall({ requestId: "req-2", taskKey: "task-1", ...baseReserve, maxCallsPerTask: 1 })).toBe(false);
   });
 
-  it("does not count denied calls toward the turn limit", () => {
+  // No repository method ever sets advisor_calls.status = 'denied' — the
+  // reservation-limit filter (status != 'denied') references a value
+  // nothing currently writes, verified by grep across src/. Seeding it
+  // directly via db.raw is the only way to characterize the filter's
+  // actual exclusion behavior at the SQL boundary.
+  it("excludes a denied call from the per-turn limit count", () => {
     db.reserveAdvisorCall({ requestId: "req-1", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 });
-    db.reserveAdvisorCall({ requestId: "req-2", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 }); // denied
-    db.failAdvisorCall("req-1", "timeout"); // free up nothing — status stays non-denied
-    // A fresh request under the same turn is still denied because req-1 counts
-    // as an active (non-denied) call even after failing.
-    expect(db.reserveAdvisorCall({ requestId: "req-3", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 })).toBe(false);
+    db.raw.prepare("UPDATE advisor_calls SET status = 'denied' WHERE request_id = ?").run("req-1");
+    expect(db.reserveAdvisorCall({ requestId: "req-2", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 })).toBe(true);
+  });
+
+  it("excludes a denied call from the per-task limit count", () => {
+    db.reserveAdvisorCall({ requestId: "req-1", taskKey: "task-1", ...baseReserve, maxCallsPerTask: 1 });
+    db.raw.prepare("UPDATE advisor_calls SET status = 'denied' WHERE request_id = ?").run("req-1");
+    expect(db.reserveAdvisorCall({ requestId: "req-2", taskKey: "task-1", ...baseReserve, maxCallsPerTask: 1 })).toBe(true);
+  });
+
+  it("still counts a failed (non-denied) call toward the per-turn limit", () => {
+    db.reserveAdvisorCall({ requestId: "req-1", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 });
+    db.failAdvisorCall("req-1", "timeout");
+    // req-1 is 'failed', not 'denied' — it still counts as an active call.
+    expect(db.reserveAdvisorCall({ requestId: "req-2", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 })).toBe(false);
   });
 
   it("records attempts in ordinal order and returns them via getAdvisorAttempts", () => {

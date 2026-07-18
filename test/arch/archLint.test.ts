@@ -101,6 +101,35 @@ describe("arch-lint", () => {
     }
   });
 
+  it("does not let a marker exempt a nearby unmarked statement (no leakage)", () => {
+    // Regression test: an earlier version of this check looked back a fixed
+    // 15-line window for the marker, so a second, unmarked statement placed
+    // shortly after a legitimately marked one would incorrectly pass. The
+    // marker must bind to exactly the statement it sits directly above.
+    const dir = mkdtempSync(join(tmpdir(), "archlint-sql-leak-"));
+    try {
+      writeFileSync(
+        join(dir, "bad.ts"),
+        [
+          "export function marked(db: any) {",
+          "  // arch-lint-allow-legacy-sql: deliberate documented exception",
+          "  return db.prepare(`SELECT * FROM conversation_turns WHERE chat_key = ?`).all(\"x\");",
+          "}",
+          "",
+          "export function unmarked(db: any) {",
+          "  return db.prepare(`SELECT * FROM conversation_summaries WHERE chat_key = ?`).all(\"x\");",
+          "}",
+          "",
+        ].join("\n"),
+      );
+      const res = runLint(dir);
+      expect(res.code).not.toBe(0);
+      expect(res.output).toContain("conversation_summaries");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("fails when a non-owner file queries an advisor_calls table directly", () => {
     const dir = mkdtempSync(join(tmpdir(), "archlint-sql-advisor-"));
     try {

@@ -280,6 +280,8 @@ restore_backups() {
 stop_and_verify_all_services() {
   local stop_ok=1 verify_ok=1 unit active_state sub_state result exec_main_code exec_main_status
   local main_pid control_pid control_group cgroup_path cgroup_file pid pair_ok value index
+  local cgroup_list_file procs_content
+  local -a cgroup_files=()
   local evidence_file="$artifact_dir/containment-evidence.json" first_unit=1
   local -a remaining_pids=()
   if ! "$systemctl_cmd" stop "${units[@]}"; then stop_ok=0; fi
@@ -308,18 +310,33 @@ stop_and_verify_all_services() {
     (( pair_ok == 1 )) || verify_ok=0
     [[ "$main_pid" == 0 && "$control_pid" == 0 ]] || verify_ok=0
     remaining_pids=()
-    if [[ -n "$control_group" && "$control_group" == /* && "$control_group" != *..* ]]; then
-      cgroup_path="$cgroup_root$control_group"
-      if [[ -e "$cgroup_path" ]]; then
+    if [[ -n "$control_group" ]]; then
+      if [[ "$control_group" != /* || "$control_group" == *..* ]]; then
+        verify_ok=0
+      else
+        cgroup_path="$cgroup_root$control_group"
         if [[ ! -d "$cgroup_path" || -L "$cgroup_path" ]]; then
           verify_ok=0
         else
-          while IFS= read -r -d '' cgroup_file; do
-            while IFS= read -r pid || [[ -n "$pid" ]]; do
-              [[ -z "$pid" ]] && continue
-              if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then remaining_pids+=("$pid"); else verify_ok=0; fi
-            done < "$cgroup_file"
-          done < <(/usr/bin/find "$cgroup_path" -type f -name cgroup.procs -print0)
+          cgroup_list_file="$(/usr/bin/mktemp)"
+          cgroup_files=()
+          if ! /usr/bin/find "$cgroup_path" -type f -name cgroup.procs -print0 > "$cgroup_list_file" 2>/dev/null; then
+            verify_ok=0
+          else
+            mapfile -d '' -t cgroup_files < "$cgroup_list_file"
+            for cgroup_file in "${cgroup_files[@]}"; do
+              [[ -z "$cgroup_file" ]] && continue
+              if ! procs_content="$(< "$cgroup_file")" 2>/dev/null; then
+                verify_ok=0
+                continue
+              fi
+              while IFS= read -r pid || [[ -n "$pid" ]]; do
+                [[ -z "$pid" ]] && continue
+                if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then remaining_pids+=("$pid"); else verify_ok=0; fi
+              done <<< "$procs_content"
+            done
+          fi
+          /usr/bin/rm -f -- "$cgroup_list_file"
         fi
       fi
     fi

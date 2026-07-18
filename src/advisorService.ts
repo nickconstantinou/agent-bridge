@@ -7,6 +7,7 @@
 
 import { randomUUID } from "node:crypto";
 import { executeAdvisorInvestigation, executeAdvisorRequest } from "./advisor.js";
+import { redactAdvisorEvidenceText } from "./advisorEvidenceRedaction.js";
 import type { AdvisorEvidenceToolBroker } from "./advisorEvidenceTools.js";
 import type { AdvisorExecutionProfile } from "./advisorPolicy.js";
 import type { AdvisorConfig, AdvisorOrigin, AdvisorRequest, AdvisorRequestMode, AdvisorResult } from "./advisorTypes.js";
@@ -29,6 +30,19 @@ export interface TrustedAdvisorRequest {
   evidence?: AdvisorRequest["evidence"];
   /** Optional Bridge-owned read-only evidence broker. Valid only for debug mode. */
   evidenceTools?: AdvisorEvidenceToolBroker;
+}
+
+function scrubEvidence(evidence: AdvisorRequest["evidence"]): AdvisorRequest["evidence"] {
+  if (!evidence) return undefined;
+  return {
+    ...(evidence.diffSummary != null ? { diffSummary: redactAdvisorEvidenceText(evidence.diffSummary) } : {}),
+    ...(evidence.testOutput != null ? { testOutput: redactAdvisorEvidenceText(evidence.testOutput) } : {}),
+    ...(evidence.constraints != null ? { constraints: evidence.constraints.map(redactAdvisorEvidenceText) } : {}),
+    ...(evidence.references != null ? { references: evidence.references.map(redactAdvisorEvidenceText) } : {}),
+    ...(evidence.acceptanceCriteria != null ? { acceptanceCriteria: redactAdvisorEvidenceText(evidence.acceptanceCriteria) } : {}),
+    ...(evidence.plan != null ? { plan: redactAdvisorEvidenceText(evidence.plan) } : {}),
+    ...(evidence.attemptSummary != null ? { attemptSummary: redactAdvisorEvidenceText(evidence.attemptSummary) } : {}),
+  };
 }
 
 export class AdvisorService {
@@ -54,10 +68,10 @@ export class AdvisorService {
       origin: request.origin,
       approved: request.approved,
       mode: request.mode,
-      task: request.task,
+      task: redactAdvisorEvidenceText(request.task),
       activeProvider: request.activeProvider,
       activeModel: request.activeModel,
-      evidence: request.evidence,
+      evidence: scrubEvidence(request.evidence),
     };
     const deps = {
       db: this.deps.db,

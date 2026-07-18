@@ -222,11 +222,17 @@ export async function executeAdvisorInvestigation(
     const selection = await executeAdvisorPrompt(
       deps,
       selectionPrompt,
-      (raw) => parseAdvisorToolSelection(raw, 6),
+      (raw) => {
+        const parsed = parseAdvisorToolSelection(raw, 6);
+        try {
+          return { ...parsed, toolRequests: parsed.toolRequests.map(parseAdvisorEvidenceToolRequest) };
+        } catch (error) {
+          throw new Error(`Invalid advisor tool selection: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      },
       1,
     );
-    const toolRequests = selection.value.toolRequests.map(parseAdvisorEvidenceToolRequest);
-    const toolResults = await deps.evidenceTools.execute(toolRequests);
+    const toolResults = await deps.evidenceTools.execute(selection.value.toolRequests);
     const finalPrompt = buildAdvisorDebugFinalPrompt({
       activeProvider: request.activeProvider,
       activeModel: request.activeModel,
@@ -235,13 +241,24 @@ export async function executeAdvisorInvestigation(
       missingEvidence: selection.value.missingEvidence,
       results: toolResults,
     });
-    const completed = await executeAdvisorPrompt(deps, finalPrompt, parseAdvisorDebugOutput, selection.nextOrdinal);
     const knownEvidenceIds = new Set(toolResults.map((result) => result.evidenceId));
-    if (completed.value.evidenceIds.some((id) => !knownEvidenceIds.has(id))) {
-      throw new Error("Invalid advisor debug output: referenced unknown evidence identifier");
-    }
-    const hasUnavailableEvidence = toolResults.some((result) => result.status !== "ok");
-    const confidence = hasUnavailableEvidence && completed.value.confidence === "high"
+    const completed = await executeAdvisorPrompt(
+      deps,
+      finalPrompt,
+      (raw) => {
+        const parsed = parseAdvisorDebugOutput(raw);
+        if (parsed.evidenceIds.some((id) => !knownEvidenceIds.has(id))) {
+          throw new Error("Invalid advisor debug output: referenced unknown evidence identifier");
+        }
+        if (toolResults.length > 0 && parsed.evidenceIds.length === 0) {
+          throw new Error("Invalid advisor debug output: evidence identifiers are required after tool use");
+        }
+        return parsed;
+      },
+      selection.nextOrdinal,
+    );
+    const hasLimitedEvidence = toolResults.some((result) => result.status !== "ok" || result.truncated);
+    const confidence = hasLimitedEvidence && completed.value.confidence === "high"
       ? "medium"
       : completed.value.confidence;
     db.completeAdvisorCall(request.requestId, completed.provider, completed.model, confidence);

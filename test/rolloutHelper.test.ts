@@ -47,6 +47,7 @@ interface Fixture {
   lockFile: string;
   configFile: string;
   envDir: string;
+  cgroupRoot: string;
 }
 
 const roots: string[] = [];
@@ -153,7 +154,20 @@ case "$cmd" in
     else
       : > "${fixture.stateFile}"
     fi
-    if [ "$count" -gt 1 ] && [ "\${FAKE_CONTAINMENT_MODE:-}" = stop-error ]; then exit 1; fi
+    if [ "\${FAKE_CONTAINMENT_MODE:-}" = failed-empty-live-cgroup ] || {
+      [ "$count" -gt 1 ] && [ "\${FAKE_CONTAINMENT_MODE:-}" = live-cgroup ];
+    }; then
+      printf '9876\n' > "${fixture.cgroupRoot}/agent-bridge-test/\${1:-unknown}/cgroup.procs"
+    fi
+    if [ "\${FAKE_CONTAINMENT_MODE:-}" = unreadable-cgroup-procs ]; then
+      chmod 000 "${fixture.cgroupRoot}/agent-bridge-test/\${1:-unknown}/cgroup.procs"
+    fi
+    if [ "\${FAKE_CONTAINMENT_MODE:-}" = unreadable-cgroup-dir ]; then
+      chmod 000 "${fixture.cgroupRoot}/agent-bridge-test/\${1:-unknown}"
+    fi
+    if [ "\${FAKE_CONTAINMENT_MODE:-}" = failed-empty-stop-error ] || {
+      [ "$count" -gt 1 ] && [ "\${FAKE_CONTAINMENT_MODE:-}" = stop-error ];
+    }; then exit 1; fi
     ;;
   start)
     if [ "\${FAKE_FAIL_PHASE:-}" = start ]; then exit 1; fi
@@ -165,6 +179,7 @@ case "$cmd" in
     grep -Fxq "\${1:-}" "${fixture.stateFile}"
     ;;
   is-failed) exit 1 ;;
+  reset-failed) ;;
   show)
     unit="$1"; shift
     properties=()
@@ -173,10 +188,25 @@ case "$cmd" in
       case "$property" in
         EnvironmentFiles) printf '%s\n%s\n' "${fixture.envDir}/agent-bridge-shared (ignore_errors=yes)" "${fixture.envDir}/\${unit%.service} (ignore_errors=no)" ;;
         Environment) echo NODE_ENV=production ;;
-        ActiveState) grep -Fxq "$unit" "${fixture.stateFile}" && echo active || echo inactive ;;
+        ActiveState)
+          if grep -Fxq "$unit" "${fixture.stateFile}"; then echo active
+          elif [[ "\${FAKE_CONTAINMENT_MODE:-}" == *failed-empty* ]]; then echo failed
+          else echo inactive
+          fi
+          ;;
         SubState) grep -Fxq "$unit" "${fixture.stateFile}" && echo running || echo dead ;;
+        Result) [[ "\${FAKE_CONTAINMENT_MODE:-}" == *failed-empty* ]] && echo exit-code || echo success ;;
+        ExecMainCode) [[ "\${FAKE_CONTAINMENT_MODE:-}" == *failed-empty* ]] && echo exited || echo 0 ;;
+        ExecMainStatus) [[ "\${FAKE_CONTAINMENT_MODE:-}" == *failed-empty* ]] && echo 143 || echo 0 ;;
         MainPID) grep -Fxq "$unit" "${fixture.stateFile}" && echo 4242 || echo 0 ;;
         ControlPID) echo 0 ;;
+        ControlGroup)
+          case "\${FAKE_CONTAINMENT_MODE:-}" in
+            empty-controlgroup) echo "" ;;
+            missing-cgroup-dir) echo "/agent-bridge-missing/$unit" ;;
+            *) echo "/agent-bridge-test/$unit" ;;
+          esac
+          ;;
         NRestarts)
           if [ "\${FAKE_FAIL_PHASE:-}" = delayed ] && [ -f "${fixture.root}/started" ]; then echo 1; else echo 0; fi
           ;;
@@ -229,11 +259,17 @@ function createFixture(options: { pending?: number; unknownSchema?: boolean; mis
   const lockFile = join(root, "run", "lock", "agent-bridge-rollout.lock");
   const configFile = join(root, "etc", "agent-bridge", "rollout.conf");
   const envDir = join(root, "etc", "default");
+  const cgroupRoot = join(root, "sys", "fs", "cgroup");
   mkdirSync(join(project, "scripts"), { recursive: true });
   mkdirSync(join(root, "etc", "agent-bridge"), { recursive: true });
   mkdirSync(envDir, { recursive: true });
   mkdirSync(backupDir, { recursive: true, mode: 0o700 });
   mkdirSync(logDir, { recursive: true, mode: 0o700 });
+  for (const unit of units) {
+    const cgroup = join(cgroupRoot, "agent-bridge-test", unit);
+    mkdirSync(cgroup, { recursive: true });
+    writeFileSync(join(cgroup, "cgroup.procs"), "");
+  }
   symlinkSync(sourceDir, join(project, "src"));
   symlinkSync(nodeModules, join(project, "node_modules"));
   if (existsSync(migrationScript)) symlinkSync(migrationScript, join(project, "scripts", "rollout-db.ts"));
@@ -279,7 +315,7 @@ function createFixture(options: { pending?: number; unknownSchema?: boolean; mis
   ].join("\n"), { mode: 0o600 });
   writeFileSync(stateFile, `${units.join("\n")}\n`);
   writeFileSync(actionLog, "");
-  const fixture = { root, project, expectedCommit, dbPaths, actionLog, stateFile, backupDir, logDir, lockFile, configFile, envDir };
+  const fixture = { root, project, expectedCommit, dbPaths, actionLog, stateFile, backupDir, logDir, lockFile, configFile, envDir, cgroupRoot };
   writeFakeCommands(fixture);
   return fixture;
 }
@@ -384,6 +420,149 @@ describe("guarded rollout helper", () => {
     expect(actions(fixture)).not.toMatch(/\sbackup\s/);
     expect(actions(fixture)).not.toContain("systemctl:start");
   });
+
+  it("accepts failed/dead exit 143 when stop is nonzero but every cgroup is empty", () => {
+    const fixture = useMinimalInventory(createFixture());
+    const result = runRollout(fixture, undefined, "failed-empty-stop-error");
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+    const evidence = JSON.parse(readFileSync(join(artifacts, "containment-evidence.json"), "utf8"));
+    expect(evidence.units).toEqual([
+      expect.objectContaining({
+        unit: units[0],
+        ActiveState: "failed",
+        SubState: "dead",
+        Result: "exit-code",
+        ExecMainCode: "exited",
+        ExecMainStatus: "143",
+        MainPID: 0,
+        ControlPID: 0,
+        ControlGroup: `/agent-bridge-test/${units[0]}`,
+        remainingCgroupPids: [],
+      }),
+    ]);
+    expect(actions(fixture)).toContain(`systemctl:reset-failed ${units[0]}`);
+    expect(actions(fixture).indexOf("systemctl:reset-failed")).toBeLessThan(actions(fixture).indexOf("systemctl:start"));
+  });
+
+  it("fails closed on a live cgroup member before backup or migration", () => {
+    const fixture = useMinimalInventory(createFixture());
+    const result = runRollout(fixture, undefined, "failed-empty-live-cgroup");
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/CONTAINMENT INCOMPLETE/);
+    expect(actions(fixture)).not.toMatch(/\sbackup\s|\smigrate\s/);
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+    const evidence = JSON.parse(readFileSync(join(artifacts, "containment-evidence.json"), "utf8"));
+    expect(evidence.units[0].remainingCgroupPids).toEqual([9876]);
+  });
+
+  it("accepts systemd's affirmative empty ControlGroup report with zero PIDs", () => {
+    const fixture = useMinimalInventory(createFixture());
+    const result = runRollout(fixture, undefined, "empty-controlgroup");
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+    const evidence = JSON.parse(readFileSync(join(artifacts, "containment-evidence.json"), "utf8"));
+    expect(evidence.units[0]).toEqual(expect.objectContaining({
+      ControlGroup: "",
+      MainPID: 0,
+      ControlPID: 0,
+      remainingCgroupPids: [],
+    }));
+  });
+
+  it.each([
+    "missing-cgroup-dir",
+    "unreadable-cgroup-dir",
+    "unreadable-cgroup-procs",
+  ])("fails closed before backup or migration when the cgroup cannot be inspected: %s", (mode) => {
+    const fixture = useMinimalInventory(createFixture());
+    const before = fixture.dbPaths.map(sha256);
+    try {
+      const result = runRollout(fixture, undefined, mode);
+
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toMatch(/CONTAINMENT INCOMPLETE/);
+      expect(actions(fixture)).not.toMatch(/\sbackup\s|\smigrate\s/);
+      expect(fixture.dbPaths.map(sha256)).toEqual(before);
+    } finally {
+      for (const unit of units) {
+        const cgroup = join(fixture.cgroupRoot, "agent-bridge-test", unit);
+        try {
+          chmodSync(cgroup, 0o755);
+          chmodSync(join(cgroup, "cgroup.procs"), 0o644);
+        } catch {}
+      }
+    }
+  });
+
+  it.runIf(process.env.AGENT_BRIDGE_REAL_SYSTEMD_TEST === "1")(
+    "accepts a real failed/dead user service that exits 143 with an empty cgroup",
+    async () => {
+      const fixture = useMinimalInventory(createFixture());
+      const unit = units[0];
+      const runtimeDir = `/run/user/${process.getuid()}`;
+      const userEnv = {
+        ...process.env,
+        XDG_RUNTIME_DIR: runtimeDir,
+        DBUS_SESSION_BUS_ADDRESS: `unix:path=${runtimeDir}/bus`,
+      };
+      rmSync(fixture.cgroupRoot, { recursive: true, force: true });
+      symlinkSync("/sys/fs/cgroup", fixture.cgroupRoot, "dir");
+      executable(join(fixture.root, "bin", "systemctl"), `#!/usr/bin/env bash
+set -euo pipefail
+echo "systemctl:$*" >> "${fixture.actionLog}"
+export XDG_RUNTIME_DIR="${runtimeDir}"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=${runtimeDir}/bus"
+if [ "\${1:-}" = show ] && [[ " $* " == *" --property=EnvironmentFiles "* ]]; then
+  printf '%s\n%s\n' "${fixture.envDir}/agent-bridge-shared (ignore_errors=yes)" "${fixture.envDir}/\${2%.service} (ignore_errors=no)"
+elif [ "\${1:-}" = show ] && [[ " $* " == *" --property=Environment "* ]]; then
+  echo NODE_ENV=production
+else
+  exec /usr/bin/systemctl --user "$@"
+fi
+`);
+
+      try {
+        execFileSync("systemd-run", [
+          "--user",
+          `--unit=${unit}`,
+          "--service-type=simple",
+          "--property=Restart=no",
+          "/bin/sh",
+          "-c",
+          "trap 'exit 143' TERM; while :; do sleep 1; done",
+        ], { env: userEnv, stdio: "ignore" });
+        const deadline = Date.now() + 5_000;
+        while (execFileSync("systemctl", ["--user", "show", unit, "-p", "ActiveState", "--value"], { env: userEnv, encoding: "utf8" }).trim() !== "active") {
+          if (Date.now() >= deadline) throw new Error("real systemd fixture did not become active");
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+
+        const result = runRollout(fixture, "backup");
+        expect(result.status).not.toBe(0);
+        expect(`${result.stdout}\n${result.stderr}`).toContain("all selected services verified stopped");
+        expect(`${result.stdout}\n${result.stderr}`).not.toContain("CONTAINMENT INCOMPLETE");
+        const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+        const evidence = JSON.parse(readFileSync(join(artifacts, "containment-evidence.json"), "utf8"));
+        expect(evidence.units[0]).toEqual(expect.objectContaining({
+          unit,
+          ActiveState: "failed",
+          SubState: "failed",
+          ExecMainStatus: "143",
+          MainPID: 0,
+          ControlPID: 0,
+          remainingCgroupPids: [],
+        }));
+      } finally {
+        spawnSync("systemctl", ["--user", "stop", unit], { env: userEnv, stdio: "ignore" });
+        spawnSync("systemctl", ["--user", "reset-failed", unit], { env: userEnv, stdio: "ignore" });
+      }
+    },
+    15_000,
+  );
 
   it.each(["backup", "migrate", "validate"])("restores every database after a pre-start %s failure", (phase) => {
     const fixture = useMinimalInventory(createFixture());
@@ -624,7 +803,7 @@ describe("guarded rollout helper", () => {
     expect(actions(fixture).match(/systemctl:stop/g)?.length).toBeGreaterThanOrEqual(2);
   });
 
-  it.each(["stop-error", "active"])("skips pre-start rollback when containment is incomplete: %s", (mode) => {
+  it.each(["live-cgroup", "active"])("skips pre-start rollback when containment is incomplete: %s", (mode) => {
     const fixture = useMinimalInventory(createFixture());
     const before = fixture.dbPaths.map(sha256);
     const result = runRollout(fixture, "migrate", mode);
@@ -640,7 +819,7 @@ describe("guarded rollout helper", () => {
   it("preserves migrated evidence when post-start containment cannot be proven", () => {
     const fixture = useMinimalInventory(createFixture());
     const before = fixture.dbPaths.map(sha256);
-    const result = runRollout(fixture, "smoke", "stop-error");
+    const result = runRollout(fixture, "smoke", "live-cgroup");
     const output = `${result.stdout}\n${result.stderr}`;
     const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
 

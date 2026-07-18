@@ -48,6 +48,7 @@ if [[ -n "$test_root" ]]; then
   cp_cmd="$test_root/bin/cp"
   restore_cmd="$test_root/bin/rollout-restore"
   defaults_dir="$test_root/etc/default"
+  cgroup_root="$test_root/sys/fs/cgroup"
   smoke_delay=0
   test_mode=1
 else
@@ -60,11 +61,12 @@ else
   cp_cmd="/usr/bin/cp"
   restore_cmd="/usr/local/libexec/agent-bridge-rollout-restore"
   defaults_dir="/etc/default"
+  cgroup_root="/sys/fs/cgroup"
   smoke_delay=5
   test_mode=0
 fi
 
-for command_path in "$systemctl_cmd" "$runuser_cmd" "$journalctl_cmd" "$cp_cmd" "$restore_cmd" /usr/bin/flock /usr/bin/git /usr/bin/sha256sum /usr/bin/tee /usr/bin/realpath /usr/bin/stat /usr/bin/id /usr/bin/mv /usr/bin/rm /usr/bin/cut /usr/bin/sleep /usr/bin/mkdir /usr/bin/chmod /usr/bin/dirname /usr/bin/date /usr/bin/mktemp; do
+for command_path in "$systemctl_cmd" "$runuser_cmd" "$journalctl_cmd" "$cp_cmd" "$restore_cmd" /usr/bin/find /usr/bin/flock /usr/bin/git /usr/bin/sha256sum /usr/bin/tee /usr/bin/realpath /usr/bin/stat /usr/bin/id /usr/bin/mv /usr/bin/rm /usr/bin/cut /usr/bin/sleep /usr/bin/mkdir /usr/bin/chmod /usr/bin/dirname /usr/bin/date /usr/bin/mktemp; do
   [[ -x "$command_path" ]] || die "required command is unavailable: $command_path"
 done
 [[ -f "$config_file" && ! -L "$config_file" ]] || die "missing fixed rollout config: $config_file"
@@ -276,28 +278,88 @@ restore_backups() {
 }
 
 stop_and_verify_all_services() {
-  local stop_ok=1 verify_ok=1 unit active_state sub_state main_pid control_pid state_output
-  local -a state_fields=()
+  local stop_ok=1 verify_ok=1 unit active_state sub_state result exec_main_code exec_main_status
+  local main_pid control_pid control_group cgroup_path cgroup_file pid pair_ok value index
+  local cgroup_list_file procs_content
+  local -a cgroup_files=()
+  local evidence_file="$artifact_dir/containment-evidence.json" first_unit=1
+  local -a remaining_pids=()
   if ! "$systemctl_cmd" stop "${units[@]}"; then stop_ok=0; fi
+  printf '{\n  "createdAt": "%s",\n  "stopCommandSucceeded": %s,\n  "units": [\n' \
+    "$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" "$([[ "$stop_ok" == 1 ]] && echo true || echo false)" > "$evidence_file"
   for unit in "${units[@]}"; do
-    if "$systemctl_cmd" is-active --quiet "$unit"; then verify_ok=0; fi
-    if state_output="$("$systemctl_cmd" show "$unit" --property=ActiveState --property=SubState --property=MainPID --property=ControlPID --value 2>/dev/null)"; then
-      mapfile -t state_fields <<< "$state_output"
-      active_state="${state_fields[0]:-unknown}"
-      sub_state="${state_fields[1]:-unknown}"
-      main_pid="${state_fields[2]:-unknown}"
-      control_pid="${state_fields[3]:-unknown}"
-    else
-      verify_ok=0; active_state=unknown; sub_state=unknown; main_pid=unknown; control_pid=unknown
+    if ! active_state="$("$systemctl_cmd" show "$unit" --property=ActiveState --value 2>/dev/null)" \
+      || ! sub_state="$("$systemctl_cmd" show "$unit" --property=SubState --value 2>/dev/null)" \
+      || ! result="$("$systemctl_cmd" show "$unit" --property=Result --value 2>/dev/null)" \
+      || ! exec_main_code="$("$systemctl_cmd" show "$unit" --property=ExecMainCode --value 2>/dev/null)" \
+      || ! exec_main_status="$("$systemctl_cmd" show "$unit" --property=ExecMainStatus --value 2>/dev/null)" \
+      || ! main_pid="$("$systemctl_cmd" show "$unit" --property=MainPID --value 2>/dev/null)" \
+      || ! control_pid="$("$systemctl_cmd" show "$unit" --property=ControlPID --value 2>/dev/null)" \
+      || ! control_group="$("$systemctl_cmd" show "$unit" --property=ControlGroup --value 2>/dev/null)"; then
+      verify_ok=0
+      active_state=unknown; sub_state=unknown; result=unknown; exec_main_code=unknown; exec_main_status=unknown
+      main_pid=unknown; control_pid=unknown; control_group=unknown
     fi
-    [[ "$active_state" == inactive ]] || verify_ok=0
-    [[ "$sub_state" == dead || "$sub_state" == exited ]] || verify_ok=0
+    for value in "$active_state" "$sub_state" "$result" "$exec_main_code" "$exec_main_status" "$main_pid" "$control_pid"; do
+      [[ "$value" =~ ^[A-Za-z0-9_-]+$ ]] || verify_ok=0
+    done
+    [[ -z "$control_group" || ( "$control_group" == /* && "$control_group" != *..* && "$control_group" =~ ^/[A-Za-z0-9_@./:-]+$ ) ]] || verify_ok=0
+    pair_ok=0
+    [[ "$active_state" == inactive && ( "$sub_state" == dead || "$sub_state" == exited ) ]] && pair_ok=1
+    [[ "$active_state" == failed && ( "$sub_state" == dead || "$sub_state" == failed ) ]] && pair_ok=1
+    (( pair_ok == 1 )) || verify_ok=0
     [[ "$main_pid" == 0 && "$control_pid" == 0 ]] || verify_ok=0
+    remaining_pids=()
+    if [[ -n "$control_group" ]]; then
+      if [[ "$control_group" != /* || "$control_group" == *..* ]]; then
+        verify_ok=0
+      else
+        cgroup_path="$cgroup_root$control_group"
+        if [[ ! -d "$cgroup_path" || -L "$cgroup_path" ]]; then
+          verify_ok=0
+        else
+          cgroup_list_file="$(/usr/bin/mktemp)"
+          cgroup_files=()
+          if ! /usr/bin/find "$cgroup_path" -type f -name cgroup.procs -print0 > "$cgroup_list_file" 2>/dev/null; then
+            verify_ok=0
+          else
+            mapfile -d '' -t cgroup_files < "$cgroup_list_file"
+            for cgroup_file in "${cgroup_files[@]}"; do
+              [[ -z "$cgroup_file" ]] && continue
+              if ! procs_content="$(< "$cgroup_file")" 2>/dev/null; then
+                verify_ok=0
+                continue
+              fi
+              while IFS= read -r pid || [[ -n "$pid" ]]; do
+                [[ -z "$pid" ]] && continue
+                if [[ "$pid" =~ ^[1-9][0-9]*$ ]]; then remaining_pids+=("$pid"); else verify_ok=0; fi
+              done <<< "$procs_content"
+            done
+          fi
+          /usr/bin/rm -f -- "$cgroup_list_file"
+        fi
+      fi
+    fi
+    (( ${#remaining_pids[@]} == 0 )) || verify_ok=0
+    (( first_unit == 1 )) || printf ',\n' >> "$evidence_file"
+    first_unit=0
+    printf '    {"unit":"%s","ActiveState":"%s","SubState":"%s","Result":"%s","ExecMainCode":"%s","ExecMainStatus":"%s","MainPID":%s,"ControlPID":%s,"ControlGroup":"%s","remainingCgroupPids":[' \
+      "$unit" "$active_state" "$sub_state" "$result" "$exec_main_code" "$exec_main_status" \
+      "$([[ "$main_pid" =~ ^[0-9]+$ ]] && echo "$main_pid" || echo -1)" \
+      "$([[ "$control_pid" =~ ^[0-9]+$ ]] && echo "$control_pid" || echo -1)" "$control_group" >> "$evidence_file"
+    for index in "${!remaining_pids[@]}"; do
+      (( index == 0 )) || printf ',' >> "$evidence_file"
+      printf '%s' "${remaining_pids[$index]}" >> "$evidence_file"
+    done
+    printf ']}' >> "$evidence_file"
   done
-  if (( stop_ok == 0 || verify_ok == 0 )); then
+  printf '\n  ]\n}\n' >> "$evidence_file"
+  /usr/bin/sha256sum "$evidence_file" > "$artifact_dir/containment-evidence.sha256"
+  if (( verify_ok == 0 )); then
     echo "CONTAINMENT INCOMPLETE: stop_ok=$stop_ok verify_ok=$verify_ok" >&2
     return 1
   fi
+  (( stop_ok == 1 )) || echo "systemctl stop returned nonzero; containment independently verified" >&2
   echo "all selected services verified stopped"
 }
 
@@ -381,6 +443,7 @@ run_db_tool validate --evidence - "${db_args[@]}" > "$artifact_dir/validation-ev
 echo "starting all services"
 journal_since="$(/usr/bin/date -u '+%Y-%m-%d %H:%M:%S UTC')"
 start_attempted=1
+"$systemctl_cmd" reset-failed "${units[@]}"
 "$systemctl_cmd" start "${units[@]}"
 for unit in "${units[@]}"; do assert_service_active "$unit"; done
 services_started=1

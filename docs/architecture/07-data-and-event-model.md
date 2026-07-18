@@ -1,6 +1,12 @@
 # 07 — Database & Event Model
 
-## Current schema (from src/db.ts DDL)
+## Schema versioning boundary
+
+SQLite `PRAGMA user_version` is the authoritative schema marker. `user_version = 0` denotes the pre-versioned legacy baseline. Phase 4A establishes `CURRENT_SCHEMA_VERSION = 1`. Migration 1 (`applyLegacyCompatibleBaseline` in `src/db/legacyBaselineMigration.ts`) owns the full legacy DDL and every historical shape-detected repair, applied once, transactionally, advancing legacy databases straight to version 1. `openDb()` version-gates before WAL mode or any write — future, negative, or non-integer versions fail closed and the connection is closed before rethrowing. The migration runner (`applyMigrationsUpTo` in `src/db/schema.ts`) suspends `foreign_keys` enforcement around the whole migration transaction (a documented no-op if toggled inside one), verifies `PRAGMA foreign_key_check` reports zero violations before the transaction can commit, and rolls back both DDL and the version marker — with `foreign_keys` restored — on any failure, including a foreign-key violation.
+
+The five guarded rollout database roles (shared, Discord, health, interactive, and worker) use the same schema contract. `scripts/rollout-db.ts` reports version 0 explicitly as `legacy`, accepts only version 1 as current, and rejects future versions. Historical repair logic now lives entirely in `src/db/legacyBaselineMigration.ts` as migration 1, not in `src/db.ts`; `user_version` is authoritative once a database reaches 1, so repairs no longer re-run on every open. Later Phase 4 PRs will move repository ownership (advisor/conversation direct SQL) out of the `BridgeDb` façade; the migration itself is already fully owned by the versioned boundary.
+
+## Current schema (from src/db/legacyBaselineMigration.ts DDL)
 
 | Table | Owner (target repository) | Purpose |
 |---|---|---|
@@ -15,6 +21,12 @@
 | project_memories | memoryRepository | memory store |
 
 ## Planned migrations (additive only; better-sqlite3 try/alter pattern already established)
+
+| Version | Status | Purpose |
+|---|---|---|
+| 0 | legacy | Existing unversioned databases |
+| 1 | Phase 4A | Compatibility baseline marker |
+| 2+ | future PRs | Individual historical repairs and additive schema changes |
 
 ```sql
 -- M-013 memory kinds (Epic 7)

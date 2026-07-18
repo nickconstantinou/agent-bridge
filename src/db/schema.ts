@@ -17,6 +17,20 @@ export class UnsupportedSchemaVersionError extends Error {
   }
 }
 
+export interface ForeignKeyViolation {
+  table: string;
+  rowid: number | bigint | null;
+  parent: string;
+  fkid: number;
+}
+
+export class MigrationForeignKeyViolationError extends Error {
+  constructor(public readonly violations: readonly ForeignKeyViolation[]) {
+    super(`migration left ${violations.length} foreign key violation(s): ${JSON.stringify(violations)}`);
+    this.name = "MigrationForeignKeyViolationError";
+  }
+}
+
 /**
  * Applies migrations transactionally up to an explicit target version. The
  * registered plan must end exactly at targetVersion, and no migration above
@@ -58,6 +72,14 @@ export function applyMigrationsUpTo(
         migration.up(db);
         db.pragma(`user_version = ${migration.version}`);
       }
+      // foreign_key_check runs a full on-demand scan regardless of the
+      // foreign_keys enforcement setting, and works inside a transaction
+      // (unlike the foreign_keys pragma itself). Restoring foreign_keys = ON
+      // afterward does not retroactively detect violations left by a rename
+      // /recreate repair, so verify explicitly before this transaction can
+      // commit and stamp user_version.
+      const violations = db.pragma("foreign_key_check") as ForeignKeyViolation[];
+      if (violations.length > 0) throw new MigrationForeignKeyViolationError(violations);
     });
     migrate();
   } finally {

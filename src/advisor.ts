@@ -247,17 +247,35 @@ export async function executeAdvisorInvestigation(
       finalPrompt,
       (raw) => {
         const parsed = parseAdvisorDebugOutput(raw);
+        const declaredEvidenceIds = new Set(parsed.evidenceIds);
+        const basisEvidenceIds = new Set<string>();
+        if (toolResults.length > 0 && parsed.evidenceBasis.length === 0) {
+          throw new Error("Invalid advisor debug output: evidence_basis is required after tool use");
+        }
+        for (const basis of parsed.evidenceBasis) {
+          for (const id of basis.evidenceIds) {
+            if (!knownEvidenceIds.has(id)) {
+              throw new Error("Invalid advisor debug output: evidence_basis referenced unknown evidence identifier");
+            }
+            if (!declaredEvidenceIds.has(id)) {
+              throw new Error("Invalid advisor debug output: evidence_basis identifier missing from evidence_ids");
+            }
+            basisEvidenceIds.add(id);
+          }
+        }
         if (parsed.evidenceIds.some((id) => !knownEvidenceIds.has(id))) {
           throw new Error("Invalid advisor debug output: referenced unknown evidence identifier");
         }
-        if (toolResults.length > 0 && parsed.evidenceIds.length === 0) {
-          throw new Error("Invalid advisor debug output: evidence identifiers are required after tool use");
+        if (parsed.evidenceIds.some((id) => !basisEvidenceIds.has(id))) {
+          throw new Error("Invalid advisor debug output: every evidence identifier must support a structured claim");
         }
         return parsed;
       },
       selection.nextOrdinal,
     );
-    const hasLimitedEvidence = toolResults.some((result) => result.status !== "ok" || result.truncated);
+    const hasLimitedEvidence = selection.value.missingEvidence.length > 0
+      || completed.value.unresolvedConflicts.length > 0
+      || toolResults.some((result) => result.status !== "ok" || result.truncated);
     const confidence = hasLimitedEvidence && completed.value.confidence === "high"
       ? "medium"
       : completed.value.confidence;

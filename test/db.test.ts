@@ -1388,3 +1388,71 @@ describe("BridgeDb work_jobs task_type migration", () => {
     }
   });
 });
+
+describe("BridgeDb advisor call persistence", () => {
+  const baseReserve = {
+    scopeKey: "scope-1",
+    mode: "review",
+    trigger: "manual",
+    contextChars: 100,
+    maxCallsPerTurn: 2,
+    maxCallsPerTask: 2,
+  };
+
+  it("reserves a new request id and returns true", () => {
+    expect(db.reserveAdvisorCall({ requestId: "req-1", ...baseReserve })).toBe(true);
+  });
+
+  it("returns false when the same request id is reserved twice", () => {
+    expect(db.reserveAdvisorCall({ requestId: "req-1", ...baseReserve })).toBe(true);
+    expect(db.reserveAdvisorCall({ requestId: "req-1", ...baseReserve })).toBe(false);
+  });
+
+  it("denies reservation once the per-turn call limit is reached", () => {
+    expect(db.reserveAdvisorCall({ requestId: "req-1", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 })).toBe(true);
+    expect(db.reserveAdvisorCall({ requestId: "req-2", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 })).toBe(false);
+  });
+
+  it("denies reservation once the per-task call limit is reached", () => {
+    expect(db.reserveAdvisorCall({ requestId: "req-1", taskKey: "task-1", ...baseReserve, maxCallsPerTask: 1 })).toBe(true);
+    expect(db.reserveAdvisorCall({ requestId: "req-2", taskKey: "task-1", ...baseReserve, maxCallsPerTask: 1 })).toBe(false);
+  });
+
+  it("does not count denied calls toward the turn limit", () => {
+    db.reserveAdvisorCall({ requestId: "req-1", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 });
+    db.reserveAdvisorCall({ requestId: "req-2", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 }); // denied
+    db.failAdvisorCall("req-1", "timeout"); // free up nothing — status stays non-denied
+    // A fresh request under the same turn is still denied because req-1 counts
+    // as an active (non-denied) call even after failing.
+    expect(db.reserveAdvisorCall({ requestId: "req-3", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 })).toBe(false);
+  });
+
+  it("records attempts in ordinal order and returns them via getAdvisorAttempts", () => {
+    db.reserveAdvisorCall({ requestId: "req-1", ...baseReserve });
+    db.addAdvisorAttempt({ requestId: "req-1", ordinal: 1, provider: "anthropic", model: "claude", status: "failed", errorKind: "timeout", durationMs: 50 });
+    db.addAdvisorAttempt({ requestId: "req-1", ordinal: 2, provider: "openai", model: "gpt", status: "succeeded", durationMs: 75 });
+    const attempts = db.getAdvisorAttempts("req-1");
+    expect(attempts).toHaveLength(2);
+    expect(attempts.map((a) => a.ordinal)).toEqual([1, 2]);
+    expect(attempts[0]).toMatchObject({ provider: "anthropic", model: "claude", status: "failed", error_kind: "timeout", duration_ms: 50 });
+    expect(attempts[1]).toMatchObject({ provider: "openai", model: "gpt", status: "succeeded", error_kind: null, duration_ms: 75 });
+  });
+
+  it("completeAdvisorCall marks the call succeeded with the selected provider/model/confidence", () => {
+    db.reserveAdvisorCall({ requestId: "req-1", ...baseReserve });
+    db.completeAdvisorCall("req-1", "anthropic", "claude", "high");
+    const row = db.raw.prepare("SELECT status, selected_provider, selected_model, confidence FROM advisor_calls WHERE request_id = ?").get("req-1");
+    expect(row).toEqual({ status: "succeeded", selected_provider: "anthropic", selected_model: "claude", confidence: "high" });
+  });
+
+  it("failAdvisorCall marks the call failed with the error kind", () => {
+    db.reserveAdvisorCall({ requestId: "req-1", ...baseReserve });
+    db.failAdvisorCall("req-1", "capacity");
+    const row = db.raw.prepare("SELECT status, error_kind FROM advisor_calls WHERE request_id = ?").get("req-1");
+    expect(row).toEqual({ status: "failed", error_kind: "capacity" });
+  });
+
+  it("getAdvisorAttempts returns an empty array for a request with no attempts", () => {
+    expect(db.getAdvisorAttempts("no-such-request")).toEqual([]);
+  });
+});

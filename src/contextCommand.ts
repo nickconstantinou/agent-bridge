@@ -33,6 +33,11 @@ function openReadWrite(dbPath: string): Database.Database {
   return new Database(dbPath, { fileMustExist: true });
 }
 
+// arch-lint-allow-legacy-sql: this CLI helper deliberately queries the
+// SQLite file directly (readonly, no BridgeDb instance) rather than going
+// through ConversationRepository — predates Phase 4B (issue #135) and is out
+// of scope for this PR's minimal extraction. Candidate for a future Phase 4C
+// cleanup if this module is ever routed through BridgeDb.
 function buildQueryFromContext(db: Database.Database, chatKey: string): string {
   const turns = db.prepare(
     `SELECT text FROM conversation_turns WHERE chat_key = ? ORDER BY id DESC LIMIT 5`
@@ -90,6 +95,8 @@ function addMemoryJson(db: Database.Database, rawJson: string, env: EnvLike): st
   return formatProjectMemoryStoreResult(result);
 }
 
+// arch-lint-allow-legacy-sql: see buildQueryFromContext above — same
+// deliberate direct-SQLite CLI pattern, predates Phase 4B.
 function latestSummary(db: Database.Database, chatKey: string): string {
   const row = db.prepare(
     `SELECT summary_md, created_at
@@ -103,6 +110,8 @@ function latestSummary(db: Database.Database, chatKey: string): string {
   return [`Latest compact summary (${row.created_at}):`, "", row.summary_md].join("\n");
 }
 
+// arch-lint-allow-legacy-sql: see buildQueryFromContext above — same
+// deliberate direct-SQLite CLI pattern, predates Phase 4B.
 function recentTurns(db: Database.Database, chatKey: string, limit: number): string {
   const rows = db.prepare(
     `SELECT role, text, cli, created_at

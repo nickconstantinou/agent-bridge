@@ -66,4 +66,66 @@ describe("arch-lint", () => {
   it("passes on the real src/ tree", () => {
     expect(runLint(join(__dirname, "..", "..", "src")).code).toBe(0);
   });
+
+  it("fails when a non-owner file queries an advisor/conversation table directly", () => {
+    const dir = mkdtempSync(join(tmpdir(), "archlint-sql-owner-"));
+    try {
+      writeFileSync(
+        join(dir, "bad.ts"),
+        'export function f(db: any) {\n  return db.prepare(`SELECT * FROM conversation_turns WHERE chat_key = ?`).all("x");\n}\n',
+      );
+      const res = runLint(dir);
+      expect(res.code).not.toBe(0);
+      expect(res.output).toContain("advisor/conversation SQL must live in its owning repository");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes when the SQL is preceded by an arch-lint-allow-legacy-sql marker", () => {
+    const dir = mkdtempSync(join(tmpdir(), "archlint-sql-allowed-"));
+    try {
+      writeFileSync(
+        join(dir, "ok.ts"),
+        [
+          "export function f(db: any) {",
+          "  // arch-lint-allow-legacy-sql: deliberate documented exception",
+          "  return db.prepare(`SELECT * FROM conversation_turns WHERE chat_key = ?`).all(\"x\");",
+          "}",
+          "",
+        ].join("\n"),
+      );
+      expect(runLint(dir).code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when a non-owner file queries an advisor_calls table directly", () => {
+    const dir = mkdtempSync(join(tmpdir(), "archlint-sql-advisor-"));
+    try {
+      writeFileSync(
+        join(dir, "bad.ts"),
+        'export function f(db: any) {\n  return db.prepare(`SELECT * FROM advisor_calls WHERE request_id = ?`).get("x");\n}\n',
+      );
+      const res = runLint(dir);
+      expect(res.code).not.toBe(0);
+      expect(res.output).toContain("advisor/conversation SQL must live in its owning repository");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores a comment-only mention of a conversation table name", () => {
+    const dir = mkdtempSync(join(tmpdir(), "archlint-sql-comment-"));
+    try {
+      writeFileSync(
+        join(dir, "ok.ts"),
+        "// this note just mentions conversation_turns in prose, not SQL\nexport const x = 1;\n",
+      );
+      expect(runLint(dir).code).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

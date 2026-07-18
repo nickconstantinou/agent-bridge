@@ -26,11 +26,17 @@ export interface AdvisorRequest {
   activeProvider: string; activeModel: string | null;
   evidence?: AdvisorEvidenceInput;
 }
+export interface AdvisorEvidenceBasis {
+  claim: string;
+  evidenceIds: string[];
+}
 export interface AdvisorResult {
   adviceMd: string; risks: string[]; suggestedNextSteps: string[]; confidence: AdvisorConfidence;
   provider: ProviderId; model: string; requestId: string;
   verdict?: AdvisorDebugVerdict;
   evidenceIds?: string[];
+  evidenceBasis?: AdvisorEvidenceBasis[];
   assumptions?: string[];
+  unresolvedConflicts?: string[];
   verificationSteps?: string[];
 }

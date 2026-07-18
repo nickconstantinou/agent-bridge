@@ -1,15 +1,9 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  closeSync,
-  lstatSync,
-  openSync,
-  readSync,
-  readdirSync,
-  realpathSync,
-  statSync,
-} from "node:fs";
+import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
-import { redactAdvisorText } from "./advisorPrompt.js";
+import { promisify } from "node:util";
+import { redactAdvisorEvidenceText } from "./advisorEvidenceRedaction.js";
 
 export type AdvisorEvidenceToolName =
   | "repo.list_files"
@@ -62,6 +56,7 @@ export interface AdvisorEvidenceToolLimits {
   maxResultBytes: number;
   maxAggregateBytes: number;
   maxFiles: number;
+  maxEntries: number;
   maxMatches: number;
   maxDepth: number;
   timeoutMs: number;
@@ -74,13 +69,32 @@ export interface AdvisorWorkerEvidence {
   attemptSummary?: string;
 }
 
-type RunGit = (args: string[], cwd: string) => string | Promise<string>;
+type RunGit = (
+  args: string[],
+  cwd: string,
+  options: { timeoutMs: number },
+) => string | Promise<string>;
+
+interface EvidencePayload {
+  content: string;
+  complete: boolean;
+  limitation?: string;
+}
+
+interface FileCollection {
+  files: string[];
+  complete: boolean;
+  limitations: Set<string>;
+}
+
+const execFileAsync = promisify(execFile);
 
 const DEFAULT_LIMITS: AdvisorEvidenceToolLimits = {
   maxCalls: 6,
   maxResultBytes: 8_000,
   maxAggregateBytes: 30_000,
   maxFiles: 120,
+  maxEntries: 500,
   maxMatches: 60,
   maxDepth: 5,
   timeoutMs: 5_000,
@@ -150,6 +164,18 @@ function truncateUtf8(value: string, maxBytes: number): { text: string; truncate
   return { text, truncated: true };
 }
 
+function safeGitEnvironment(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [key, value] of Object.entries(process.env)) {
+    if (key.startsWith("GIT_") || key === "SSH_ASKPASS") continue;
+    env[key] = value;
+  }
+  env.GIT_TERMINAL_PROMPT = "0";
+  env.GIT_CONFIG_NOSYSTEM = "1";
+  env.LC_ALL = "C";
+  return env;
+}
+
 export function parseAdvisorEvidenceToolRequest(value: unknown): AdvisorEvidenceToolRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Advisor tool request must be an object");
   const input = value as Record<string, unknown>;
@@ -200,7 +226,7 @@ export function parseAdvisorEvidenceToolRequest(value: unknown): AdvisorEvidence
 }
 
 export class AdvisorEvidenceToolBroker {
-  private readonly root: string;
+  private readonly rootPromise: Promise<string>;
   private readonly limits: AdvisorEvidenceToolLimits;
   private calls = 0;
   private aggregateBytes = 0;
@@ -212,7 +238,7 @@ export class AdvisorEvidenceToolBroker {
     limits?: Partial<AdvisorEvidenceToolLimits>;
     audit?: (event: AdvisorEvidenceAuditEvent) => void;
   }) {
-    this.root = realpathSync(options.repoPath);
+    this.rootPromise = realpath(options.repoPath);
     this.limits = { ...DEFAULT_LIMITS, ...options.limits };
   }
 
@@ -225,26 +251,38 @@ export class AdvisorEvidenceToolBroker {
 
   private async executeOne(request: AdvisorEvidenceToolRequest): Promise<AdvisorEvidenceToolResult> {
     const startedAt = Date.now();
+    const deadline = startedAt + this.limits.timeoutMs;
     this.calls += 1;
-    if (this.calls > this.limits.maxCalls) return this.result(request, "exhausted", "Tool-call budget exhausted", "", startedAt);
+    if (this.calls > this.limits.maxCalls) {
+      return this.result(request, "exhausted", "Tool-call budget exhausted", { content: "", complete: false }, startedAt);
+    }
     try {
-      const content = await this.withTimeout(this.perform(request));
-      return this.result(request, "ok", "Read-only evidence collected", content, startedAt);
+      const payload = await this.perform(request, deadline);
+      return this.result(request, "ok", "Read-only evidence collected", payload, startedAt);
     } catch (caught) {
       const error = caught instanceof Error ? caught : new Error(String(caught));
       const denied = /escape|sensitive|symlink|binary|must stay inside|relative path|unsupported git object|not supported for git\.show/i.test(error.message);
       const unavailable = /unavailable/i.test(error.message);
-      return this.result(request, denied ? "denied" : unavailable ? "unavailable" : "failed", redactAdvisorText(error.message), "", startedAt);
+      const exhausted = /timeout|deadline|budget exhausted/i.test(error.message);
+      return this.result(
+        request,
+        denied ? "denied" : unavailable ? "unavailable" : exhausted ? "exhausted" : "failed",
+        redactAdvisorEvidenceText(error.message),
+        { content: "", complete: !exhausted },
+        startedAt,
+      );
     }
   }
 
-  private async withTimeout<T>(promise: Promise<T>): Promise<T> {
+  private async beforeDeadline<T>(operation: () => Promise<T>, deadline: number): Promise<T> {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error("Advisor evidence tool deadline exhausted");
     let timer: NodeJS.Timeout | undefined;
     try {
       return await Promise.race([
-        promise,
+        operation(),
         new Promise<T>((_resolve, reject) => {
-          timer = setTimeout(() => reject(new Error("Advisor evidence tool timeout")), this.limits.timeoutMs);
+          timer = setTimeout(() => reject(new Error("Advisor evidence tool timeout")), remaining);
         }),
       ]);
     } finally {
@@ -256,18 +294,23 @@ export class AdvisorEvidenceToolBroker {
     request: AdvisorEvidenceToolRequest,
     status: AdvisorEvidenceToolResult["status"],
     summary: string,
-    rawContent: string,
+    payload: EvidencePayload,
     startedAt: number,
   ): AdvisorEvidenceToolResult {
     const remaining = Math.max(0, this.limits.maxAggregateBytes - this.aggregateBytes);
     const maxBytes = Math.min(this.limits.maxResultBytes, remaining);
-    const bounded = truncateUtf8(redactAdvisorText(rawContent), maxBytes);
+    const bounded = truncateUtf8(redactAdvisorEvidenceText(payload.content), maxBytes);
     const content = maxBytes > 0 ? bounded.text : "";
     const bytes = Buffer.byteLength(content, "utf8");
     this.aggregateBytes += bytes;
-    const exhausted = remaining === 0 && status === "ok";
-    const finalStatus = exhausted ? "exhausted" : status;
-    const truncated = bounded.truncated || exhausted;
+    const incomplete = !payload.complete || bounded.truncated || remaining === 0;
+    const finalStatus = status === "ok" && incomplete ? "exhausted" : status;
+    const truncated = incomplete || status === "exhausted";
+    const limitation = payload.limitation?.trim();
+    const finalSummary = finalStatus === "exhausted"
+      ? [limitation || "Evidence collection was incomplete", bounded.truncated ? "result byte limit reached" : "", remaining === 0 ? "aggregate byte limit reached" : ""]
+        .filter(Boolean).join("; ")
+      : summary.slice(0, 500);
     const evidenceId = `ev_${createHash("sha256")
       .update(JSON.stringify({ tool: request.tool, request: this.auditArguments(request), status: finalStatus, truncated, contentHash: createHash("sha256").update(content).digest("hex") }))
       .digest("hex")
@@ -276,9 +319,7 @@ export class AdvisorEvidenceToolBroker {
       evidenceId,
       tool: request.tool,
       status: finalStatus,
-      summary: exhausted
-        ? "Aggregate evidence byte budget exhausted"
-        : `${summary.slice(0, 450)}${truncated ? " (truncated by evidence byte budget)" : ""}`,
+      summary: finalSummary.slice(0, 500),
       content,
       bytes,
       truncated,
@@ -311,26 +352,35 @@ export class AdvisorEvidenceToolBroker {
     return [...GIT_READ_PREFIX, ...args];
   }
 
-  private async perform(request: AdvisorEvidenceToolRequest): Promise<string> {
+  private async perform(request: AdvisorEvidenceToolRequest, deadline: number): Promise<EvidencePayload> {
     switch (request.tool) {
-      case "repo.list_files":
-        return this.listFiles(request.path ?? ".", request.depth ?? 3).join("\n");
+      case "repo.list_files": {
+        const collection = await this.collectFiles(request.path ?? ".", request.depth ?? 3, deadline);
+        return {
+          content: collection.files.join("\n"),
+          complete: collection.complete,
+          limitation: [...collection.limitations].join("; "),
+        };
+      }
       case "repo.read_file":
-        return this.readText(request.path);
+        return this.readText(request.path, deadline);
       case "repo.search_text":
-        return this.searchText(request.path ?? ".", request.query);
+        return this.searchText(request.path ?? ".", request.query, deadline);
       case "git.status":
-        return this.runGit(this.gitArgs(["status", "--short", "--branch", "--untracked-files=normal"]));
+        return { content: await this.runGit(this.gitArgs(["status", "--short", "--branch", "--untracked-files=normal"]), deadline), complete: true };
       case "git.diff":
-        if (request.scope === "staged") return this.runGit(this.gitArgs(["diff", "--cached", "--no-ext-diff", "--no-textconv", "--unified=3"]));
-        if (request.scope === "base_to_head") return this.runGit(this.gitArgs(["diff", "--no-ext-diff", "--no-textconv", "--unified=3", `${request.base}...${request.head}`]));
-        return this.runGit(this.gitArgs(["diff", "--no-ext-diff", "--no-textconv", "--unified=3"]));
+        if (request.scope === "staged") return { content: await this.runGit(this.gitArgs(["diff", "--cached", "--no-ext-diff", "--no-textconv", "--unified=3"]), deadline), complete: true };
+        if (request.scope === "base_to_head") return { content: await this.runGit(this.gitArgs(["diff", "--no-ext-diff", "--no-textconv", "--unified=3", `${request.base}...${request.head}`]), deadline), complete: true };
+        return { content: await this.runGit(this.gitArgs(["diff", "--no-ext-diff", "--no-textconv", "--unified=3"]), deadline), complete: true };
       case "git.show":
-        return request.path
-          ? this.runGit(this.gitArgs(["show", "--no-ext-diff", "--no-textconv", `${request.object}:${request.path}`]))
-          : this.runGit(this.gitArgs(["show", "--no-patch", "--format=medium", "--stat", request.object]));
+        return {
+          content: request.path
+            ? await this.runGit(this.gitArgs(["show", "--no-ext-diff", "--no-textconv", `${request.object}:${request.path}`]), deadline)
+            : await this.runGit(this.gitArgs(["show", "--no-patch", "--format=medium", "--stat", request.object]), deadline),
+          complete: true,
+        };
       case "git.log":
-        return this.runGit(this.gitArgs(["log", `-${request.count ?? 10}`, "--date=iso-strict", "--pretty=format:%H%x09%ad%x09%s"]));
+        return { content: await this.runGit(this.gitArgs(["log", `-${request.count ?? 10}`, "--date=iso-strict", "--pretty=format:%H%x09%ad%x09%s"]), deadline), complete: true };
       case "evidence.acceptance":
         return this.workerEvidence("acceptance");
       case "evidence.plan":
@@ -342,83 +392,173 @@ export class AdvisorEvidenceToolBroker {
     }
   }
 
-  private workerEvidence(key: keyof AdvisorWorkerEvidence): string {
+  private workerEvidence(key: keyof AdvisorWorkerEvidence): EvidencePayload {
     const value = this.options.evidence?.[key];
     if (!value) throw new Error(`Advisor evidence unavailable: ${key}`);
-    return value;
+    return { content: value, complete: true };
   }
 
-  private async runGit(args: string[]): Promise<string> {
-    if (!this.options.runGit) throw new Error("Advisor Git evidence unavailable");
-    return String(await this.options.runGit(args, this.root));
+  private async root(deadline: number): Promise<string> {
+    return this.beforeDeadline(() => this.rootPromise, deadline);
   }
 
-  private resolveExisting(relativePath: string): string {
+  private async runGit(args: string[], deadline: number): Promise<string> {
+    const root = await this.root(deadline);
+    const timeoutMs = Math.max(1, deadline - Date.now());
+    if (this.options.runGit) {
+      return String(await this.beforeDeadline(
+        () => Promise.resolve(this.options.runGit!(args, root, { timeoutMs })),
+        deadline,
+      ));
+    }
+    const result = await this.beforeDeadline(
+      () => execFileAsync("git", args, {
+        cwd: root,
+        encoding: "utf8",
+        env: safeGitEnvironment(),
+        timeout: timeoutMs,
+        killSignal: "SIGKILL",
+        maxBuffer: Math.max(256 * 1024, this.limits.maxAggregateBytes * 4),
+      }),
+      deadline,
+    );
+    return String(result.stdout ?? "").trim();
+  }
+
+  private async resolveExisting(relativePath: string, deadline: number): Promise<string> {
+    const root = await this.root(deadline);
     const normalizedPath = safeRelativePath(relativePath, "path", true);
-    const candidate = resolve(this.root, normalizedPath);
-    const rel = relative(this.root, candidate);
+    const candidate = resolve(root, normalizedPath);
+    const rel = relative(root, candidate);
     if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw new Error("Path escapes the worktree");
 
-    let current = this.root;
+    let current = root;
     for (const part of rel.split(sep).filter(Boolean)) {
       current = resolve(current, part);
-      if (lstatSync(current).isSymbolicLink()) throw new Error("Symlink paths are denied for advisor evidence");
+      const details = await this.beforeDeadline(() => lstat(current), deadline);
+      if (details.isSymbolicLink()) throw new Error("Symlink paths are denied for advisor evidence");
     }
-    const canonical = realpathSync(candidate);
-    const canonicalRel = relative(this.root, canonical);
+    const canonical = await this.beforeDeadline(() => realpath(candidate), deadline);
+    const canonicalRel = relative(root, canonical);
     if (canonicalRel === ".." || canonicalRel.startsWith(`..${sep}`) || isAbsolute(canonicalRel)) throw new Error("Resolved path escapes the worktree");
     return canonical;
   }
 
-  private readText(relativePath: string): string {
-    const path = this.resolveExisting(relativePath);
-    if (!statSync(path).isFile()) throw new Error("Advisor evidence path is not a file");
-    const fd = openSync(path, "r");
+  private async readText(relativePath: string, deadline: number): Promise<EvidencePayload> {
+    const path = await this.resolveExisting(relativePath, deadline);
+    const details = await this.beforeDeadline(() => stat(path), deadline);
+    if (!details.isFile()) throw new Error("Advisor evidence path is not a file");
+    const handle = await this.beforeDeadline(() => open(path, "r"), deadline);
     try {
       const buffer = Buffer.alloc(this.limits.maxResultBytes + 1);
-      const bytes = readSync(fd, buffer, 0, buffer.length, 0);
-      const content = buffer.subarray(0, bytes);
+      const read = await this.beforeDeadline(() => handle.read(buffer, 0, buffer.length, 0), deadline);
+      const content = buffer.subarray(0, read.bytesRead);
       if (content.includes(0)) throw new Error("Binary files are denied for advisor evidence");
       const text = content.toString("utf8");
       if (text.includes("�")) throw new Error("Binary or invalid UTF-8 files are denied for advisor evidence");
-      return text;
+      const complete = details.size <= this.limits.maxResultBytes;
+      return {
+        content: text,
+        complete,
+        limitation: complete ? undefined : `file exceeds ${this.limits.maxResultBytes} byte read limit`,
+      };
     } finally {
-      closeSync(fd);
+      await handle.close().catch(() => undefined);
     }
   }
 
-  private listFiles(relativePath: string, requestedDepth: number): string[] {
-    const base = this.resolveExisting(relativePath);
-    if (!statSync(base).isDirectory()) throw new Error("Advisor evidence path is not a directory");
+  private async collectFiles(relativePath: string, requestedDepth: number, deadline: number): Promise<FileCollection> {
+    const root = await this.root(deadline);
+    const base = await this.resolveExisting(relativePath, deadline);
+    const details = await this.beforeDeadline(() => stat(base), deadline);
+    if (!details.isDirectory()) throw new Error("Advisor evidence path is not a directory");
     const maxDepth = Math.min(requestedDepth, this.limits.maxDepth);
     const files: string[] = [];
-    const visit = (dir: string, depth: number): void => {
-      if (files.length >= this.limits.maxFiles || depth > maxDepth) return;
-      for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-        if (files.length >= this.limits.maxFiles) break;
+    const limitations = new Set<string>();
+    let entriesVisited = 0;
+    let complete = true;
+
+    const visit = async (dir: string, depth: number): Promise<void> => {
+      if (!complete && (files.length >= this.limits.maxFiles || entriesVisited >= this.limits.maxEntries)) return;
+      const entries = await this.beforeDeadline(
+        () => readdir(dir, { withFileTypes: true }),
+        deadline,
+      );
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      for (const entry of entries) {
+        if (entriesVisited >= this.limits.maxEntries) {
+          complete = false;
+          limitations.add(`entry limit ${this.limits.maxEntries} reached`);
+          return;
+        }
+        entriesVisited += 1;
         const absolute = resolve(dir, entry.name);
-        const rel = relative(this.root, absolute).replaceAll("\\", "/");
+        const rel = relative(root, absolute).replaceAll("\\", "/");
         if (entry.isSymbolicLink() || hasSensitivePath(rel)) continue;
-        if (entry.isDirectory()) visit(absolute, depth + 1);
-        else if (entry.isFile()) files.push(rel);
+        if (entry.isDirectory()) {
+          if (depth >= maxDepth) {
+            complete = false;
+            limitations.add(`depth limit ${maxDepth} reached`);
+            continue;
+          }
+          await visit(absolute, depth + 1);
+          if (files.length >= this.limits.maxFiles || entriesVisited >= this.limits.maxEntries) return;
+        } else if (entry.isFile()) {
+          if (files.length >= this.limits.maxFiles) {
+            complete = false;
+            limitations.add(`file limit ${this.limits.maxFiles} reached`);
+            return;
+          }
+          files.push(rel);
+        }
       }
     };
-    visit(base, 0);
-    return files;
+
+    await visit(base, 0);
+    return { files, complete, limitations };
   }
 
-  private searchText(relativePath: string, query: string): string {
-    const files = this.listFiles(relativePath, this.limits.maxDepth);
+  private async searchText(relativePath: string, query: string, deadline: number): Promise<EvidencePayload> {
+    const collection = await this.collectFiles(relativePath, this.limits.maxDepth, deadline);
     const matches: string[] = [];
-    for (const file of files) {
-      if (matches.length >= this.limits.maxMatches) break;
-      let text: string;
-      try { text = this.readText(file); } catch { continue; }
-      const lines = text.split(/\r?\n/);
-      for (let index = 0; index < lines.length && matches.length < this.limits.maxMatches; index++) {
-        if (lines[index].includes(query)) matches.push(`${file}:${index + 1}: ${lines[index].slice(0, 500)}`);
+    let complete = collection.complete;
+    const limitations = new Set(collection.limitations);
+
+    for (const file of collection.files) {
+      if (matches.length >= this.limits.maxMatches) {
+        complete = false;
+        limitations.add(`match limit ${this.limits.maxMatches} reached`);
+        break;
+      }
+      let payload: EvidencePayload;
+      try {
+        payload = await this.readText(file, deadline);
+      } catch {
+        continue;
+      }
+      if (!payload.complete) {
+        complete = false;
+        limitations.add("one or more files exceeded the per-file read limit");
+      }
+      const lines = payload.content.split(/\r?\n/);
+      for (let index = 0; index < lines.length; index++) {
+        if (lines[index].includes(query)) {
+          matches.push(`${file}:${index + 1}: ${lines[index].slice(0, 500)}`);
+          if (matches.length >= this.limits.maxMatches) {
+            complete = false;
+            limitations.add(`match limit ${this.limits.maxMatches} reached`);
+            break;
+          }
+        }
       }
     }
-    return matches.length ? matches.join("\n") : "No literal matches found.";
+
+    return {
+      content: matches.length
+        ? matches.join("\n")
+        : complete ? "No literal matches found." : "No literal matches found in the scanned subset.",
+      complete,
+      limitation: [...limitations].join("; "),
+    };
   }
 }

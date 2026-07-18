@@ -22,19 +22,20 @@ These are settled; the rest of this document designs around them, not toward alt
 7. **Any migration or validation failure restores the whole cohort.** Partial success — some of the five databases migrated and validated, others not — is not an acceptable end state; either all five reach and validate the target version, or all five are restored to their pre-migration state.
 8. **Interrupted rollouts remain explicitly incomplete.** A rollout that stops mid-sequence (process killed, machine rebooted, operator Ctrl-C) must not silently resume as either the old or the new release. It must require explicit operator re-invocation, and the containment/precondition checks must re-verify from scratch rather than trusting an interrupted run's partial state.
 9. **Fresh/missing-database bootstrap is a distinct, explicitly owned path — not a variant of "legacy."** A database that doesn't exist yet (first install, or a genuinely new role added later) is not "behind schema," it's absent. Bootstrap creation is the responsibility of the guarded rollout helper's install/first-run path (§6.5), never an implicit side effect of an ordinary `openDb()` call.
+10. **`openDb()` itself is not the strict gate.** It stays the general-purpose, backward-compatible opener — dozens of existing tests (`test/db.test.ts` alone has 15+ call sites) rely on it creating a brand-new file-backed database on a missing path as everyday setup, not as legacy-fixture migration testing specifically. Redefining `openDb()` to require an existing file would be a breaking public-API change with no compatibility path, not a narrowing. The strict fail-closed contract in §2 belongs to a **new, additive** entry point used only by the five ordinary-startup service entrypoints (§6.1) — `openDb()`'s existing behavior and every test that depends on it are unchanged.
 
 ## 2. Startup behaviour matrix
 
-Applies to `openDb()` as called from the five ordinary-startup entrypoints (`src/index.ts`, `src/index-worker.ts`, `src/index-interactive.ts`, `src/index-discord-interactive.ts`, `src/index-health.ts`).
+Applies to a **new, additive** strict opener — provisionally `openProductionDb()`, exported alongside `openDb()` from `src/db.ts` — used only by the five ordinary-startup entrypoints (`src/index.ts`, `src/index-worker.ts`, `src/index-interactive.ts`, `src/index-discord-interactive.ts`, `src/index-health.ts`). **`openDb()` itself does not change** (locked decision 10) — it keeps its current create-if-missing, auto-migrate behavior exactly as today, because dozens of existing tests depend on that as ordinary setup, not as a legacy-migration-specific path. `openProductionDb()` shares `openDb()`'s internal WAL/FK-pragma/`BridgeDb`-construction tail (extracted into a private helper both call, to avoid duplicating that logic) but replaces the file-open mode and version gate:
 
-| Schema state (`user_version`) | Current behaviour (PR #147) | Required behaviour (this policy) |
+| Schema state (`user_version`) | `openDb()` (unchanged) | `openProductionDb()` (new) |
 |---|---|---|
-| `current` (`== CURRENT_SCHEMA_VERSION`) | Starts normally | Unchanged — starts normally |
-| `legacy` (`0`, file exists) | Auto-migrates transactionally, then starts | **Fails closed** before WAL mode or any write, with an error identifying the required rollout action. Does not migrate. |
-| `migratable` (`0 < user_version < CURRENT_SCHEMA_VERSION`, once multi-step migrations exist) | N/A today (only versions 0 and 1 exist) | Same as legacy — fails closed, does not migrate |
-| `future` (`> CURRENT_SCHEMA_VERSION`) | Fails closed before WAL, connection closed, error thrown | Unchanged — this is already correct and is the template the legacy case is being brought in line with |
-| Negative / non-integer | Fails closed before WAL (per PR #147 round-2 review fix) | Unchanged |
-| **Missing file** | `new Database(dbPath)` (better-sqlite3 default mode) creates the file on disk as an empty, `user_version = 0` database *before* the version pragma is even read — `mkdirSync` of the parent directory happens one line earlier still. The strict legacy gate above would then reject this newly-created file as "legacy," but the file-creation write already happened, contradicting "fails without writing." | **`openDb()` must open in explicit non-creating mode** (better-sqlite3 `{ fileMustExist: true }`) so a missing database fails closed with a distinct `DatabaseMissingError` — no directory or file is created by ordinary startup, ever. First-run bootstrap is a separate, explicit rollout-helper action (§6.5), not an implicit `openDb()` side effect. |
+| `current` (`== CURRENT_SCHEMA_VERSION`) | Starts normally | Starts normally |
+| `legacy` (`0`, file exists) | Auto-migrates transactionally, then starts | **Fails closed** before WAL mode or any write, with `MigrationRequiredError` identifying the required rollout action. Does not migrate. |
+| `migratable` (`0 < user_version < CURRENT_SCHEMA_VERSION`, once multi-step migrations exist) | Auto-migrates | Fails closed with `MigrationRequiredError`, same as legacy |
+| `future` (`> CURRENT_SCHEMA_VERSION`) | Fails closed before WAL, connection closed, `UnsupportedSchemaVersionError` | Same — this is already correct in `openDb()` today and `openProductionDb()` inherits it unchanged |
+| Negative / non-integer | Fails closed before WAL (per PR #147 round-2 review fix) | Same |
+| **Missing file** | Creates the file (`new Database(dbPath)`'s default mode), applies migration 1's full DDL, ends at `CURRENT_SCHEMA_VERSION` — this is already correct and already tested (`dbSchema.test.ts`'s "keeps a fresh database at the current version" case) and is the mechanism bootstrap reuses (§3) | `{ fileMustExist: true }` — fails closed with a distinct `DatabaseMissingError`. No directory or file is created by production service startup, ever. |
 
 ## 3. Rollout-time behaviour matrix
 
@@ -43,9 +44,9 @@ Applies to `scripts/rollout-db.ts`'s `inspect` / `migrate` / `validate` modes, i
 | Mode | Current behaviour | Required behaviour |
 |---|---|---|
 | `inspect` | Read-only schema/integrity/queue evidence per database; `fileMustExist: true`; aborts if any legacy queue count is nonzero | Unchanged, plus: cross-check that the resolved database set, once canonicalised (§4), matches the expected five-role inventory exactly — extra or missing canonical paths abort before backup |
-| `migrate` | Calls `openDb(path, ...)` directly per database in a plain loop — a mid-loop failure propagates immediately and does not attempt the remaining databases (already fail-fast; verified by reading the loop, no per-database try/catch) | Calls a **new, narrowly-owned migration entry point** (§6.1, §6.6 — not the ordinary `openDb()`), only reachable from `scripts/rollout-db.ts` and its own tests, enforced by an architecture test rather than by naming convention alone. Same fail-fast, no-partial-continuation, transactional/FK-check guarantees as today — this is a narrowing of *who may call it*, not a change to *what it does on failure*. |
+| `migrate` | Calls `openDb(path, ...)` directly per database in a plain loop — a mid-loop failure propagates immediately and does not attempt the remaining databases (already fail-fast; verified by reading the loop, no per-database try/catch) | **Unchanged — keeps calling `openDb()`.** This is exactly the auto-migrating behavior the guarded rollout helper is supposed to own; nothing here was ever the problem. Same fail-fast, no-partial-continuation, transactional/FK-check guarantees as today. |
 | `validate` | Re-inspects each database and requires `schema === "current"` | Unchanged |
-| **First-run bootstrap** (new mode) | Not supported — `rollout-agent-bridge.sh` requires every discovered database to already exist (`[[ -f "$discovered" ]] || die ...`) before acquiring the lock, and `rollout-db.ts inspect`/`migrate`/`validate` all open with `fileMustExist: true` | **New, explicitly separate `bootstrap` mode**: only for a database file that is genuinely absent (not merely legacy), creates it at `CURRENT_SCHEMA_VERSION` directly (no legacy DDL path — a brand-new role has no history to repair), with the same ownership/mode discipline the rollout helper already applies to backups. Never invoked implicitly by `inspect`/`migrate`/`validate`, and never bundled into the same invocation as a migration of *existing* databases — no pre-migration backup exists for a database that didn't exist, so it cannot participate in the whole-cohort restore guarantee (locked decision 7) the same way. Requires explicit operator confirmation that the missing file is expected (new role), not a symptom of misconfiguration or accidental deletion. |
+| **First-run bootstrap** (new mode) | Not supported — `rollout-agent-bridge.sh` requires every discovered database to already exist (`[[ -f "$discovered" ]] || die ...`) before acquiring the lock, and `rollout-db.ts inspect`/`migrate`/`validate` all open with `fileMustExist: true` | **New, explicitly separate `bootstrap` mode.** Reuses `openDb()`'s existing missing-file path unchanged — it already creates the file and runs it through migration 1's real DDL (`applyLegacyCompatibleBaseline`/`applyMigrations`), the same registered plan every other database goes through, so there is no duplicated or shortcut schema definition. What's new is entirely at the rollout-helper level, not the database layer: a root-owned, separately-invoked route (not folded into the ordinary `--expected-commit` migrate flow) with its own allowlist of expected new-role paths, parent-directory/ownership validation matching the existing backup-directory discipline, atomic creation (write to a temp path, then atomic rename into place, mirroring `rollout-restore.py`'s existing descriptor-relative approach), and cleanup of the partial file if `openDb()`'s migration fails partway. Never invoked implicitly by `inspect`/`migrate`/`validate`, and never bundled into the same invocation as a migration of *existing* databases — no pre-migration backup exists for a database that didn't exist, so it cannot participate in the whole-cohort restore guarantee (locked decision 7) the same way. Requires explicit operator confirmation that the missing file is expected (new role), not a symptom of misconfiguration or accidental deletion. |
 
 ## 4. Five-database-role inventory and shared-path handling
 
@@ -67,9 +68,10 @@ Current production topology (`systemd/agent-bridge-rollout.conf.example`), seven
 
 | Concern | Owner | Not owned by |
 |---|---|---|
-| Schema version validation on ordinary startup | `src/db.ts` `openDb()` (fail-closed gate, §2) | Individual service entrypoints — they must not duplicate version-checking logic |
-| Schema migration execution | `src/db/rolloutMigration.ts` (new, narrow module — §6.1), called only from `scripts/rollout-db.ts` `migrate` mode, invoked only by `scripts/rollout-agent-bridge.sh`; ownership enforced by arch-lint, not just convention (§6.6) | `openDb()` under ordinary startup; any service; any ad hoc script |
-| First-run database bootstrap | `scripts/rollout-db.ts` `bootstrap` mode (new — §2, §3, §6.5), never invoked implicitly | `openDb()` under ordinary startup (must `fileMustExist`, never create); `migrate`/`inspect`/`validate` modes |
+| Schema version validation on ordinary (production) startup | `openProductionDb()` (new, §6.1) — the five service entrypoints import only this, never `openDb()` directly; enforced by arch-lint, not convention (§6.6) | Individual service entrypoints — they must not duplicate version-checking logic; `openDb()` itself, which stays general-purpose |
+| General-purpose database open (tests, dev, and the rollout helper's own migration) | `src/db.ts` `openDb()` — unchanged (locked decision 10) | — |
+| Schema migration execution | `scripts/rollout-db.ts` `migrate` mode, calling the unchanged `openDb()`, invoked only by `scripts/rollout-agent-bridge.sh` | Ordinary service entrypoints, which use `openProductionDb()` and never migrate |
+| First-run database bootstrap | `scripts/rollout-db.ts` `bootstrap` mode (new — §2, §3), reusing `openDb()`'s existing missing-file path, never invoked implicitly | `openProductionDb()` under ordinary startup (must `fileMustExist`, never create); `migrate`/`inspect`/`validate` modes |
 | Containment (stop, prove dead) | `scripts/rollout-agent-bridge.sh` phase 4 (existing, unchanged) | — |
 | Backup | `scripts/rollout-agent-bridge.sh` phase 6 (existing, unchanged) | — |
 | Restore | `scripts/rollout-restore.py`, invoked by `rollout-agent-bridge.sh` (existing, unchanged) | — |
@@ -81,39 +83,47 @@ Current production topology (`systemd/agent-bridge-rollout.conf.example`), seven
 
 ## 6. Proposed rollout-helper changes
 
-Minimal, additive — no removal of existing containment/backup/evidence machinery.
+Minimal, additive — no removal of existing containment/backup/evidence machinery, and **`openDb()` itself is untouched** (locked decision 10).
 
-1. **`src/db.ts`: split the migration entry point, and open in non-creating mode.**
-   `openDb()` (used by all five ordinary entrypoints) opens with better-sqlite3's `{ fileMustExist: true }` (so a missing database fails closed as `DatabaseMissingError` — see §2 — instead of being silently created), and changes its version gate from "reject only `> CURRENT_SCHEMA_VERSION`" to "reject anything that is not exactly `CURRENT_SCHEMA_VERSION`" — i.e. legacy now fails closed too, with a distinct, actionable error (`MigrationRequiredError`, separate from `UnsupportedSchemaVersionError`, so operators and logs can tell "you're behind" from "you're ahead/corrupt" at a glance). Both new errors are thrown before any pragma that could create/mutate the file.
+1. **`src/db.ts`: add `openProductionDb()`, leave `openDb()` alone.**
+   `openDb()` keeps its exact current signature and behavior — create-if-missing, auto-migrate on legacy, everything the ~15+ existing `test/db.test.ts` call sites (and more elsewhere) already depend on. A new, additive export `openProductionDb()` shares `openDb()`'s internal WAL-pragma/FK-pragma/non-schema-maintenance/`BridgeDb`-construction tail — extracted into a private helper both functions call, so that shared logic isn't duplicated — but opens with better-sqlite3's `{ fileMustExist: true }` (missing file → `DatabaseMissingError`, no directory or file created) and a strict version gate: anything that is not exactly `CURRENT_SCHEMA_VERSION` fails closed before WAL mode or any write, with `MigrationRequiredError` for legacy/migratable (distinct from `UnsupportedSchemaVersionError` for future/negative/non-integer, so operators and logs can tell "you're behind" from "you're ahead/corrupt" at a glance).
 
-   A new, narrowly-scoped **migration module** (not a general export of `src/db.ts` — see item 6 below for how "narrow" is enforced, not just asserted) retains today's `openDb()` auto-migrate behavior and is the only thing `rollout-db.ts migrate` mode may call. Both entry points share the same `applyMigrations()`/`legacyBaselineMigration.ts` internals; only the entry point, file-open mode, and version-gate strictness differ. Verified by grep across `test/*.ts`: only `test/dbSchema.test.ts` exercises legacy-fixture migration through `openDb()`, and every one of those cases is exactly the migration-path testing that moves to the new module under 4C.2 — no other test relies on ordinary `openDb()` auto-migrating a legacy database as a success path, so this is a pure narrowing, not a behavior removal any other caller depends on. Re-verify this grep at 4C.2 implementation time in case new tests have landed since this document was written.
+   This is purely additive: no existing `openDb()` caller changes, no test needs to move. The five ordinary-startup entrypoints switch their one `openDb(...)` call each to `openProductionDb(...)`.
 
-2. **`rollout-db.ts`: switch `migrate` mode to the new migration module.** No change to its existing fail-fast behavior (confirmed by reading the current implementation: a plain loop over databases with no per-database try/catch, so a failure on database N already stops before attempting N+1 — this is preserved, not newly added).
+2. **`rollout-db.ts`: no change to `migrate` mode.** It keeps calling `openDb()` exactly as today — that auto-migrating behavior was never the problem; the problem was ordinary services also being able to reach it. No change to its existing fail-fast behavior either (confirmed by reading the current implementation: a plain loop over databases with no per-database try/catch, so a failure on database N already stops before attempting N+1).
 
 3. **`rollout-db.ts inspect`: add per-database "resolving units" evidence field** (§4), sourced from the same unit/env resolution `rollout-agent-bridge.sh` already performs — pass the resolved unit→path mapping into `rollout-db.ts` as evidence input rather than re-deriving it.
 
-4. **`rollout-agent-bridge.sh`: add an explicit interrupted-rollout guard (locked decision 8), ordered to avoid a check-then-act race.** The check-for-stale-sentinel-before-acquiring-the-lock design considered earlier has a race: a second invocation could observe no sentinel, then acquire the lock only after a third invocation has already failed and left one behind, and proceed without ever re-checking. Corrected order, all under the *existing* `flock --exclusive --nonblock` at the point already in the script (line ~192, before any precondition check runs):
-   1. Acquire the exclusive `flock` (unchanged — this is the sole serialization point; nothing new needed here).
-   2. Immediately after acquiring it, inspect the sentinel path. If a sentinel exists, abort with an instruction to review the prior run's evidence before manually clearing it — this check now happens under the same lock a concurrent invocation would also need, so there is no window between "checked" and "acted."
-   3. Atomically create the new sentinel (e.g. `O_CREAT|O_EXCL`) before any precondition check proceeds.
-   4. Remove the sentinel only on a clean terminal outcome: full success, or a fully-evidenced, fully-restored failure (`on_exit`'s existing `restore_backups` path completing with `status == 0`). Any other exit leaves the sentinel in place — deliberately, per locked decision 8.
+4. **`rollout-agent-bridge.sh`: add an explicit interrupted-rollout guard (locked decision 8), with one unambiguous sentinel-lifecycle contract.**
 
-5. **New `bootstrap` mode for genuinely missing databases (§2, §3).** Explicitly separate invocation from ordinary migration; never runs implicitly.
+   Lock-then-sentinel ordering (avoids the check-then-act race in an earlier draft: a second invocation observing no sentinel, then acquiring the lock only after a third invocation had already failed and left one behind), all under the *existing* `flock --exclusive --nonblock` at the point already in the script (line ~192, before any precondition check runs):
+   1. Acquire the exclusive `flock` (unchanged — the sole serialization point).
+   2. Immediately after, inspect the sentinel path under that same lock. If present, abort with an instruction to review the prior run's evidence before manually clearing it.
+   3. Atomically create the new sentinel (`O_CREAT|O_EXCL`) before any precondition check proceeds.
 
-6. **Enforce sole-ownership of the migration module with a static check, not a naming convention.** A comment saying "only `rollout-db.ts` may call this" is not a boundary — nothing stops a future service module from importing it directly, and Phase 4B already established the precedent (`scripts/sqlOwnershipLint.mjs`, PRs #147/#154) that this codebase backs ownership claims with enforcement, not documentation alone. Concretely: place the migration module somewhere its import path signals restriction (e.g. `src/db/rolloutMigration.ts`, mirroring `src/db/legacyBaselineMigration.ts`'s existing "internal to the migration boundary" placement), add an architecture-lint rule restricting its imports to `scripts/rollout-db.ts` and its own test file (same allowlist-plus-marker pattern `scripts/sqlOwnershipLint.mjs` already uses), and add a regression test asserting that none of the five ordinary-startup entrypoints (or any other `src/` module) import it — run as part of the same `bash scripts/arch-lint.sh src` gate already in CI.
+   **Removal contract — one rule, not exit-code-dependent** (the script's overall exit status stays nonzero on every failure path, including a cleanly auto-restored one, so exit code alone can't signal "safe to retry"; a dedicated flag is required):
+   - **Remove** the sentinel when, and only when, the run reaches one of three *verified-safe* states: (a) `DONE` — full success; (b) a **proven no-mutation failure** — precondition, containment, or backup-phase failure, where nothing was written yet; (c) **verified full restoration** — the migration/validation-failure path's `restore_backups` call returns success (not merely attempted) and every restored database's SHA-256 matches the backup manifest. Introduce an explicit `sentinel_removable` flag set only in these three cases — never inferred from `$?`.
+   - **Retain** the sentinel in every other case: process killed or machine rebooted mid-rollout (nothing runs to remove it); `restore_backups` itself fails or returns partial success (state genuinely uncertain); containment cannot be proven during the failure trap ("rollback skipped: stopped state could not be proven"); and post-start failure (`STOPPED_PRESERVED` — services already running against the new schema, so an automatic DB rollback could race live writes; this always requires operator judgment, never an automatic retry).
+
+5. **New `bootstrap` mode for genuinely missing databases (§2, §3).** Explicitly separate invocation from ordinary migration; never runs implicitly; reuses `openDb()`'s existing, already-tested missing-file→full-migration-plan path at the database layer, with new root-owned allowlist/ownership/atomic-creation/cleanup-on-failure machinery at the rollout-helper level (§3).
+
+6. **Enforce that the five service entrypoints use `openProductionDb()`, not `openDb()`, with a static check — not a naming convention.** A comment saying "services must use the strict opener" is not a boundary; Phase 4B already established the precedent (`scripts/sqlOwnershipLint.mjs`, PRs #147/#154) that this codebase backs ownership claims with enforcement. Concretely: an arch-lint rule scanning `src/index.ts`, `src/index-worker.ts`, `src/index-interactive.ts`, `src/index-discord-interactive.ts`, `src/index-health.ts` for any `openDb` import/call (as opposed to `openProductionDb`), and a regression test asserting the rule fires on a deliberately-reverted fixture — run as part of the same `bash scripts/arch-lint.sh src` gate already in CI. `openDb()` remains freely importable everywhere else (tests, `rollout-db.ts`, dev tooling) since it is not the concern being restricted — only which opener the five production entrypoints use is.
 
 7. **No change to:** containment proof, backup/restore mechanics, `--expected-commit` exact-SHA requirement, sudoers/config model, or the "legacy queue discard is unsupported" rule.
 
 ## 7. Failure and interruption semantics
 
-| Failure point | Current helper behavior | This policy |
-|---|---|---|
-| Precondition/containment failure (before backup) | Aborts, no rollback needed (nothing touched yet) | Unchanged |
-| Backup failure | Aborts before migration; databases untouched | Unchanged |
-| Migration or validation failure (mid-`migrate`/`validate` across the five databases) | **Already whole-cohort restore, verified by reading the script, not assumed:** `start_attempted` is set to `1` only after both `migrate` and `validate` complete (line ~445, after the migrate/validate calls at lines ~438–441). The `on_exit` trap fires on any nonzero exit and, when `start_attempted == 0` and a backup manifest exists, calls `restore_backups` for the *entire* manifest — not per-database. `rollout-db.ts migrate`'s own plain-loop fail-fast (item 2 above) means a mid-cohort failure stops there and lets this existing trap handle the whole-cohort restore. | **No new implementation required here — the earlier draft of this section incorrectly described this as unhandled/to-be-built.** What's needed is a UAT case (§11) proving it under a real induced failure, since it's currently exercised only by code-reading, not a test. |
-| Post-migration, post-validation, pre-start failure | Same trap: `start_attempted` is still `0` at this point, so this is *also* already whole-cohort restore, not "preserved" as the earlier draft stated. | Corrected description only — no behavior change. |
-| Post-start failure (service won't come up on new schema) | `start_attempted == 1` by this point, so the trap does *not* restore — migrated databases, evidence, and the failed service state are preserved for operator review (existing, and correctly distinct from the pre-start cases above: once a service has started against the new schema, an automatic DB rollback could race with in-flight writes, so this one genuinely does require manual judgment). | Unchanged |
-| Process killed / machine rebooted mid-rollout | Not explicitly guarded today | **New: interrupted-rollout sentinel (§6.4) forces a hard stop and manual review on the next invocation — never an automatic resume in either direction.** |
+`sentinel_removable` is the new explicit flag from §6.4 — set only in the three verified-safe cases, never inferred from the script's overall exit code (which stays nonzero on every failure path, including a cleanly auto-restored one).
+
+| Failure point | Current helper behavior | This policy | `sentinel_removable`? |
+|---|---|---|---|
+| Precondition/containment failure (before backup) | Aborts, no rollback needed (nothing touched yet) | Unchanged | **Yes** — proven no-mutation failure |
+| Backup failure | Aborts before migration; databases untouched | Unchanged | **Yes** — proven no-mutation failure |
+| Migration or validation failure (mid-`migrate`/`validate` across the five databases) | **Already whole-cohort restore, verified by reading the script, not assumed:** `start_attempted` is set to `1` only after both `migrate` and `validate` complete (line ~445, after the migrate/validate calls at lines ~438–441). The `on_exit` trap fires on any nonzero exit and, when `start_attempted == 0` and a backup manifest exists, calls `restore_backups` for the *entire* manifest — not per-database. `rollout-db.ts migrate`'s own plain-loop fail-fast means a mid-cohort failure stops there and lets this existing trap handle the whole-cohort restore. | **No new restore implementation required — an earlier draft of this section incorrectly described this as unhandled/to-be-built.** What's needed: a UAT case (§11) proving it under a real induced failure, and the new `sentinel_removable` flag set only when `restore_backups` returns success *and* post-restore SHA-256 verification passes for every database. | **Yes, but only if `restore_backups` succeeds and is verified** — if it fails or is partial, **No** |
+| Post-migration, post-validation, pre-start failure | Same trap: `start_attempted` is still `0` at this point, so this is *also* already whole-cohort restore, not "preserved" as an earlier draft stated. | Corrected description only — no behavior change. | Same as the row above |
+| Post-start failure (service won't come up on new schema) | `start_attempted == 1` by this point, so the trap does *not* restore — migrated databases, evidence, and the failed service state are preserved for operator review (existing, and correctly distinct from the pre-start cases above: once a service has started against the new schema, an automatic DB rollback could race with in-flight writes, so this one genuinely does require manual judgment). | Unchanged | **No** — always requires operator review, never an automatic retry |
+| Process killed / machine rebooted mid-rollout | Not explicitly guarded today | **New: interrupted-rollout sentinel (§6.4) forces a hard stop and manual review on the next invocation — never an automatic resume in either direction.** | **No** — nothing runs to set the flag |
+| Containment cannot be proven during the failure trap itself | Existing: "rollback skipped: stopped state could not be proven" | Unchanged | **No** — state is genuinely uncertain |
 
 ## 8. Rollout state machine
 
@@ -128,46 +138,70 @@ LOCK_ACQUIRED (flock --exclusive, existing)
   │  existing sentinel found ──▶ ABORT (exit nonzero, lock released, sentinel left in place, operator review required)
   ▼
 SENTINEL_CREATED (O_CREAT|O_EXCL, atomic, still under the lock) ──▶ PRECONDITIONS_CHECKED
-  │ fail: release lock, sentinel remains, exit nonzero
+  │ fail: release lock, sentinel_removable=true (no-mutation failure) ──▶ sentinel removed, exit nonzero
   ▼
 CONTAINMENT_PROVEN
-  │ fail: release lock, sentinel remains, exit nonzero — nothing touched
+  │ fail: release lock, sentinel_removable=true (nothing touched) ──▶ sentinel removed, exit nonzero
   ▼
 BACKED_UP (all five)
-  │ fail: release lock, sentinel remains, exit nonzero — databases untouched
+  │ fail: release lock, sentinel_removable=true (databases untouched) ──▶ sentinel removed, exit nonzero
   ▼
-MIGRATING (all five, via the narrow migration module, §6.1/§6.6; plain fail-fast loop, no partial continuation)
-  │ any failure ──▶ RESTORING (all five, existing on_exit trap — start_attempted still 0) ──▶ FAILED_RESTORED (sentinel remains, exit nonzero)
+MIGRATING (all five, via openDb(); §6.2 — unchanged from today; plain fail-fast loop, no partial continuation)
+  │ any failure ──▶ RESTORING (all five, existing on_exit trap — start_attempted still 0)
+  │     restore verified (success + SHA-256 match) ──▶ sentinel_removable=true ──▶ FAILED_RESTORED (sentinel removed, exit nonzero)
+  │     restore fails or unverified ──▶ sentinel_removable=false ──▶ FAILED_RESTORED (sentinel remains, exit nonzero, operator review required)
   ▼ all five succeed
 VALIDATED (all five == CURRENT_SCHEMA_VERSION, requireCurrent check passes)
-  │ fail ──▶ RESTORING (all five, same trap) ──▶ FAILED_RESTORED (sentinel remains)
+  │ fail ──▶ RESTORING (all five, same trap, same verified/unverified split as above)
   ▼
 STARTING (all seven units; start_attempted set to 1 here — trap no longer restores past this point)
-  │ fail ──▶ STOPPED_PRESERVED (sentinel remains present — not removed; migrated DBs + evidence preserved, no auto-rollback, operator review required)
+  │ fail ──▶ STOPPED_PRESERVED (sentinel_removable=false always — sentinel remains present; migrated DBs + evidence preserved, no auto-rollback, operator review required)
   ▼
-VERIFIED_ACTIVE ──▶ DONE (sentinel removed only here, on a clean terminal outcome)
+VERIFIED_ACTIVE ──▶ DONE (sentinel_removable=true; sentinel removed)
 ```
 
-Interrupted at any state before `DONE`: the sentinel was created immediately after lock acquisition and is only ever removed on `DONE`, so it remains present through every failure path above. The next invocation acquires the lock, finds the sentinel under that same lock (no race), hard-stops, and requires manual review (§6.4) — it does not attempt to infer which state was reached and resume.
+Interrupted at any state before a `sentinel_removable=true` outcome: the sentinel was created immediately after lock acquisition and is only removed on one of the three verified-safe outcomes (§6.4, §7). The next invocation acquires the lock, finds the sentinel under that same lock (no race), hard-stops, and requires manual review — it does not attempt to infer which state was reached and resume.
 
 ## 9. Rollback state machine
 
-Rollback is **restore, not down-migration** (locked decision 4), and only ever operates on the whole cohort (locked decision 7).
+Rollback is **restore, not down-migration** (locked decision 4), and only ever operates on the whole cohort (locked decision 7). `FAILED_RESTORED` and `STOPPED_PRESERVED` are materially different states — the former already has a restored (old-schema) database and stopped services with no binary change yet; the latter has a *migrated* (new-schema) database, stopped services, and no automatic restore attempted — so they follow different paths, not a shared `RESTORE_INVOKED` step:
 
 ```
-FAILED_RESTORED / STOPPED_PRESERVED (operator decides rollback is required)
+FAILED_RESTORED (automatic on_exit trap already restored the cohort — §7; sentinel state per §6.4)
   │
   ▼
-RESTORE_INVOKED (rollout-restore.py, existing mechanics — O_DIRECTORY|O_NOFOLLOW, atomic rename, mode/ownership preserved)
-  │ restore fails ──▶ CONTAINMENT_INCOMPLETE-equivalent: operator must intervene manually, evidence points at exact byte-level backup state
-  ▼
-RESTORED (all five databases bitwise-identical to pre-migration backups, verified by SHA-256 against the recorded manifest)
+VERIFY_RESTORED_COHORT (operator re-confirms: all five databases' SHA-256 match the pre-migration backup manifest —
+  the automatic restore already checked this per-database during restore_backups; this is an operator-visible
+  re-confirmation before deciding next steps, not a new mechanism)
+  │
+  ├─▶ retry: fix the root cause of the migration/validation failure, re-invoke with a corrected commit (services were
+  │    never started against the new schema, so this is a fresh rollout attempt, not a partial resume)
+  │
+  └─▶ abandon: PREVIOUS_BINARY_DEPLOYED (revert the working tree to the previous commit — separate, manual, outside
+       this script) ──▶ SERVICES_RESTARTED (previous binary + already-restored previous-schema database — a pairing
+       that was already proven to work; services were stopped, not started, throughout, so this is a normal start,
+       not a rollback of a running system)
+
+STOPPED_PRESERVED (services stopped after a post-start failure; database IS on the new schema — migration/validation
+  already succeeded; no automatic restore was attempted, per the always-manual-review rule in §7)
   │
   ▼
-PREVIOUS_BINARY_DEPLOYED (separate, manual: checkout/deploy the previous commit — not part of the DB rollback mechanism itself)
+OPERATOR_DECIDES: forward-fix the service issue and start against the already-migrated new schema, OR roll back
+  │
+  ▼ (if rolling back)
+OPERATOR_APPROVED_RESTORE_INVOKED (rollout-restore.py, existing mechanics — O_DIRECTORY|O_NOFOLLOW, atomic rename,
+  mode/ownership preserved; this is the first restore attempt for this failure path, unlike FAILED_RESTORED where
+  it already happened automatically)
+  │ restore fails ──▶ CONTAINMENT_INCOMPLETE-equivalent: operator must intervene manually, evidence points at exact
+  │   byte-level backup state
+  ▼
+VERIFY_RESTORED_COHORT (same SHA-256-against-manifest check as the FAILED_RESTORED path)
   │
   ▼
-SERVICES_RESTARTED (previous binary + restored databases — a schema/binary pairing that was already proven to work)
+PREVIOUS_BINARY_DEPLOYED (separate, manual: checkout/deploy the previous commit)
+  │
+  ▼
+SERVICES_RESTARTED (previous binary + restored databases — a pairing that was already proven to work)
 ```
 
 There is no state in this machine that represents "new binary + old schema" or "old binary + new schema" as a supported combination — both are excluded by locked decisions 3 and 5.
@@ -177,10 +211,10 @@ There is no state in this machine that represents "new binary + old schema" or "
 | Phase | Scope | Depends on |
 |---|---|---|
 | 4C.1 | This document, reviewed and merged (docs only) | — |
-| 4C.2 | `src/db/rolloutMigration.ts` split out from `src/db.ts` (§6.1, §6.6); `openDb()` gains `{ fileMustExist: true }` and the strict legacy/missing gates; `MigrationRequiredError`/`DatabaseMissingError`; arch-lint import-restriction rule + regression test enforcing sole ownership (§6.6); full-repo grep confirming no caller relies on ordinary-open auto-migration of a legacy DB; characterization tests locking current `future`/`current` behavior unchanged, new tests for the legacy-fails-closed and missing-file-fails-closed paths | 4C.1 |
-| 4C.3 | `rollout-db.ts` switched to the new migration module; new `bootstrap` mode (§2, §3, §6.5) for genuinely missing databases; per-database resolving-units evidence field | 4C.2 |
-| 4C.4 | `rollout-agent-bridge.sh` interrupted-rollout sentinel, created under the existing `flock` (§6.4), not before it | 4C.3 (can proceed in parallel with 4C.3 if reviewed as a separate PR) |
-| 4C.5 | Full test/UAT matrix (§11) executed against a non-production fixture environment, including a UAT case proving the *already-existing* whole-cohort restore-on-migration-failure behavior (§7) under a real induced failure | 4C.2–4C.4 merged |
+| 4C.2 | `openProductionDb()` added to `src/db.ts`, additive (§6.1); `openDb()` completely unchanged; shared WAL/FK/construction tail extracted into a private helper both call; `MigrationRequiredError`/`DatabaseMissingError`; the five service entrypoints switched to `openProductionDb()`; arch-lint rule + regression test enforcing that they never import `openDb()` directly (§6.6); characterization tests proving every existing `openDb()` call site (tests, dev tooling, `rollout-db.ts`) is unaffected; new tests for `openProductionDb()`'s legacy-fails-closed and missing-file-fails-closed paths | 4C.1 |
+| 4C.3 | New `rollout-db.ts bootstrap` mode (§2, §3) reusing `openDb()`'s existing missing-file path at the database layer, plus new root-owned allowlist/ownership/atomic-creation/cleanup-on-failure machinery at the rollout-helper level; per-database resolving-units evidence field. `rollout-db.ts migrate` itself is unchanged. | 4C.2 |
+| 4C.4 | `rollout-agent-bridge.sh` interrupted-rollout sentinel: lock-then-sentinel ordering (§6.4), and the explicit `sentinel_removable` flag (§7) — set only for the three verified-safe outcomes, never inferred from exit code | 4C.3 (can proceed in parallel with 4C.3 if reviewed as a separate PR) |
+| 4C.5 | Full test/UAT matrix (§11) executed against a non-production fixture environment, including a UAT case proving the *already-existing* whole-cohort restore-on-migration-failure behavior (§7) under a real induced failure, and a UAT case for the split rollback paths (§9) | 4C.2–4C.4 merged |
 | 4C.6 | This issue's Phase 4C acceptance criteria reviewed and checked off; Issue #135 updated | 4C.5 |
 | 4C.7 | Separately authorized production deployment (§12 runbook) | 4C.6, explicit human approval |
 
@@ -190,19 +224,21 @@ Each of 4C.2–4C.4 is its own draft PR through the same review discipline as PR
 
 | Case | Level | Proves |
 |---|---|---|
-| Ordinary `openDb()` on a `current`-version DB | Unit (characterization, must stay green) | No regression from the split |
-| Ordinary `openDb()` on a `future`-version DB | Unit (characterization, must stay green) | Existing fail-closed-before-WAL behavior unchanged |
-| Ordinary `openDb()` on a `legacy`-version (`user_version = 0`) DB | Unit (new, must be red before 4C.2, green after) | New fail-closed behavior; no WAL/write occurs (mirrors the PR #147 future-version test's sidecar-file assertions) |
-| Ordinary `openDb()` on a missing file | Unit (new, must be red before 4C.2, green after) | `fileMustExist: true` prevents implicit creation; no directory or file appears on disk (assert via `existsSync` before/after, mirroring the sidecar-file pattern above) |
-| Migration module on a `legacy` DB | Unit (moved from existing `openDb()` tests) | Migration still works exactly as PR #147 proved, just under the new entry point |
-| A non-owner `src/` module attempting to import the migration module | Arch-lint regression (new) | Sole-ownership is enforced, not just documented (§6.6) — mirrors `scripts/sqlOwnershipLint.mjs`'s existing pattern from PR #154 |
+| Every existing `openDb()` call site across `test/*.ts` and `scripts/rollout-db.ts` | Full regression suite (must stay green throughout 4C.2) | `openDb()` is genuinely untouched — no test rewrite, no behavior change |
+| `openProductionDb()` on a `current`-version DB | Unit (new) | Starts normally, same as `openDb()` would |
+| `openProductionDb()` on a `future`-version DB | Unit (new) | Fails closed before WAL, `UnsupportedSchemaVersionError` |
+| `openProductionDb()` on a `legacy`-version (`user_version = 0`) DB | Unit (new, must be red before 4C.2, green after) | Fails closed with `MigrationRequiredError`; no WAL/write occurs (mirrors the PR #147 future-version test's sidecar-file assertions) |
+| `openProductionDb()` on a missing file | Unit (new, must be red before 4C.2, green after) | `fileMustExist: true` prevents implicit creation; no directory or file appears on disk (assert via `existsSync` before/after, mirroring the sidecar-file pattern above) |
+| The five service entrypoints, each importing `openDb` directly instead of `openProductionDb` | Arch-lint regression (new) | Sole-ownership of the strict path is enforced, not just documented (§6.6) — mirrors `scripts/sqlOwnershipLint.mjs`'s existing pattern from PR #154 |
 | `rollout-db.ts inspect` on the real five-role shape, with shared antigravity/claude/codex path | Integration (new) | Canonicalisation correctly collapses three units to one database, no double-processing |
-| `rollout-db.ts bootstrap` on a genuinely missing database | Integration (new) | New role creation works and is distinct from migration — never triggered implicitly by `inspect`/`migrate`/`validate` |
-| `rollout-agent-bridge.sh` with one of five databases deliberately made unmigratable (e.g. injected FK violation, per PR #147's `foreign_key_check` gate) | Integration/UAT (new) | The **existing** whole-cohort restore (via `on_exit`'s `start_attempted == 0` check, §7) actually triggers under a real failure, not just by code inspection |
+| `rollout-db.ts bootstrap` on a genuinely missing database | Integration (new) | New role creation works via the existing `openDb()` migration-plan path, distinct from ordinary `migrate` — never triggered implicitly by `inspect`/`migrate`/`validate` |
+| `rollout-agent-bridge.sh` with one of five databases deliberately made unmigratable (e.g. injected FK violation, per PR #147's `foreign_key_check` gate) | Integration/UAT (new) | The **existing** whole-cohort restore (via `on_exit`'s `start_attempted == 0` check, §7) actually triggers under a real failure, and `sentinel_removable` is correctly set only after verified restoration |
+| Same as above, but `restore_backups` itself is forced to fail | UAT, non-production fixture environment (new) | `sentinel_removable` stays false when restoration cannot be verified — the flag isn't just "restore was attempted" |
 | Two concurrent `rollout-agent-bridge.sh` invocations racing for the lock, one with a prior failed run's sentinel present | UAT, non-production fixture environment (new) | The corrected lock-then-sentinel ordering (§6.4) actually closes the race, not just on paper |
 | `rollout-agent-bridge.sh` killed mid-`MIGRATING` (simulated) | UAT, non-production fixture environment | Sentinel present on next invocation; hard stop; no auto-resume in either direction |
 | `rollout-agent-bridge.sh` full run against a five-database fixture cohort seeded with realistic legacy shapes (reuse PR #147's fixed pre-versioned SQL fixtures) | UAT, non-production fixture environment | End-to-end containment → backup → migrate → validate → start → verify, matching `docs/GUARDED-ROLLOUT.md`'s documented sequence exactly |
-| Full rollback drill: fixture cohort, forced mid-migration failure, restore, verify byte-identical to pre-migration backup via SHA-256 | UAT, non-production fixture environment | Locked decision 4 and 7 hold under a real (if fixture-scale) failure |
+| Full rollback drill, `FAILED_RESTORED` path: fixture cohort, forced mid-migration failure, automatic restore, verify byte-identical to pre-migration backup via SHA-256 | UAT, non-production fixture environment | Locked decision 4 and 7 hold under a real (if fixture-scale) failure; §9's `FAILED_RESTORED` path is followed, not the `STOPPED_PRESERVED` one |
+| Full rollback drill, `STOPPED_PRESERVED` path: fixture cohort, forced post-start service failure, manual operator-approved restore invocation | UAT, non-production fixture environment (new) | §9's distinct `STOPPED_PRESERVED` path — database on new schema, no automatic restore, requires explicit operator invocation — is actually exercised, not conflated with the automatic path above |
 | Existing rollout-helper test suite (`test/rolloutHelper.test.ts`, 39 tests) | Regression | No existing containment/backup/evidence guarantee regresses |
 
 ## 12. Production deployment runbook (for 4C.7, not this PR)

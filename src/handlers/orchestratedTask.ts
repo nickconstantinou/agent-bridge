@@ -6,6 +6,7 @@
  */
 
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
+import { requestConfiguredWorkerAdvisorDebug } from "../advisorBroker.js";
 import { isCodeCliAllowed } from "../workerCliPolicy.js";
 import { createWorkerPromptFileReader } from "../workerPromptFileReader.js";
 import { loadWorkerPrompt } from "../workerPrompts.js";
@@ -190,13 +191,29 @@ export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHa
   const consultDebugAdvisor = async (
     input: JobHandlerInput,
     checkpoint: Parameters<NonNullable<OrchestratedTaskDeps["advisorDebugCheckpoint"]>>[0],
+    db: JobHandlerContext["db"],
+    activeProvider: string,
   ): Promise<AdvisorDebugCheckpointResult | undefined> => {
-    if (!advisorDebugCheckpoint) {
-      if (input.advisor_required === true) throw new Error("Advisor debug checkpoint required but disabled or unavailable");
-      return undefined;
-    }
     try {
-      return await advisorDebugCheckpoint(checkpoint);
+      if (advisorDebugCheckpoint) return await advisorDebugCheckpoint(checkpoint);
+      const result = await requestConfiguredWorkerAdvisorDebug({
+        db,
+        ...checkpoint,
+        activeProvider,
+        runGit,
+        audit: (event) => console.info("[advisor:evidence]", JSON.stringify(event)),
+      });
+      return {
+        verdict: result.verdict ?? "insufficient_evidence",
+        advice: [
+          result.adviceMd,
+          ...result.risks.map((risk) => `Risk: ${risk}`),
+          ...result.suggestedNextSteps.map((step) => `Next: ${step}`),
+        ].join("\n"),
+        evidenceIds: result.evidenceIds ?? [],
+        verificationSteps: result.verificationSteps ?? [],
+        confidence: result.confidence,
+      };
     } catch (error) {
       if (input.advisor_required === true) throw error;
       console.warn("[advisor] optional worker debug checkpoint failed:", error);
@@ -287,7 +304,7 @@ export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHa
         acceptanceCriteria: [item.title, item.body ?? ""].filter(Boolean).join("\n\n"),
         plan: phaseData.plan,
         blocked,
-      });
+      }, ctx.db, selectedCli ?? "codex");
       if (!advisorDebug || advisorDebug.verdict !== "retry") return blockedSummary(workItemId, blocked, advisorDebug);
 
       return {

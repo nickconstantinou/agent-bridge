@@ -22,19 +22,13 @@ import {
   type CompactionAttemptInput,
   type CompactionAttemptRecord,
 } from "./repositories/compactionRepository.js";
+import { AdvisorRepository } from "./repositories/advisorRepository.js";
+import { ConversationRepository, DEFAULT_CONTEXT_MAX_CHARS } from "./repositories/conversationRepository.js";
+export { DEFAULT_CONTEXT_MAX_CHARS, DEFAULT_CONTEXT_RECENT_TURN_LIMIT } from "./repositories/conversationRepository.js";
 import { applyMigrations, CURRENT_SCHEMA_VERSION, UnsupportedSchemaVersionError } from "./db/schema.js";
 
 // Sentinel row keys stored in bridge_state for non-chat state
 const pollingKey = (bot: string) => `$polling:${bot}`;
-export const DEFAULT_CONTEXT_MAX_CHARS = 8_000;
-export const DEFAULT_CONTEXT_RECENT_TURN_LIMIT = 200;
-
-function recentTurnCandidateLimit(): number {
-  const raw = process.env.BRIDGE_CONTEXT_RECENT_TURN_LIMIT;
-  if (!raw) return DEFAULT_CONTEXT_RECENT_TURN_LIMIT;
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CONTEXT_RECENT_TURN_LIMIT;
-}
 
 const MEMORY_SYNONYMS: Record<string, string[]> = {
   affordance: ["helper", "command", "context"],
@@ -116,7 +110,11 @@ export function openDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
   // ── Non-schema runtime maintenance ────────────────────────────────────────
   // Prunes turns already covered by a compact summary. Depends on runtime
   // data (conversation_summaries), not schema shape, so it must run on every
-  // open rather than once via migration.
+  // open rather than once via migration — that's why this stays here rather
+  // than in ConversationRepository, which owns request-scoped conversation
+  // operations, not startup maintenance.
+  // arch-lint-allow-legacy-sql: startup conversation-turn prune, not a
+  // repository operation — see Phase 4B (issue #135).
   raw.exec(`
     DELETE FROM conversation_turns
     WHERE id <= COALESCE((
@@ -156,6 +154,8 @@ export class BridgeDb {
   private readonly workQueue: WorkQueueRepository;
   private readonly memories: MemoryRepository;
   private readonly compactions: CompactionRepository;
+  private readonly advisorCalls: AdvisorRepository;
+  private readonly conversations: ConversationRepository;
 
   constructor(raw: Database.Database, lockOptions: {
     serviceId: string; runId: string; leaseMs: number; clock?: () => number;
@@ -169,6 +169,8 @@ export class BridgeDb {
     this.workQueue = new WorkQueueRepository(raw);
     this.memories = new MemoryRepository(raw);
     this.compactions = new CompactionRepository(raw);
+    this.advisorCalls = new AdvisorRepository(raw);
+    this.conversations = new ConversationRepository(raw);
   }
 
   runInTransaction<T>(operation: () => T): T {
@@ -251,47 +253,26 @@ export class BridgeDb {
     mode: string; trigger: string; contextChars: number;
     maxCallsPerTurn: number; maxCallsPerTask: number;
   }): boolean {
-    return this.raw.transaction(() => {
-      const existing = this.raw.prepare("SELECT status FROM advisor_calls WHERE request_id = ?").get(input.requestId);
-      if (existing) return false;
-      if (input.turnKey) {
-        const row = this.raw.prepare("SELECT COUNT(*) AS n FROM advisor_calls WHERE turn_key = ? AND status != 'denied'").get(input.turnKey) as { n: number };
-        if (row.n >= input.maxCallsPerTurn) return false;
-      }
-      if (input.taskKey) {
-        const row = this.raw.prepare("SELECT COUNT(*) AS n FROM advisor_calls WHERE task_key = ? AND status != 'denied'").get(input.taskKey) as { n: number };
-        if (row.n >= input.maxCallsPerTask) return false;
-      }
-      this.raw.prepare(`INSERT INTO advisor_calls
-        (request_id, scope_key, turn_key, task_key, mode, trigger, status, context_chars)
-        VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?)`)
-        .run(input.requestId, input.scopeKey, input.turnKey ?? null, input.taskKey ?? null, input.mode, input.trigger, input.contextChars);
-      return true;
-    })();
+    return this.advisorCalls.reserveAdvisorCall(input);
   }
 
   addAdvisorAttempt(input: {
     requestId: string; ordinal: number; provider: string; model: string;
     status: string; errorKind?: string; durationMs: number;
   }): void {
-    this.raw.prepare(`INSERT INTO advisor_attempts
-      (request_id, ordinal, provider, model, status, error_kind, duration_ms)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`)
-      .run(input.requestId, input.ordinal, input.provider, input.model, input.status, input.errorKind ?? null, input.durationMs);
+    this.advisorCalls.addAdvisorAttempt(input);
   }
 
   completeAdvisorCall(requestId: string, provider: string, model: string, confidence: string): void {
-    this.raw.prepare(`UPDATE advisor_calls SET status='succeeded', selected_provider=?, selected_model=?, confidence=?, updated_at=CURRENT_TIMESTAMP WHERE request_id=?`)
-      .run(provider, model, confidence, requestId);
+    this.advisorCalls.completeAdvisorCall(requestId, provider, model, confidence);
   }
 
   failAdvisorCall(requestId: string, errorKind: string): void {
-    this.raw.prepare(`UPDATE advisor_calls SET status='failed', error_kind=?, updated_at=CURRENT_TIMESTAMP WHERE request_id=?`)
-      .run(errorKind, requestId);
+    this.advisorCalls.failAdvisorCall(requestId, errorKind);
   }
 
   getAdvisorAttempts(requestId: string): Array<Record<string, unknown>> {
-    return this.raw.prepare("SELECT * FROM advisor_attempts WHERE request_id = ? ORDER BY ordinal").all(requestId) as Array<Record<string, unknown>>;
+    return this.advisorCalls.getAdvisorAttempts(requestId);
   }
 
   getChatRepo(chatId: string): string | null {
@@ -543,9 +524,7 @@ export class BridgeDb {
 
   // ── Conversation turns ──────────────────────────────────────────────────
   addConvTurn(chatKey: string, role: "user" | "assistant", text: string, cli?: string): void {
-    this.raw
-      .prepare(`INSERT INTO conversation_turns (chat_key, role, text, cli) VALUES (?, ?, ?, ?)`)
-      .run(chatKey, role, text, cli ?? null);
+    this.conversations.addConvTurn(chatKey, role, text, cli);
   }
 
   getRecentConvTurns(
@@ -553,63 +532,11 @@ export class BridgeDb {
     limit: number,
     sinceId?: number,
   ): Array<{ id: number; role: string; text: string; cli: string | null; created_at: string }> {
-    if (sinceId != null) {
-      // Fetch the newest `limit` turns after sinceId (not the oldest), then
-      // re-sort chronologically — mirrors the no-summary branch below so the
-      // most recent context is never silently dropped once a chat exceeds
-      // the candidate limit.
-      return this.raw
-        .prepare(
-          `SELECT id, role, text, cli, created_at FROM (
-             SELECT id, role, text, cli, created_at FROM conversation_turns
-             WHERE chat_key = ? AND id > ?
-             ORDER BY id DESC LIMIT ?
-           ) ORDER BY id ASC`
-        )
-        .all(chatKey, sinceId, limit) as any;
-    }
-    return this.raw
-      .prepare(
-        `SELECT id, role, text, cli, created_at FROM (
-           SELECT id, role, text, cli, created_at FROM conversation_turns
-           WHERE chat_key = ?
-           ORDER BY id DESC LIMIT ?
-         ) ORDER BY id ASC`
-      )
-      .all(chatKey, limit) as any;
+    return this.conversations.getRecentConvTurns(chatKey, limit, sinceId);
   }
 
   buildConvContext(chatKey: string, maxChars = DEFAULT_CONTEXT_MAX_CHARS): string {
-    const summary = this.getLatestConvSummary(chatKey);
-    const sinceId = summary?.range_end_turn_id;
-    // Fetch the newest N candidates (configurable via BRIDGE_CONTEXT_RECENT_TURN_LIMIT);
-    // char budget below further culls them. This is a prompt-context cap only —
-    // compaction (getConvTurnsForCompaction) always processes the full backlog.
-    const candidates = this.getRecentConvTurns(chatKey, recentTurnCandidateLimit(), sinceId);
-    if (!summary && candidates.length === 0) return "";
-
-    // Walk newest-first, accumulate until char budget is exhausted
-    let budget = maxChars - (summary ? summary.summary_md.length : 0);
-    const selected: Array<{ role: string; text: string }> = [];
-    for (let i = candidates.length - 1; i >= 0; i--) {
-      const t = candidates[i];
-      const line = `${t.role === "user" ? "User" : "Assistant"}: ${t.text}`;
-      if (line.length <= budget) {
-        selected.unshift({ role: t.role, text: t.text });
-        budget -= line.length;
-      }
-    }
-
-    const lines = ["[Context from previous conversation]"];
-    if (summary) {
-      lines.push(summary.summary_md);
-      lines.push("");
-    }
-    for (const t of selected) {
-      lines.push(`${t.role === "user" ? "User" : "Assistant"}: ${t.text}`);
-    }
-    lines.push("[End context — continue naturally]");
-    return lines.join("\n") + "\n\n";
+    return this.conversations.buildConvContext(chatKey, maxChars);
   }
 
   // ── Pending messages ────────────────────────────────────────────────────
@@ -750,78 +677,45 @@ export class BridgeDb {
 
   // ── Conversation summaries ──────────────────────────────────────────────
   addConvSummary(chatKey: string, startTurnId: number, endTurnId: number, summaryMd: string): void {
-    this.raw
-      .prepare(
-        `INSERT INTO conversation_summaries (chat_key, range_start_turn_id, range_end_turn_id, summary_md)
-         VALUES (?, ?, ?, ?)`
-      )
-      .run(chatKey, startTurnId, endTurnId, summaryMd);
+    this.conversations.addConvSummary(chatKey, startTurnId, endTurnId, summaryMd);
   }
 
   getLatestConvSummary(chatKey: string): {
     id: number; range_start_turn_id: number; range_end_turn_id: number; summary_md: string; created_at: string;
   } | null {
-    return (this.raw
-      .prepare(
-        `SELECT id, range_start_turn_id, range_end_turn_id, summary_md, created_at
-         FROM conversation_summaries WHERE chat_key = ? ORDER BY id DESC LIMIT 1`
-      )
-      .get(chatKey) as any) ?? null;
+    return this.conversations.getLatestConvSummary(chatKey);
   }
 
   getConvTurnsForCompaction(chatKey: string): Array<{ id: number; role: string; text: string; cli: string | null; created_at: string }> {
-    const summary = this.getLatestConvSummary(chatKey);
-    return this.raw
-      .prepare(
-        `SELECT id, role, text, cli, created_at FROM conversation_turns
-         WHERE chat_key = ? AND id > ?
-         ORDER BY id ASC`
-      )
-      .all(chatKey, summary?.range_end_turn_id ?? 0) as any;
+    return this.conversations.getConvTurnsForCompaction(chatKey);
   }
 
   getUncompactedConvStats(chatKey: string): { turnCount: number; charCount: number } {
-    const summary = this.getLatestConvSummary(chatKey);
-    return this.raw
-      .prepare(
-        `SELECT COUNT(*) AS turnCount, COALESCE(SUM(LENGTH(text)), 0) AS charCount
-         FROM conversation_turns WHERE chat_key = ? AND id > ?`
-      )
-      .get(chatKey, summary?.range_end_turn_id ?? 0) as { turnCount: number; charCount: number };
+    return this.conversations.getUncompactedConvStats(chatKey);
   }
 
   pruneConvTurns(chatKey: string, upToTurnId: number): void {
-    this.raw
-      .prepare(`DELETE FROM conversation_turns WHERE chat_key = ? AND id <= ?`)
-      .run(chatKey, upToTurnId);
+    this.conversations.pruneConvTurns(chatKey, upToTurnId);
   }
 
   clearConvHistory(chatKey: string): void {
-    this.raw.prepare(`DELETE FROM conversation_turns WHERE chat_key = ?`).run(chatKey);
-    this.raw.prepare(`DELETE FROM conversation_summaries WHERE chat_key = ?`).run(chatKey);
+    this.conversations.clearConvHistory(chatKey);
   }
 
   getConvStatus(chatKey: string, surface: string): {
     turnCount: number; pendingCount: number; latestSummaryAt: string | null; latestTurnAt: string | null;
   } {
     assertExecutionScope(surface, chatKey);
-    const tc = this.raw
-      .prepare(`SELECT COUNT(*) AS n FROM conversation_turns WHERE chat_key = ?`)
-      .get(chatKey) as { n: number };
+    // Pending-message SQL stays local to BridgeDb (out of Phase 4B scope);
+    // conversation-side counts come from ConversationRepository.
     const pc = this.raw
       .prepare(`SELECT COUNT(*) AS n FROM pending_messages WHERE surface = ? AND chat_key = ?`)
       .get(surface, chatKey) as { n: number };
-    const lt = this.raw
-      .prepare(`SELECT created_at FROM conversation_turns WHERE chat_key = ? ORDER BY id DESC LIMIT 1`)
-      .get(chatKey) as { created_at: string } | undefined;
-    const ls = this.raw
-      .prepare(`SELECT created_at FROM conversation_summaries WHERE chat_key = ? ORDER BY id DESC LIMIT 1`)
-      .get(chatKey) as { created_at: string } | undefined;
     return {
-      turnCount: tc.n,
+      turnCount: this.conversations.getTurnCount(chatKey),
       pendingCount: pc.n,
-      latestSummaryAt: ls?.created_at ?? null,
-      latestTurnAt: lt?.created_at ?? null,
+      latestSummaryAt: this.conversations.getLatestSummaryAt(chatKey),
+      latestTurnAt: this.conversations.getLatestTurnAt(chatKey),
     };
   }
 

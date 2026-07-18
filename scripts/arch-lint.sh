@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Architecture lint guard (Epic 11, issue #52).
 # Fails when production code under src/ imports or calls test-only APIs.
-# Raw SQLite boundary enforcement is intentionally deferred (see issue #52).
+# General raw SQLite boundary enforcement is intentionally deferred (see
+# issue #52); the advisor_calls/advisor_attempts and
+# conversation_turns/conversation_summaries tables are a narrow, Phase 4B
+# exception (see issue #135) — their SQL is confined to the repository files
+# that own them, plus the legacy baseline migration that creates them and one
+# explicitly marked non-schema maintenance statement in src/db.ts.
 set -euo pipefail
 
 TARGET_DIR="${1:-src}"
@@ -25,6 +30,19 @@ violations=$(grep -rnE \
 if [ -n "$violations" ]; then
   echo "arch-lint: test-only APIs must not be imported or called from src/" >&2
   echo "$violations" >&2
+  exit 1
+fi
+
+# Advisor/conversation SQL ownership guard (Phase 4B, issue #135): the
+# advisor_calls/advisor_attempts/conversation_turns/conversation_summaries
+# tables must only be referenced from their owning repository, the legacy
+# baseline migration (which creates them), or a statement whose immediately
+# preceding comment block carries an explicit `arch-lint-allow-legacy-sql`
+# marker. Delegated to a Node script (scripts/sqlOwnershipLint.mjs) because
+# binding a marker to exactly one statement — not a fixed line window that
+# could let a nearby unmarked statement slip through — needs real per-line
+# state, not a single grep pass.
+if ! node "$(dirname "$0")/sqlOwnershipLint.mjs" "$TARGET_DIR"; then
   exit 1
 fi
 

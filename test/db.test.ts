@@ -1,9 +1,21 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { openDb, BridgeDb } from "../src/db.js";
+import { openDb, BridgeDb, DEFAULT_CONTEXT_MAX_CHARS, DEFAULT_CONTEXT_RECENT_TURN_LIMIT } from "../src/db.js";
 import Database from "better-sqlite3";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+// Public-API compatibility: both constants were exported from src/db.ts
+// before conversation persistence moved into ConversationRepository, and
+// remain part of db.ts's public surface even though DEFAULT_CONTEXT_RECENT_TURN_LIMIT
+// has no internal caller — an OSS module's exports are a compatibility
+// contract, not just an internal-usage graph.
+describe("db.ts public export compatibility", () => {
+  it("still exports DEFAULT_CONTEXT_MAX_CHARS and DEFAULT_CONTEXT_RECENT_TURN_LIMIT", () => {
+    expect(DEFAULT_CONTEXT_MAX_CHARS).toBe(8_000);
+    expect(DEFAULT_CONTEXT_RECENT_TURN_LIMIT).toBe(200);
+  });
+});
 
 let db: BridgeDb;
 
@@ -1386,5 +1398,88 @@ describe("BridgeDb work_jobs task_type migration", () => {
       rmSync(dir, { recursive: true, force: true });
       db = openDb(":memory:");
     }
+  });
+});
+
+describe("BridgeDb advisor call persistence", () => {
+  const baseReserve = {
+    scopeKey: "scope-1",
+    mode: "review",
+    trigger: "manual",
+    contextChars: 100,
+    maxCallsPerTurn: 2,
+    maxCallsPerTask: 2,
+  };
+
+  it("reserves a new request id and returns true", () => {
+    expect(db.reserveAdvisorCall({ requestId: "req-1", ...baseReserve })).toBe(true);
+  });
+
+  it("returns false when the same request id is reserved twice", () => {
+    expect(db.reserveAdvisorCall({ requestId: "req-1", ...baseReserve })).toBe(true);
+    expect(db.reserveAdvisorCall({ requestId: "req-1", ...baseReserve })).toBe(false);
+  });
+
+  it("denies reservation once the per-turn call limit is reached", () => {
+    expect(db.reserveAdvisorCall({ requestId: "req-1", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 })).toBe(true);
+    expect(db.reserveAdvisorCall({ requestId: "req-2", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 })).toBe(false);
+  });
+
+  it("denies reservation once the per-task call limit is reached", () => {
+    expect(db.reserveAdvisorCall({ requestId: "req-1", taskKey: "task-1", ...baseReserve, maxCallsPerTask: 1 })).toBe(true);
+    expect(db.reserveAdvisorCall({ requestId: "req-2", taskKey: "task-1", ...baseReserve, maxCallsPerTask: 1 })).toBe(false);
+  });
+
+  // No repository method ever sets advisor_calls.status = 'denied' — the
+  // reservation-limit filter (status != 'denied') references a value
+  // nothing currently writes, verified by grep across src/. Seeding it
+  // directly via db.raw is the only way to characterize the filter's
+  // actual exclusion behavior at the SQL boundary.
+  it("excludes a denied call from the per-turn limit count", () => {
+    db.reserveAdvisorCall({ requestId: "req-1", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 });
+    db.raw.prepare("UPDATE advisor_calls SET status = 'denied' WHERE request_id = ?").run("req-1");
+    expect(db.reserveAdvisorCall({ requestId: "req-2", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 })).toBe(true);
+  });
+
+  it("excludes a denied call from the per-task limit count", () => {
+    db.reserveAdvisorCall({ requestId: "req-1", taskKey: "task-1", ...baseReserve, maxCallsPerTask: 1 });
+    db.raw.prepare("UPDATE advisor_calls SET status = 'denied' WHERE request_id = ?").run("req-1");
+    expect(db.reserveAdvisorCall({ requestId: "req-2", taskKey: "task-1", ...baseReserve, maxCallsPerTask: 1 })).toBe(true);
+  });
+
+  it("still counts a failed (non-denied) call toward the per-turn limit", () => {
+    db.reserveAdvisorCall({ requestId: "req-1", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 });
+    db.failAdvisorCall("req-1", "timeout");
+    // req-1 is 'failed', not 'denied' — it still counts as an active call.
+    expect(db.reserveAdvisorCall({ requestId: "req-2", turnKey: "turn-1", ...baseReserve, maxCallsPerTurn: 1 })).toBe(false);
+  });
+
+  it("records attempts in ordinal order and returns them via getAdvisorAttempts", () => {
+    db.reserveAdvisorCall({ requestId: "req-1", ...baseReserve });
+    db.addAdvisorAttempt({ requestId: "req-1", ordinal: 1, provider: "anthropic", model: "claude", status: "failed", errorKind: "timeout", durationMs: 50 });
+    db.addAdvisorAttempt({ requestId: "req-1", ordinal: 2, provider: "openai", model: "gpt", status: "succeeded", durationMs: 75 });
+    const attempts = db.getAdvisorAttempts("req-1");
+    expect(attempts).toHaveLength(2);
+    expect(attempts.map((a) => a.ordinal)).toEqual([1, 2]);
+    expect(attempts[0]).toMatchObject({ provider: "anthropic", model: "claude", status: "failed", error_kind: "timeout", duration_ms: 50 });
+    expect(attempts[1]).toMatchObject({ provider: "openai", model: "gpt", status: "succeeded", error_kind: null, duration_ms: 75 });
+  });
+
+  it("completeAdvisorCall marks the call succeeded with the selected provider/model/confidence", () => {
+    db.reserveAdvisorCall({ requestId: "req-1", ...baseReserve });
+    db.completeAdvisorCall("req-1", "anthropic", "claude", "high");
+    const row = db.raw.prepare("SELECT status, selected_provider, selected_model, confidence FROM advisor_calls WHERE request_id = ?").get("req-1");
+    expect(row).toEqual({ status: "succeeded", selected_provider: "anthropic", selected_model: "claude", confidence: "high" });
+  });
+
+  it("failAdvisorCall marks the call failed with the error kind", () => {
+    db.reserveAdvisorCall({ requestId: "req-1", ...baseReserve });
+    db.failAdvisorCall("req-1", "capacity");
+    const row = db.raw.prepare("SELECT status, error_kind FROM advisor_calls WHERE request_id = ?").get("req-1");
+    expect(row).toEqual({ status: "failed", error_kind: "capacity" });
+  });
+
+  it("getAdvisorAttempts returns an empty array for a request with no attempts", () => {
+    expect(db.getAdvisorAttempts("no-such-request")).toEqual([]);
   });
 });

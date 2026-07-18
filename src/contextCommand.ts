@@ -33,10 +33,18 @@ function openReadWrite(dbPath: string): Database.Database {
   return new Database(dbPath, { fileMustExist: true });
 }
 
+// This CLI helper deliberately queries the SQLite file directly (readonly,
+// no BridgeDb instance) rather than going through ConversationRepository —
+// predates Phase 4B (issue #135) and is out of scope for this PR's minimal
+// extraction. Candidate for a future Phase 4C cleanup if this module is
+// ever routed through BridgeDb. Each direct query below carries its own
+// arch-lint-allow-legacy-sql marker per statement.
 function buildQueryFromContext(db: Database.Database, chatKey: string): string {
+  // arch-lint-allow-legacy-sql: see file-level note above.
   const turns = db.prepare(
     `SELECT text FROM conversation_turns WHERE chat_key = ? ORDER BY id DESC LIMIT 5`
   ).all(chatKey) as Array<{ text: string }>;
+  // arch-lint-allow-legacy-sql: see file-level note above.
   const summary = db.prepare(
     `SELECT summary_md FROM conversation_summaries WHERE chat_key = ? ORDER BY id DESC LIMIT 1`
   ).get(chatKey) as { summary_md: string } | undefined;
@@ -90,7 +98,9 @@ function addMemoryJson(db: Database.Database, rawJson: string, env: EnvLike): st
   return formatProjectMemoryStoreResult(result);
 }
 
+// Same deliberate direct-SQLite CLI pattern as buildQueryFromContext above.
 function latestSummary(db: Database.Database, chatKey: string): string {
+  // arch-lint-allow-legacy-sql: see buildQueryFromContext's file-level note above.
   const row = db.prepare(
     `SELECT summary_md, created_at
      FROM conversation_summaries
@@ -103,7 +113,9 @@ function latestSummary(db: Database.Database, chatKey: string): string {
   return [`Latest compact summary (${row.created_at}):`, "", row.summary_md].join("\n");
 }
 
+// Same deliberate direct-SQLite CLI pattern as buildQueryFromContext above.
 function recentTurns(db: Database.Database, chatKey: string, limit: number): string {
+  // arch-lint-allow-legacy-sql: see buildQueryFromContext's file-level note above.
   const rows = db.prepare(
     `SELECT role, text, cli, created_at
      FROM (

@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe("advisor configuration source diagnostics", () => {
-  it("reports the systemd shared file as authoritative when it matches the effective chain", () => {
+  it("reports process environment provenance and every readable file matching the effective chain", () => {
     const dir = tempDir();
     const repo = join(dir, ".env.shared");
     const systemd = join(dir, "agent-bridge-shared");
@@ -39,7 +39,8 @@ describe("advisor configuration source diagnostics", () => {
       systemdEnvPath: systemd,
     });
 
-    expect(result.effectiveChainSource).toBe(systemd);
+    expect(result.effectiveChainSource).toBe("process environment (origin not retained)");
+    expect(result.effectiveChainMatches).toEqual([systemd, repo]);
     expect(result.driftKeys).toEqual([]);
   });
 
@@ -62,7 +63,8 @@ describe("advisor configuration source diagnostics", () => {
       systemdEnvPath: systemd,
     });
 
-    expect(result.effectiveChainSource).toBe(systemd);
+    expect(result.effectiveChainSource).toBe("process environment (origin not retained)");
+    expect(result.effectiveChainMatches).toEqual([systemd]);
     expect(result.driftKeys).toEqual([
       "BRIDGE_ADVISOR_ENABLED",
       "BRIDGE_ADVISOR_CHAIN",
@@ -84,7 +86,7 @@ describe("advisor configuration source diagnostics", () => {
 
     expect(result.repoReadable).toBe(true);
     expect(result.systemdReadable).toBe(false);
-    expect(result.effectiveChainSource).toBe(repo);
+    expect(result.effectiveChainMatches).toEqual([repo]);
     expect(result.driftKeys).toEqual([]);
   });
 
@@ -98,7 +100,8 @@ describe("advisor configuration source diagnostics", () => {
 
     expect(result.repoReadable).toBe(false);
     expect(result.systemdReadable).toBe(false);
-    expect(result.effectiveChainSource).toBe("process environment or bot-specific override");
+    expect(result.effectiveChainSource).toBe("process environment (origin not retained)");
+    expect(result.effectiveChainMatches).toEqual([]);
     expect(result.driftKeys).toEqual([]);
   });
 
@@ -114,6 +117,7 @@ describe("advisor configuration source diagnostics", () => {
       repoEnvPath: repo,
       systemdEnvPath: systemd,
     });
+    expect(matching.effectiveChainMatches).toEqual([systemd, repo]);
     expect(matching.driftKeys).toEqual([]);
 
     const unconfigured = inspectAdvisorConfigSources({
@@ -122,5 +126,6 @@ describe("advisor configuration source diagnostics", () => {
       systemdEnvPath: join(dir, "missing-systemd"),
     });
     expect(unconfigured.effectiveChainSource).toBe("built-in default / unconfigured");
+    expect(unconfigured.effectiveChainMatches).toEqual([]);
   });
 });

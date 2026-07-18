@@ -90,4 +90,47 @@ describe("advisor evidence boundary regressions", () => {
     expect(result.content).toBe("No literal matches found in the scanned subset.");
     expect(result.summary).toMatch(/could not be inspected/i);
   });
+
+  it("omits sensitive Git paths, degrades completeness, and keeps audit arguments hashed", async () => {
+    const dir = tempDir("advisor-git-sensitive-");
+    const audit = vi.fn();
+    const runGit = vi.fn().mockResolvedValue([
+      "## main",
+      "?? .env.shared",
+      " M src/app.ts",
+      "diff --git a/.env.shared b/.env.shared",
+      "--- a/.env.shared",
+      "+++ b/.env.shared",
+      "+TOKEN=top-secret",
+      "diff --git a/src/app.ts b/src/app.ts",
+      "--- a/src/app.ts",
+      "+++ b/src/app.ts",
+      "+export const ready = true;",
+    ].join("\n"));
+    const broker = new AdvisorEvidenceToolBroker({ repoPath: dir, runGit, audit });
+
+    const [result] = await broker.execute([{ tool: "git.diff", scope: "working" }]);
+
+    expect(result).toMatchObject({ status: "exhausted", truncated: true, source: "git.diff scope=working" });
+    expect(result.content).toContain("src/app.ts");
+    expect(result.content).not.toContain(".env.shared");
+    expect(result.content).not.toContain("top-secret");
+    expect(result.summary).toMatch(/sensitive Git paths were omitted/i);
+    expect(JSON.stringify(audit.mock.calls)).not.toContain(".env.shared");
+    expect(JSON.stringify(audit.mock.calls)).not.toContain("src/app.ts");
+  });
+
+  it("retains bounded source attribution while hashing repository paths in audit metadata", async () => {
+    const dir = tempDir("advisor-source-attribution-");
+    writeFileSync(join(dir, "service.ts"), "export const ready = true;\n");
+    const audit = vi.fn();
+    const broker = new AdvisorEvidenceToolBroker({ repoPath: dir, audit });
+
+    const [result] = await broker.execute([{ tool: "repo.read_file", path: "service.ts" }]);
+
+    expect(result.source).toBe("repo.read_file path=service.ts");
+    const auditJson = JSON.stringify(audit.mock.calls);
+    expect(auditJson).not.toContain("service.ts");
+    expect(auditJson).toMatch(/pathSha256/);
+  });
 });

@@ -70,6 +70,33 @@ target to support verified tool-disabled execution: Claude runs with
 `--tools ""`, while Codex, Agy, and Kimchi fail closed until a verified
 tool-disabled adapter exists. A two-model chain may use two Claude models.
 
+### Configuration source and deployment drift
+
+The running service process is authoritative. Under systemd, shared values are
+loaded from `/etc/default/agent-bridge-shared` before the bot-specific defaults
+file; a bot-specific value with the same key overrides the shared value.
+Repository `.env.shared` is an editable source file, but changing it alone does
+not update an already-running systemd service.
+
+`/advisor status` reports the effective chain and the source whose chain value
+matches the running process. When both repository `.env.shared` and
+`/etc/default/agent-bridge-shared` are readable, it also compares the bounded
+`BRIDGE_ADVISOR_*` configuration keys and emits a drift warning naming only the
+conflicting keys. It never displays tokens, unrelated environment values, or
+file contents.
+
+After changing advisor configuration for a systemd deployment:
+
+1. update `/etc/default/agent-bridge-shared` through the approved installer or
+   deployment path;
+2. run `systemctl daemon-reload` when unit files changed;
+3. restart the affected Agent Bridge services;
+4. run `/advisor status` and confirm the effective chain, source, and absence of
+   drift warnings.
+
+Unreadable or absent source files are reported only as unavailable evidence;
+they do not create a false drift warning.
+
 ## Flow
 
 ```text

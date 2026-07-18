@@ -15,6 +15,22 @@ function runLint(dir: string): { code: number; output: string } {
   }
 }
 
+/**
+ * Runs arch-lint with its cwd set to `repoDir`, targeting `targetDir` (relative
+ * to `repoDir`) — needed to exercise the migration-ownership rule's exact
+ * repo-root-relative path matching (e.g. a fixture "src/db.ts") against a
+ * fixture tree that isn't the real repo, since the rule computes paths
+ * relative to process.cwd(), not the target-dir argument.
+ */
+function runLintInRepo(repoDir: string, targetDir: string): { code: number; output: string } {
+  try {
+    const output = execFileSync("bash", [SCRIPT, targetDir], { encoding: "utf8", cwd: repoDir });
+    return { code: 0, output };
+  } catch (err: any) {
+    return { code: err.status ?? 1, output: `${err.stdout ?? ""}${err.stderr ?? ""}` };
+  }
+}
+
 describe("arch-lint", () => {
   it("is executable", () => {
     accessSync(SCRIPT, constants.X_OK);
@@ -341,22 +357,127 @@ describe("arch-lint", () => {
         );
         const res = runLint(dir);
         expect(res.code).not.toBe(0);
-        expect(res.output).toContain("db.openDb");
+        expect(res.output).toContain("namespace import");
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
     });
 
-    it("does not flag a namespace import that never touches a migration primitive", () => {
+    it("denies a namespace import of a migration-owning module even if it never (visibly) touches a primitive — deny-by-default, not detect-then-allow", () => {
+      // A property-access scan can be defeated by computed access
+      // (db["openDb"]) or by destructuring off a dynamically-imported
+      // module — an AST-free regex check cannot soundly prove a namespace
+      // binding never reaches a primitive. So any namespace import of a
+      // migration-owning module is unconditionally denied, regardless of
+      // whether this particular file happens to only use it for a type.
       const dir = mkdtempSync(join(tmpdir(), "archlint-migown-namespace-ok-"));
       try {
         writeFileSync(
           join(dir, "fine.ts"),
           'import * as db from "./db.js";\nexport function f(x: db.BridgeDb) { return x; }\n',
         );
-        expect(runLint(dir).code).toBe(0);
+        const res = runLint(dir);
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain("namespace import");
       } finally {
         rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("catches computed property access off a namespace import (db[\"openDb\"])", () => {
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-computed-"));
+      try {
+        writeFileSync(
+          join(dir, "sneaky.ts"),
+          'import * as db from "./db.js";\nexport function f() { return db["openDb"](":memory:"); }\n',
+        );
+        const res = runLint(dir);
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain("namespace import");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("catches a dynamic import() of a migration-owning module", () => {
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-dynamic-"));
+      try {
+        writeFileSync(
+          join(dir, "sneaky.ts"),
+          'export async function f() {\n  const { openDb } = await import("./db.js");\n  return openDb(":memory:");\n}\n',
+        );
+        const res = runLint(dir);
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain("dynamic import");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("catches a named import hidden behind an interleaved comment (import { /* x */ openDb } from ...)", () => {
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-comment-"));
+      try {
+        writeFileSync(
+          join(dir, "sneaky.ts"),
+          'import { /* sneaky */ openDb } from "./db.js";\nexport function f() { return openDb(":memory:"); }\n',
+        );
+        const res = runLint(dir);
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain("openDb");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("fails when src/db.ts imports a primitive outside its exact permitted set (applyMigrationsUpTo, not just applyMigrations)", () => {
+      const repoDir = mkdtempSync(join(tmpdir(), "archlint-migown-db-overscope-"));
+      try {
+        mkdirSync(join(repoDir, "src", "db"), { recursive: true });
+        writeFileSync(
+          join(repoDir, "src", "db.ts"),
+          'import { applyMigrations, applyMigrationsUpTo } from "./db/schema.js";\nexport function f() { applyMigrationsUpTo; return applyMigrations; }\n',
+        );
+        const res = runLintInRepo(repoDir, "src");
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain("applyMigrationsUpTo");
+        expect(res.output).not.toContain('"applyMigrations" from "./db/schema.js" is not');
+      } finally {
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it("permits src/db.ts to import exactly applyMigrations, and src/db/schema.ts to import exactly applyLegacyCompatibleBaseline", () => {
+      const repoDir = mkdtempSync(join(tmpdir(), "archlint-migown-db-inscope-"));
+      try {
+        mkdirSync(join(repoDir, "src", "db"), { recursive: true });
+        writeFileSync(
+          join(repoDir, "src", "db.ts"),
+          'import { applyMigrations } from "./db/schema.js";\nexport function openDb() { applyMigrations; }\n',
+        );
+        writeFileSync(
+          join(repoDir, "src", "db", "schema.ts"),
+          'import { applyLegacyCompatibleBaseline } from "./legacyBaselineMigration.js";\nexport function applyMigrations() { applyLegacyCompatibleBaseline; }\nexport function applyMigrationsUpTo() {}\n',
+        );
+        writeFileSync(join(repoDir, "src", "db", "legacyBaselineMigration.ts"), "export function applyLegacyCompatibleBaseline() {}\n");
+        expect(runLintInRepo(repoDir, "src").code).toBe(0);
+      } finally {
+        rmSync(repoDir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not exempt a nested path that merely ends in /src/db.ts (exact-path ownership, not a suffix match)", () => {
+      const repoDir = mkdtempSync(join(tmpdir(), "archlint-migown-nested-"));
+      try {
+        mkdirSync(join(repoDir, "vendor", "src"), { recursive: true });
+        writeFileSync(
+          join(repoDir, "vendor", "src", "db.ts"),
+          'import { openDb } from "./db.js";\nexport function f() { return openDb(":memory:"); }\n',
+        );
+        const res = runLintInRepo(repoDir, "vendor/src");
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain("openDb");
+      } finally {
+        rmSync(repoDir, { recursive: true, force: true });
       }
     });
 

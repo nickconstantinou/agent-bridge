@@ -181,12 +181,24 @@ export function openDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
  *  - Future/negative/non-integer versions still fail closed with the
  *    existing UnsupportedSchemaVersionError, exactly as openDb() does today.
  * All checks happen before WAL mode is enabled or any write occurs.
+ *
+ * The `{ fileMustExist: true }` open itself is the authoritative check —
+ * there is deliberately no separate existsSync() pre-check, which would
+ * leave a check-then-open race (the file could be deleted between the check
+ * and the open). Missing-file translation happens in the open's own failure
+ * path instead: existsSync() is consulted only after the open has already
+ * failed, purely to classify the failure, not to gate it.
  */
 export function openProductionDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
-  if (dbPath !== ":memory:" && !existsSync(dbPath)) {
-    throw new DatabaseMissingError(dbPath);
+  let raw: Database.Database;
+  try {
+    raw = new Database(dbPath, { fileMustExist: true });
+  } catch (err) {
+    if (dbPath !== ":memory:" && !existsSync(dbPath)) {
+      throw new DatabaseMissingError(dbPath);
+    }
+    throw err;
   }
-  const raw = new Database(dbPath, { fileMustExist: true });
   const schemaVersion = Number(raw.pragma("user_version", { simple: true }));
   if (!Number.isInteger(schemaVersion) || schemaVersion < 0 || schemaVersion > CURRENT_SCHEMA_VERSION) {
     raw.close();

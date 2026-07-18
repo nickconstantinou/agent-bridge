@@ -21,6 +21,7 @@ export interface AdvisorConfigSourceDiagnostics {
   repoReadable: boolean;
   systemdReadable: boolean;
   effectiveChainSource: string;
+  effectiveChainMatches: string[];
   driftKeys: AdvisorConfigKey[];
 }
 
@@ -75,19 +76,17 @@ export function inspectAdvisorConfigSources({
 
   const repoValues = readAdvisorEnvFile(resolvedRepoPath);
   const systemdValues = readAdvisorEnvFile(resolvedSystemdPath);
+  const effectiveChainConfigured = env.BRIDGE_ADVISOR_CHAIN !== undefined;
   const effectiveChain = (env.BRIDGE_ADVISOR_CHAIN ?? "").trim();
 
-  let effectiveChainSource = "built-in default / unconfigured";
-  if (effectiveChain) {
+  const effectiveChainMatches: string[] = [];
+  if (effectiveChainConfigured) {
     if (systemdValues?.BRIDGE_ADVISOR_CHAIN === effectiveChain) {
-      effectiveChainSource = resolvedSystemdPath;
-    } else if (repoValues?.BRIDGE_ADVISOR_CHAIN === effectiveChain) {
-      effectiveChainSource = resolvedRepoPath;
-    } else {
-      effectiveChainSource = "process environment or bot-specific override";
+      effectiveChainMatches.push(resolvedSystemdPath);
     }
-  } else if (env.BRIDGE_ADVISOR_CHAIN !== undefined) {
-    effectiveChainSource = "process environment or bot-specific override";
+    if (repoValues?.BRIDGE_ADVISOR_CHAIN === effectiveChain) {
+      effectiveChainMatches.push(resolvedRepoPath);
+    }
   }
 
   const driftKeys = repoValues && systemdValues
@@ -99,7 +98,10 @@ export function inspectAdvisorConfigSources({
     systemdEnvPath: resolvedSystemdPath,
     repoReadable: repoValues !== null,
     systemdReadable: systemdValues !== null,
-    effectiveChainSource,
+    effectiveChainSource: effectiveChainConfigured
+      ? "process environment (origin not retained)"
+      : "built-in default / unconfigured",
+    effectiveChainMatches,
     driftKeys,
   };
 }

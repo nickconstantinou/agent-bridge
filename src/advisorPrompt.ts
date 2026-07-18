@@ -1,5 +1,6 @@
 import type { BridgeDb } from "./db.js";
-import type { AdvisorConfidence, AdvisorRequest, AdvisorRequestMode } from "./advisorTypes.js";
+import type { AdvisorEvidenceToolResult } from "./advisorEvidenceTools.js";
+import type { AdvisorConfidence, AdvisorDebugVerdict, AdvisorRequest, AdvisorRequestMode } from "./advisorTypes.js";
 
 export function redactAdvisorText(text: string): string {
   return text
@@ -7,6 +8,7 @@ export function redactAdvisorText(text: string): string {
     .replace(/\b(token|api[_-]?key|password|secret)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]")
     .replace(/\b(?:gh[opsu]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{20,})\b/g, "[REDACTED TOKEN]");
 }
+
 function boundedParts(parts: string[], maxChars: number): string {
   const selected: string[] = [];
   let remaining = maxChars;
@@ -19,6 +21,7 @@ function boundedParts(parts: string[], maxChars: number): string {
   }
   return selected.join("\n\n").slice(0, maxChars);
 }
+
 export function buildAdvisorContext(db: BridgeDb, input: {
   scopeKey: string; task: string; maxChars: number; evidence?: AdvisorRequest["evidence"];
 }): string {
@@ -29,12 +32,16 @@ export function buildAdvisorContext(db: BridgeDb, input: {
     `Task: ${input.task}`,
     ...(summary ? [`Conversation summary:\n${summary.summary_md}`] : []),
     ...[...turns].reverse().map((turn) => `${turn.role}: ${turn.text}`),
+    ...(evidence?.acceptanceCriteria ? [`Acceptance criteria:\n${evidence.acceptanceCriteria}`] : []),
+    ...(evidence?.plan ? [`Implementation plan:\n${evidence.plan}`] : []),
+    ...(evidence?.attemptSummary ? [`Blocked attempt summary:\n${evidence.attemptSummary}`] : []),
     ...(evidence?.diffSummary ? [`Diff summary:\n${evidence.diffSummary}`] : []),
     ...(evidence?.testOutput ? [`Test output:\n${evidence.testOutput}`] : []),
     ...(evidence?.constraints?.length ? [`Constraints:\n${evidence.constraints.join("\n")}`] : []),
     ...(evidence?.references?.length ? [`References:\n${evidence.references.join("\n")}`] : []),
   ], input.maxChars);
 }
+
 export function buildAdvisorPrompt(input: { mode: AdvisorRequestMode; activeProvider: string; activeModel: string | null; context: string }): string {
   return [
     "You are Agent Bridge's frontier advisor. Give the executor a concise, rigorous second opinion.",
@@ -46,22 +53,103 @@ export function buildAdvisorPrompt(input: { mode: AdvisorRequestMode; activeProv
     '{"advice_md":"...","risks":["..."],"suggested_next_steps":["..."],"confidence":"low|medium|high"}',
   ].join("\n\n");
 }
+
+export function buildAdvisorToolSelectionPrompt(input: {
+  activeProvider: string;
+  activeModel: string | null;
+  context: string;
+  maxToolCalls: number;
+}): string {
+  return [
+    "You are Agent Bridge's mutation-free debugging advisor.",
+    "Select only the minimum read-only evidence needed to diagnose the blocked executor. You cannot execute commands or use native provider tools.",
+    "Agent Bridge may perform only these typed tools:",
+    "repo.list_files {path?, depth?}",
+    "repo.read_file {path}",
+    "repo.search_text {query, path?} (literal search only)",
+    "git.status {}",
+    "git.diff {scope: working|staged|base_to_head, base?, head?}",
+    "git.show {object, path?}",
+    "git.log {count?}",
+    "evidence.acceptance {}",
+    "evidence.plan {}",
+    "evidence.test_failures {}",
+    "evidence.attempt_summary {}",
+    `Request at most ${input.maxToolCalls} tools. Do not request secrets, environment files, credentials, writes, shell, tests, network access, SQL, services, deployment, merge, or approval actions.`,
+    `Active executor: ${input.activeProvider}:${input.activeModel ?? "default"}`,
+    input.context,
+    "Return only JSON:",
+    '{"hypothesis":"...","tool_requests":[{"tool":"repo.read_file","path":"src/example.ts"}],"missing_evidence":["..."]}',
+  ].join("\n\n");
+}
+
+export interface AdvisorToolSelection {
+  hypothesis: string;
+  toolRequests: unknown[];
+  missingEvidence: string[];
+}
+
+export function parseAdvisorToolSelection(raw: string, maxToolCalls: number): AdvisorToolSelection {
+  try {
+    const value = extractJson(raw) as Record<string, unknown>;
+    const hypothesis = typeof value.hypothesis === "string" ? redactAdvisorText(value.hypothesis.trim()).slice(0, 2_000) : "";
+    const toolRequests = Array.isArray(value.tool_requests) ? value.tool_requests.slice(0, maxToolCalls) : null;
+    const missingEvidence = boundedList(value.missing_evidence, 12, 800);
+    if (!hypothesis || !toolRequests || !missingEvidence) throw new Error("schema");
+    return { hypothesis, toolRequests, missingEvidence };
+  } catch {
+    throw new Error("Invalid advisor tool selection: expected structured JSON");
+  }
+}
+
+export function buildAdvisorDebugFinalPrompt(input: {
+  activeProvider: string;
+  activeModel: string | null;
+  context: string;
+  hypothesis: string;
+  missingEvidence: string[];
+  results: AdvisorEvidenceToolResult[];
+}): string {
+  const evidence = input.results.map((result) => ({
+    evidence_id: result.evidenceId,
+    tool: result.tool,
+    status: result.status,
+    summary: result.summary,
+    content: result.content,
+  }));
+  return [
+    "You are Agent Bridge's mutation-free debugging advisor. Produce the final bounded recommendation for exactly one possible executor retry.",
+    "Use only supplied context and Bridge evidence. Deterministic evidence overrides your hypothesis. Explicitly disclose missing or conflicting evidence.",
+    "Every evidence-based claim must cite one or more supplied evidence_id values. High confidence is invalid when a load-bearing fact remains missing, failed, denied, unavailable, or conflicting.",
+    "You cannot edit files, run commands, approve, merge, deploy, delete, control services, or send user messages.",
+    `Active executor: ${input.activeProvider}:${input.activeModel ?? "default"}`,
+    input.context,
+    `Initial hypothesis: ${input.hypothesis}`,
+    ...(input.missingEvidence.length ? [`Initially missing evidence:\n${input.missingEvidence.map((item) => `- ${item}`).join("\n")}`] : []),
+    `Bridge evidence JSON:\n${JSON.stringify(evidence)}`,
+    "Return only JSON:",
+    '{"verdict":"retry|needs_human|insufficient_evidence","advice_md":"...","risks":["..."],"suggested_next_steps":["..."],"verification_steps":["..."],"evidence_ids":["ev_..."],"assumptions":["..."],"confidence":"low|medium|high"}',
+  ].join("\n\n");
+}
+
 function extractJson(raw: string): unknown {
   const trimmed = raw.trim();
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)?.[1];
   const candidate = fenced ?? trimmed.slice(trimmed.indexOf("{"), trimmed.lastIndexOf("}") + 1);
   return JSON.parse(candidate);
 }
-function boundedList(value: unknown): string[] | null {
+
+function boundedList(value: unknown, maxItems = 12, maxChars = 1_200): string[] | null {
   return Array.isArray(value) && value.every((item) => typeof item === "string")
-    ? value.slice(0, 12).map((item) => item.slice(0, 1_200)) : null;
+    ? value.slice(0, maxItems).map((item) => redactAdvisorText(item).slice(0, maxChars)) : null;
 }
+
 export function parseAdvisorOutput(raw: string): {
   adviceMd: string; risks: string[]; suggestedNextSteps: string[]; confidence: AdvisorConfidence;
 } {
   try {
     const value = extractJson(raw) as Record<string, unknown>;
-    const adviceMd = typeof value.advice_md === "string" ? value.advice_md.trim().slice(0, 12_000) : "";
+    const adviceMd = typeof value.advice_md === "string" ? redactAdvisorText(value.advice_md.trim()).slice(0, 12_000) : "";
     const risks = boundedList(value.risks);
     const suggestedNextSteps = boundedList(value.suggested_next_steps);
     const confidence = value.confidence;
@@ -69,5 +157,45 @@ export function parseAdvisorOutput(raw: string): {
     return { adviceMd, risks, suggestedNextSteps, confidence: confidence as AdvisorConfidence };
   } catch {
     throw new Error("Invalid advisor output: expected structured JSON");
+  }
+}
+
+export function parseAdvisorDebugOutput(raw: string): {
+  verdict: AdvisorDebugVerdict;
+  adviceMd: string;
+  risks: string[];
+  suggestedNextSteps: string[];
+  verificationSteps: string[];
+  evidenceIds: string[];
+  assumptions: string[];
+  confidence: AdvisorConfidence;
+} {
+  try {
+    const value = extractJson(raw) as Record<string, unknown>;
+    const verdict = value.verdict;
+    const adviceMd = typeof value.advice_md === "string" ? redactAdvisorText(value.advice_md.trim()).slice(0, 12_000) : "";
+    const risks = boundedList(value.risks);
+    const suggestedNextSteps = boundedList(value.suggested_next_steps);
+    const verificationSteps = boundedList(value.verification_steps);
+    const evidenceIds = boundedList(value.evidence_ids, 24, 100);
+    const assumptions = boundedList(value.assumptions, 12, 800);
+    const confidence = value.confidence;
+    if (
+      !(["retry", "needs_human", "insufficient_evidence"] as unknown[]).includes(verdict)
+      || !adviceMd || !risks || !suggestedNextSteps || !verificationSteps || !evidenceIds || !assumptions
+      || !["low", "medium", "high"].includes(String(confidence))
+    ) throw new Error("schema");
+    return {
+      verdict: verdict as AdvisorDebugVerdict,
+      adviceMd,
+      risks,
+      suggestedNextSteps,
+      verificationSteps,
+      evidenceIds,
+      assumptions,
+      confidence: confidence as AdvisorConfidence,
+    };
+  } catch {
+    throw new Error("Invalid advisor debug output: expected structured JSON");
   }
 }

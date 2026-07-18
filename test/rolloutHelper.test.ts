@@ -159,6 +159,12 @@ case "$cmd" in
     }; then
       printf '9876\n' > "${fixture.cgroupRoot}/agent-bridge-test/\${1:-unknown}/cgroup.procs"
     fi
+    if [ "\${FAKE_CONTAINMENT_MODE:-}" = unreadable-cgroup-procs ]; then
+      chmod 000 "${fixture.cgroupRoot}/agent-bridge-test/\${1:-unknown}/cgroup.procs"
+    fi
+    if [ "\${FAKE_CONTAINMENT_MODE:-}" = unreadable-cgroup-dir ]; then
+      chmod 000 "${fixture.cgroupRoot}/agent-bridge-test/\${1:-unknown}"
+    fi
     if [ "\${FAKE_CONTAINMENT_MODE:-}" = failed-empty-stop-error ] || {
       [ "$count" -gt 1 ] && [ "\${FAKE_CONTAINMENT_MODE:-}" = stop-error ];
     }; then exit 1; fi
@@ -194,7 +200,13 @@ case "$cmd" in
         ExecMainStatus) [[ "\${FAKE_CONTAINMENT_MODE:-}" == *failed-empty* ]] && echo 143 || echo 0 ;;
         MainPID) grep -Fxq "$unit" "${fixture.stateFile}" && echo 4242 || echo 0 ;;
         ControlPID) echo 0 ;;
-        ControlGroup) echo "/agent-bridge-test/$unit" ;;
+        ControlGroup)
+          case "\${FAKE_CONTAINMENT_MODE:-}" in
+            empty-controlgroup) echo "" ;;
+            missing-cgroup-dir) echo "/agent-bridge-missing/$unit" ;;
+            *) echo "/agent-bridge-test/$unit" ;;
+          esac
+          ;;
         NRestarts)
           if [ "\${FAKE_FAIL_PHASE:-}" = delayed ] && [ -f "${fixture.root}/started" ]; then echo 1; else echo 0; fi
           ;;
@@ -444,6 +456,46 @@ describe("guarded rollout helper", () => {
     const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
     const evidence = JSON.parse(readFileSync(join(artifacts, "containment-evidence.json"), "utf8"));
     expect(evidence.units[0].remainingCgroupPids).toEqual([9876]);
+  });
+
+  it("accepts systemd's affirmative empty ControlGroup report with zero PIDs", () => {
+    const fixture = useMinimalInventory(createFixture());
+    const result = runRollout(fixture, undefined, "empty-controlgroup");
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+    const evidence = JSON.parse(readFileSync(join(artifacts, "containment-evidence.json"), "utf8"));
+    expect(evidence.units[0]).toEqual(expect.objectContaining({
+      ControlGroup: "",
+      MainPID: 0,
+      ControlPID: 0,
+      remainingCgroupPids: [],
+    }));
+  });
+
+  it.each([
+    "missing-cgroup-dir",
+    "unreadable-cgroup-dir",
+    "unreadable-cgroup-procs",
+  ])("fails closed before backup or migration when the cgroup cannot be inspected: %s", (mode) => {
+    const fixture = useMinimalInventory(createFixture());
+    const before = fixture.dbPaths.map(sha256);
+    try {
+      const result = runRollout(fixture, undefined, mode);
+
+      expect(result.status).not.toBe(0);
+      expect(`${result.stdout}\n${result.stderr}`).toMatch(/CONTAINMENT INCOMPLETE/);
+      expect(actions(fixture)).not.toMatch(/\sbackup\s|\smigrate\s/);
+      expect(fixture.dbPaths.map(sha256)).toEqual(before);
+    } finally {
+      for (const unit of units) {
+        const cgroup = join(fixture.cgroupRoot, "agent-bridge-test", unit);
+        try {
+          chmodSync(cgroup, 0o755);
+          chmodSync(join(cgroup, "cgroup.procs"), 0o644);
+        } catch {}
+      }
+    }
   });
 
   it.runIf(process.env.AGENT_BRIDGE_REAL_SYSTEMD_TEST === "1")(

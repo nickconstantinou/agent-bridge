@@ -13,6 +13,7 @@ import { listLocalCatalog } from "./skills.js";
 import { buildEffortKeyboard, buildEffortText, resolveEffort } from "./effort.js";
 import { contextInjectionPolicy, preseedCompactMode, preseedCompactCharThreshold } from "./contextPolicy.js";
 import { parseAdvisorConfig } from "./advisorConfig.js";
+import { inspectAdvisorConfigSources } from "./advisorConfigSource.js";
 
 const CONTEXT_COMPACT_NUDGE_TURNS = 100;
 
@@ -171,15 +172,29 @@ export function handleCommand(
       const chain = advisor.chain.length
         ? advisor.chain.map((target) => `${target.provider}:${target.model}`).join(" -> ")
         : "not configured";
-      return {
-        kind: "message",
-        text: [
-          `Advisor: ${advisor.enabled ? "enabled" : "disabled"}`,
-          `Mode: ${advisor.mode}`,
-          `Chain: ${chain}`,
-          `Budgets: ${advisor.maxCallsPerTurn}/turn, ${advisor.maxCallsPerTask}/task`,
-        ].join("\n"),
-      };
+      const diagnostics = inspectAdvisorConfigSources();
+      const matches = diagnostics.effectiveChainMatches.length > 0
+        ? diagnostics.effectiveChainMatches.join(" and ")
+        : "no readable configured file";
+      const lines = [
+        `Advisor: ${advisor.enabled ? "enabled" : "disabled"}`,
+        `Mode: ${advisor.mode}`,
+        `Chain: ${chain}`,
+        `Effective source: ${diagnostics.effectiveChainSource}`,
+        `Effective chain matches: ${matches}`,
+        `Budgets: ${advisor.maxCallsPerTurn}/turn, ${advisor.maxCallsPerTask}/task`,
+      ];
+      if (diagnostics.driftKeys.length > 0) {
+        lines.push(
+          `Configuration drift: ${diagnostics.driftKeys.join(", ")} differ between ${diagnostics.repoEnvPath} and ${diagnostics.systemdEnvPath}.`,
+          "Update the authoritative systemd defaults and restart the affected Agent Bridge services.",
+        );
+      } else if (diagnostics.repoReadable && diagnostics.systemdReadable) {
+        lines.push("Configuration drift: none detected.");
+      } else {
+        lines.push("Configuration drift: not evaluated because both configuration files are not readable.");
+      }
+      return { kind: "message", text: lines.join("\n") };
     }
     if (!["ask", "review", "plan", "debug"].includes(action)) {
       return { kind: "message", text: "Usage: /advisor status|ask <question>|review|plan <goal>|debug <problem>" };

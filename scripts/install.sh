@@ -74,6 +74,15 @@ env_file_get() {
   ' "${file}"
 }
 
+env_file_has_key() {
+  local file="$1" key="$2"
+  [[ -f "${file}" ]] || return 1
+  awk -F= -v key="${key}" '
+    $0 !~ /^[[:space:]]*#/ && $1 == key { found = 1; exit }
+    END { exit(found ? 0 : 1) }
+  ' "${file}"
+}
+
 seed_from_env_file() {
   local file="$1"
   local key value
@@ -84,6 +93,9 @@ seed_from_env_file() {
               CODEX_PROJECT_DIR ANTIGRAVITY_PROJECT_DIR CLAUDE_PROJECT_DIR \
               AGENT_BRIDGE_SKILLS AGENT_BRIDGE_SKILL_LINK_MODE \
               BRIDGE_EXECUTION_MODE POLL_INTERVAL_MS FETCH_TIMEOUT_MS \
+              BRIDGE_ADVISOR_ENABLED BRIDGE_ADVISOR_MODE BRIDGE_ADVISOR_CHAIN \
+              BRIDGE_ADVISOR_MAX_CALLS_PER_TURN BRIDGE_ADVISOR_MAX_CALLS_PER_TASK \
+              BRIDGE_ADVISOR_TIMEOUT_MS BRIDGE_ADVISOR_CONTEXT_MAX_CHARS \
               AGENT_BRIDGE_SOUL_PATH AGENT_BRIDGE_SOUL_MODE \
               HEALTH_MONITOR_ENABLED HEALTH_MONITOR_CADENCE_SECONDS HEALTH_MONITOR_AUTONOMY \
               HEALTH_MONITOR_CHAT_ID HEALTH_SUGGEST_BOT \
@@ -91,7 +103,11 @@ seed_from_env_file() {
               DISCORD_BOT_TOKEN DISCORD_APPLICATION_ID DISCORD_GUILD_ID DISCORD_ALLOWED_USER_IDS \
               DISCORD_CLI CLI_COMMAND CLI_MODEL_PREFERENCE INTERACTIVE_DEFAULT_CLI INTERACTIVE_CLI_CHAIN; do
     value="$(env_file_get "${file}" "${key}")"
-    if [[ -n "${value}" && -z "${!key:-}" ]]; then
+    if [[ "${key}" == BRIDGE_ADVISOR_* ]]; then
+      if env_file_has_key "${file}" "${key}" && ! declare -p "${key}" >/dev/null 2>&1; then
+        export "${key}=${value}"
+      fi
+    elif [[ -n "${value}" && -z "${!key:-}" ]]; then
       export "${key}=${value}"
     fi
   done
@@ -106,7 +122,8 @@ seed_from_env_file() {
 
 # write_env_file <example> <target>
 # Reads the example line-by-line. For each KEY= line, substitutes the current
-# shell value if set; otherwise keeps the example's default verbatim.
+# shell value if set; otherwise keeps the example's default verbatim. Advisor
+# settings are copied only when explicitly configured, including an empty chain.
 write_env_file() {
   local example="$1"
   local target="$2"
@@ -116,7 +133,11 @@ write_env_file() {
     if [[ "${line}" =~ ^([A-Z_][A-Z0-9_]*)= ]]; then
       local key="${BASH_REMATCH[1]}"
       local envval="${!key:-}"
-      if [[ -n "${envval}" ]]; then
+      if [[ "${key}" == BRIDGE_ADVISOR_* ]]; then
+        if declare -p "${key}" >/dev/null 2>&1; then
+          printf '%s=%s\n' "${key}" "${!key}"
+        fi
+      elif [[ -n "${envval}" ]]; then
         printf '%s=%s\n' "${key}" "${envval}"
       else
         printf '%s\n' "${line}"
@@ -299,6 +320,13 @@ if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
   write_env_file "${REPO_DIR}/.env.discord-interactive.example" "${REPO_DIR}/.env.discord-interactive"
 fi
 
+write_optional_env() {
+  local key="$1"
+  if declare -p "${key}" >/dev/null 2>&1; then
+    printf '%s=%s\n' "${key}" "${!key}"
+  fi
+}
+
 # Write shared defaults loaded by all services
 _write_shared_defaults() {
   local dest="${DEFAULTS_DIR}/agent-bridge-shared"
@@ -311,6 +339,11 @@ _write_shared_defaults() {
     echo "BRIDGE_ASYNC_ENABLED=true"
     echo "POLL_INTERVAL_MS=${POLL_INTERVAL_MS:-1000}"
     echo "FETCH_TIMEOUT_MS=${FETCH_TIMEOUT_MS:-45000}"
+    for key in BRIDGE_ADVISOR_ENABLED BRIDGE_ADVISOR_MODE BRIDGE_ADVISOR_CHAIN \
+               BRIDGE_ADVISOR_MAX_CALLS_PER_TURN BRIDGE_ADVISOR_MAX_CALLS_PER_TASK \
+               BRIDGE_ADVISOR_TIMEOUT_MS BRIDGE_ADVISOR_CONTEXT_MAX_CHARS; do
+      write_optional_env "${key}"
+    done
     [[ -n "${AGENT_BRIDGE_SOUL_PATH:-}" ]]  && echo "AGENT_BRIDGE_SOUL_PATH=${AGENT_BRIDGE_SOUL_PATH}"
     [[ -n "${AGENT_BRIDGE_SOUL_MODE:-}" ]]  && echo "AGENT_BRIDGE_SOUL_MODE=${AGENT_BRIDGE_SOUL_MODE}"
     echo "HEALTH_MONITOR_ENABLED=${HEALTH_MONITOR_ENABLED:-false}"

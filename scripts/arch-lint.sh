@@ -46,4 +46,11 @@ if ! node "$(dirname "$0")/sqlOwnershipLint.mjs" "$TARGET_DIR"; then
   exit 1
 fi
 
+# Migration-primitive ownership guard (Phase 4C.2, issue #135): deny-by-default
+# for openDb/applyMigrations/applyMigrationsUpTo/applyLegacyCompatibleBaseline
+# outside their three defining files. See scripts/migrationOwnershipLint.mjs.
+if ! node "$(dirname "$0")/migrationOwnershipLint.mjs" "$TARGET_DIR"; then
+  exit 1
+fi
+
 echo "arch-lint: ok ($TARGET_DIR)"

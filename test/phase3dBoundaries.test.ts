@@ -68,7 +68,7 @@ describe("Issue #135 Phase 3D: internal ownership boundaries", () => {
     }
     expect(bridge.parseModelPreference).toBe(config.parseModelPreference);
     expect(bridge.validateBridgeConfig).toBe(config.validateBridgeConfig);
-    expect(bridge.openDb).toBe(db.openDb);
+    expect(bridge.BridgeDb).toBe(db.BridgeDb);
     expect(bridge.shutdownCliProcesses).toBe(supervisor.shutdownCliProcesses);
     expect(bridge.setAntigravityModel).toBe(antigravityRuntime.setAntigravityModel);
     expect(cli.buildClaudeExcludedPluginSettings).toBe(claudeSettings.buildClaudeExcludedPluginSettings);

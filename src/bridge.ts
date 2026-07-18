@@ -13,7 +13,7 @@ import {
 } from "./cli.js";
 import { abortCliProcess, abortCliProcessAndWait, shutdownCliProcesses } from "./cliSupervisor.js";
 import { validateBridgeConfig, parseModelPreference } from "./config.js";
-import { openDb, BridgeDb } from "./db.js";
+import { BridgeDb } from "./db.js";
 import {
   resolveAntigravityConversationId, extractAntigravityConversationId,
   readAntigravityLastConversation, readLatestAntigravityConversationFromLogs,
@@ -76,7 +76,7 @@ export {
   runCli, runCliAsync, parseCliResult, buildCliInvocation, buildExecutionOptions,
   isCapacityExhaustedError, getNextFallbackModel, toUserMessage, scrubOutputDir,
   abortCliProcess, abortCliProcessAndWait, shutdownCliProcesses,
-  validateBridgeConfig, parseModelPreference, openDb, BridgeDb,
+  validateBridgeConfig, parseModelPreference, BridgeDb,
   resolveAntigravityConversationId, extractAntigravityConversationId,
   readAntigravityLastConversation, readLatestAntigravityConversationFromLogs,
   setAntigravityModel, ensureAntigravityStateDirs, toAntigravityModelLabel,

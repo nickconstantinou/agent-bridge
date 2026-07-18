@@ -8,7 +8,7 @@ import dotenv from "dotenv";
 import { basename } from "node:path";
 import { getBridgeProjectDir } from "./bridge.js";
 import { validateBridgeConfig } from "./config.js";
-import { openDb } from "./db.js";
+import { openProductionDb } from "./db.js";
 import { shutdownCliProcesses } from "./cliSupervisor.js";
 import { TelegramClient } from "./telegram.js";
 import { BridgeEngine } from "./engine.js";
@@ -65,7 +65,7 @@ const soulContext = loadSoulContext({
 });
 if (soulContext) console.log(`[bridge] loaded SOUL.md context (${soulContext.length} chars)`);
 
-const db = openDb(config.dbPath, { serviceId: standaloneServiceId() });
+const db = openProductionDb(config.dbPath, { serviceId: standaloneServiceId() });
 const advisorBroker = await startConfiguredAdvisorBroker({ db, bots: config.bots, runCli });
 
 console.log("[bridge] starting bots...");

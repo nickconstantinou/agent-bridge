@@ -12,7 +12,7 @@ import {
   getBridgeProjectDir,
   isAuthorizedMessage,
 } from "./bridge.js";
-import { openDb } from "./db.js";
+import { openProductionDb } from "./db.js";
 import { loadBotsConfig } from "./config.js";
 import { TelegramClient } from "./telegram.js";
 import { BridgeEngine } from "./engine.js";
@@ -88,7 +88,7 @@ const executionMode = (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") 
 const asyncEnabled = process.env.BRIDGE_ASYNC_ENABLED !== "false";
 const advisorConfig = parseAdvisorConfig(process.env);
 
-const db = openDb(dbPath, { serviceId: "telegram:worker" });
+const db = openProductionDb(dbPath, { serviceId: "telegram:worker" });
 const client = new TelegramClient(token, fetch, 45_000);
 
 function withThread<T extends Record<string, unknown>>(body: T, threadId?: number): T & { message_thread_id?: number } {

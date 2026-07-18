@@ -242,4 +242,172 @@ describe("arch-lint", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  describe("migration-primitive ownership guard (Phase 4C.2, issue #135)", () => {
+    const MSG = "must only be referenced from src/db.ts, src/db/schema.ts";
+
+    it("passes when the five entrypoints import openProductionDb", () => {
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-entrypoints-ok-"));
+      try {
+        writeFileSync(
+          join(dir, "index.ts"),
+          'import { openProductionDb } from "./db.js";\nconst db = openProductionDb("/tmp/x.sqlite", {});\n',
+        );
+        expect(runLint(dir).code).toBe(0);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("fails when a fixture entrypoint imports openDb directly", () => {
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-entrypoint-bad-"));
+      try {
+        writeFileSync(
+          join(dir, "index.ts"),
+          'import { openDb } from "./db.js";\nconst db = openDb("/tmp/x.sqlite");\n',
+        );
+        const res = runLint(dir);
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain(MSG);
+        expect(res.output).toContain("openDb");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("fails when a non-entrypoint src/ module imports openDb directly (deny-by-default, not a five-file allowlist)", () => {
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-nonentrypoint-"));
+      try {
+        writeFileSync(
+          join(dir, "someHelper.ts"),
+          'import { openDb } from "./db.js";\nexport function f() { return openDb(":memory:"); }\n',
+        );
+        const res = runLint(dir);
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain("someHelper.ts");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("fails when a fixture module imports applyMigrations, applyMigrationsUpTo, or applyLegacyCompatibleBaseline directly, with no openDb import at all", () => {
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-primitives-"));
+      try {
+        writeFileSync(
+          join(dir, "bypass.ts"),
+          [
+            'import Database from "better-sqlite3";',
+            'import { applyMigrations, applyMigrationsUpTo } from "./db/schema.js";',
+            'import { applyLegacyCompatibleBaseline } from "./legacyBaselineMigration.js";',
+            "export function bypass(raw: Database.Database) {",
+            "  applyLegacyCompatibleBaseline(raw);",
+            "  applyMigrationsUpTo(raw, [], 0);",
+            "  applyMigrations(raw);",
+            "}",
+            "",
+          ].join("\n"),
+        );
+        const res = runLint(dir);
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain("applyMigrations");
+        expect(res.output).toContain("applyMigrationsUpTo");
+        expect(res.output).toContain("applyLegacyCompatibleBaseline");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("catches an aliased named import (import { openDb as x })", () => {
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-alias-"));
+      try {
+        writeFileSync(
+          join(dir, "sneaky.ts"),
+          'import { openDb as x } from "./db.js";\nexport function f() { return x(":memory:"); }\n',
+        );
+        const res = runLint(dir);
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain("openDb");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("catches namespace access (import * as db from \"./db.js\"; db.openDb(...))", () => {
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-namespace-"));
+      try {
+        writeFileSync(
+          join(dir, "sneaky.ts"),
+          'import * as db from "./db.js";\nexport function f() { return db.openDb(":memory:"); }\n',
+        );
+        const res = runLint(dir);
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain("db.openDb");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not flag a namespace import that never touches a migration primitive", () => {
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-namespace-ok-"));
+      try {
+        writeFileSync(
+          join(dir, "fine.ts"),
+          'import * as db from "./db.js";\nexport function f(x: db.BridgeDb) { return x; }\n',
+        );
+        expect(runLint(dir).code).toBe(0);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("catches a named re-export (export { openDb } from \"./db.js\")", () => {
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-reexport-"));
+      try {
+        writeFileSync(join(dir, "barrel.ts"), 'export { openDb } from "./db.js";\n');
+        const res = runLint(dir);
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain("openDb");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("catches a wildcard re-export (export * from \"./db.js\")", () => {
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-wildcard-"));
+      try {
+        writeFileSync(join(dir, "barrel.ts"), 'export * from "./db.js";\n');
+        const res = runLint(dir);
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain("wildcard");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("catches a wildcard namespace re-export (export * as db from \"./db.js\")", () => {
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-wildcard-ns-"));
+      try {
+        writeFileSync(join(dir, "barrel.ts"), 'export * as db from "./db.js";\n');
+        const res = runLint(dir);
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain("wildcard");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not flag an unrelated named import from db.js (e.g. the BridgeDb type)", () => {
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-unrelated-"));
+      try {
+        writeFileSync(join(dir, "fine.ts"), 'import type { BridgeDb } from "./db.js";\nexport type X = BridgeDb;\n');
+        expect(runLint(dir).code).toBe(0);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("passes on the real src/ tree", () => {
+      expect(runLint(join(__dirname, "..", "..", "src")).code).toBe(0);
+    });
+  });
 });

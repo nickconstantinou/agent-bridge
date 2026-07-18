@@ -3,7 +3,6 @@ import {
   closeSync,
   lstatSync,
   openSync,
-  readFileSync,
   readSync,
   readdirSync,
   realpathSync,
@@ -45,6 +44,7 @@ export interface AdvisorEvidenceToolResult {
   summary: string;
   content: string;
   bytes: number;
+  truncated: boolean;
 }
 
 export interface AdvisorEvidenceAuditEvent {
@@ -53,6 +53,7 @@ export interface AdvisorEvidenceAuditEvent {
   evidenceId: string;
   durationMs: number;
   bytes: number;
+  truncated: boolean;
   arguments: Record<string, string | number | boolean>;
 }
 
@@ -96,14 +97,20 @@ const SENSITIVE_BASENAMES = new Set([
   "known_hosts",
 ]);
 
+const GIT_READ_PREFIX = [
+  "--no-pager",
+  "-c", "core.fsmonitor=false",
+  "-c", "credential.helper=",
+];
+
 function hasSensitivePath(path: string): boolean {
   const parts = path.replaceAll("\\", "/").split("/").filter(Boolean).map((part) => part.toLowerCase());
   const base = parts.at(-1) ?? "";
+  if (parts.includes(".git")) return true;
   if (base.startsWith(".env")) return true;
   if (SENSITIVE_BASENAMES.has(base)) return true;
   if (/\.(?:pem|key|p12|pfx|jks|keystore)$/i.test(base)) return true;
   if (parts.includes(".ssh") || parts.includes("workspace-secrets") || parts.includes("secrets")) return true;
-  if (parts.includes(".git") && ["config", "credentials"].includes(base)) return true;
   return /(?:^|[._-])(?:token|secret|credential)(?:s)?(?:[._-]|$)/i.test(base);
 }
 
@@ -135,6 +142,14 @@ function safeGitRef(value: unknown, field: string): string {
   return value;
 }
 
+function truncateUtf8(value: string, maxBytes: number): { text: string; truncated: boolean } {
+  const bytes = Buffer.from(value, "utf8");
+  if (bytes.length <= maxBytes) return { text: value, truncated: false };
+  let text = bytes.subarray(0, Math.max(0, maxBytes)).toString("utf8");
+  while (text.endsWith("�")) text = text.slice(0, -1);
+  return { text, truncated: true };
+}
+
 export function parseAdvisorEvidenceToolRequest(value: unknown): AdvisorEvidenceToolRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Advisor tool request must be an object");
   const input = value as Record<string, unknown>;
@@ -163,12 +178,15 @@ export function parseAdvisorEvidenceToolRequest(value: unknown): AdvisorEvidence
       }
       return { tool: "git.diff", scope: scope as "working" | "staged" };
     }
-    case "git.show":
+    case "git.show": {
+      const path = input.path == null ? undefined : safeRelativePath(input.path, "path");
+      if (path?.includes(":")) throw new Error("path is not supported for git.show");
       return {
         tool: "git.show",
         object: safeGitRef(input.object, "object"),
-        ...(input.path == null ? {} : { path: safeRelativePath(input.path, "path") }),
+        ...(path == null ? {} : { path }),
       };
+    }
     case "git.log":
       return { tool: "git.log", count: boundedInteger(input.count, 10, 1, 20) };
     case "evidence.acceptance":
@@ -214,7 +232,7 @@ export class AdvisorEvidenceToolBroker {
       return this.result(request, "ok", "Read-only evidence collected", content, startedAt);
     } catch (caught) {
       const error = caught instanceof Error ? caught : new Error(String(caught));
-      const denied = /escape|sensitive|symlink|binary|must stay inside|relative path|unsupported git object/i.test(error.message);
+      const denied = /escape|sensitive|symlink|binary|must stay inside|relative path|unsupported git object|not supported for git\.show/i.test(error.message);
       const unavailable = /unavailable/i.test(error.message);
       return this.result(request, denied ? "denied" : unavailable ? "unavailable" : "failed", redactAdvisorText(error.message), "", startedAt);
     }
@@ -243,21 +261,27 @@ export class AdvisorEvidenceToolBroker {
   ): AdvisorEvidenceToolResult {
     const remaining = Math.max(0, this.limits.maxAggregateBytes - this.aggregateBytes);
     const maxBytes = Math.min(this.limits.maxResultBytes, remaining);
-    const content = maxBytes > 0 ? redactAdvisorText(rawContent).slice(0, maxBytes) : "";
+    const bounded = truncateUtf8(redactAdvisorText(rawContent), maxBytes);
+    const content = maxBytes > 0 ? bounded.text : "";
     const bytes = Buffer.byteLength(content, "utf8");
     this.aggregateBytes += bytes;
+    const exhausted = remaining === 0 && status === "ok";
+    const finalStatus = exhausted ? "exhausted" : status;
+    const truncated = bounded.truncated || exhausted;
     const evidenceId = `ev_${createHash("sha256")
-      .update(JSON.stringify({ tool: request.tool, request: this.auditArguments(request), status, contentHash: createHash("sha256").update(content).digest("hex") }))
+      .update(JSON.stringify({ tool: request.tool, request: this.auditArguments(request), status: finalStatus, truncated, contentHash: createHash("sha256").update(content).digest("hex") }))
       .digest("hex")
       .slice(0, 16)}`;
-    const finalStatus = remaining === 0 && status === "ok" ? "exhausted" : status;
     const result: AdvisorEvidenceToolResult = {
       evidenceId,
       tool: request.tool,
       status: finalStatus,
-      summary: remaining === 0 && status === "ok" ? "Aggregate evidence byte budget exhausted" : summary.slice(0, 500),
+      summary: exhausted
+        ? "Aggregate evidence byte budget exhausted"
+        : `${summary.slice(0, 450)}${truncated ? " (truncated by evidence byte budget)" : ""}`,
       content,
       bytes,
+      truncated,
     };
     this.options.audit?.({
       tool: request.tool,
@@ -265,6 +289,7 @@ export class AdvisorEvidenceToolBroker {
       evidenceId,
       durationMs: Date.now() - startedAt,
       bytes,
+      truncated,
       arguments: this.auditArguments(request),
     });
     return result;
@@ -282,6 +307,10 @@ export class AdvisorEvidenceToolBroker {
     }
   }
 
+  private gitArgs(args: string[]): string[] {
+    return [...GIT_READ_PREFIX, ...args];
+  }
+
   private async perform(request: AdvisorEvidenceToolRequest): Promise<string> {
     switch (request.tool) {
       case "repo.list_files":
@@ -291,17 +320,17 @@ export class AdvisorEvidenceToolBroker {
       case "repo.search_text":
         return this.searchText(request.path ?? ".", request.query);
       case "git.status":
-        return this.runGit(["status", "--short", "--branch", "--untracked-files=normal"]);
+        return this.runGit(this.gitArgs(["status", "--short", "--branch", "--untracked-files=normal"]));
       case "git.diff":
-        if (request.scope === "staged") return this.runGit(["diff", "--cached", "--no-ext-diff", "--unified=3"]);
-        if (request.scope === "base_to_head") return this.runGit(["diff", "--no-ext-diff", "--unified=3", `${request.base}...${request.head}`]);
-        return this.runGit(["diff", "--no-ext-diff", "--unified=3"]);
+        if (request.scope === "staged") return this.runGit(this.gitArgs(["diff", "--cached", "--no-ext-diff", "--no-textconv", "--unified=3"]));
+        if (request.scope === "base_to_head") return this.runGit(this.gitArgs(["diff", "--no-ext-diff", "--no-textconv", "--unified=3", `${request.base}...${request.head}`]));
+        return this.runGit(this.gitArgs(["diff", "--no-ext-diff", "--no-textconv", "--unified=3"]));
       case "git.show":
         return request.path
-          ? this.runGit(["show", "--no-ext-diff", `${request.object}:${request.path}`])
-          : this.runGit(["show", "--no-ext-diff", "--format=medium", "--stat", request.object]);
+          ? this.runGit(this.gitArgs(["show", "--no-ext-diff", "--no-textconv", `${request.object}:${request.path}`]))
+          : this.runGit(this.gitArgs(["show", "--no-patch", "--format=medium", "--stat", request.object]));
       case "git.log":
-        return this.runGit(["log", `-${request.count ?? 10}`, "--date=iso-strict", "--pretty=format:%H%x09%ad%x09%s"]);
+        return this.runGit(this.gitArgs(["log", `-${request.count ?? 10}`, "--date=iso-strict", "--pretty=format:%H%x09%ad%x09%s"]));
       case "evidence.acceptance":
         return this.workerEvidence("acceptance");
       case "evidence.plan":
@@ -352,7 +381,7 @@ export class AdvisorEvidenceToolBroker {
       if (content.includes(0)) throw new Error("Binary files are denied for advisor evidence");
       const text = content.toString("utf8");
       if (text.includes("�")) throw new Error("Binary or invalid UTF-8 files are denied for advisor evidence");
-      return bytes > this.limits.maxResultBytes ? `${text.slice(0, this.limits.maxResultBytes)}\n...[truncated]` : text;
+      return text;
     } finally {
       closeSync(fd);
     }

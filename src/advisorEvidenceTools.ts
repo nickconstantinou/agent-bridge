@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import { lstat, open, readdir, realpath, stat } from "node:fs/promises";
 import { isAbsolute, normalize, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -308,7 +309,7 @@ export class AdvisorEvidenceToolBroker {
     const truncated = incomplete || status === "exhausted";
     const limitation = payload.limitation?.trim();
     const finalSummary = finalStatus === "exhausted"
-      ? [limitation || "Evidence collection was incomplete", bounded.truncated ? "result byte limit reached" : "", remaining === 0 ? "aggregate byte limit reached" : ""]
+      ? [limitation || summary || "Evidence collection was incomplete", bounded.truncated ? "result byte limit reached" : "", remaining === 0 ? "aggregate byte limit reached" : ""]
         .filter(Boolean).join("; ")
       : summary.slice(0, 500);
     const evidenceId = `ev_${createHash("sha256")
@@ -446,10 +447,10 @@ export class AdvisorEvidenceToolBroker {
 
   private async readText(relativePath: string, deadline: number): Promise<EvidencePayload> {
     const path = await this.resolveExisting(relativePath, deadline);
-    const details = await this.beforeDeadline(() => stat(path), deadline);
-    if (!details.isFile()) throw new Error("Advisor evidence path is not a file");
-    const handle = await this.beforeDeadline(() => open(path, "r"), deadline);
+    const handle = await this.beforeDeadline(() => open(path, constants.O_RDONLY | constants.O_NOFOLLOW), deadline);
     try {
+      const details = await this.beforeDeadline(() => handle.stat(), deadline);
+      if (!details.isFile()) throw new Error("Advisor evidence path is not a file");
       const buffer = Buffer.alloc(this.limits.maxResultBytes + 1);
       const read = await this.beforeDeadline(() => handle.read(buffer, 0, buffer.length, 0), deadline);
       const content = buffer.subarray(0, read.bytesRead);
@@ -501,7 +502,8 @@ export class AdvisorEvidenceToolBroker {
             limitations.add(`depth limit ${maxDepth} reached`);
             continue;
           }
-          await visit(absolute, depth + 1);
+          const verifiedDirectory = await this.resolveExisting(rel, deadline);
+          await visit(verifiedDirectory, depth + 1);
           if (files.length >= this.limits.maxFiles || entriesVisited >= this.limits.maxEntries) return;
         } else if (entry.isFile()) {
           if (files.length >= this.limits.maxFiles) {
@@ -533,7 +535,11 @@ export class AdvisorEvidenceToolBroker {
       let payload: EvidencePayload;
       try {
         payload = await this.readText(file, deadline);
-      } catch {
+      } catch (caught) {
+        const error = caught instanceof Error ? caught : new Error(String(caught));
+        if (/timeout|deadline/i.test(error.message)) throw error;
+        complete = false;
+        limitations.add("one or more files could not be inspected");
         continue;
       }
       if (!payload.complete) {

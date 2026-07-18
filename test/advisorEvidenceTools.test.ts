@@ -50,7 +50,7 @@ describe("AdvisorEvidenceToolBroker", () => {
     expect(JSON.stringify(audit.mock.calls)).not.toContain("Inspect service.ts");
   });
 
-  it("uses only isolated fixed Git argument shapes", async () => {
+  it("uses only isolated fixed Git argument shapes with a real timeout budget", async () => {
     const repo = tempDir("advisor-git-");
     const runGit = vi.fn().mockResolvedValue("git evidence");
     const broker = new AdvisorEvidenceToolBroker({ repoPath: repo, runGit });
@@ -64,13 +64,14 @@ describe("AdvisorEvidenceToolBroker", () => {
     ]);
 
     expect(results.every((result) => result.status === "ok")).toBe(true);
-    expect(runGit.mock.calls).toEqual([
+    expect(runGit.mock.calls.map(([args, cwd]) => [args, cwd])).toEqual([
       [[...gitReadPrefix, "status", "--short", "--branch", "--untracked-files=normal"], repo],
       [[...gitReadPrefix, "diff", "--cached", "--no-ext-diff", "--no-textconv", "--unified=3"], repo],
       [[...gitReadPrefix, "diff", "--no-ext-diff", "--no-textconv", "--unified=3", "main...feature/test"], repo],
       [[...gitReadPrefix, "show", "--no-ext-diff", "--no-textconv", "HEAD:src/file.ts"], repo],
       [[...gitReadPrefix, "log", "-4", "--date=iso-strict", "--pretty=format:%H%x09%ad%x09%s"], repo],
     ]);
+    expect(runGit.mock.calls.every(([, , options]) => options.timeoutMs > 0 && options.timeoutMs <= 5_000)).toBe(true);
   });
 
   it("fails closed on traversal, sensitive files, Git internals, symlinks, and binary content", async () => {
@@ -96,6 +97,32 @@ describe("AdvisorEvidenceToolBroker", () => {
     expect(results.every((result) => result.content === "")).toBe(true);
   });
 
+  it("scrubs common credentials from ordinary files and Git evidence", async () => {
+    const repo = tempDir("advisor-redaction-");
+    const jwt = "eyJabcdefghijk.eyJabcdefghijkl.mnopqrstuvwxyz";
+    writeFileSync(join(repo, "config.json"), [
+      '"client_secret": "client-value"',
+      "Authorization: Bearer bearer-value",
+      "DATABASE_URL=postgres://user:pass@db.example/app",
+      "AWS_ACCESS_KEY_ID=AKIAABCDEFGHIJKLMNOP",
+      "AWS_SECRET_ACCESS_KEY=aws-secret-value",
+      `session=${jwt}`,
+    ].join("\n"));
+    const runGit = vi.fn().mockResolvedValue("refresh_token=git-refresh-value\nAuthorization: Basic abc123");
+    const broker = new AdvisorEvidenceToolBroker({ repoPath: repo, runGit });
+
+    const results = await broker.execute([
+      { tool: "repo.read_file", path: "config.json" },
+      { tool: "git.diff", scope: "working" },
+    ]);
+    const combined = results.map((result) => result.content).join("\n");
+
+    for (const secret of ["client-value", "bearer-value", "user:pass", "AKIAABCDEFGHIJKLMNOP", "aws-secret-value", jwt, "git-refresh-value", "abc123"]) {
+      expect(combined).not.toContain(secret);
+    }
+    expect(combined).toMatch(/REDACTED/);
+  });
+
   it("enforces call and aggregate byte budgets and marks truncation explicitly", async () => {
     const repo = tempDir("advisor-limits-");
     writeFileSync(join(repo, "large.txt"), "x".repeat(200));
@@ -119,10 +146,53 @@ describe("AdvisorEvidenceToolBroker", () => {
       { tool: "repo.read_file", path: "large.txt" },
     ]);
     expect(results[0].bytes).toBeLessThanOrEqual(20);
-    expect(results[0].truncated).toBe(true);
-    expect(results[0].summary).toMatch(/truncated/i);
+    expect(results[0]).toMatchObject({ status: "exhausted", truncated: true });
+    expect(results[0].summary).toMatch(/limit/i);
     expect(results[0].bytes + results[1].bytes).toBeLessThanOrEqual(25);
     expect(results[1].truncated).toBe(true);
+  });
+
+  it("marks file, entry, match, depth, and per-file scan limits as incomplete", async () => {
+    const repo = tempDir("advisor-completeness-");
+    mkdirSync(join(repo, "nested"));
+    mkdirSync(join(repo, "nested", "deeper"));
+    writeFileSync(join(repo, "a.txt"), "alpha\n");
+    writeFileSync(join(repo, "b.txt"), "beta\n");
+    writeFileSync(join(repo, "nested", "deeper", "late.txt"), `${"x".repeat(50)}needle\n`);
+    const broker = new AdvisorEvidenceToolBroker({
+      repoPath: repo,
+      limits: { maxFiles: 2, maxEntries: 4, maxDepth: 1, maxResultBytes: 20 },
+    });
+
+    const [listing, search] = await broker.execute([
+      { tool: "repo.list_files", path: ".", depth: 1 },
+      { tool: "repo.search_text", path: ".", query: "needle" },
+    ]);
+
+    expect(listing).toMatchObject({ status: "exhausted", truncated: true });
+    expect(listing.summary).toMatch(/limit/i);
+    expect(search).toMatchObject({ status: "exhausted", truncated: true });
+    expect(search.content).not.toBe("No literal matches found.");
+    expect(search.summary).toMatch(/limit/i);
+  });
+
+  it("returns an explicit exhausted result when an evidence operation exceeds its deadline", async () => {
+    const repo = tempDir("advisor-timeout-");
+    const runGit = vi.fn(() => new Promise<string>(() => undefined));
+    const audit = vi.fn();
+    const broker = new AdvisorEvidenceToolBroker({
+      repoPath: repo,
+      runGit,
+      audit,
+      limits: { timeoutMs: 10 },
+    });
+
+    const [result] = await broker.execute([{ tool: "git.status" }]);
+
+    expect(result).toMatchObject({ status: "exhausted", truncated: true, content: "" });
+    expect(result.summary).toMatch(/timeout|incomplete/i);
+    expect(runGit.mock.calls[0][2].timeoutMs).toBeGreaterThan(0);
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({ status: "exhausted" }));
   });
 
   it("validates model-selected tool requests before execution", () => {

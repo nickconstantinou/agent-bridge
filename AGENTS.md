@@ -147,6 +147,29 @@ Before declaring work complete:
 - verify the exact final commit SHA and account for all review threads and deferred items
 - state what was tested, what was not tested, and the residual risk
 
+## Continuous improvement and agent retrospectives
+
+At the end of each non-trivial implementation, defect repair, migration, deployment, incident response, or independent review, perform a brief retrospective before declaring the work complete:
+
+- what was missed, incorrect, unexpectedly difficult, or required rework
+- which contract, boundary, lifecycle transition, assumption, test oracle, environment, or process allowed it
+- whether the same pattern has appeared elsewhere in repository history
+- whether an existing rule or skill should have prevented it
+- the smallest systemic prevention: code safeguard, test, skill improvement, or agent rule
+
+When evidence shows a recurring pattern, a high-impact systemic gap, or ambiguous or missing guidance, propose a concise update to this file. Add it in the same PR only when directly related and still reviewable; otherwise open a follow-up documentation-only PR.
+
+Self-improvement changes must:
+
+- be grounded in concrete repository evidence, not style preferences or one-off mistakes
+- be durable, actionable, and verifiable
+- generalize across future work without overfitting one incident
+- avoid duplicating or conflicting with existing rules or skills; consolidate instead
+- preserve human review: never silently edit `AGENTS.md` on `main`
+- remove or revise stale rules when the codebase or architecture changes
+
+Include the retrospective result in final evidence: `no new systemic pattern`, `existing rule covers it`, or a link to the proposed `AGENTS.md` or skill follow-up.
+
 ---
 
 # Worktree and Branch Isolation

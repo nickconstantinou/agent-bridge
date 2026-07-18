@@ -47,6 +47,131 @@ When executing or reviewing a plan, every phase that adds new behaviour must inc
 
 ---
 
+# SDLC Skill Routing
+
+Before planning, implementing, reviewing, or releasing software changes, read the relevant repository skill:
+
+- `skills/requirements-to-acceptance/SKILL.md` for ambiguous, cross-functional, user-facing, or multi-module requests.
+- `skills/risk-based-test-strategy/SKILL.md` when selecting test depth or reviewing coverage.
+- `skills/red-green-refactor-tdd/SKILL.md` for features, bug fixes, refactors, and behaviour changes.
+- `skills/release-readiness-review/SKILL.md` before declaring a change merge-ready, release-ready, or deployment-ready.
+
+Skills supplement these repository invariants; they do not override them. If native skill discovery is unavailable, read the relevant `SKILL.md` directly.
+
+# Review-Derived Engineering Invariants
+
+These rules address recurring defects found during independent review. A passing suite does not override a known contract, lifecycle, wiring, or deployment violation.
+
+## Define the observable contract before editing
+
+Before implementation:
+
+1. Restate the intended outcome.
+2. Record material assumptions, constraints, and explicit non-goals.
+3. Define binary acceptance criteria observable outside the implementation.
+4. Name the verification that proves each criterion.
+
+Ask for clarification only when a missing answer makes a reasonable implementation unsafe. Otherwise, state the assumption and continue.
+
+## Complete the production path
+
+Trace every changed behaviour through its required path:
+
+`input → validation → state owner → side effect → persistence → runtime consumer → status projection → user-visible confirmation`
+
+A helper, parser, repository method, DTO, endpoint, UI component, or unit test alone is not a completed feature. Each externally exposed slice must be vertically complete. Incomplete infrastructure may merge only when existing public behaviour is preserved or the new path is explicitly disabled behind a safe flag.
+
+## Use authoritative state and verify postconditions
+
+Identify the authoritative source for every status or decision. Do not infer authentication from files when the provider can report it, Git state from model output, service state from an attempted command, or deployment success from intended actions.
+
+After mutation, read back the protected postcondition:
+
+- configuration → persisted value
+- authentication → provider verdict
+- repository state → Git
+- process or service state → runtime supervisor
+- deployment → exact artifact or commit SHA and health signal
+- rollback → equality with the protected baseline
+
+Keep status and probe surfaces read-only. Reconciliation or repair must be a separate explicit mutation. Label evidence as real, disposable, simulated, or inferred; never present inference as live verification.
+
+## Model lifecycle, races, and recovery
+
+For queues, jobs, migrations, credentials, releases, processes, or other lifecycle work, define states, transition owners, terminal states, retry and replay behaviour, restart behaviour, timeout and cancellation behaviour, stale-event handling, and rollback ownership before coding.
+
+Terminal states must not be overwritten. Side-effect ownership must be recorded immediately. Cleanup and rollback must be retry-safe, preserve the original failure, retain enough state to resume after interruption, and restore every state dimension used to detect change.
+
+Test success, each material failure boundary, retry or replay, restart, cancellation, timeout, and plausible concurrent completion.
+
+## Test the contract at the risk boundary
+
+The red test must exercise the production boundary that could permit the defect and fail for the expected reason.
+
+- Prefer observable behaviour, persisted state, emitted events, authoritative status, and external-call assertions over implementation details.
+- Prefer real implementations or focused fakes over broad mocks.
+- Do not copy production parsers, schemas, state transitions, or decision logic into the test oracle.
+- A helper-only test is insufficient when correctness depends on its caller, runtime wiring, persistence, process environment, or user-visible projection.
+- Never skip, delete, weaken, or rewrite unrelated tests merely to make verification pass.
+
+Match verification to the highest-risk boundary affected. Persistence, migrations, queues, authentication, permissions, external APIs, cross-module contracts, and operational changes require boundary-level checks; critical user paths require end-to-end or realistic manual verification.
+
+## Preserve compatibility, explicit intent, and sibling behaviour
+
+Before changing defaults or semantics, record and test existing behaviour for default, explicitly configured, legacy or omitted, unavailable dependency, and unsupported cases.
+
+Parse explicit slash commands and structured controls before forced modes, defaults, routing, keywords, or heuristics. Explicit user intent must not be displaced by low-confidence inference; ambiguous input should clarify or fail safely.
+
+Audit all sibling entry points, roles, providers, modes, optional services, install forms, transports, and environments. Record deliberate exclusions rather than silently fixing only the nearest variant.
+
+## Diagnose first and keep changes coherent
+
+For defects, CI failures, or review repairs, identify the smallest reproducing command, describe the observed failure, and state the likely root cause before editing. Preserve useful work already present and make the smallest correction that fixes the root cause without weakening the approved contract.
+
+Implement one coherent slice at a time. Avoid unrelated cleanup, cosmetic rewrites, import churn, broad renames, and abstractions for hypothetical future use. Keep the repository buildable after each slice and commits small enough to review and roll back safely.
+
+## Verify the deployed environment and documentation
+
+When relevant, test clean-shell environment loading, missing or malformed environment files, closed stdin, non-default paths, runtime user and permissions, systemd install/enable/restart/health behaviour, install variants, and actual service topology. Process probes must be non-interactive, bounded by a timeout, and check exit status.
+
+Update colocated documentation when public behaviour, configuration, commands, service operation, recovery, onboarding, or architecture changes. Add or update an ADR when a durable architectural decision or ownership boundary changes. Documentation never replaces tests, runtime safeguards, rollback support, or postcondition checks.
+
+## Final evidence and regression audit
+
+Before declaring work complete:
+
+- inspect the final diff for unrelated scope
+- search callers, aliases, entry points, and sibling implementations
+- compare defaults, compatibility, security, and rollback behaviour
+- run focused tests, the relevant broader suite, typecheck, architecture or static checks, and `git diff --check`
+- verify the exact final commit SHA and account for all review threads and deferred items
+- state what was tested, what was not tested, and the residual risk
+
+## Continuous improvement and agent retrospectives
+
+At the end of each non-trivial implementation, defect repair, migration, deployment, incident response, or independent review, perform a brief retrospective before declaring the work complete:
+
+- what was missed, incorrect, unexpectedly difficult, or required rework
+- which contract, boundary, lifecycle transition, assumption, test oracle, environment, or process allowed it
+- whether the same pattern has appeared elsewhere in repository history
+- whether an existing rule or skill should have prevented it
+- the smallest systemic prevention: code safeguard, test, skill improvement, or agent rule
+
+When evidence shows a recurring pattern, a high-impact systemic gap, or ambiguous or missing guidance, propose a concise update to this file. Add it in the same PR only when directly related and still reviewable; otherwise open a follow-up documentation-only PR.
+
+Self-improvement changes must:
+
+- be grounded in concrete repository evidence, not style preferences or one-off mistakes
+- be durable, actionable, and verifiable
+- generalize across future work without overfitting one incident
+- avoid duplicating or conflicting with existing rules or skills; consolidate instead
+- preserve human review: never silently edit `AGENTS.md` on `main`
+- remove or revise stale rules when the codebase or architecture changes
+
+Include the retrospective result in final evidence: `no new systemic pattern`, `existing rule covers it`, or a link to the proposed `AGENTS.md` or skill follow-up. A retrospective is required, but an `AGENTS.md` change is not: update rules only when the evidence meets the criteria above.
+
+---
+
 # Worktree and Branch Isolation
 
 For substantial changes or complex features, use the `git-sandbox` skill to isolate execution environments. Do not modify the main workspace directly if worktree isolation is requested.

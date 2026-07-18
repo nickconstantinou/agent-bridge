@@ -110,4 +110,74 @@ describe("advisor debug degraded lifecycle", () => {
       db.close();
     }
   });
+
+  it("completes a thrown executing_retry as human-needed and never claims it again", async () => {
+    const db = makeDb();
+    const item = db.createWorkItem({
+      kind: "feature",
+      source: "telegram",
+      repository: "owner/repo",
+      title: "Fix parser ownership",
+      created_by: "worker",
+    });
+    const job = db.createWorkJob({
+      task_type: "orchestrated_task",
+      idempotency_key: "orchestrated:failed-bounded-retry",
+      work_item_id: item.id,
+      input_json: { work_item_id: item.id },
+      max_attempts: 5,
+    });
+    const seeded = db.claimNextWorkJob("seed", new Date().toISOString(), 300, job.id);
+    expect(seeded).not.toBeNull();
+    db.markWorkJobRunning(job.id, "seed");
+    db.continueWorkJob(job.id, "executing_retry", {
+      workItemId: item.id,
+      repoPath: "/tmp/repo",
+      branchName: `agent/work-${item.id}`,
+      plan: "Use one parser",
+      debugAttempted: true,
+      blockedResult: {
+        status: "BLOCKED",
+        reason: "NEEDS_ADVISOR",
+        hypothesis: "ownership",
+        attemptedSteps: ["read"],
+        failingEvidence: "failure",
+        relevantFiles: ["src/parser.ts"],
+        decisionNeeded: "owner",
+      },
+      advisorDebug: {
+        verdict: "retry",
+        advice: "Use the canonical parser",
+        evidenceIds: ["ev_0123456789abcdef"],
+        verificationSteps: ["Run parser tests"],
+        confidence: "medium",
+      },
+    }, "seed");
+
+    const runCli = vi.fn().mockRejectedValue(new Error("executor transport failed"));
+    const handler = createOrchestratedTaskHandler({
+      runCli,
+      runGit: vi.fn(),
+      runTests: vi.fn().mockResolvedValue({ ok: true, output: "ok" }),
+    });
+    const deps = {
+      db,
+      workerId: "worker",
+      handlers: { orchestrated_task: handler },
+      notify: vi.fn(),
+      targetJobId: job.id,
+    };
+
+    try {
+      const first = await executeNextJob(deps);
+      expect(first?.handlerResult).toMatchObject({ needsHuman: true, retryFailure: "executor transport failed" });
+      expect(db.getWorkJob(job.id)).toMatchObject({ status: "completed", phase: "executing_retry", max_attempts: 5 });
+
+      const second = await executeNextJob(deps);
+      expect(second).toBeNull();
+      expect(runCli).toHaveBeenCalledTimes(1);
+    } finally {
+      db.close();
+    }
+  });
 });

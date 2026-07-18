@@ -13,6 +13,7 @@ import { listLocalCatalog } from "./skills.js";
 import { buildEffortKeyboard, buildEffortText, resolveEffort } from "./effort.js";
 import { contextInjectionPolicy, preseedCompactMode, preseedCompactCharThreshold } from "./contextPolicy.js";
 import { parseAdvisorConfig } from "./advisorConfig.js";
+import { inspectAdvisorConfigSources } from "./advisorConfigSource.js";
 
 const CONTEXT_COMPACT_NUDGE_TURNS = 100;
 
@@ -171,15 +172,23 @@ export function handleCommand(
       const chain = advisor.chain.length
         ? advisor.chain.map((target) => `${target.provider}:${target.model}`).join(" -> ")
         : "not configured";
-      return {
-        kind: "message",
-        text: [
-          `Advisor: ${advisor.enabled ? "enabled" : "disabled"}`,
-          `Mode: ${advisor.mode}`,
-          `Chain: ${chain}`,
-          `Budgets: ${advisor.maxCallsPerTurn}/turn, ${advisor.maxCallsPerTask}/task`,
-        ].join("\n"),
-      };
+      const diagnostics = inspectAdvisorConfigSources();
+      const lines = [
+        `Advisor: ${advisor.enabled ? "enabled" : "disabled"}`,
+        `Mode: ${advisor.mode}`,
+        `Chain: ${chain}`,
+        `Source: ${diagnostics.effectiveChainSource}`,
+        `Budgets: ${advisor.maxCallsPerTurn}/turn, ${advisor.maxCallsPerTask}/task`,
+      ];
+      if (diagnostics.driftKeys.length > 0) {
+        lines.push(
+          `Configuration drift: ${diagnostics.driftKeys.join(", ")} differ between ${diagnostics.repoEnvPath} and ${diagnostics.systemdEnvPath}.`,
+          "Update the authoritative systemd defaults and restart the affected Agent Bridge services.",
+        );
+      } else {
+        lines.push("Configuration drift: none detected.");
+      }
+      return { kind: "message", text: lines.join("\n") };
     }
     if (!["ask", "review", "plan", "debug"].includes(action)) {
       return { kind: "message", text: "Usage: /advisor status|ask <question>|review|plan <goal>|debug <problem>" };

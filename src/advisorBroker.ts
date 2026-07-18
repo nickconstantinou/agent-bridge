@@ -170,6 +170,8 @@ export async function requestConfiguredWorkerAdvisorDebug(input: {
   acceptanceCriteria: string;
   plan: string;
   blocked: WorkerBlockedResult;
+  /** Legacy caller field retained for compatibility; evidence Git is broker-owned and this value is never executed. */
+  runGit?: unknown;
   audit?: (event: AdvisorEvidenceAuditEvent) => void;
 }): Promise<AdvisorResult> {
   const service = CONFIGURED_TRUSTED_SERVICES.get(input.db);

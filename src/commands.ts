@@ -173,11 +173,15 @@ export function handleCommand(
         ? advisor.chain.map((target) => `${target.provider}:${target.model}`).join(" -> ")
         : "not configured";
       const diagnostics = inspectAdvisorConfigSources();
+      const matches = diagnostics.effectiveChainMatches.length > 0
+        ? diagnostics.effectiveChainMatches.join(" and ")
+        : "no readable configured file";
       const lines = [
         `Advisor: ${advisor.enabled ? "enabled" : "disabled"}`,
         `Mode: ${advisor.mode}`,
         `Chain: ${chain}`,
-        `Source: ${diagnostics.effectiveChainSource}`,
+        `Effective source: ${diagnostics.effectiveChainSource}`,
+        `Effective chain matches: ${matches}`,
         `Budgets: ${advisor.maxCallsPerTurn}/turn, ${advisor.maxCallsPerTask}/task`,
       ];
       if (diagnostics.driftKeys.length > 0) {
@@ -185,8 +189,10 @@ export function handleCommand(
           `Configuration drift: ${diagnostics.driftKeys.join(", ")} differ between ${diagnostics.repoEnvPath} and ${diagnostics.systemdEnvPath}.`,
           "Update the authoritative systemd defaults and restart the affected Agent Bridge services.",
         );
-      } else {
+      } else if (diagnostics.repoReadable && diagnostics.systemdReadable) {
         lines.push("Configuration drift: none detected.");
+      } else {
+        lines.push("Configuration drift: not evaluated because both configuration files are not readable.");
       }
       return { kind: "message", text: lines.join("\n") };
     }

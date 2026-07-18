@@ -35,6 +35,8 @@ export type AdvisorEvidenceToolRequest =
 export interface AdvisorEvidenceToolResult {
   evidenceId: string;
   tool: AdvisorEvidenceToolName;
+  /** Bounded, sanitised provenance that lets later reasoning distinguish evidence sources. */
+  source: string;
   status: "ok" | "denied" | "failed" | "unavailable" | "exhausted";
   summary: string;
   content: string;
@@ -177,6 +179,89 @@ function safeGitEnvironment(): NodeJS.ProcessEnv {
   return env;
 }
 
+function descriptorHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+function safeSourcePath(path: string): string {
+  return hasSensitivePath(path) ? `path_sha256=${descriptorHash(path)}` : `path=${path}`;
+}
+
+function sourceDescriptor(request: AdvisorEvidenceToolRequest): string {
+  switch (request.tool) {
+    case "repo.list_files":
+      return `repo.list_files ${safeSourcePath(request.path ?? ".")} depth=${request.depth ?? 3}`;
+    case "repo.read_file":
+      return `repo.read_file ${safeSourcePath(request.path)}`;
+    case "repo.search_text":
+      return `repo.search_text ${safeSourcePath(request.path ?? ".")} query_sha256=${descriptorHash(request.query)} query_chars=${request.query.length}`;
+    case "git.status":
+      return "git.status worktree";
+    case "git.diff":
+      return request.scope === "base_to_head"
+        ? `git.diff scope=base_to_head base_sha256=${descriptorHash(request.base ?? "")} head_sha256=${descriptorHash(request.head ?? "")}`
+        : `git.diff scope=${request.scope ?? "working"}`;
+    case "git.show":
+      return `git.show object_sha256=${descriptorHash(request.object)}${request.path ? ` ${safeSourcePath(request.path)}` : ""}`;
+    case "git.log":
+      return `git.log count=${request.count ?? 10}`;
+    case "evidence.acceptance":
+    case "evidence.plan":
+    case "evidence.test_failures":
+    case "evidence.attempt_summary":
+      return request.tool;
+  }
+}
+
+function unquoteGitPath(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.startsWith('"') && trimmed.endsWith('"') ? trimmed.slice(1, -1) : trimmed;
+}
+
+function gitMetadataPaths(line: string): string[] {
+  let match = line.match(/^diff --git a\/(.+?) b\/(.+)$/);
+  if (match) return [match[1], match[2]].map(unquoteGitPath);
+  match = line.match(/^(?:---|\+\+\+) (?:a|b)\/(.+)$/);
+  if (match) return [unquoteGitPath(match[1])];
+  match = line.match(/^(?:rename|copy) (?:from|to) (.+)$/);
+  if (match) return [unquoteGitPath(match[1])];
+  if (!line.startsWith("## ")) {
+    match = line.match(/^[ MADRCU?!]{2}\s+(.+)$/);
+    if (match) return match[1].split(/\s+->\s+/).map(unquoteGitPath);
+  }
+  match = line.match(/^\s*(.+?)\s+\|\s+\d+/);
+  if (match) return [unquoteGitPath(match[1])];
+  return [];
+}
+
+function sanitiseGitEvidence(raw: string): EvidencePayload {
+  const kept: string[] = [];
+  let omitted = false;
+  let skipDiffBlock = false;
+  for (const line of raw.split(/\r?\n/)) {
+    if (line.startsWith("diff --git ")) {
+      skipDiffBlock = gitMetadataPaths(line).some(hasSensitivePath);
+      if (skipDiffBlock) {
+        omitted = true;
+        continue;
+      }
+      kept.push(line);
+      continue;
+    }
+    if (skipDiffBlock) continue;
+    if (gitMetadataPaths(line).some(hasSensitivePath)) {
+      omitted = true;
+      continue;
+    }
+    kept.push(line);
+  }
+  return {
+    content: kept.join("\n").trim(),
+    complete: !omitted,
+    limitation: omitted ? "sensitive Git paths were omitted" : undefined,
+  };
+}
+
 export function parseAdvisorEvidenceToolRequest(value: unknown): AdvisorEvidenceToolRequest {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Advisor tool request must be an object");
   const input = value as Record<string, unknown>;
@@ -312,13 +397,16 @@ export class AdvisorEvidenceToolBroker {
       ? [limitation || summary || "Evidence collection was incomplete", bounded.truncated ? "result byte limit reached" : "", remaining === 0 ? "aggregate byte limit reached" : ""]
         .filter(Boolean).join("; ")
       : summary.slice(0, 500);
+    const source = sourceDescriptor(request).slice(0, 500);
+    const auditArguments = this.auditArguments(request);
     const evidenceId = `ev_${createHash("sha256")
-      .update(JSON.stringify({ tool: request.tool, request: this.auditArguments(request), status: finalStatus, truncated, contentHash: createHash("sha256").update(content).digest("hex") }))
+      .update(JSON.stringify({ tool: request.tool, source, request: auditArguments, status: finalStatus, truncated, contentHash: createHash("sha256").update(content).digest("hex") }))
       .digest("hex")
       .slice(0, 16)}`;
     const result: AdvisorEvidenceToolResult = {
       evidenceId,
       tool: request.tool,
+      source,
       status: finalStatus,
       summary: finalSummary.slice(0, 500),
       content,
@@ -332,18 +420,28 @@ export class AdvisorEvidenceToolBroker {
       durationMs: Date.now() - startedAt,
       bytes,
       truncated,
-      arguments: this.auditArguments(request),
+      arguments: auditArguments,
     });
     return result;
   }
 
   private auditArguments(request: AdvisorEvidenceToolRequest): Record<string, string | number | boolean> {
     switch (request.tool) {
-      case "repo.list_files": return { path: request.path ?? ".", depth: request.depth ?? 3 };
-      case "repo.read_file": return { path: request.path };
-      case "repo.search_text": return { path: request.path ?? ".", queryChars: request.query.length };
-      case "git.diff": return { scope: request.scope ?? "working", hasBase: Boolean(request.base), hasHead: Boolean(request.head) };
-      case "git.show": return { object: request.object, hasPath: Boolean(request.path) };
+      case "repo.list_files": return { pathSha256: descriptorHash(request.path ?? "."), depth: request.depth ?? 3 };
+      case "repo.read_file": return { pathSha256: descriptorHash(request.path) };
+      case "repo.search_text": return { pathSha256: descriptorHash(request.path ?? "."), querySha256: descriptorHash(request.query), queryChars: request.query.length };
+      case "git.diff": return {
+        scope: request.scope ?? "working",
+        hasBase: Boolean(request.base),
+        hasHead: Boolean(request.head),
+        ...(request.base ? { baseSha256: descriptorHash(request.base) } : {}),
+        ...(request.head ? { headSha256: descriptorHash(request.head) } : {}),
+      };
+      case "git.show": return {
+        objectSha256: descriptorHash(request.object),
+        hasPath: Boolean(request.path),
+        ...(request.path ? { pathSha256: descriptorHash(request.path) } : {}),
+      };
       case "git.log": return { count: request.count ?? 10 };
       default: return {};
     }
@@ -368,20 +466,17 @@ export class AdvisorEvidenceToolBroker {
       case "repo.search_text":
         return this.searchText(request.path ?? ".", request.query, deadline);
       case "git.status":
-        return { content: await this.runGit(this.gitArgs(["status", "--short", "--branch", "--untracked-files=normal"]), deadline), complete: true };
+        return this.runGit(this.gitArgs(["status", "--short", "--branch", "--untracked-files=normal"]), deadline, true);
       case "git.diff":
-        if (request.scope === "staged") return { content: await this.runGit(this.gitArgs(["diff", "--cached", "--no-ext-diff", "--no-textconv", "--unified=3"]), deadline), complete: true };
-        if (request.scope === "base_to_head") return { content: await this.runGit(this.gitArgs(["diff", "--no-ext-diff", "--no-textconv", "--unified=3", `${request.base}...${request.head}`]), deadline), complete: true };
-        return { content: await this.runGit(this.gitArgs(["diff", "--no-ext-diff", "--no-textconv", "--unified=3"]), deadline), complete: true };
+        if (request.scope === "staged") return this.runGit(this.gitArgs(["diff", "--cached", "--no-ext-diff", "--no-textconv", "--unified=3"]), deadline, true);
+        if (request.scope === "base_to_head") return this.runGit(this.gitArgs(["diff", "--no-ext-diff", "--no-textconv", "--unified=3", `${request.base}...${request.head}`]), deadline, true);
+        return this.runGit(this.gitArgs(["diff", "--no-ext-diff", "--no-textconv", "--unified=3"]), deadline, true);
       case "git.show":
-        return {
-          content: request.path
-            ? await this.runGit(this.gitArgs(["show", "--no-ext-diff", "--no-textconv", `${request.object}:${request.path}`]), deadline)
-            : await this.runGit(this.gitArgs(["show", "--no-patch", "--format=medium", "--stat", request.object]), deadline),
-          complete: true,
-        };
+        return request.path
+          ? this.runGit(this.gitArgs(["show", "--no-ext-diff", "--no-textconv", `${request.object}:${request.path}`]), deadline, false)
+          : this.runGit(this.gitArgs(["show", "--no-patch", "--format=medium", "--stat", request.object]), deadline, true);
       case "git.log":
-        return { content: await this.runGit(this.gitArgs(["log", `-${request.count ?? 10}`, "--date=iso-strict", "--pretty=format:%H%x09%ad%x09%s"]), deadline), complete: true };
+        return this.runGit(this.gitArgs(["log", `-${request.count ?? 10}`, "--date=iso-strict", "--pretty=format:%H%x09%ad%x09%s"]), deadline, false);
       case "evidence.acceptance":
         return this.workerEvidence("acceptance");
       case "evidence.plan":
@@ -403,27 +498,32 @@ export class AdvisorEvidenceToolBroker {
     return this.beforeDeadline(() => this.rootPromise, deadline);
   }
 
-  private async runGit(args: string[], deadline: number): Promise<string> {
+  private async runGit(args: string[], deadline: number, filterSensitivePaths: boolean): Promise<EvidencePayload> {
     const root = await this.root(deadline);
     const timeoutMs = Math.max(1, deadline - Date.now());
+    let raw: string;
     if (this.options.runGit) {
-      return String(await this.beforeDeadline(
+      raw = String(await this.beforeDeadline(
         () => Promise.resolve(this.options.runGit!(args, root, { timeoutMs })),
         deadline,
       ));
+    } else {
+      const result = await this.beforeDeadline(
+        () => execFileAsync("git", args, {
+          cwd: root,
+          encoding: "utf8",
+          env: safeGitEnvironment(),
+          timeout: timeoutMs,
+          killSignal: "SIGKILL",
+          maxBuffer: Math.max(256 * 1024, this.limits.maxAggregateBytes * 4),
+        }),
+        deadline,
+      );
+      raw = String(result.stdout ?? "");
     }
-    const result = await this.beforeDeadline(
-      () => execFileAsync("git", args, {
-        cwd: root,
-        encoding: "utf8",
-        env: safeGitEnvironment(),
-        timeout: timeoutMs,
-        killSignal: "SIGKILL",
-        maxBuffer: Math.max(256 * 1024, this.limits.maxAggregateBytes * 4),
-      }),
-      deadline,
-    );
-    return String(result.stdout ?? "").trim();
+    return filterSensitivePaths
+      ? sanitiseGitEvidence(raw)
+      : { content: raw.trim(), complete: true };
   }
 
   private async resolveExisting(relativePath: string, deadline: number): Promise<string> {

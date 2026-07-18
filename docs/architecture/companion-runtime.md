@@ -78,12 +78,18 @@ file; a bot-specific value with the same key overrides the shared value.
 Repository `.env.shared` is an editable source file, but changing it alone does
 not update an already-running systemd service.
 
-`/advisor status` reports the effective chain and the source whose chain value
-matches the running process. When both repository `.env.shared` and
-`/etc/default/agent-bridge-shared` are readable, it also compares the bounded
-`BRIDGE_ADVISOR_*` configuration keys and emits a drift warning naming only the
-conflicting keys. It never displays tokens, unrelated environment values, or
-file contents.
+`/advisor status` reports the effective chain from the process environment. A
+running process does not retain which environment file supplied a value, so the
+status output separately lists readable configuration files whose chain matches
+the effective value. It does not claim that a matching file was necessarily the
+origin when the same value could also have come from a bot-specific override or
+direct process environment.
+
+When both repository `.env.shared` and `/etc/default/agent-bridge-shared` are
+readable, the command compares the bounded `BRIDGE_ADVISOR_*` configuration keys
+and emits a drift warning naming only the conflicting keys. It never displays
+tokens, unrelated environment values, or file contents. If both files cannot be
+read, drift is reported as not evaluated rather than as a false clean result.
 
 After changing advisor configuration for a systemd deployment:
 
@@ -91,8 +97,8 @@ After changing advisor configuration for a systemd deployment:
    deployment path;
 2. run `systemctl daemon-reload` when unit files changed;
 3. restart the affected Agent Bridge services;
-4. run `/advisor status` and confirm the effective chain, source, and absence of
-   drift warnings.
+4. run `/advisor status` and confirm the effective chain, matching files, and
+   absence of drift warnings.
 
 Unreadable or absent source files are reported only as unavailable evidence;
 they do not create a false drift warning.

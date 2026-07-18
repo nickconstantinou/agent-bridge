@@ -25,7 +25,6 @@ const ALLOWED_MODES = new Set<AdvisorRequestMode>(["plan", "review", "debug", "r
 const LOCAL_SOCKET_PATHS = new Map<string, string>();
 const CONFIGURED_TRUSTED_SERVICES = new WeakMap<BridgeDb, AdvisorService>();
 type RunCli = ConstructorParameters<typeof AdvisorService>[0]["runCli"];
-type RunGit = (args: string[], cwd: string) => string | Promise<string>;
 
 export interface AdvisorCapabilityBinding {
   chatKey: string;
@@ -171,7 +170,6 @@ export async function requestConfiguredWorkerAdvisorDebug(input: {
   acceptanceCriteria: string;
   plan: string;
   blocked: WorkerBlockedResult;
-  runGit: RunGit;
   audit?: (event: AdvisorEvidenceAuditEvent) => void;
 }): Promise<AdvisorResult> {
   const service = CONFIGURED_TRUSTED_SERVICES.get(input.db);
@@ -179,7 +177,6 @@ export async function requestConfiguredWorkerAdvisorDebug(input: {
   const attemptSummary = formatWorkerBlockedResult(input.blocked);
   const evidenceTools = new AdvisorEvidenceToolBroker({
     repoPath: input.repoPath,
-    runGit: input.runGit,
     evidence: {
       acceptance: input.acceptanceCriteria,
       plan: input.plan,

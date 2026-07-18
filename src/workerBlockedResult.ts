@@ -1,4 +1,4 @@
-import { redactAdvisorText } from "./advisorPrompt.js";
+import { redactAdvisorEvidenceText } from "./advisorEvidenceRedaction.js";
 
 export const WORKER_BLOCKED_RESULT_MARKER = "AGENT_BRIDGE_BLOCKED_RESULT:";
 
@@ -16,7 +16,7 @@ function boundedText(value: unknown, field: string, maxChars: number): string {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`Invalid worker blocked result: ${field} is required`);
   }
-  return redactAdvisorText(value.trim()).slice(0, maxChars);
+  return redactAdvisorEvidenceText(value.trim()).slice(0, maxChars);
 }
 
 function boundedList(value: unknown, field: string, maxItems: number, maxChars: number): string[] {
@@ -25,7 +25,7 @@ function boundedList(value: unknown, field: string, maxItems: number, maxChars: 
   }
   return value
     .slice(0, maxItems)
-    .map((item) => redactAdvisorText(item.trim()).slice(0, maxChars))
+    .map((item) => redactAdvisorEvidenceText(item.trim()).slice(0, maxChars))
     .filter(Boolean);
 }
 

@@ -168,7 +168,7 @@ Self-improvement changes must:
 - preserve human review: never silently edit `AGENTS.md` on `main`
 - remove or revise stale rules when the codebase or architecture changes
 
-Include the retrospective result in final evidence: `no new systemic pattern`, `existing rule covers it`, or a link to the proposed `AGENTS.md` or skill follow-up.
+Include the retrospective result in final evidence: `no new systemic pattern`, `existing rule covers it`, or a link to the proposed `AGENTS.md` or skill follow-up. A retrospective is required, but an `AGENTS.md` change is not: update rules only when the evidence meets the criteria above.
 
 ---
 

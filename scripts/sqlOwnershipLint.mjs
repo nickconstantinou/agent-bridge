@@ -3,17 +3,24 @@
 //
 // advisor_calls/advisor_attempts/conversation_turns/conversation_summaries
 // must only be referenced from their owning repository, the legacy baseline
-// migration (which creates them), or a statement whose *immediately
-// preceding* comment block (no other code between) contains an
-// `arch-lint-allow-legacy-sql` marker. The marker is resolved per-statement
-// (the nearest enclosing `.prepare(`/`.exec(` call), not by a fixed line
-// window — a window can let an unrelated, unmarked statement a few lines
-// away slip through as if it were the marked one.
+// migration (which creates them), or a table reference textually inside a
+// `.prepare(`/`.exec(` call whose immediately preceding, unbroken comment
+// block carries an `arch-lint-allow-legacy-sql` marker.
+//
+// A table reference is proven to belong to a statement only if it falls
+// within that statement's own character range — computed by tracking paren
+// depth from the call's opening `(`, treating characters inside a backtick
+// template literal as inert (so `COALESCE(...)`/subquery parens inside SQL
+// don't confuse the depth count), until depth returns to 0. A reference
+// outside every statement's range (e.g. in a separately declared SQL string
+// assigned to a variable that's passed into `.prepare()` elsewhere) fails
+// closed as unowned, rather than being attributed to the nearest preceding
+// statement.
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 const OWNED_TABLES = /\b(advisor_calls|advisor_attempts|conversation_turns|conversation_summaries)\b/;
-const STATEMENT_START = /\.(prepare|exec)\(/;
+const STATEMENT_START = /\.(prepare|exec)\(/g;
 const MARKER = "arch-lint-allow-legacy-sql";
 const OWNER_FILE_SUFFIXES = [
   "src/repositories/advisorRepository.ts",
@@ -37,15 +44,51 @@ function isOwnerFile(relPath) {
 }
 
 /**
- * For each line, find the nearest enclosing statement-start line (the
- * closest `.prepare(`/`.exec(` at or before it), then walk backward from
- * that statement-start through a *contiguous* run of comment/blank lines
- * only — stopping at the first line that is neither — and check whether
- * the marker appears in that contiguous run. This binds the marker to
- * exactly the statement it sits directly above.
+ * Computes [startOffset, endOffset) character ranges (into the whole-file
+ * string) for every `.prepare(`/`.exec(` call, by tracking paren depth from
+ * the call's opening `(` and ignoring parens/backticks while inside a
+ * template literal, until depth returns to 0.
  */
-function statementIsMarked(lines, statementStartIndex) {
-  let j = statementStartIndex - 1;
+function findStatementRanges(content) {
+  const ranges = [];
+  STATEMENT_START.lastIndex = 0;
+  let m;
+  while ((m = STATEMENT_START.exec(content)) !== null) {
+    const openParenIndex = m.index + m[0].length - 1; // index of the "(" itself
+    let depth = 1;
+    let inTemplate = false;
+    let i = openParenIndex + 1;
+    for (; i < content.length && depth > 0; i++) {
+      const ch = content[i];
+      if (ch === "\\" && inTemplate) {
+        i++; // skip escaped char inside template
+        continue;
+      }
+      if (ch === "`") {
+        inTemplate = !inTemplate;
+        continue;
+      }
+      if (inTemplate) continue;
+      if (ch === "(") depth++;
+      else if (ch === ")") depth--;
+    }
+    ranges.push([openParenIndex, i]); // end is exclusive, one past the closing ")"
+  }
+  return ranges;
+}
+
+function offsetToLine(content, offset) {
+  let line = 1;
+  for (let i = 0; i < offset && i < content.length; i++) {
+    if (content[i] === "\n") line++;
+  }
+  return line;
+}
+
+function statementIsMarked(lines, statementStartLine) {
+  // statementStartLine is 1-indexed; walk backward through the contiguous
+  // comment/blank-line block immediately above it.
+  let j = statementStartLine - 2; // 0-indexed line just above the start line
   while (j >= 0) {
     const trimmed = lines[j].trim();
     if (trimmed.startsWith("//")) {
@@ -62,25 +105,34 @@ function statementIsMarked(lines, statementStartIndex) {
   return false;
 }
 
-function findEnclosingStatementStart(lines, matchIndex) {
-  for (let i = matchIndex; i >= 0; i--) {
-    if (STATEMENT_START.test(lines[i])) return i;
-  }
-  return -1;
-}
-
 function lintFile(filePath, relPath) {
   const violations = [];
   if (isOwnerFile(relPath)) return violations;
   const content = readFileSync(filePath, "utf8");
   const lines = content.split("\n");
+  const statementRanges = findStatementRanges(content);
+  const markedStatementLines = new Set(
+    statementRanges
+      .map(([start]) => offsetToLine(content, start))
+      .filter((line) => statementIsMarked(lines, line)),
+  );
+
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (!OWNED_TABLES.test(line)) continue;
     if (line.trim().startsWith("//")) continue; // prose mention, not executable SQL
-    const statementStart = findEnclosingStatementStart(lines, i);
-    if (statementStart !== -1 && statementIsMarked(lines, statementStart)) continue;
-    violations.push(`${relPath}:${i + 1}:${line}`);
+    const lineNumber = i + 1;
+    const matchOffset = lines.slice(0, i).join("\n").length + (i > 0 ? 1 : 0) + line.search(OWNED_TABLES);
+
+    const containingStatement = statementRanges.find(
+      ([start, end]) => matchOffset >= start && matchOffset < end,
+    );
+    if (containingStatement) {
+      const statementStartLine = offsetToLine(content, containingStatement[0]);
+      if (markedStatementLines.has(statementStartLine)) continue;
+    }
+    // Not proven to belong to any marked statement — fail closed.
+    violations.push(`${relPath}:${lineNumber}:${line}`);
   }
   return violations;
 }
@@ -97,7 +149,8 @@ if (allViolations.length > 0) {
   console.error(
     "arch-lint: advisor/conversation SQL must live in its owning repository " +
     "(src/repositories/advisorRepository.ts, src/repositories/conversationRepository.ts) " +
-    "or be explicitly marked with arch-lint-allow-legacy-sql immediately above the statement",
+    "or be textually inside a .prepare()/.exec() call explicitly marked with " +
+    "arch-lint-allow-legacy-sql immediately above",
   );
   for (const v of allViolations) console.error(v);
   process.exit(1);

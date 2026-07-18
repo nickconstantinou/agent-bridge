@@ -130,6 +130,37 @@ describe("arch-lint", () => {
     }
   });
 
+  it("does not attribute a separately declared SQL string to an earlier marked statement (fails closed)", () => {
+    // Regression test: a marker must prove the table reference is textually
+    // inside its own .prepare()/.exec() call, not just "somewhere after a
+    // marked statement and before the next one." A SQL string built in a
+    // variable and passed to .prepare() later must not inherit an earlier
+    // marked call's exemption — the reference here isn't inside any
+    // .prepare()/.exec() call's own parentheses at all.
+    const dir = mkdtempSync(join(tmpdir(), "archlint-sql-separate-string-"));
+    try {
+      writeFileSync(
+        join(dir, "bad.ts"),
+        [
+          "export function f(db: any) {",
+          "  // arch-lint-allow-legacy-sql: legitimate exception",
+          "  db.prepare(`SELECT * FROM conversation_turns`).all();",
+          "",
+          "  const leakedSql = `SELECT * FROM conversation_summaries`;",
+          "  return db.prepare(leakedSql).all();",
+          "}",
+          "",
+        ].join("\n"),
+      );
+      const res = runLint(dir);
+      expect(res.code).not.toBe(0);
+      expect(res.output).toContain("conversation_summaries");
+      expect(res.output).toContain("leakedSql");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("fails when a non-owner file queries an advisor_calls table directly", () => {
     const dir = mkdtempSync(join(tmpdir(), "archlint-sql-advisor-"));
     try {

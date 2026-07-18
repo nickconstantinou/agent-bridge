@@ -44,14 +44,25 @@ export function applyMigrationsUpTo(
   }
   if (current === targetVersion) return;
 
-  const migrate = db.transaction(() => {
-    for (const migration of ordered) {
-      if (migration.version <= current || migration.version > targetVersion) continue;
-      migration.up(db);
-      db.pragma(`user_version = ${migration.version}`);
-    }
-  });
-  migrate();
+  // PRAGMA foreign_keys is a documented no-op inside a transaction, so it
+  // must be toggled here, before db.transaction() opens its BEGIN, for
+  // migrations that rename/recreate tables (e.g. to widen a CHECK
+  // constraint) to actually run with enforcement suspended. Restored
+  // unconditionally afterward, success or failure.
+  const foreignKeysWereEnabled = Number(db.pragma("foreign_keys", { simple: true })) === 1;
+  if (foreignKeysWereEnabled) db.pragma("foreign_keys = OFF");
+  try {
+    const migrate = db.transaction(() => {
+      for (const migration of ordered) {
+        if (migration.version <= current || migration.version > targetVersion) continue;
+        migration.up(db);
+        db.pragma(`user_version = ${migration.version}`);
+      }
+    });
+    migrate();
+  } finally {
+    if (foreignKeysWereEnabled) db.pragma("foreign_keys = ON");
+  }
 }
 
 /**

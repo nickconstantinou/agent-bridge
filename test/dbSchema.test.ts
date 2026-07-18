@@ -34,6 +34,7 @@ function tempDbPath(role: string): { dir: string; path: string } {
  */
 function createLegacyFixture(path: string): void {
   const raw = new Database(path);
+  raw.pragma("foreign_keys = ON");
   raw.exec(`
     CREATE TABLE bridge_state (
       chat_id               TEXT    PRIMARY KEY,
@@ -124,6 +125,22 @@ function createLegacyFixture(path: string): void {
       updated_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
   `);
+  // Linked rows across work_items -> work_jobs -> approvals/github_links, with
+  // foreign_keys enforcement ON at creation time (matching a real production
+  // instance). Exercises the rename-recreate repairs under real FK pressure,
+  // not just against an empty schema.
+  raw.exec(`
+    INSERT INTO bridge_state (chat_id, codex_session_id, gemini_session_id, active_execution_lock, last_update_id)
+    VALUES ('chat:legacy', 'codex-session-1', 'gemini-session-1', 0, 42);
+    INSERT INTO work_items (id, kind, source, title, status, priority, created_by)
+    VALUES (1, 'feature', 'telegram', 'Legacy work item', 'approved', 'normal', 'nick');
+    INSERT INTO work_jobs (id, work_item_id, task_type, status, idempotency_key)
+    VALUES (1, 1, 'implementation_plan', 'completed', 'legacy-job-1');
+    INSERT INTO approvals (id, work_item_id, job_id, approval_type, status, requested_by)
+    VALUES (1, 1, 1, 'merge_pr', 'approved', 'nick');
+    INSERT INTO github_links (id, work_item_id, repository, pr_number)
+    VALUES (1, 1, 'nickconstantinou/agent-bridge', 147);
+  `);
   raw.close();
 }
 
@@ -160,6 +177,15 @@ describe("database schema versioning", () => {
       for (const table of ["conversation_turns", "pending_messages", "conversation_summaries", "compaction_attempts", "project_memories"]) {
         expect(db.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)).toBeTruthy();
       }
+
+      // The linked work_items -> work_jobs -> approvals/github_links chain
+      // survived the rename-recreate repairs intact (foreign_keys is
+      // suspended for the whole migration, not left enabled mid-rename).
+      expect(db.raw.prepare("SELECT id, title FROM work_items WHERE id = 1").get()).toEqual({ id: 1, title: "Legacy work item" });
+      expect(db.raw.prepare("SELECT id, work_item_id FROM work_jobs WHERE id = 1").get()).toEqual({ id: 1, work_item_id: 1 });
+      expect(db.raw.prepare("SELECT id, work_item_id, job_id FROM approvals WHERE id = 1").get()).toEqual({ id: 1, work_item_id: 1, job_id: 1 });
+      expect(db.raw.prepare("SELECT id, pr_number FROM github_links WHERE id = 1").get()).toEqual({ id: 1, pr_number: 147 });
+      expect(db.raw.pragma("foreign_keys", { simple: true })).toBe(1);
       db.close();
 
       // Reopening an already-migrated (version 1) database must not re-run
@@ -210,6 +236,30 @@ describe("database schema versioning", () => {
       expect(verify.pragma("journal_mode", { simple: true })).toBe("delete");
       expect(verify.pragma("user_version", { simple: true })).toBe(99);
       expect(verify.prepare("SELECT name FROM sqlite_master WHERE name = 'sentinel'").get()).toBeTruthy();
+      verify.close();
+    } finally {
+      rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed for a negative schema version without enabling WAL mode", () => {
+    const fixture = tempDbPath("negative");
+    try {
+      const raw = new Database(fixture.path);
+      raw.exec("CREATE TABLE sentinel(value TEXT); PRAGMA user_version = -5;");
+      raw.close();
+
+      const walPath = `${fixture.path}-wal`;
+      const shmPath = `${fixture.path}-shm`;
+
+      expect(() => openDb(fixture.path)).toThrow(/unsupported database schema version -5/i);
+
+      expect(existsSync(walPath)).toBe(false);
+      expect(existsSync(shmPath)).toBe(false);
+
+      const verify = new Database(fixture.path, { readonly: true });
+      expect(verify.pragma("journal_mode", { simple: true })).toBe("delete");
+      expect(verify.pragma("user_version", { simple: true })).toBe(-5);
       verify.close();
     } finally {
       rmSync(fixture.dir, { recursive: true, force: true });

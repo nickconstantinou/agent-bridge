@@ -1,10 +1,31 @@
 import type Database from "better-sqlite3";
 
 /**
+ * Adds a column, tolerating only the specific "already exists" failure so a
+ * database that already carries the column (e.g. added by the pre-migration
+ * unversioned code path on a real production instance) stays idempotent.
+ * Any other failure (disk error, syntax, corruption) propagates so the
+ * migration transaction rolls back rather than silently marking an
+ * incomplete repair as version 1. Returns whether the column was added.
+ */
+function addColumnIfMissing(raw: Database.Database, sql: string): boolean {
+  try {
+    raw.exec(sql);
+    return true;
+  } catch (err) {
+    if (err instanceof Error && /duplicate column name/i.test(err.message)) return false;
+    throw err;
+  }
+}
+
+/**
  * The version-0 to version-1 migration: owns the full legacy DDL and every
  * historical shape-detected repair, transactionally. Moved verbatim out of
  * openDb() so user_version becomes authoritative — a version-1 database no
- * longer re-runs these repairs on every open.
+ * longer re-runs these repairs on every open. Repair failures are allowed to
+ * propagate (rather than being caught and logged) so an incomplete repair
+ * rolls back the whole migration and leaves user_version at 0, instead of
+ * being permanently marked complete.
  */
 export function applyLegacyCompatibleBaseline(raw: Database.Database): void {
   raw.exec(`
@@ -190,202 +211,165 @@ export function applyLegacyCompatibleBaseline(raw: Database.Database): void {
     `);
   }
   raw.exec(`CREATE INDEX IF NOT EXISTS idx_execution_locks_lease ON execution_locks(lease_expires_at)`);
-  try {
-    raw.exec(`ALTER TABLE bridge_state ADD COLUMN claude_session_id TEXT`);
-  } catch { /* column already exists in existing DBs */ }
-  try {
-    raw.exec(`ALTER TABLE bridge_state ADD COLUMN antigravity_session_id TEXT`);
-  } catch { /* column already exists in existing DBs */ }
-  try {
-    raw.exec(`UPDATE bridge_state SET antigravity_session_id = gemini_session_id WHERE antigravity_session_id IS NULL AND gemini_session_id IS NOT NULL`);
-  } catch { /* ignore migration failures */ }
-  try {
-    raw.exec(`ALTER TABLE bridge_state ADD COLUMN codex_consecutive_failures INTEGER NOT NULL DEFAULT 0`);
-  } catch { /* column already exists */ }
-  try {
-    raw.exec(`ALTER TABLE bridge_state ADD COLUMN claude_consecutive_failures INTEGER NOT NULL DEFAULT 0`);
-  } catch { /* column already exists */ }
-  try {
-    raw.exec(`ALTER TABLE bridge_state ADD COLUMN antigravity_consecutive_failures INTEGER NOT NULL DEFAULT 0`);
-  } catch { /* column already exists */ }
-  try {
-    raw.exec(`ALTER TABLE bridge_state ADD COLUMN codex_session_created_at TEXT`);
-  } catch { /* column already exists */ }
-  try {
-    raw.exec(`ALTER TABLE bridge_state ADD COLUMN antigravity_session_created_at TEXT`);
-  } catch { /* column already exists */ }
-  try {
-    raw.exec(`ALTER TABLE bridge_state ADD COLUMN claude_session_created_at TEXT`);
-  } catch { /* column already exists */ }
-  try {
-    raw.exec(`ALTER TABLE bridge_state ADD COLUMN kimchi_session_id TEXT`);
-  } catch { /* column already exists */ }
-  try {
-    raw.exec(`ALTER TABLE bridge_state ADD COLUMN kimchi_consecutive_failures INTEGER NOT NULL DEFAULT 0`);
-  } catch { /* column already exists */ }
-  try {
-    raw.exec(`ALTER TABLE bridge_state ADD COLUMN kimchi_session_created_at TEXT`);
-  } catch { /* column already exists */ }
-  try {
-    raw.exec(`ALTER TABLE github_links ADD COLUMN pr_state TEXT NOT NULL DEFAULT 'draft'`);
-  } catch { /* column already exists */ }
-  try {
-    raw.exec(`ALTER TABLE github_links ADD COLUMN last_activity_at TEXT`);
-  } catch { /* column already exists */ }
-  try {
-    raw.exec(`ALTER TABLE github_links ADD COLUMN proof_comment_sha TEXT`);
-  } catch { /* column already exists */ }
-  try {
-    const workItemsSql = (raw.prepare(
-      `SELECT sql FROM sqlite_master WHERE type='table' AND name='work_items'`
-    ).get() as { sql: string } | undefined)?.sql ?? "";
-    const hasCurrentWorkItemTypes = workItemsSql.includes("'refactor'") && workItemsSql.includes("'refactor_scan'");
-    if (!hasCurrentWorkItemTypes) {
-      raw.pragma("foreign_keys = OFF");
-      raw.pragma("legacy_alter_table = ON");
-      try {
-        raw.exec(`
-          ALTER TABLE work_items RENAME TO work_items_migrate_tmp;
-          CREATE TABLE work_items (
-            id          INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind        TEXT NOT NULL CHECK (kind IN ('defect','feature','maintenance','research','ops','refactor')),
-            source      TEXT NOT NULL CHECK (source IN ('telegram','health','defect_scan','refactor_scan','schedule','github','manual')),
-            repository  TEXT,
-            title       TEXT NOT NULL,
-            body        TEXT,
-            status      TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','needs_approval','approved','in_progress','blocked','resolved','closed','rejected')),
-            priority    TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('low','normal','high','urgent')),
-            created_by  TEXT NOT NULL,
-            created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-          );
-          INSERT INTO work_items (id, kind, source, repository, title, body, status, priority, created_by, created_at, updated_at)
-          SELECT id, kind, source, repository, title, body, status, priority, created_by, created_at, updated_at
-          FROM work_items_migrate_tmp;
-          DROP TABLE work_items_migrate_tmp;
-        `);
-      } finally {
-        raw.pragma("legacy_alter_table = OFF");
-        raw.pragma("foreign_keys = ON");
-      }
+  addColumnIfMissing(raw, `ALTER TABLE bridge_state ADD COLUMN claude_session_id TEXT`);
+  addColumnIfMissing(raw, `ALTER TABLE bridge_state ADD COLUMN antigravity_session_id TEXT`);
+  raw.exec(`UPDATE bridge_state SET antigravity_session_id = gemini_session_id WHERE antigravity_session_id IS NULL AND gemini_session_id IS NOT NULL`);
+  addColumnIfMissing(raw, `ALTER TABLE bridge_state ADD COLUMN codex_consecutive_failures INTEGER NOT NULL DEFAULT 0`);
+  addColumnIfMissing(raw, `ALTER TABLE bridge_state ADD COLUMN claude_consecutive_failures INTEGER NOT NULL DEFAULT 0`);
+  addColumnIfMissing(raw, `ALTER TABLE bridge_state ADD COLUMN antigravity_consecutive_failures INTEGER NOT NULL DEFAULT 0`);
+  addColumnIfMissing(raw, `ALTER TABLE bridge_state ADD COLUMN codex_session_created_at TEXT`);
+  addColumnIfMissing(raw, `ALTER TABLE bridge_state ADD COLUMN antigravity_session_created_at TEXT`);
+  addColumnIfMissing(raw, `ALTER TABLE bridge_state ADD COLUMN claude_session_created_at TEXT`);
+  addColumnIfMissing(raw, `ALTER TABLE bridge_state ADD COLUMN kimchi_session_id TEXT`);
+  addColumnIfMissing(raw, `ALTER TABLE bridge_state ADD COLUMN kimchi_consecutive_failures INTEGER NOT NULL DEFAULT 0`);
+  addColumnIfMissing(raw, `ALTER TABLE bridge_state ADD COLUMN kimchi_session_created_at TEXT`);
+  addColumnIfMissing(raw, `ALTER TABLE github_links ADD COLUMN pr_state TEXT NOT NULL DEFAULT 'draft'`);
+  addColumnIfMissing(raw, `ALTER TABLE github_links ADD COLUMN last_activity_at TEXT`);
+  addColumnIfMissing(raw, `ALTER TABLE github_links ADD COLUMN proof_comment_sha TEXT`);
+
+  const workItemsSql = (raw.prepare(
+    `SELECT sql FROM sqlite_master WHERE type='table' AND name='work_items'`
+  ).get() as { sql: string } | undefined)?.sql ?? "";
+  const hasCurrentWorkItemTypes = workItemsSql.includes("'refactor'") && workItemsSql.includes("'refactor_scan'");
+  if (!hasCurrentWorkItemTypes) {
+    // legacy_alter_table (unlike foreign_keys) does take effect inside the
+    // enclosing migration transaction; foreign_keys enforcement is already
+    // suspended for the whole migration by applyMigrationsUpTo().
+    raw.pragma("legacy_alter_table = ON");
+    try {
+      raw.exec(`
+        ALTER TABLE work_items RENAME TO work_items_migrate_tmp;
+        CREATE TABLE work_items (
+          id          INTEGER PRIMARY KEY AUTOINCREMENT,
+          kind        TEXT NOT NULL CHECK (kind IN ('defect','feature','maintenance','research','ops','refactor')),
+          source      TEXT NOT NULL CHECK (source IN ('telegram','health','defect_scan','refactor_scan','schedule','github','manual')),
+          repository  TEXT,
+          title       TEXT NOT NULL,
+          body        TEXT,
+          status      TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','needs_approval','approved','in_progress','blocked','resolved','closed','rejected')),
+          priority    TEXT NOT NULL DEFAULT 'normal' CHECK (priority IN ('low','normal','high','urgent')),
+          created_by  TEXT NOT NULL,
+          created_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        INSERT INTO work_items (id, kind, source, repository, title, body, status, priority, created_by, created_at, updated_at)
+        SELECT id, kind, source, repository, title, body, status, priority, created_by, created_at, updated_at
+        FROM work_items_migrate_tmp;
+        DROP TABLE work_items_migrate_tmp;
+      `);
+    } finally {
+      raw.pragma("legacy_alter_table = OFF");
     }
-  } catch (err) { console.warn('[db] work_items refactor migration failed:', err); }
+  }
+
   // Migrate work_jobs task_type CHECK constraint to include feature_plan, pr_lifecycle,
   // pr_watch, pr_refresh, and orchestrated_task. SQLite cannot ALTER CHECK
-  // constraints; use rename-recreate.
-  // We disable FK enforcement and legacy-alter-table mode to prevent SQLite 3.26+ from
-  // auto-rewriting FK references in other tables (e.g. approvals.job_id) during the
-  // rename, which would otherwise cause the DROP TABLE to fail.
-  try {
-    const workJobsSql = (raw.prepare(
-      `SELECT sql FROM sqlite_master WHERE type='table' AND name='work_jobs'`
-    ).get() as { sql: string } | undefined)?.sql ?? "";
-    const hasCurrentTaskTypes = workJobsSql.includes("'orchestrated_task'")
-      && workJobsSql.includes("'refactor_scan'")
-      && workJobsSql.includes("'pr_watch'")
-      && workJobsSql.includes("'pr_refresh'");
-    if (!hasCurrentTaskTypes) {
-      const existingColumns = (raw.prepare(`PRAGMA table_info(work_jobs)`).all() as Array<{ name: string }>)
-        .map(c => c.name);
-      const hasPhase = existingColumns.includes("phase");
-      const hasPhaseData = existingColumns.includes("phase_data_json");
-      const baseColumns = [
-        "id", "work_item_id", "task_type", "status", "bot", "lease_owner",
-        "lease_expires_at", "heartbeat_at", "attempt_count", "max_attempts",
-        "idempotency_key", "input_json", "result_json", "error",
-        "created_at", "updated_at",
-      ];
-      const targetColumns = [...baseColumns, "phase", "phase_data_json"].join(", ");
-      const sourceColumns = [
-        ...baseColumns,
-        hasPhase ? "phase" : "'initial'",
-        hasPhaseData ? "phase_data_json" : "NULL",
-      ].join(", ");
-      raw.pragma("foreign_keys = OFF");
-      raw.pragma("legacy_alter_table = ON");
-      try {
-        raw.exec(`
-          ALTER TABLE work_jobs RENAME TO work_jobs_migrate_tmp;
-          CREATE TABLE work_jobs (
-            id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            work_item_id     INTEGER,
-            task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','orchestrated_task','refactor_scan','pr_lifecycle','pr_watch','pr_refresh')),
-            status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','leased','running','waiting_approval','completed','failed','cancelled')),
-            bot              TEXT CHECK (bot IN ('codex','antigravity','claude')),
-            lease_owner      TEXT,
-            lease_expires_at TEXT,
-            heartbeat_at     TEXT,
-            attempt_count    INTEGER NOT NULL DEFAULT 0,
-            max_attempts     INTEGER NOT NULL DEFAULT 2,
-            idempotency_key  TEXT NOT NULL UNIQUE,
-            input_json       TEXT NOT NULL DEFAULT '{}',
-            result_json      TEXT,
-            error            TEXT,
-            created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            phase            TEXT NOT NULL DEFAULT 'initial',
-            phase_data_json  TEXT,
-            FOREIGN KEY(work_item_id) REFERENCES work_items(id)
-          );
-          INSERT INTO work_jobs (${targetColumns})
-          SELECT ${sourceColumns} FROM work_jobs_migrate_tmp;
-          DROP TABLE work_jobs_migrate_tmp;
-        `);
-      } finally {
-        raw.pragma("legacy_alter_table = OFF");
-        raw.pragma("foreign_keys = ON");
-      }
+  // constraints; use rename-recreate. legacy_alter_table prevents SQLite 3.26+
+  // from auto-rewriting FK references in other tables (e.g. approvals.job_id)
+  // during the rename, which would otherwise cause the DROP TABLE to fail.
+  const workJobsSql = (raw.prepare(
+    `SELECT sql FROM sqlite_master WHERE type='table' AND name='work_jobs'`
+  ).get() as { sql: string } | undefined)?.sql ?? "";
+  const hasCurrentTaskTypes = workJobsSql.includes("'orchestrated_task'")
+    && workJobsSql.includes("'refactor_scan'")
+    && workJobsSql.includes("'pr_watch'")
+    && workJobsSql.includes("'pr_refresh'");
+  if (!hasCurrentTaskTypes) {
+    const existingColumns = (raw.prepare(`PRAGMA table_info(work_jobs)`).all() as Array<{ name: string }>)
+      .map(c => c.name);
+    const hasPhase = existingColumns.includes("phase");
+    const hasPhaseData = existingColumns.includes("phase_data_json");
+    const baseColumns = [
+      "id", "work_item_id", "task_type", "status", "bot", "lease_owner",
+      "lease_expires_at", "heartbeat_at", "attempt_count", "max_attempts",
+      "idempotency_key", "input_json", "result_json", "error",
+      "created_at", "updated_at",
+    ];
+    const targetColumns = [...baseColumns, "phase", "phase_data_json"].join(", ");
+    const sourceColumns = [
+      ...baseColumns,
+      hasPhase ? "phase" : "'initial'",
+      hasPhaseData ? "phase_data_json" : "NULL",
+    ].join(", ");
+    raw.pragma("legacy_alter_table = ON");
+    try {
+      raw.exec(`
+        ALTER TABLE work_jobs RENAME TO work_jobs_migrate_tmp;
+        CREATE TABLE work_jobs (
+          id               INTEGER PRIMARY KEY AUTOINCREMENT,
+          work_item_id     INTEGER,
+          task_type        TEXT NOT NULL CHECK (task_type IN ('defect_scan','feature_plan','feature_research','implementation_plan','run_tdd_fix','open_github_issue','open_pull_request','verify_pull_request','ops_check','tdd_implementation','orchestrated_task','refactor_scan','pr_lifecycle','pr_watch','pr_refresh')),
+          status           TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','leased','running','waiting_approval','completed','failed','cancelled')),
+          bot              TEXT CHECK (bot IN ('codex','antigravity','claude')),
+          lease_owner      TEXT,
+          lease_expires_at TEXT,
+          heartbeat_at     TEXT,
+          attempt_count    INTEGER NOT NULL DEFAULT 0,
+          max_attempts     INTEGER NOT NULL DEFAULT 2,
+          idempotency_key  TEXT NOT NULL UNIQUE,
+          input_json       TEXT NOT NULL DEFAULT '{}',
+          result_json      TEXT,
+          error            TEXT,
+          created_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at       TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          phase            TEXT NOT NULL DEFAULT 'initial',
+          phase_data_json  TEXT,
+          FOREIGN KEY(work_item_id) REFERENCES work_items(id)
+        );
+        INSERT INTO work_jobs (${targetColumns})
+        SELECT ${sourceColumns} FROM work_jobs_migrate_tmp;
+        DROP TABLE work_jobs_migrate_tmp;
+      `);
+    } finally {
+      raw.pragma("legacy_alter_table = OFF");
     }
-  } catch (err) { console.warn('[db] work_jobs pr_watch migration failed:', err); }
+  }
 
   // Repair legacy DBs where an earlier work_jobs rename left approvals.job_id
   // pointing at a dropped migration table. That blocks merge approval creation.
-  try {
-    const approvalsSql = (raw.prepare(
-      `SELECT sql FROM sqlite_master WHERE type='table' AND name='approvals'`
-    ).get() as { sql: string } | undefined)?.sql ?? "";
-    if (approvalsSql.includes("work_jobs_old") || approvalsSql.includes("work_jobs_migrate_tmp")) {
-      raw.pragma("foreign_keys = OFF");
-      raw.pragma("legacy_alter_table = ON");
-      try {
-        raw.exec(`
-          ALTER TABLE approvals RENAME TO approvals_migrate_tmp;
-          CREATE TABLE approvals (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            work_item_id  INTEGER,
-            job_id        INTEGER,
-            approval_type TEXT NOT NULL CHECK (approval_type IN ('create_issue','start_implementation','push_branch','open_pr','merge_pr','restart_service','cancel_job')),
-            status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','expired')),
-            requested_by  TEXT NOT NULL,
-            requested_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            decided_by    TEXT,
-            decided_at    TEXT,
-            expires_at    TEXT,
-            payload_json  TEXT NOT NULL DEFAULT '{}',
-            FOREIGN KEY(work_item_id) REFERENCES work_items(id),
-            FOREIGN KEY(job_id) REFERENCES work_jobs(id)
-          );
-          INSERT INTO approvals (
-            id, work_item_id, job_id, approval_type, status, requested_by,
-            requested_at, decided_by, decided_at, expires_at, payload_json
-          )
-          SELECT
-            id, work_item_id, job_id, approval_type, status, requested_by,
-            requested_at, decided_by, decided_at, expires_at, payload_json
-          FROM approvals_migrate_tmp;
-          DROP TABLE approvals_migrate_tmp;
-        `);
-      } finally {
-        raw.pragma("legacy_alter_table = OFF");
-        raw.pragma("foreign_keys = ON");
-      }
+  const approvalsSql = (raw.prepare(
+    `SELECT sql FROM sqlite_master WHERE type='table' AND name='approvals'`
+  ).get() as { sql: string } | undefined)?.sql ?? "";
+  if (approvalsSql.includes("work_jobs_old") || approvalsSql.includes("work_jobs_migrate_tmp")) {
+    raw.pragma("legacy_alter_table = ON");
+    try {
+      raw.exec(`
+        ALTER TABLE approvals RENAME TO approvals_migrate_tmp;
+        CREATE TABLE approvals (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          work_item_id  INTEGER,
+          job_id        INTEGER,
+          approval_type TEXT NOT NULL CHECK (approval_type IN ('create_issue','start_implementation','push_branch','open_pr','merge_pr','restart_service','cancel_job')),
+          status        TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','approved','rejected','expired')),
+          requested_by  TEXT NOT NULL,
+          requested_at  TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          decided_by    TEXT,
+          decided_at    TEXT,
+          expires_at    TEXT,
+          payload_json  TEXT NOT NULL DEFAULT '{}',
+          FOREIGN KEY(work_item_id) REFERENCES work_items(id),
+          FOREIGN KEY(job_id) REFERENCES work_jobs(id)
+        );
+        INSERT INTO approvals (
+          id, work_item_id, job_id, approval_type, status, requested_by,
+          requested_at, decided_by, decided_at, expires_at, payload_json
+        )
+        SELECT
+          id, work_item_id, job_id, approval_type, status, requested_by,
+          requested_at, decided_by, decided_at, expires_at, payload_json
+        FROM approvals_migrate_tmp;
+        DROP TABLE approvals_migrate_tmp;
+      `);
+    } finally {
+      raw.pragma("legacy_alter_table = OFF");
     }
-  } catch (err) { console.warn('[db] approvals FK migration failed:', err); }
+  }
 
   // ── Conversation persistence (2026-06-20) ────────────────────────────────
   // conversation_turns are pruned post-/compact via pruneConvTurns(). Summaries are tiny and kept forever.
-  try {
-    raw.exec(`
+  // CREATE TABLE/INDEX IF NOT EXISTS already makes this idempotent; a real
+  // failure here must propagate rather than be silently swallowed.
+  raw.exec(`
       CREATE TABLE IF NOT EXISTS conversation_turns (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         chat_key   TEXT    NOT NULL,
@@ -440,26 +424,20 @@ export function applyLegacyCompatibleBaseline(raw: Database.Database): void {
       CREATE INDEX IF NOT EXISTS idx_compaction_attempts_chat_key
         ON compaction_attempts(chat_key, id);
     `);
-  } catch { /* tables already exist on upgraded DBs */ }
-  let migratedPendingSurface = false;
-  try {
-    raw.exec(`ALTER TABLE pending_messages ADD COLUMN surface TEXT NOT NULL DEFAULT 'legacy'`);
-    migratedPendingSurface = true;
-  } catch { /* column already exists */ }
+  const migratedPendingSurface = addColumnIfMissing(raw, `ALTER TABLE pending_messages ADD COLUMN surface TEXT NOT NULL DEFAULT 'legacy'`);
   raw.exec(`CREATE INDEX IF NOT EXISTS idx_pending_msgs_surface_chat_key ON pending_messages(surface, chat_key, id)`);
-  try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'claimed'))`); } catch {}
-  try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN claim_run_id TEXT`); } catch {}
-  try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN claim_acquisition_id TEXT`); } catch {}
-  try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN claimed_at TEXT`); } catch {}
-  try { raw.exec(`ALTER TABLE pending_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'`); } catch {}
+  addColumnIfMissing(raw, `ALTER TABLE pending_messages ADD COLUMN state TEXT NOT NULL DEFAULT 'queued' CHECK (state IN ('queued', 'claimed'))`);
+  addColumnIfMissing(raw, `ALTER TABLE pending_messages ADD COLUMN claim_run_id TEXT`);
+  addColumnIfMissing(raw, `ALTER TABLE pending_messages ADD COLUMN claim_acquisition_id TEXT`);
+  addColumnIfMissing(raw, `ALTER TABLE pending_messages ADD COLUMN claimed_at TEXT`);
+  addColumnIfMissing(raw, `ALTER TABLE pending_messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'`);
   if (migratedPendingSurface) {
     const { count } = raw.prepare(`SELECT COUNT(*) AS count FROM pending_messages WHERE surface = 'legacy'`).get() as { count: number };
     if (count > 0) console.warn(`[db] quarantined ${count} legacy pending message(s)`);
   }
 
   // ── Project memories (2026-06-21) ─────────────────────────────────────────
-  try {
-    raw.exec(`
+  raw.exec(`
       CREATE TABLE IF NOT EXISTS project_memories (
         id              TEXT PRIMARY KEY,
         scope           TEXT NOT NULL DEFAULT 'project',
@@ -486,21 +464,12 @@ export function applyLegacyCompatibleBaseline(raw: Database.Database): void {
         INSERT INTO project_memories_fts(rowid, id, text) VALUES (new.rowid, new.id, new.text);
       END;
     `);
-  } catch { /* tables already exist on upgraded DBs */ }
-  try {
-    raw.exec(`ALTER TABLE project_memories ADD COLUMN source_turn_id INTEGER`);
-  } catch { /* column already exists */ }
-  try {
-    raw.exec(`ALTER TABLE project_memories ADD COLUMN source_repo_path TEXT`);
-  } catch { /* column already exists */ }
+  addColumnIfMissing(raw, `ALTER TABLE project_memories ADD COLUMN source_turn_id INTEGER`);
+  addColumnIfMissing(raw, `ALTER TABLE project_memories ADD COLUMN source_repo_path TEXT`);
 
   // ── Job checkpointing (Phase A) ───────────────────────────────────────────
   // Adds phase + phase_data_json to work_jobs so handlers can yield mid-job
   // and resume from a named phase with accumulated state.
-  try {
-    raw.exec(`ALTER TABLE work_jobs ADD COLUMN phase TEXT NOT NULL DEFAULT 'initial'`);
-  } catch { /* column already exists */ }
-  try {
-    raw.exec(`ALTER TABLE work_jobs ADD COLUMN phase_data_json TEXT`);
-  } catch { /* column already exists */ }
+  addColumnIfMissing(raw, `ALTER TABLE work_jobs ADD COLUMN phase TEXT NOT NULL DEFAULT 'initial'`);
+  addColumnIfMissing(raw, `ALTER TABLE work_jobs ADD COLUMN phase_data_json TEXT`);
 }

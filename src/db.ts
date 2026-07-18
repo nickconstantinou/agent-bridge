@@ -101,9 +101,11 @@ export function openDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
   }
   const raw = new Database(dbPath);
   // Version-gate before WAL mode or any other write-affecting operation, so a
-  // future/unsupported database is rejected without being mutated.
+  // future, negative, or otherwise unsupported database is rejected without
+  // being mutated. Mirrors the validation in applyMigrationsUpTo() so no
+  // invalid version can reach WAL mode via this earlier gate.
   const schemaVersion = Number(raw.pragma("user_version", { simple: true }));
-  if (schemaVersion > CURRENT_SCHEMA_VERSION) {
+  if (!Number.isInteger(schemaVersion) || schemaVersion < 0 || schemaVersion > CURRENT_SCHEMA_VERSION) {
     raw.close();
     throw new UnsupportedSchemaVersionError(schemaVersion);
   }

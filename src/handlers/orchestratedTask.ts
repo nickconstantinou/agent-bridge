@@ -7,6 +7,7 @@
 
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
 import { requestConfiguredWorkerAdvisorDebug } from "../advisorBroker.js";
+import { redactAdvisorEvidenceText } from "../advisorEvidenceRedaction.js";
 import { isCodeCliAllowed } from "../workerCliPolicy.js";
 import { createWorkerPromptFileReader } from "../workerPromptFileReader.js";
 import { loadWorkerPrompt } from "../workerPrompts.js";
@@ -15,7 +16,7 @@ import {
   parseWorkerBlockedResult,
   type WorkerBlockedResult,
 } from "../workerBlockedResult.js";
-import type { AdvisorDebugVerdict } from "../advisorTypes.js";
+import type { AdvisorDebugVerdict, AdvisorEvidenceBasis } from "../advisorTypes.js";
 
 type CliKind = "codex" | "claude" | "antigravity";
 type RunCli = (command: string, args: string[], cwd?: string) => Promise<string>;
@@ -28,6 +29,9 @@ export interface AdvisorDebugCheckpointResult {
   evidenceIds: string[];
   verificationSteps: string[];
   confidence: "low" | "medium" | "high";
+  evidenceBasis?: AdvisorEvidenceBasis[];
+  assumptions?: string[];
+  unresolvedConflicts?: string[];
 }
 
 interface OrchestratedTaskDeps {
@@ -120,6 +124,14 @@ async function buildExecutePrompt(ctx: JobHandlerContext, title: string, plan: s
   );
 }
 
+function evidenceBasisText(debug: AdvisorDebugCheckpointResult): string[] {
+  return (debug.evidenceBasis ?? []).slice(0, 24).map((basis) => {
+    const claim = basis.claim.slice(0, 1_200);
+    const ids = basis.evidenceIds.slice(0, 12).join(", ");
+    return `- ${claim} [${ids}]`;
+  });
+}
+
 async function buildDebugRetryPrompt(
   ctx: JobHandlerContext,
   title: string,
@@ -129,6 +141,7 @@ async function buildDebugRetryPrompt(
   debug: AdvisorDebugCheckpointResult,
 ): Promise<string> {
   const base = await buildExecutePrompt(ctx, title, plan, advisorPlan);
+  const basis = evidenceBasisText(debug);
   return [
     base,
     "",
@@ -139,6 +152,9 @@ async function buildDebugRetryPrompt(
     "The previous executor attempt returned BLOCKED / NEEDS_ADVISOR. This is the only permitted retry.",
     `Previous blocked result:\n${formatWorkerBlockedResult(blocked)}`,
     `Advisor recommendation (${debug.confidence} confidence):\n${debug.advice}`,
+    ...(basis.length ? [`Evidence basis:\n${basis.join("\n")}`] : []),
+    ...(debug.assumptions?.length ? [`Advisor assumptions:\n${debug.assumptions.slice(0, 12).map((item) => `- ${item}`).join("\n")}`] : []),
+    ...(debug.unresolvedConflicts?.length ? [`Unresolved conflicts:\n${debug.unresolvedConflicts.slice(0, 12).map((item) => `- ${item}`).join("\n")}`] : []),
     ...(debug.evidenceIds.length ? [`Evidence identifiers: ${debug.evidenceIds.join(", ")}`] : []),
     ...(debug.verificationSteps.length ? [`Required verification:\n${debug.verificationSteps.map((step) => `- ${step}`).join("\n")}`] : []),
     "Apply only the changes justified by the plan and recommendation. Do not invoke the advisor directly.",
@@ -156,6 +172,28 @@ function blockedSummary(workItemId: number, blocked: WorkerBlockedResult, adviso
     needsHuman: true,
     blockedResult: blocked,
     advisorDebug: advisor,
+  };
+}
+
+function retryFailureSummary(
+  workItemId: number,
+  blocked: WorkerBlockedResult,
+  advisor: AdvisorDebugCheckpointResult,
+  caught: unknown,
+): JobHandlerResult {
+  const message = redactAdvisorEvidenceText(caught instanceof Error ? caught.message : String(caught)).slice(0, 2_000);
+  return {
+    summary: [
+      `Orchestrated task for work item #${workItemId} failed during its only permitted debug retry and needs human attention.`,
+      `Retry failure: ${message}`,
+      formatWorkerBlockedResult(blocked),
+      `Advisor verdict: ${advisor.verdict} (${advisor.confidence} confidence)`,
+      advisor.advice,
+    ].join("\n\n"),
+    needsHuman: true,
+    blockedResult: blocked,
+    advisorDebug: advisor,
+    retryFailure: message,
   };
 }
 
@@ -213,6 +251,9 @@ export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHa
         evidenceIds: result.evidenceIds ?? [],
         verificationSteps: result.verificationSteps ?? [],
         confidence: result.confidence,
+        evidenceBasis: result.evidenceBasis ?? [],
+        assumptions: result.assumptions ?? [],
+        unresolvedConflicts: result.unresolvedConflicts ?? [],
       };
     } catch (error) {
       if (input.advisor_required === true) throw error;
@@ -324,18 +365,22 @@ export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHa
       if (!phaseData.repoPath || !phaseData.plan || !phaseData.advisorDebug || !phaseData.blockedResult || !phaseData.debugAttempted) {
         throw new Error("orchestrated_task missing debug retry phase data");
       }
-      const retryPrompt = await buildDebugRetryPrompt(
-        ctx,
-        item.title,
-        phaseData.plan,
-        phaseData.advisorPlan,
-        phaseData.blockedResult,
-        phaseData.advisorDebug,
-      );
-      const retryOutput = await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, retryPrompt], phaseData.repoPath);
-      const repeatedBlocked = parseWorkerBlockedResult(retryOutput);
-      if (repeatedBlocked) return blockedSummary(workItemId, repeatedBlocked, phaseData.advisorDebug);
-      return commitExecution(phaseData.repoPath, phaseData);
+      try {
+        const retryPrompt = await buildDebugRetryPrompt(
+          ctx,
+          item.title,
+          phaseData.plan,
+          phaseData.advisorPlan,
+          phaseData.blockedResult,
+          phaseData.advisorDebug,
+        );
+        const retryOutput = await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, retryPrompt], phaseData.repoPath);
+        const repeatedBlocked = parseWorkerBlockedResult(retryOutput);
+        if (repeatedBlocked) return blockedSummary(workItemId, repeatedBlocked, phaseData.advisorDebug);
+        return await commitExecution(phaseData.repoPath, phaseData);
+      } catch (error) {
+        return retryFailureSummary(workItemId, phaseData.blockedResult, phaseData.advisorDebug, error);
+      }
     }
 
     if (ctx.phase === "verifying") {

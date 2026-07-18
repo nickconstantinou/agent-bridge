@@ -161,6 +161,60 @@ describe("arch-lint", () => {
     }
   });
 
+  it("catches a second unowned reference sharing a line with a marked statement", () => {
+    // Regression test: the check must inspect every owned-table occurrence
+    // on a line, not just the first (an earlier version used
+    // line.search(), which only finds the first match). A marked statement
+    // followed on the SAME line by an unrelated, unmarked SQL string
+    // assignment must still be caught.
+    const dir = mkdtempSync(join(tmpdir(), "archlint-sql-same-line-string-"));
+    try {
+      writeFileSync(
+        join(dir, "bad.ts"),
+        [
+          "export function f(db: any) {",
+          "  // arch-lint-allow-legacy-sql: legitimate exception",
+          "  db.prepare(`SELECT * FROM conversation_turns`).all(); const leakedSql = `SELECT * FROM conversation_summaries`;",
+          "  return db.prepare(leakedSql).all();",
+          "}",
+          "",
+        ].join("\n"),
+      );
+      const res = runLint(dir);
+      expect(res.code).not.toBe(0);
+      expect(res.output).toContain("conversation_summaries");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails closed for two statements sharing a single marked line (ambiguous attribution)", () => {
+    // Regression test: a marker precedes a LINE, not a specific call. If
+    // two .prepare()/.exec() statements both start on that line, the
+    // marker can't be unambiguously attributed to just one of them — both
+    // must be treated as unmarked (fail closed) rather than both being
+    // exempted.
+    const dir = mkdtempSync(join(tmpdir(), "archlint-sql-two-calls-one-line-"));
+    try {
+      writeFileSync(
+        join(dir, "bad.ts"),
+        [
+          "export function f(db: any) {",
+          "  // arch-lint-allow-legacy-sql: legitimate exception",
+          "  db.prepare(`SELECT * FROM conversation_turns`).all(); db.prepare(`SELECT * FROM conversation_summaries`).all();",
+          "}",
+          "",
+        ].join("\n"),
+      );
+      const res = runLint(dir);
+      expect(res.code).not.toBe(0);
+      expect(res.output).toContain("conversation_turns");
+      expect(res.output).toContain("conversation_summaries");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("fails when a non-owner file queries an advisor_calls table directly", () => {
     const dir = mkdtempSync(join(tmpdir(), "archlint-sql-advisor-"));
     try {

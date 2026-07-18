@@ -7,19 +7,19 @@
 // `.prepare(`/`.exec(` call whose immediately preceding, unbroken comment
 // block carries an `arch-lint-allow-legacy-sql` marker.
 //
-// A table reference is proven to belong to a statement only if it falls
-// within that statement's own character range — computed by tracking paren
-// depth from the call's opening `(`, treating characters inside a backtick
-// template literal as inert (so `COALESCE(...)`/subquery parens inside SQL
-// don't confuse the depth count), until depth returns to 0. A reference
-// outside every statement's range (e.g. in a separately declared SQL string
-// assigned to a variable that's passed into `.prepare()` elsewhere) fails
-// closed as unowned, rather than being attributed to the nearest preceding
-// statement.
+// A table reference is proven to belong to a statement only if its exact
+// character offset falls within that statement's own range — computed by
+// tracking paren depth from the call's opening `(`, treating characters
+// inside a backtick template literal as inert (so `COALESCE(...)`/subquery
+// parens inside the SQL text don't confuse the count), until depth returns
+// to 0. Every occurrence of an owned table name is checked independently
+// (not just the first per line), and marker state is keyed by each
+// statement's own start offset (not its line number), so two statements
+// sharing a line — one marked, one not — are never conflated.
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 
-const OWNED_TABLES = /\b(advisor_calls|advisor_attempts|conversation_turns|conversation_summaries)\b/;
+const OWNED_TABLES = /\b(advisor_calls|advisor_attempts|conversation_turns|conversation_summaries)\b/g;
 const STATEMENT_START = /\.(prepare|exec)\(/g;
 const MARKER = "arch-lint-allow-legacy-sql";
 const OWNER_FILE_SUFFIXES = [
@@ -72,7 +72,7 @@ function findStatementRanges(content) {
       if (ch === "(") depth++;
       else if (ch === ")") depth--;
     }
-    ranges.push([openParenIndex, i]); // end is exclusive, one past the closing ")"
+    ranges.push({ start: openParenIndex, end: i }); // end is exclusive, one past the closing ")"
   }
   return ranges;
 }
@@ -85,10 +85,22 @@ function offsetToLine(content, offset) {
   return line;
 }
 
-function statementIsMarked(lines, statementStartLine) {
-  // statementStartLine is 1-indexed; walk backward through the contiguous
-  // comment/blank-line block immediately above it.
-  let j = statementStartLine - 2; // 0-indexed line just above the start line
+function lineTextAt(lines, lineNumber) {
+  return lines[lineNumber - 1] ?? "";
+}
+
+/**
+ * A statement is marked only if: (1) it is the *only* statement starting on
+ * its start line, and (2) the contiguous comment/blank-line block
+ * immediately above that line contains the marker. A marker comment
+ * precedes a line, not a specific call — if two statements start on the
+ * same line, the marker can't be unambiguously attributed to just one of
+ * them, so neither is exempted (fail closed) rather than exempting both.
+ */
+function statementIsMarked(lines, statementStartOffset, content, startsPerLine) {
+  const startLine = offsetToLine(content, statementStartOffset);
+  if ((startsPerLine.get(startLine) ?? 0) > 1) return false;
+  let j = startLine - 2; // 0-indexed line just above the start line
   while (j >= 0) {
     const trimmed = lines[j].trim();
     if (trimmed.startsWith("//")) {
@@ -111,28 +123,34 @@ function lintFile(filePath, relPath) {
   const content = readFileSync(filePath, "utf8");
   const lines = content.split("\n");
   const statementRanges = findStatementRanges(content);
-  const markedStatementLines = new Set(
-    statementRanges
-      .map(([start]) => offsetToLine(content, start))
-      .filter((line) => statementIsMarked(lines, line)),
+  const startsPerLine = new Map();
+  for (const r of statementRanges) {
+    const startLine = offsetToLine(content, r.start);
+    startsPerLine.set(startLine, (startsPerLine.get(startLine) ?? 0) + 1);
+  }
+  const markedByStartOffset = new Map(
+    statementRanges.map((r) => [r.start, statementIsMarked(lines, r.start, content, startsPerLine)]),
   );
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (!OWNED_TABLES.test(line)) continue;
-    if (line.trim().startsWith("//")) continue; // prose mention, not executable SQL
-    const lineNumber = i + 1;
-    const matchOffset = lines.slice(0, i).join("\n").length + (i > 0 ? 1 : 0) + line.search(OWNED_TABLES);
+  OWNED_TABLES.lastIndex = 0;
+  let match;
+  while ((match = OWNED_TABLES.exec(content)) !== null) {
+    const matchOffset = match.index;
+    const lineNumber = offsetToLine(content, matchOffset);
+    const lineText = lineTextAt(lines, lineNumber);
+    // Skip a match that's part of a comment-only mention (a pure prose
+    // line, not executable SQL). A match inside a statement that itself
+    // sits after a `//` on the same line is still checked normally below,
+    // since the statement-range check is what actually matters.
+    if (lineText.trim().startsWith("//")) continue;
 
     const containingStatement = statementRanges.find(
-      ([start, end]) => matchOffset >= start && matchOffset < end,
+      (r) => matchOffset >= r.start && matchOffset < r.end,
     );
-    if (containingStatement) {
-      const statementStartLine = offsetToLine(content, containingStatement[0]);
-      if (markedStatementLines.has(statementStartLine)) continue;
+    if (containingStatement && markedByStartOffset.get(containingStatement.start)) {
+      continue;
     }
-    // Not proven to belong to any marked statement — fail closed.
-    violations.push(`${relPath}:${lineNumber}:${line}`);
+    violations.push(`${relPath}:${lineNumber}:${lineText}`);
   }
   return violations;
 }

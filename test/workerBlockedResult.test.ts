@@ -29,21 +29,23 @@ describe("worker blocked result contract", () => {
     expect(formatWorkerBlockedResult(result!)).toContain("Ran the focused test");
   });
 
-  it("redacts secret-shaped values before carrying blocked evidence", () => {
+  it("redacts conversational and repository credential forms before carrying blocked evidence", () => {
+    const jwt = "eyJabcdefghijk.eyJabcdefghijkl.mnopqrstuvwxyz";
     const result = parseWorkerBlockedResult(`${WORKER_BLOCKED_RESULT_MARKER} ${JSON.stringify({
       status: "BLOCKED",
       reason: "NEEDS_ADVISOR",
-      hypothesis: "token=super-secret-value",
-      attempted_steps: ["api_key=also-secret"],
-      failing_evidence: "password=hunter2",
+      hypothesis: 'client_secret: "client-secret-value"',
+      attempted_steps: ["Authorization: Bearer bearer-secret-value", "api_key=also-secret"],
+      failing_evidence: `DATABASE_URL=postgres://user:pass@db.example/app session=${jwt}`,
       relevant_files: ["src/auth.ts"],
-      decision_needed: "secret=do-not-store",
+      decision_needed: "AWS_SECRET_ACCESS_KEY=aws-secret-value",
     })}`)!;
+    const carried = JSON.stringify(result);
 
-    expect(JSON.stringify(result)).not.toContain("super-secret-value");
-    expect(JSON.stringify(result)).not.toContain("also-secret");
-    expect(JSON.stringify(result)).not.toContain("hunter2");
-    expect(JSON.stringify(result)).toContain("[REDACTED]");
+    for (const secret of ["client-secret-value", "bearer-secret-value", "also-secret", "user:pass", jwt, "aws-secret-value"]) {
+      expect(carried).not.toContain(secret);
+    }
+    expect(carried).toContain("[REDACTED");
   });
 
   it("fails closed for malformed or wrong-status marked output", () => {

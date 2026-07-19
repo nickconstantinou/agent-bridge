@@ -1,4 +1,4 @@
-# Issue #159 Addendum — Prompt Separation and Advisor Red-Test Planning
+# Issue #159 Addendum — Prompt, Decomposition, Plan, and Readiness Contracts
 
 ## Status
 
@@ -7,52 +7,92 @@ Normative implementation-plan addendum. This document and `docs/implementation-p
 ## Decisions
 
 1. The Technical Lead owns test-strategy design during implementation planning.
-2. The Code Worker implements the approved red-test packet; it does not receive vague instructions such as `write tests` and infer product or architectural intent independently.
+2. The Code Worker implements the approved red-test packet; it does not infer product or architecture intent from vague instructions.
 3. Prompts remain separate by role, mode, and focused-repair purpose.
 4. Canonical role prompts are versioned source-controlled Markdown files registered in `src/agenticPromptContracts.ts`.
-5. Canonical role prompts cannot be replaced by database text.
-6. The SQLite `prompts` table is a legacy runtime override channel, not a backup. It is retired in stages after row inventory and a separately approved guarded migration.
+5. Canonical and compatibility prompts cannot be replaced by database text.
+6. Reusable requirements, testing, TDD, and readiness know-how remains canonical in repository skills and is composed explicitly.
+7. Multi-issue specifications are reviewed as one complete bundle before Agent Bridge mutates GitHub.
+8. New and repaired implementation plans require reproducible target-path provenance.
+9. Implementation and applicable operations review occur after deterministic verification and before documentation.
+10. Verification, review, operations, documentation, readiness, and CI evidence are bound to one exact head.
+11. Missing, stale, contradictory, or materially misleading required documentation blocks readiness and must be corrected in the same delivery.
 
 ## Delivered in PR #160
 
-PR #160 now contains:
+PR #160 contains:
 
-- the complete canonical prompt registry for all Technical Lead, Code Worker, and Documentation Steward modes;
+- 22 canonical prompt contracts for Technical Lead, Code Worker, and Documentation Steward modes;
 - one source-controlled prompt file per role/mode under `prompts/worker/roles/`;
+- `technical_lead:decomposition_review` for pre-mutation bundle consistency;
 - separate Technical Lead red-test and execution-contract repair prompts;
-- active legacy implementation-planning prompts strengthened with product, architecture, real-caller, authoritative-oracle, false-positive, sibling, and risk coverage requirements;
+- active compatibility planning prompts strengthened with comprehensive red tests and structured target provenance;
 - active TDD red/green prompts aligned to the approved red-test contract;
-- contract tests proving prompt completeness, separation, source, version, hash, permission intent, and absence of database overrides.
+- deterministic lifecycle-skill extraction, validation, composition, and hashes;
+- exact-head implementation, operations, documentation, and readiness contracts;
+- explicit required-versus-actual review independence;
+- tests proving prompt completeness, separation, source, version, hashes, permission intent, bundle review, path classification, exact-head ordering, and documentation blocking;
+- complete runtime removal of database prompt access and schema migration 2 for safe table retirement.
 
-These additions do not yet switch the whole worker lifecycle to role routing. Existing handlers remain compatibility paths until their delivery slice migrates.
+These additions do not activate the whole role-based lifecycle. Existing handlers remain compatibility paths until their delivery slices migrate.
 
 ## Minimal-change implementation
 
 Extend:
 
 - source-controlled prompt files under `prompts/worker/`;
-- `src/workerPrompts.ts` for legacy compatibility prompts;
+- `src/workerPrompts.ts` for compatibility prompts;
 - `src/agenticPromptContracts.ts` for canonical role prompts;
+- canonical repository skills and `src/lifecycleSkillGuidance.ts`;
 - `AdvisorService` for Technical Lead execution;
 - the implementation-plan schema and quality validator;
-- PR #157's section-specific repair pattern.
+- the existing focused repair pattern;
+- current documentation registry and readiness gates.
 
 Do not introduce:
 
 - a second prompt database or prompt service;
-- prompt-owned tools, permissions, budgets, or lifecycle policy;
+- prompt-owned tools, permissions, budgets, lifecycle policy, or GitHub mutation authority;
 - one shared mega-prompt;
 - a new planning handler solely to hold prompt text;
-- a second plan validator;
+- a second workflow engine, plan validator, queue, supervisor, or merge path;
 - provider-specific prompt schemas;
-- reintroducing database prompt overrides.
+- mutable prompt overrides;
+- deferred stale documentation as an accepted readiness result.
+
+## Multi-issue decomposition contract
+
+When one request proposes multiple child issues:
+
+1. Author all issue bodies without GitHub mutation.
+2. Assemble the complete bundle, canonical invariant table, repository owners, caller paths, and dependencies.
+3. Invoke `technical_lead:decomposition_review`.
+4. Require separate `implementation_delivery_order` and `runtime_phase_order` outputs.
+5. Audit lifecycle/state, permissions, schema/SQL, GitHub mutation, platform/appliance authority, compatibility, repair invalidation, and prohibited duplicate abstractions.
+6. Repair all conflicts and rerun review.
+7. Permit Agent Bridge issue mutation only after `ready_for_issue_mutation`.
+
+Individual issue validity is insufficient when the bundle is inconsistent.
 
 ## Planning output contract
 
-Extend the canonical implementation-plan structured output with:
+The canonical implementation plan contains:
 
 ```ts
+type TargetFile = {
+  path: string;
+  classification:
+    | "existing_at_base"
+    | "existing_in_dependency"
+    | "proposed_new_production"
+    | "proposed_new_test";
+  owner: string;
+  dependency_ref?: string | null;
+  rationale: string;
+};
+
 type ImplementationPlan = {
+  target_files: TargetFile[];
   red_tests: RedTestSpec[];
   acceptance_coverage: Array<{
     requirement_id: string;
@@ -72,30 +112,34 @@ type ImplementationPlan = {
 };
 ```
 
-`RedTestSpec` is defined in `docs/architecture/agentic-prompt-contracts.md` and implemented in the Technical Lead planning prompt.
+For `existing_in_dependency`, `dependency_ref` names the dependency PR and exact reviewed ref. A proposed production path identifies the neighbouring current owner and why no existing file is sufficient. Invalid or unclassified paths block approval.
 
-The human Markdown plan includes `## Red Tests` and `## Red Test Coverage`, generated from validated structured data. Rendered prose is not an independent source of truth.
+Already-persisted plans created before this provenance contract retain a narrow compatibility validator for concrete target paths. Newly generated and repaired model output always uses the strict validator.
 
-## Planning validator changes
+`RedTestSpec` is defined in `docs/architecture/agentic-prompt-contracts.md`. Human Markdown includes `## Target Files`, `## Red Tests`, and `## Red Test Coverage` generated from validated structured data.
 
-Extend the existing implementation-plan validator. It must prove:
+## Planning validator
 
-1. Every acceptance criterion has a mapped red test or justified deterministic non-test proof.
-2. Every affected architecture boundary or invariant has appropriate structural/integration coverage.
-3. Tests identify the real production caller and authoritative observable result.
-4. Tests state why current code fails and the expected red assertion.
-5. Tests include a focused command and expected sibling-green behaviour.
-6. Product, architecture, compatibility, lifecycle, security, data, operations, migration, and rollback intent are covered where triggered.
-7. Generic or placeholder instructions are rejected.
-8. Helper-only tests are rejected when production wiring is material.
-9. Test oracles do not copy production ranking, parsing, transition, permission, reconciliation, or migration logic.
-10. Refactors identify characterization before structural change.
-11. Existing tests cited as sufficient are named by exact file/test and mapped to intent.
-12. Test targets and commands match repository evidence and ownership.
+The generated-plan validator proves:
 
-Validation errors are typed and section-specific so one focused red-test repair can run without reopening the whole plan.
+1. Every target path has valid classification, owner, and rationale.
+2. Dependency paths include exact dependency evidence.
+3. Every acceptance criterion has mapped red tests or justified deterministic proof.
+4. Every affected architecture boundary/invariant has structural or integration coverage.
+5. Tests identify the real production caller and authoritative observable result.
+6. Tests state why current code fails and the expected red assertion.
+7. Tests include a focused command and sibling-green behaviour.
+8. Product, architecture, compatibility, lifecycle, security, data, operations, migration, and rollback intent are covered where triggered.
+9. Generic or placeholder instructions are rejected.
+10. Helper-only tests are rejected when production wiring is material.
+11. Test oracles do not copy production algorithms.
+12. Refactors identify characterization before structural change.
+13. Existing tests cited as sufficient identify exact file/test and mapped intent.
+14. Required documentation obligations are identified and cannot be deferred when stale.
 
-## Prompt registry
+Validation errors remain typed and section-specific.
+
+## Prompt registry and skill composition
 
 The canonical registry owns metadata, not authority:
 
@@ -107,129 +151,100 @@ type AgenticPromptContract = {
   mode: string;
   filePath: string;
   outputContract: string;
+  requiredVariables: readonly string[];
+  lifecycleSkills: readonly LifecycleSkillKey[];
   source: "builtin";
   allowDatabaseOverride: false;
   compatibilityAliases: string[];
 };
 ```
 
-`loadAgenticPrompt()` reads the registered file, renders bounded inputs, and records a SHA-256 content hash. Agent Bridge separately supplies tools, permissions, budgets, context, lifecycle owner, schema, and validator.
+`loadAgenticPrompt()` loads the registered file, validates and composes declared skills, renders bounded inputs, and records role-template, skill-set, composed-template, and rendered hashes. Agent Bridge separately supplies tools, permissions, budgets, lifecycle owner, schema, validator, exact-head state, and human gates.
 
 ## Database prompt retirement
 
-The source-controlled prompt file is already the fallback for the legacy loader. Therefore the SQLite row is not a backup; it is an override that can silently replace reviewed prompt text.
+The SQLite prompt table was a mutable override channel, not a backup. PR #160 removes:
 
-Removing the override capability is the target decision because prompt changes influence requirements, plans, tests, code mutation, review, and operations. They must therefore have:
+- `BridgeDb.getPrompt()` and `setPrompt()`;
+- loader database-template options;
+- every handler override read;
+- the table from fresh database creation.
 
-- Git history and human review;
-- versioned contracts;
-- deterministic tests;
-- exact-head CI;
-- reproducible workspace behaviour;
-- content hashes tied to application revisions;
-- known rollback.
-
-Do not drop the table in PR #160. The database migration boundary is separately guarded, and existing rows have not been inventoried. Instead:
-
-1. New role prompts reject database overrides now.
-2. No new override-management surface is added.
-3. Inventory legacy rows by workspace/key without logging content.
-4. Move any approved customization into source-controlled files and tests.
-5. Disable reads handler by handler during role migration.
-6. Completed in PR #160: remove `setPrompt`, `getPrompt`, loader override options, all callers, and the empty table through migration 2.
-7. Drop the table through a dedicated guarded migration with backup, rollback, and representative existing-database tests.
+Schema migration 2 treats an absent table as retired, drops an empty table transactionally, and rejects unexpected rows while preserving schema version 1 and contents. Prompt rollback is application rollback to a reviewed SHA.
 
 ## Focused repair sequence
 
 1. `technical_lead:planning` creates the full plan once.
-2. The existing validator checks every section.
+2. The strict generated-plan validator checks every section, including target provenance.
 3. If only red tests or coverage matrices are invalid, call `technical_lead:planning_repair:red_tests` once.
-4. Repair input contains the immutable canonical issue, original plan, evidence references, and typed validation failures.
-5. Repair output contains only replacement red-test and coverage sections.
-6. Agent Bridge merges those sections and revalidates the complete plan.
-7. If only the execution contract is invalid, use `technical_lead:planning_repair:execution_contract`.
-8. If multiple substantive sections are invalid, fail the full plan rather than chaining autonomous repairs.
+4. If only the execution contract is invalid, call `technical_lead:planning_repair:execution_contract` once.
+5. Merge only the repaired section.
+6. Revalidate the complete plan with the strict validator.
+7. Fail closed when bounded repair remains invalid.
 
-Neither repair can alter requirements, scope, non-goals, architecture, packet boundaries, permissions, operations policy, or human gates.
+Neither repair can alter requirements, scope, non-goals, architecture, packet boundaries, permissions, operations policy, documentation obligation, or human gates.
 
-## Required production-boundary red tests
+## Canonical review and documentation sequence
 
-### 1. Complete prompt registry
+```text
+deterministic verification
+→ Technical Lead implementation review
+→ Technical Lead operations review when triggered
+→ Documentation Steward authoring
+→ Documentation Steward validation
+→ Technical Lead PR readiness
+→ exact-head CI
+→ human merge gate
+```
 
-- Every documented role/mode resolves one unique registered key and source-controlled file.
-- No canonical contract allows a database override.
-- Missing or duplicate files fail tests.
+Implementation review evaluates documentation obligations but does not consume completed documentation. Documentation requires accepted review evidence for the same `subject_head_sha`.
 
-### 2. Planning rejects generic test wording
+A code-changing repair invalidates verification, implementation review, operations review, documentation, readiness, and CI evidence for the previous head.
 
-- Process an otherwise valid plan containing only `write unit tests` through the real validator.
-- Expect typed missing intent/boundary/oracle/coverage errors and no canonical persistence.
+Readiness distinguishes `passed`, `failed`, `not_run`, `not_scheduled`, `stale`, and `unknown`. Only authoritative `passed` evidence for the exact current head satisfies a required gate. Required and actual review independence are recorded separately.
 
-### 3. Product and architecture intent both map
+## Documentation completion contract
 
-- Validate an architecture-affecting change with behavioural criteria and a public compatibility invariant.
-- A narrow helper test alone must fail validation.
+Every document triggered by `agentic-maintenance.yaml` is checked against final exact-head evidence.
 
-### 4. Triggered risks require matching test classes
+- Missing, stale, contradictory, or materially misleading required documents block readiness.
+- Required corrections are completed and revalidated in the same delivery.
+- A deferred issue, owner assignment, archive recommendation, or future roadmap item does not satisfy readiness.
+- When correction requires material scope or authority change, the workflow holds for human approval rather than returning ready.
+- `no_documentation_change` remains valid only with rationale, manifest trigger evidence, and Technical Lead validation.
 
-- A cancellation/retry/lease/restart change with only happy-path tests must fail for missing lifecycle coverage.
-- Equivalent security, operations, migration, or rollback triggers require their own classes.
+## Required production-boundary tests
 
-### 5. Structured red-test contract persists and renders
-
-- Validate, persist, reload after simulated restart, and render a plan with multiple `RedTestSpec` records.
-- Structured records, prompt key/version/hash, and rendered sections remain equivalent.
-
-### 6. Red-test repair is section-only
-
-- A repair that attempts to change scope or packets is rejected.
-- Only red-test and coverage sections can be merged, followed by full revalidation.
-
-### 7. Execution-contract repair remains separate
-
-- PR #157's focused repair continues to use its own key and cannot change red tests or other plan sections.
-
-### 8. Role/mode prompts cannot substitute
-
-- Planning, review, operations, executor, and documentation dispatch resolve their exact keys.
-- A fallback model receives the same key, version, schema, validator, and content hash.
-
-### 9. Canonical prompts ignore database text
-
-- Seed a legacy row with conflicting instructions for a canonical key.
-- `loadAgenticPrompt()` still loads the reviewed file and records `source: builtin`.
-
-### 10. Legacy retirement is safe
-
-- Inventory existing rows without exposing contents.
-- Each migrated handler ignores its row only after compatibility evidence passes.
-- Final table removal is migration-tested and rollback-qualified.
-
-## Architecture Lint and structural guards
-
-Add guards proving:
-
-- one central canonical prompt registry;
-- prompt text does not define tool, permission, budget, or lifecycle policy;
-- role handlers resolve registered prompts rather than embed large independent copies;
-- planning and focused repairs use different keys;
-- Technical Lead prompts route through `AdvisorService`;
-- Code Worker and Documentation Steward prompts cannot be selected for Technical Lead modes;
-- canonical prompt loaders cannot import or call DB prompt access;
-- compatibility aliases are explicit and cannot silently become canonical.
-
-Avoid brittle full-text snapshots as the primary oracle. Test keys, metadata, required semantic instructions, schemas, validators, content hashes, and isolation. Use focused golden fixtures only where wording itself is contractual.
+1. Complete prompt registry, including decomposition review, resolves unique source files.
+2. Multi-issue conflicts produce `revise_bundle` and zero GitHub mutations.
+3. Generic test wording fails plan validation.
+4. Invalid or unclassified target paths fail generated-plan validation.
+5. Dependency paths without exact dependency refs fail validation.
+6. Persisted pre-provenance plans retain compatibility while new model output remains strict.
+7. Product and architecture intent both map to tests or proof.
+8. Triggered lifecycle/security/operations/migration risks require matching test classes.
+9. Structured red-test contracts persist and render across restart.
+10. Red-test repair and execution-contract repair remain section-only and separate.
+11. Fallback models preserve prompt, skill, schema, validator, and hash identity.
+12. Canonical and compatibility prompts ignore database text.
+13. Implementation review precedes documentation.
+14. Code repair invalidates all later prior-head evidence.
+15. `not_scheduled` and stale evidence cannot be reported as green.
+16. Stale required documentation blocks readiness until corrected.
+17. Migration 2 safely retires absent/empty prompt storage and fails closed on rows.
 
 ## Completion criteria
 
 This addendum is complete only when:
 
-- Technical Lead plans cannot pass with generic test instructions;
-- comprehensive red-test specifications protect product and architectural intent;
-- acceptance, architecture, and risk coverage matrices are validated and durable;
-- red-test and execution-contract repair remain separate and bounded;
-- every role/mode has a distinct source-controlled prompt contract;
-- canonical role prompts cannot consume database overrides;
-- legacy rows are inventoried and safely migrated before the table is removed;
-- exact-head focused/full tests, typecheck, Architecture Lint, cleanup accounting, and CI pass;
-- independent review confirms no prompt path can bypass role, permission, validator, evidence, or lifecycle boundaries.
+- the 22 prompt contracts are source-controlled and isolated;
+- multi-issue mutation requires bundle-wide consistency;
+- new plans cannot pass generic tests or unclassified paths;
+- comprehensive red tests protect product and architecture intent;
+- focused repairs remain separate and bounded;
+- prompt/skill identity and fallback are deterministic;
+- mutable database prompt precedence remains absent;
+- review, operations, documentation, readiness, and CI are exact-head-bound;
+- stale required documentation cannot be deferred;
+- exact-head focused/full tests, typecheck, Architecture Lint, cleanup accounting, diff checks, and CI pass;
+- independent review confirms no prompt path bypasses authority boundaries.

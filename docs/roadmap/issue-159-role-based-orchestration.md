@@ -31,10 +31,12 @@ PR #160 delivers:
 - comprehensive advisor-authored red-test instructions protecting product intent, architecture, invariants, compatibility, and triggered risks;
 - strengthened active implementation-plan and TDD red/green prompts;
 - prompt contract version/content-hash support and contract tests;
-- an explicit decision that canonical prompts cannot use SQLite overrides;
+- source-only prompt resolution for canonical and compatibility handlers;
+- removal of `BridgeDb.getPrompt()`, `BridgeDb.setPrompt()`, loader database-template options, and every handler override read;
+- schema migration 2, which removes an absent or empty legacy `prompts` table and fails closed if an unexpected row exists;
 - target-state architecture, testing, configuration, operations, documentation, and rollout policy.
 
-Role routing, durable role assignment, requirements lifecycle, complete structured plan validation, permissions, platform allocation, and legacy prompt-table retirement remain to be implemented through the slices below.
+Role routing, durable role assignment, requirements lifecycle, complete structured plan persistence, permissions, Documentation Steward execution, platform allocation, and final role-workflow qualification remain to be implemented through the slices below.
 
 ## Approved scope
 
@@ -52,9 +54,9 @@ Role routing, durable role assignment, requirements lifecycle, complete structur
 
 ## Prompt storage decision
 
-The SQLite `prompts` table is not a backup. Source-controlled Markdown is already the fallback. The table is a mutable override channel that can change consequential model instructions without reviewed Git history, contract versioning, deterministic tests, exact-head CI, reproducible rollout, or a known application-SHA rollback.
+Prompt text is a reviewed source artifact. Canonical and compatibility prompts resolve only from registered repository files; there is no SQLite prompt precedence or mutable runtime override API.
 
-Canonical role prompts therefore reject database overrides. The table remains temporarily because existing rows have not been inventoried and dropping it is a separately guarded database migration. Retirement requires row inventory, migration of approved custom behaviour into reviewed files/tests, handler-by-handler read removal, API removal, and a backup/rollback-qualified table-drop migration.
+Schema migration 2 retires the legacy table. It treats an absent table as already removed, drops an empty table transactionally, and aborts without data loss if an unexpected row exists. On rejection, schema version 1 and the table contents remain intact for guarded investigation. Prompt rollback is application rollback to a reviewed SHA.
 
 ## Implementation strategy
 
@@ -66,7 +68,7 @@ Add role configuration, deterministic resolution, requirements/canonical issue p
 
 ## Delivery slices
 
-0. Current-state reconciliation, child issue creation, linked platform plan, and legacy prompt-row inventory.
+0. Current-state reconciliation, child issue creation, and linked platform plan.
 1. Role domain, additive persistence, and dormant status projection.
 2. CLI/model discovery and deterministic role resolution.
 3. Mode-specific permission enforcement through existing dispatch boundaries.
@@ -75,7 +77,7 @@ Add role configuration, deterministic resolution, requirements/canonical issue p
 6. Code Worker scan candidates and bounded execution packets through existing TDD handlers.
 7. Documentation Steward phases in the existing implementation workspace.
 8. Technical Lead implementation and operations review after deterministic verification.
-9. Lifecycle, audit, compatibility, legacy prompt retirement, migration, and rollback qualification.
+9. Lifecycle, audit, compatibility, migration, and rollback qualification.
 10. Platform desired/effective role assignment API and UI.
 
 Each child issue must enumerate production-boundary red tests, product and architectural intent, expected current failure, authoritative oracle, focused red command, false-positive controls, sibling behaviour that remains green, migration/rollback impact, documentation triggers, and exact dependency.
@@ -92,7 +94,7 @@ These plans are normative for implementation and subordinate only to the accepte
 - Issue #100 — bounded advisor debug/read-only evidence;
 - Issue #119 — durable lifecycle, cancellation, lease, restart, and stale ownership;
 - Issue #132 — existing advisor checkpoint scope, revised by this roadmap;
-- Issue #135 — guarded database migration ownership for eventual prompt-table retirement;
+- Issue #135 — guarded database migration ownership used to roll out schema migration 2;
 - Issue #146 — freshness and authority metadata;
 - PR #157 — transitional fail-closed execution-contract repair;
 - linked `agent-bridge-platform` issue created during Slice 0.
@@ -105,8 +107,6 @@ Human approval remains required for:
 - unresolved product decisions;
 - material canonical issue changes;
 - role defaults and high-risk review policy;
-- legacy prompt customisation migration decisions;
-- prompt-table removal;
 - merge;
 - production deployment/restart;
 - destructive, secret, permission, or policy changes.

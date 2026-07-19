@@ -6,7 +6,10 @@
 import type { JobHandler, JobHandlerInput, JobHandlerContext, JobHandlerResult } from "../jobExecutor.js";
 import { PermanentJobFailureError } from "../jobExecutor.js";
 import { buildGithubWorkItemComment } from "../approvalHtml.js";
-import { validateImplementationPlan } from "../implementationPlanQuality.js";
+import {
+  validateGeneratedImplementationPlan,
+  validateImplementationPlan,
+} from "../implementationPlanQuality.js";
 import { createRunCommand } from "../runCommandAsync.js";
 import { resolveLocalRepoPath } from "../workspace.js";
 import type { WorkItem } from "../db.js";
@@ -151,7 +154,7 @@ export function createImplementationPlanHandler(deps: ImplementationPlanDeps): J
 
     const cwd = canonicalItem.repository ? resolveRepoPath(canonicalItem.repository) ?? process.cwd() : process.cwd();
     let planText = await runCli(command, ["--print", "--output-format", "text", await buildCreatePrompt( canonicalItem)], cwd);
-    let quality = validateImplementationPlan(planText);
+    let quality = validateGeneratedImplementationPlan(planText);
     let contractResult = extractExecutionContract(planText);
 
     if (!quality.valid || !contractResult.ok) {
@@ -160,7 +163,7 @@ export function createImplementationPlanHandler(deps: ImplementationPlanDeps): J
         ...(contractResult.ok ? [] : [`missing or invalid execution contract: ${contractResult.error}`]),
       ];
       planText = await runCli(command, ["--print", "--output-format", "text", await buildImprovePrompt( planText, missing)], cwd);
-      quality = validateImplementationPlan(planText);
+      quality = validateGeneratedImplementationPlan(planText);
       contractResult = extractExecutionContract(planText);
     }
 

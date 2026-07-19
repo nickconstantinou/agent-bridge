@@ -475,6 +475,99 @@ describe("rollout-db.ts bootstrap", () => {
     expect(db.pragma("user_version", { simple: true })).toBe(CURRENT_SCHEMA_VERSION);
     db.close();
   }, 15000);
+
+  it("reports the committed outcome, with zero .bootstrap-* debris, when SIGTERM arrives after unlink() during the post-publication evidence read", async () => {
+    // Regression for the round-3 review finding: committed-state handling
+    // previously ended the instant withSignalCleanup()'s callback returned
+    // — before this checkpoint existed, unlink() completing, the signal
+    // listeners being removed, and then the fallible evidence read
+    // happening *outside* any signal guard at all. AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_AT=post-unlink
+    // extends the real checkpoint 3 (after unlink(), still inside
+    // withSignalCleanup()'s guarded region) so this can be proven directly:
+    // committed-state message, a valid destination, and — critically — the
+    // temp name is already gone by this point (unlink() already ran), so
+    // there must be zero .bootstrap-* debris left anywhere.
+    const dir = tempDir();
+    const dbPath = join(dir, "bridge.sqlite");
+    const pauseFile = join(dir, ".pause-signal");
+    const child = spawn(process.execPath, [
+      tsxCli, migrationScript, "bootstrap",
+      ...bootstrapArgs(dbPath),
+    ], {
+      env: {
+        ...process.env,
+        AGENT_BRIDGE_BOOTSTRAP_TEST_MODE: "1",
+        AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_AT: "post-unlink",
+        AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_FILE: pauseFile,
+      },
+    });
+
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+
+    try {
+      const deadline = Date.now() + 8000;
+      while (!existsSync(pauseFile) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(existsSync(pauseFile), "child never reached the pause point").toBe(true);
+      expect(existsSync(dbPath), "destination must already be published at this checkpoint").toBe(true);
+      // The *main* temp name is gone (unlink() already ran) — only its
+      // -wal/-shm sidecars may still be on disk at this exact instant,
+      // since removeSidecars(tempPath) is scheduled to run right after
+      // this checkpoint in the normal flow. That's expected and fine: the
+      // signal handler's committed branch cleans them up regardless of
+      // whether the signal lands here or later.
+      const mainTempStillPresent = readdirSync(dir).some((name) => /^\.bootstrap-[0-9a-f]{32}-bridge\.sqlite$/.test(name));
+      expect(mainTempStillPresent, "unlink() already ran by this checkpoint — the main temp name must be gone").toBe(false);
+
+      child.kill("SIGTERM");
+      const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+        child.on("exit", (code, signal) => resolve({ code, signal }));
+      });
+      expect(exit.code).toBe(143);
+    } finally {
+      if (!child.killed) child.kill("SIGKILL");
+    }
+
+    expect(stderr).toMatch(/already published|do NOT retry/i);
+    expect(existsSync(dbPath)).toBe(true);
+    const db = new Database(dbPath, { readonly: true });
+    expect(db.pragma("user_version", { simple: true })).toBe(CURRENT_SCHEMA_VERSION);
+    db.close();
+    const leftoverEntries = readdirSync(dir).filter((name) => name !== ".pause-signal");
+    const staleDebris = leftoverEntries.filter((name) => name.startsWith(".bootstrap-"));
+    expect(staleDebris, `unexpected .bootstrap-* debris: ${staleDebris.join(", ")}`).toEqual([]);
+  }, 15000);
+
+  it("recovers an orphaned post-commit sidecar (-wal/-shm with no corresponding main temp file) when the destination already exists", () => {
+    // Reproduces the gap between the committed-state signal handler (which
+    // only best-effort-removes the main temp hard link and its sidecars
+    // immediately) and a later crash that could still leave a sidecar
+    // behind with the main temp name already gone. Since a -wal/-shm
+    // sidecar is never itself a hard link to the destination, no inode
+    // check applies to it — cleanupStalePostCommitLink() must recover it
+    // unconditionally once the destination exists, not just when the main
+    // temp name is also still present.
+    const dir = tempDir();
+    const dbPath = join(dir, "bridge.sqlite");
+    const first = runBootstrap(bootstrapArgs(dbPath));
+    expect(first.status, first.stderr).toBe(0);
+    const orphanedWal = join(dir, ".bootstrap-dddddddddddddddddddddddddddddddd-bridge.sqlite-wal");
+    const orphanedShm = join(dir, ".bootstrap-dddddddddddddddddddddddddddddddd-bridge.sqlite-shm");
+    writeFileSync(orphanedWal, "orphaned wal with no main temp file left\n");
+    writeFileSync(orphanedShm, "orphaned shm with no main temp file left\n");
+
+    const second = runBootstrap(bootstrapArgs(dbPath));
+    expect(second.status).not.toBe(0);
+    expect(second.stderr).toMatch(/already exists/i);
+    expect(existsSync(orphanedWal), "orphaned sidecar should have been recovered").toBe(false);
+    expect(existsSync(orphanedShm), "orphaned sidecar should have been recovered").toBe(false);
+    expect(existsSync(dbPath)).toBe(true);
+    const db = new Database(dbPath, { readonly: true });
+    expect(db.pragma("user_version", { simple: true })).toBe(CURRENT_SCHEMA_VERSION);
+    db.close();
+  });
 });
 
 describe("rollout-db.ts ordinary modes never bootstrap", () => {

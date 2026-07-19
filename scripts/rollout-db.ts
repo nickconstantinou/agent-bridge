@@ -352,7 +352,17 @@ function cleanupStalePostCommitLink(dir: string, path: string): void {
     return; // destination doesn't exist — nothing to reconcile here
   }
   if (!destinationStat.isFile()) return;
-  const pattern = new RegExp(`^\\.bootstrap-[0-9a-f]{32}-${escapeRegExp(basename(path))}$`);
+  const base = escapeRegExp(basename(path));
+  const mainPattern = new RegExp(`^\\.bootstrap-[0-9a-f]{32}-${base}$`);
+  // A sidecar can outlive its main temp file: withSignalCleanup()'s
+  // committed-state branch removes the main hard link immediately but only
+  // best-effort-removes its sidecars, so a crash right at that point can
+  // leave an orphaned -wal/-shm with no corresponding main temp file at
+  // all. These are never hard links to the destination themselves (WAL/SHM
+  // files aren't linked the way the main database file is), so no inode
+  // check applies to them — they're always safe to remove as debris tied
+  // to this target's own temp-name pattern.
+  const sidecarPattern = new RegExp(`^\\.bootstrap-[0-9a-f]{32}-${base}(-wal|-shm)$`);
   let entries: string[];
   try {
     entries = readdirSync(dir);
@@ -360,27 +370,35 @@ function cleanupStalePostCommitLink(dir: string, path: string): void {
     return;
   }
   for (const entry of entries) {
-    if (!pattern.test(entry)) continue;
     const full = join(dir, entry);
-    let entryStat;
-    try {
-      entryStat = lstatSync(full);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
-      throw new Error(`failed to inspect stale post-commit temp file ${full}: ${err instanceof Error ? err.message : String(err)}`);
+    if (mainPattern.test(entry)) {
+      let entryStat;
+      try {
+        entryStat = lstatSync(full);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw new Error(`failed to inspect stale post-commit temp file ${full}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (entryStat.dev !== destinationStat.dev || entryStat.ino !== destinationStat.ino) {
+        throw new Error(
+          `stale temp file ${full} shares a name with the published database at ${path} but not its inode — refusing to remove it automatically; this needs manual operator review`,
+        );
+      }
+      try {
+        rmSync(full);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw new Error(`failed to remove stale post-commit temp file ${full}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      removeSidecars(full);
+    } else if (sidecarPattern.test(entry)) {
+      try {
+        rmSync(full);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw new Error(`failed to remove orphaned post-commit sidecar file ${full}: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
-    if (entryStat.dev !== destinationStat.dev || entryStat.ino !== destinationStat.ino) {
-      throw new Error(
-        `stale temp file ${full} shares a name with the published database at ${path} but not its inode — refusing to remove it automatically; this needs manual operator review`,
-      );
-    }
-    try {
-      rmSync(full);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
-      throw new Error(`failed to remove stale post-commit temp file ${full}: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    removeSidecars(full);
   }
 }
 
@@ -415,10 +433,15 @@ function yieldToEventLoop(): Promise<void> {
  * identified by `checkpoint` so a test can deterministically observe the
  * mid-flight state and inject a signal there. It does not introduce any
  * yield point that isn't already present in the unconditional production
- * path — "post-commit" is the one exception, and is only ever awaited when
- * this specific hook is active, never in production (see bootstrapDatabase).
+ * path — "post-commit" is the one exception (between link() and unlink(),
+ * proving the committed-state handler branch without requiring a genuinely
+ * unobservable SIGKILL race), and is only ever awaited when this specific
+ * hook is active, never in production (see bootstrapDatabase). "post-unlink"
+ * extends the real checkpoint after unlink() but still inside
+ * withSignalCleanup()'s guarded region, covering the post-publication
+ * evidence-read window.
  */
-async function testPause(checkpoint: "post-migration" | "post-validation" | "post-commit"): Promise<void> {
+async function testPause(checkpoint: "post-migration" | "post-validation" | "post-commit" | "post-unlink"): Promise<void> {
   const pauseFile = testHook("AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_FILE");
   if (!pauseFile || testHook("AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_AT") !== checkpoint) return;
   writeFileSync(pauseFile, "paused\n");
@@ -459,10 +482,12 @@ async function withSignalCleanup<T>(state: BootstrapSignalState, fn: () => Promi
   const handler = (signal: NodeJS.Signals) => {
     if (state.committed) {
       // The destination already exists and is fully valid — only the
-      // redundant temp hard link name is left. Best-effort removal here;
-      // cleanupStalePostCommitLink() recovers it on the next invocation
-      // regardless, so a failure here isn't fatal to correctness.
+      // redundant temp hard link name (and, if migration ever produced
+      // them, its -wal/-shm sidecars) is left. Best-effort removal here;
+      // cleanupStalePostCommitLink() recovers whatever is left on the next
+      // invocation regardless, so a failure here isn't fatal to correctness.
       try { rmSync(state.tempPath, { force: true }); } catch { /* best-effort */ }
+      removeSidecars(state.tempPath);
       process.stderr.write(
         `rollout-db: bootstrap interrupted by ${signal} AFTER the database was already published at the destination — ` +
         "the database exists and is valid; do NOT retry bootstrap for this target. Only a redundant temp hard link name was involved.\n",
@@ -503,11 +528,13 @@ async function withSignalCleanup<T>(state: BootstrapSignalState, fn: () => Promi
  * new database is created and migrated at a randomly-named temp path in the
  * *same* directory as the final target, validated (integrity, foreign keys,
  * exact schema version), then published with no-replace link()+unlink()
- * semantics only after every check passes. Two real, unconditional
- * event-loop yields — after migration and after validation, both always
- * present in production, not just under a test hook — let a pending
- * SIGTERM/SIGINT actually be serviced before the final commit; the
- * link()+unlink() tail itself is deliberately *not* interrupted by any
+ * semantics only after every check passes. Three real, unconditional
+ * event-loop yields — after migration, after validation, and after the
+ * final unlink() (still inside withSignalCleanup()'s guarded region, so the
+ * committed-state handler is still installed for the post-publication
+ * evidence read too) — all always present in production, not just under a
+ * test hook, let a pending SIGTERM/SIGINT actually be serviced. Only the
+ * link()+unlink() pair itself is deliberately *not* interrupted by any
  * yield, so it stays the minimal possible synchronous window. If anything
  * fails before that window — missing-file precondition, parent validation,
  * the migration itself, post-migration validation, publication racing a
@@ -517,8 +544,9 @@ async function withSignalCleanup<T>(state: BootstrapSignalState, fn: () => Promi
  * link()+unlink() window itself cannot be observed or handled by any
  * process at all — that narrow window can leave a harmless extra hard link
  * (same inode, same already-validated content as the published database,
- * never a partial/corrupt file) at the stale temp name;
- * `cleanupStalePostCommitLink()` recovers it opportunistically on the next
+ * never a partial/corrupt file) at the stale temp name, and possibly an
+ * orphaned -wal/-shm sidecar alongside or instead of it;
+ * `cleanupStalePostCommitLink()` recovers both opportunistically on the next
  * bootstrap attempt against the same target, under the same exclusive
  * rollout lock, even though the destination already exists by then.
  */
@@ -540,7 +568,7 @@ async function bootstrapDatabase(path: string, role: string): Promise<DbEvidence
     removeSidecars(tempPath);
   };
   try {
-    await withSignalCleanup(state, async () => {
+    return await withSignalCleanup(state, async () => {
       if (testHook("AGENT_BRIDGE_BOOTSTRAP_TEST_FORCE_MIGRATION_FAILURE") === path) {
         // Pre-creates a file at the exact temp path with a future,
         // unsupported schema version, so openDb()'s own existing
@@ -579,20 +607,29 @@ async function bootstrapDatabase(path: string, role: string): Promise<DbEvidence
       // happened") without requiring a genuinely unobservable SIGKILL race.
       await testPause("post-commit");
       unlinkSync(tempPath);
+
+      // Real production checkpoint 3: unconditional, always present, and
+      // still inside withSignalCleanup()'s guarded region — the
+      // committed-state signal handler stays installed through the
+      // post-publication evidence read below, so a signal here also
+      // reports "already published," never an ambiguous result.
+      await yieldToEventLoop();
+      await testPause("post-unlink");
+
+      removeSidecars(tempPath);
+      const evidence = inspectDatabase(path, true);
+      return { ...evidence, role };
     });
   } catch (err) {
     cleanupTemp();
     if (state.committed) {
       throw new Error(
-        `bootstrap published ${path} successfully but failed to remove its temp hard link (${tempPath}): ` +
+        `bootstrap published ${path} successfully but failed during post-publication work (${tempPath}): ` +
         `${err instanceof Error ? err.message : String(err)} — do not retry bootstrap for this target, the database exists and is valid`,
       );
     }
     throw err;
   }
-  removeSidecars(tempPath);
-  const evidence = inspectDatabase(path, true);
-  return { ...evidence, role };
 }
 
 function writeEvidence(path: string | null, mode: Mode, databases: DbEvidence[]): void {

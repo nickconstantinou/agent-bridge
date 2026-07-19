@@ -181,7 +181,16 @@ Retirement is staged:
 6. Remove `BridgeDb.getPrompt()` after all callers are migrated.
 7. Drop the `prompts` table only through a separately approved guarded database migration with backup, rollback, and representative existing-database tests.
 
-Dropping the table inside this PR would be unsafe because the production database migration boundary is separately controlled and existing rows have not yet been inventoried. Retaining it temporarily does not make it authoritative or a backup.
+Dropping the table inside PR #160 would be unsafe because the production database migration boundary is separately controlled and existing rows have not yet been inventoried. Retaining it temporarily does not make it authoritative or a backup.
+
+The table must not be removed until all of these postconditions are proven:
+
+- the production row inventory is complete for every worker database;
+- every non-empty row has an explicit migrate, intentionally discard, or hold-for-human decision;
+- no production caller reads or writes prompt rows;
+- source-controlled replacements and compatibility tests are merged and deployed;
+- backup, rollback, and representative existing-database migration tests pass;
+- the guarded migration owner performs the table removal under separate approval.
 
 ## Compatibility
 

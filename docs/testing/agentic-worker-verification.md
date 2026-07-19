@@ -2,17 +2,18 @@
 
 ## Status
 
-Canonical verification requirements for role-based Engineering Worker orchestration.
+Canonical verification requirements for role-based Engineering Worker orchestration. These requirements apply as each Issue #159 slice activates its owning behaviour.
 
 ## Test principles
 
 - Write boundary-level acceptance tests before implementation.
 - Preserve red-green-refactor with separate red and green commits for behaviour changes.
 - Test authoritative state and externally observable effects rather than model wording.
-- Treat permission, lifecycle, persistence, role resolution, prompts, canonical skills, structured output, and documentation triggers as risk boundaries.
+- Treat issue mutation, permission, lifecycle, persistence, role resolution, prompts, canonical skills, structured output, exact-head evidence, and documentation triggers as risk boundaries.
 - Require Technical Lead plans to define comprehensive red tests protecting product and architectural intent.
 - Keep reusable SDLC know-how authoritative in versioned repository skills rather than copied prompt passages.
 - Deterministic evidence overrides model claims.
+- A stale required document or stale exact-head result is a failed readiness condition, not a deferred follow-up.
 
 ## Acceptance suites
 
@@ -37,9 +38,10 @@ Cover:
 - one model can serve every role with separate sessions, prompts, validators, and permission profiles;
 - model-diversity and independent-review flags are accurate;
 - repository policy can block high-risk work when independent review is required;
-- no false claim of independent review.
+- required and actual independence are recorded separately;
+- a fresh same-model session is not reported as independent.
 
-### Requirements intake
+### Requirements intake and multi-issue decomposition
 
 For feature, defect, and refactor paths, cover:
 
@@ -51,6 +53,17 @@ For feature, defect, and refactor paths, cover:
 - canonical issue versions and `requirements_ready` transitions are durable;
 - restart and retry do not duplicate validation calls.
 
+For split or multi-issue work, additionally cover:
+
+- every proposed child issue is assembled before GitHub mutation;
+- `technical_lead:decomposition_review` receives the complete bundle;
+- implementation delivery order and runtime phase order are represented separately;
+- one invariant matrix covers owners/callers, lifecycle/state authority, permissions, schema/SQL, GitHub mutation, platform/appliance authority, compatibility, repair invalidation, and prohibited duplicates;
+- a contradiction in any child issue returns `revise_bundle` and produces zero GitHub mutations;
+- duplicate or overlapping scope blocks mutation;
+- unresolved product policy returns a human-decision verdict;
+- retries after a remote/local interruption remain idempotent.
+
 ### Scan candidate handling
 
 Cover:
@@ -59,6 +72,7 @@ Cover:
 - defect and refactor findings remain candidates;
 - every supported Technical Lead disposition;
 - duplicate, rejected, and split findings do not accidentally queue implementation;
+- split findings return to bundle review before child issue mutation;
 - a refactor without concrete evidence or measurable benefit is rejected;
 - scan output cannot grant mutation permission.
 
@@ -79,51 +93,53 @@ Cover:
 Cover:
 
 - every role/mode resolves exactly one registered prompt key and contract version;
-- planning, red-test repair, execution-contract repair, review, operations, guidance, Code Worker, and Documentation Steward prompts remain separate;
+- requirements, issue, decomposition review, planning, focused repairs, review, operations, guidance, Code Worker, and Documentation Steward prompts remain separate;
 - every role/mode and compatibility prompt declares an ordered lifecycle-skill set explicitly;
 - each canonical skill has exactly one marked runtime-guidance block and a matching `skill.json` name/version;
 - requirements, risk-based testing, TDD, and release-readiness know-how comes from canonical skills rather than duplicated prompt supplements;
 - missing, duplicate, empty, oversized, malformed, or version-mismatched guidance fails closed;
-- fallback targets use the same prompt key/version, input/output schemas, validator, role-template hash, skill identities, skill-set hash, and composed-template hash;
-- changing one prompt does not change sibling prompt template hashes or contracts;
+- fallback targets preserve prompt key/version, schemas, validator, role-template hash, skill identities, skill-set hash, and composed-template hash;
+- changing one prompt does not change sibling prompt-template hashes or contracts;
 - changing one skill changes only consuming prompts' skill-set, composed, and rendered hashes;
-- every canonical prompt declares its required render variables and missing inputs fail closed;
+- every canonical prompt declares required render variables and missing inputs fail closed;
 - supplied context is bounded before rendering;
 - canonical and compatibility prompts resolve only from registered source-controlled files and report `source: builtin`;
-- the database prompt table, accessors, loader override options, and handler reads are absent;
+- database prompt table accessors, loader overrides, and handler reads remain absent;
 - schema migration 2 drops an absent or empty legacy table transactionally;
-- an unexpected populated table fails closed and preserves schema version 1 plus its rows for investigation;
-- unknown prompt keys and incompatible contract inputs fail safely;
-- compatibility aliases remain explicit and degraded;
-- role-template, lifecycle-skill-set, composed-template, and invocation-specific rendered hashes are distinguished and audit-safe;
-- raw repository context and sensitive prompt inputs are not stored in metadata-only audit.
+- an unexpected populated table fails closed and preserves schema version 1 plus its rows;
+- prompt and lifecycle-skill identities remain audit-safe without raw repository context.
 
 Canonical contract: `docs/architecture/agentic-prompt-contracts.md`.
 
-### Planning
+### Planning and target provenance
 
 Cover:
 
 - planning requires `requirements_ready`;
 - plans trace every acceptance criterion;
 - execution contracts include bounded work packets, red/green phases, verification, documentation, and operations obligations;
-- plan target paths are repository-relative and policy-valid;
+- every new or repaired plan's target path is classified as `existing_at_base`, `existing_in_dependency`, `proposed_new_production`, or `proposed_new_test`;
+- each target has an owner and rationale;
+- dependency-owned paths require a dependency PR and exact reviewed ref;
+- proposed production files identify their neighbouring owner and why no existing path is sufficient;
+- invalid or unclassified targets fail plan validation;
+- already-persisted pre-provenance plans may use only the narrow concrete-path compatibility validator;
+- generated or repaired model output can never use that compatibility path;
 - legacy scribe output cannot silently become the canonical plan when role routing is authoritative;
-- current PR #157 execution-contract repair remains separate transitional hardening until replacement is complete.
+- current focused execution-contract repair remains separate until replacement is complete.
 
-Every valid Technical Lead plan must also contain structured comprehensive red-test specifications. Cover:
+Every valid Technical Lead plan also contains structured comprehensive red-test specifications. Cover:
 
-- every acceptance criterion maps to one or more red tests or a justified deterministic non-test proof;
-- affected product behaviour and architectural boundaries/invariants are named explicitly;
-- each red test identifies file/name, real production boundary, fixture/state, real caller action, observable result, why current code fails, expected red assertion, focused command, authoritative oracle, false-positive controls, and sibling behaviour remaining green;
+- every acceptance criterion maps to red tests or a justified deterministic non-test proof;
+- affected product behaviour and architectural boundaries/invariants are explicit;
+- each red test identifies file/name, real production boundary, fixture/state, caller action, observable result, current failure, expected red assertion, focused command, oracle, false-positive controls, and sibling behaviour remaining green;
 - architecture/refactor work includes characterization and structural/Architecture Lint coverage where applicable;
 - lifecycle work triggers cancellation, retry, restart, lease, stale-owner, race, and terminal-state coverage as applicable;
 - permission/security work triggers deny-path and credential-isolation coverage;
 - operational work triggers abort, rollback, and authoritative postcondition coverage;
-- generic instructions such as `write tests`, `add unit tests`, or `increase coverage` fail validation;
-- helper-only tests fail validation when correctness depends on handler wiring, repositories, permissions, child processes, Git/GitHub, platform status, or operations;
-- cited existing tests identify exact file/test and prove why they cover the required intent;
-- rendered human plan red-test prose is derived from the validated structured contract;
+- generic instructions fail validation;
+- helper-only tests fail validation when production wiring matters;
+- cited existing tests identify exact file/test and prove sufficiency;
 - red-test specifications survive restart without semantic drift.
 
 ### Focused plan repair
@@ -134,8 +150,9 @@ Cover:
 - missing execution contracts use only the separate execution-contract repair key;
 - red-test repair can replace only red-test and coverage fields;
 - attempted scope, non-goal, packet, architecture, permission, operation, or human-gate changes are rejected;
+- new or repaired plans must satisfy strict target provenance;
 - one repair is allowed and the full plan is revalidated;
-- multiple substantive invalid sections fail the plan rather than chaining autonomous repairs;
+- multiple substantive invalid sections fail rather than chaining autonomous repairs;
 - failure after bounded repair is fail-closed.
 
 ### Code Worker permission modes
@@ -143,14 +160,32 @@ Cover:
 Cover:
 
 - scan/investigate cannot mutate files or Git;
-- red can commit test files only and must demonstrate the exact planned expected failure;
-- Code Worker red receives the validated `RedTestSpec`, not free-form test-strategy ownership;
+- red can commit test files only and must demonstrate the exact planned failure;
+- red receives the validated `RedTestSpec`, not free-form strategy ownership;
 - green cannot alter committed red tests;
 - repair cannot escape the approved packet;
-- verify cannot introduce new source changes;
+- verify cannot introduce source changes;
 - permission tokens are invocation-scoped and revoked on completion, cancellation, timeout, or lease loss.
 
-### Documentation Steward
+### Review, operations, and exact-head evidence
+
+Cover:
+
+- implementation review cannot run before deterministic verification;
+- implementation review does not consume completed documentation;
+- operations review follows accepted implementation review and precedes documentation;
+- Documentation Steward authoring requires accepted implementation and applicable operations review for the same `subject_head_sha`;
+- readiness requires verification, review, operations, documentation, and CI evidence for the same current head;
+- gate status distinguishes `passed`, `failed`, `not_run`, `not_scheduled`, `stale`, and `unknown`;
+- only authoritative `passed` evidence for the current head satisfies a required gate;
+- `not_scheduled` or `not_run` cannot be reported as green;
+- different-target review preference follows policy;
+- required and actual independence are recorded separately;
+- unavailable required independence holds for human decision;
+- model verdict cannot mark failed, missing, stale, or moved-head evidence ready;
+- a code-changing repair invalidates verification, review, operations, documentation, and readiness evidence for the previous head.
+
+### Documentation Steward and no-deferral policy
 
 Cover:
 
@@ -158,8 +193,12 @@ Cover:
 - author mode can change only manifest-approved documentation paths;
 - production-code and test-code mutations are rejected;
 - manifest triggers resolve required documents deterministically;
-- a `no_documentation_change` result requires rationale and validation;
-- PR readiness remains blocked while required documents are missing or stale.
+- `docs/architecture/01-current-architecture.md` is included in canonical architecture coverage;
+- a `no_documentation_change` result requires rationale, trigger evaluation, and Technical Lead validation;
+- missing, stale, contradictory, or materially misleading required documents make readiness impossible;
+- a later issue, owner assignment, archive suggestion, or follow-up does not satisfy readiness;
+- required documentation is corrected and revalidated in the same delivery;
+- scope expansion needed for a required correction returns a human-scope hold rather than a ready verdict.
 
 ### Lifecycle and persistence
 
@@ -172,46 +211,32 @@ Cover:
 - logical-call budget is preserved across retries and restart;
 - completed phases are not rerun;
 - stale model probes are revalidated before new calls;
-- prompt contract, version, role-template hash, lifecycle skill identities, skill-set hash, composed-template hash, and rendered invocation hash remain bound to each durable logical call;
-- rollback to legacy routing preserves new records without interpreting incompatible jobs unsafely.
-
-### Review and operations
-
-Cover:
-
-- different-target preference order;
-- fresh isolated session when target is reused;
-- accurate independent/non-independent status;
-- implementation review occurs only after deterministic verification;
-- review checks delivered tests against the approved red-test contract and flags omitted product/architectural intent;
-- operations review activates on configuration, credentials, schema, migration, queue, service, deployment, or rollback changes;
-- model verdict cannot mark failed deterministic evidence ready.
+- prompt contract, role-template hash, skill identities, skill-set hash, composed-template hash, and rendered hash remain bound to each durable logical call;
+- rollback to legacy routing preserves new records without unsafe reinterpretation.
 
 ## Structural checks
 
-Architecture Lint should enforce:
+Architecture Lint should enforce or be supplemented by tests proving:
 
 - role IDs and permission profiles are centrally owned;
-- one central prompt-contract registry owns role/mode prompt metadata;
-- one central lifecycle-skill registry owns extraction, manifest/version checks, budgets, and composition;
+- one prompt-contract registry owns role/mode metadata;
+- one lifecycle-skill registry owns extraction, versions, budgets, and composition;
 - worker handlers do not invoke provider CLIs directly for role work;
 - Technical Lead calls route through the advisor boundary;
-- full planning and focused repair use different registered prompt keys;
-- prompt and skill text cannot own or import tool, permission, budget, or lifecycle policy;
-- Code Worker and Documentation Steward prompts cannot be selected for Technical Lead modes;
-- canonical prompt loading cannot depend on the database prompt repository;
-- duplicated canonical lifecycle passages are not reintroduced as compatibility supplements;
+- full planning and focused repairs use different keys;
+- prompts and skills cannot own tool, permission, budget, or lifecycle authority;
+- canonical prompt loading cannot depend on database prompt storage;
+- duplicated canonical lifecycle passages are not reintroduced;
 - documentation-only handlers cannot import production mutation helpers;
-- role audit SQL remains in its owning repository;
-- no legacy scribe call is used as canonical planning without an explicit compatibility marker;
+- role audit SQL remains in its repository;
 - role status handlers remain read-only.
 
 ## Required commands
 
-The implementation plan must resolve exact repository commands. At minimum, final evidence includes:
+Final evidence includes:
 
 ```text
-focused lifecycle-skill, role-prompt, plan-validation, and workflow tests
+focused lifecycle-skill, prompt, decomposition, plan-provenance, exact-head, and documentation-gate tests
 full test suite
 npm run typecheck
 bash scripts/arch-lint.sh src
@@ -229,15 +254,18 @@ Before broad rollout, use a disposable workspace to demonstrate:
 1. one authenticated CLI with per-role model, prompt, and lifecycle-skill selection;
 2. a feature request requiring one human clarification;
 3. a detailed imported issue passing validation without unnecessary questions;
-4. a rejected defect or refactor candidate;
-5. a Technical Lead plan containing product- and architecture-grounded red-test specifications;
-6. rejection and focused repair of a plan containing only generic test wording;
-7. a read-only scan followed by approved TDD implementation of the exact planned red tests;
-8. documentation-only mutation enforced;
-9. restart between workflow phases without duplicate calls or prompt/skill-contract drift;
-10. cancellation fencing late output;
-11. accurate non-independent review reporting when only one model exists;
-12. provider fallback preserving prompt and lifecycle-skill identities;
-13. rollback to legacy routing without queue or state corruption.
+4. a multi-issue split blocked until bundle review is consistent;
+5. a rejected defect or refactor candidate;
+6. a Technical Lead plan with classified paths and product/architecture-grounded red tests;
+7. rejection and focused repair of generic test wording or unclassified paths;
+8. read-only scan followed by approved TDD implementation;
+9. implementation and operations review before documentation;
+10. same-head documentation-only mutation and validation;
+11. stale required documentation blocking readiness until corrected;
+12. restart between phases without duplicate calls or prompt/skill drift;
+13. cancellation fencing late output;
+14. accurate non-independent review reporting;
+15. provider fallback preserving prompt and skill identities;
+16. rollback to legacy routing without queue or state corruption.
 
-Production qualification is observational and separately approved. It does not occur as an implicit consequence of merging implementation code.
+Production qualification is observational and separately approved. It does not occur implicitly on merge.

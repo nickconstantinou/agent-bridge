@@ -2,13 +2,13 @@
 
 ## Status
 
-Canonical target-state architecture for Engineering Worker prompts, structured outputs, validators, focused repairs, and legacy prompt-override retirement.
+Canonical target-state architecture for Engineering Worker prompts, lifecycle-skill composition, structured outputs, validators, focused repairs, and completed legacy prompt-override retirement.
 
 ## Principle
 
-Prompts are implementation inputs, not authority boundaries.
+Prompts and skills are implementation inputs, not authority boundaries.
 
-Agent Bridge owns the role, mode, evidence supplied, tool grants, permission profile, budgets, structured-output schema, validator, repair limit, persistence, and lifecycle transition. A prompt cannot grant tools, change role, expand permission, redefine acceptance criteria, or bypass deterministic or human gates.
+Agent Bridge owns the role, mode, evidence supplied, tool grants, permission profile, budgets, structured-output schema, validator, repair limit, persistence, and lifecycle transition. A prompt or skill cannot grant tools, change role, expand permission, redefine acceptance criteria, or bypass deterministic or human gates.
 
 ## Separation model
 
@@ -16,22 +16,68 @@ Prompts remain separate by role, mode, and stage. Do not create one large orches
 
 Each prompt contract has:
 
-- a stable key;
-- a contract version;
+- a stable key and contract version;
 - one owning role and mode;
-- a source-controlled Markdown file;
-- a typed input schema;
-- a structured output schema;
+- a source-controlled Markdown prompt file;
+- a typed input schema and structured output schema;
 - an independent deterministic validator;
-- an evidence/tool grant selected outside the prompt;
-- a permission profile selected outside the prompt;
+- an evidence/tool grant and permission profile selected outside the prompt;
 - a bounded repair policy;
-- an audit-safe content hash;
+- an explicit ordered set of canonical lifecycle skills;
+- stable prompt-template, skill-set, composed-template, and rendered-content hashes;
 - explicit compatibility aliases where an existing prompt key remains usable during migration.
 
-Prompt text, output schema, validator, permission policy, and tool policy are separate artefacts. Canonical role prompts are source-controlled and cannot be replaced by mutable database text.
+Prompt text, lifecycle know-how, output schema, validator, permission policy, and tool policy are separate artefacts. Canonical role prompts are source-controlled and cannot be replaced by mutable database text.
 
-The implementation registry is `src/agenticPromptContracts.ts`. Canonical prompt files are under `prompts/worker/roles/`.
+The implementation registry is `src/agenticPromptContracts.ts`. Canonical prompt files are under `prompts/worker/roles/`. Canonical software-development lifecycle know-how remains under `skills/` and is composed by `src/lifecycleSkillGuidance.ts`.
+
+## Canonical lifecycle skills
+
+The following repository skills are the authoritative reusable lifecycle sources:
+
+| Skill | Owns |
+|---|---|
+| `requirements-to-acceptance` | goal, assumptions, non-goals, acceptance criteria, verification, and consequential open questions |
+| `risk-based-test-strategy` | risk discovery, test-class selection, boundary depth, observability, and residual-risk reporting |
+| `red-green-refactor-tdd` | failing test first, smallest green implementation, characterization, refactoring, and focused-to-broad verification |
+| `release-readiness-review` | scope, data, flags, rollback, observability, documentation, and post-release validation |
+
+Each `SKILL.md` contains exactly one block delimited by:
+
+```text
+<!-- BEGIN AGENT_BRIDGE_RUNTIME_GUIDANCE -->
+...
+<!-- END AGENT_BRIDGE_RUNTIME_GUIDANCE -->
+```
+
+The full skill remains available to humans and native CLI skill discovery. Agent Bridge injects only the marked block. The corresponding `skill.json` name and version must match the runtime registry. Missing, duplicate, empty, oversized, malformed, or version-mismatched guidance fails closed.
+
+Do not copy canonical lifecycle passages into role prompts or compatibility supplements. Role prompts own Agent Bridge-specific instructions: role identity, stage, supplied evidence, output shape, escalation, and authority reminders. Skills own reusable engineering know-how.
+
+## Deterministic composition and audit
+
+Every prompt contract declares `lifecycleSkills` in deterministic order. Loading performs:
+
+1. load and validate the role or compatibility prompt file;
+2. load each declared `skill.json` and `SKILL.md`;
+3. extract one bounded runtime-guidance block per skill;
+4. append only those declared blocks in order;
+5. append any additional Agent Bridge-specific supplement registered for a compatibility prompt;
+6. render bounded invocation variables;
+7. record identities.
+
+Canonical role prompt evidence records:
+
+- role prompt key and version;
+- role-template content hash;
+- ordered lifecycle skill key, version, and content hash;
+- lifecycle skill-set hash;
+- composed-template hash before invocation data;
+- rendered-content hash after bounded invocation data.
+
+A provider fallback receives the same prompt key, role template, skill set, schemas, validator, and hashes. Only the selected target/model changes.
+
+Changing one skill must change only the composed and rendered identities of prompts that declare that skill. Sibling prompt-template hashes and non-consuming prompt identities remain unchanged.
 
 ## Canonical prompt registry
 
@@ -70,6 +116,16 @@ The implementation registry is `src/agenticPromptContracts.ts`. Canonical prompt
 | `documentation_steward:author` | `author` | Create or update manifest-approved documentation paths |
 | `documentation_steward:validate` | `validate` | Compare documentation with final code, configuration, and evidence |
 | `documentation_steward:maintenance` | `maintenance` | Identify missing or stale canonical repository documents |
+
+The source mapping in `AGENTIC_PROMPT_LIFECYCLE_SKILLS` is authoritative. Examples:
+
+- Technical Lead requirements and issue modes consume `requirements-to-acceptance`;
+- Technical Lead planning consumes requirements, risk-based testing, and TDD;
+- Code Worker red consumes risk-based testing and TDD;
+- Code Worker green consumes TDD;
+- implementation review and PR readiness consume risk-based testing and release readiness;
+- operations review consumes release readiness;
+- Documentation Steward impact, validation, and maintenance consume release readiness where relevant.
 
 ## Advisor-authored plan red-test contract
 
@@ -114,26 +170,13 @@ type RedTestSpec = {
 The plan also contains a coverage matrix mapping:
 
 - every acceptance criterion to one or more red tests or a justified non-test proof;
-- every affected architectural boundary and invariant to a structural, integration, acceptance, or Architecture Lint test;
+- every affected architectural boundary and invariant to structural, integration, acceptance, or Architecture Lint coverage;
 - every triggered lifecycle, compatibility, security, data, operations, migration, or rollback risk to an appropriate test class;
 - unchanged sibling modes, task types, providers, transports, and public contracts to characterization or regression coverage.
 
 ## Red-test quality rules
 
-The Technical Lead planning validator rejects a plan when:
-
-- it says only `add tests`, `write unit tests`, `add coverage`, or equivalent generic wording;
-- a test lacks the real production boundary or caller action;
-- it does not explain why current code must fail;
-- it relies only on a helper test where correctness depends on handler wiring, repositories, lifecycle ownership, permissions, child processes, Git, GitHub, platform status, or deployment behaviour;
-- acceptance criteria or architectural invariants lack test/proof traceability;
-- a refactor lacks characterization of behaviour and public compatibility;
-- a lifecycle change lacks relevant cancellation, retry, restart, lease, stale-owner, race, or terminal-state coverage;
-- a security/permission change lacks deny-path and credential-isolation coverage;
-- an operational change lacks abort, rollback, and authoritative postcondition coverage;
-- the test oracle duplicates the production algorithm instead of observing authoritative state or effects;
-- the proposed red failure could be caused by syntax, fixture, timeout, import, or unrelated baseline failure rather than missing product behaviour;
-- changed behaviour is tested while relevant sibling behaviour is left unspecified.
+The Technical Lead planning validator rejects generic test wording, missing production callers, absent expected red failure, helper-only evidence where wiring matters, missing acceptance or architecture traceability, weak lifecycle/security/operations coverage, copied production algorithms in the oracle, unrelated failure modes, and unspecified sibling behaviour.
 
 A valid plan may cite an existing test when it already covers the required boundary. It must identify the exact file/test and explain why it is sufficient. New architectural intent should normally have an acceptance or Architecture Lint red test even when narrow unit coverage exists.
 
@@ -143,7 +186,7 @@ Full-plan generation and plan repair remain separate prompts.
 
 1. Run `technical_lead:planning` once.
 2. Validate the complete plan, including red-test coverage and execution contract.
-3. When the plan is otherwise valid but only the red-test contract is incomplete, run `technical_lead:planning_repair:red_tests` once with typed errors and immutable approved context.
+3. When only the red-test contract is incomplete, run `technical_lead:planning_repair:red_tests` once.
 4. When only the execution contract is incomplete, use `technical_lead:planning_repair:execution_contract`.
 5. Merge only the repaired section into the original plan.
 6. Revalidate the complete artefact before persistence.
@@ -153,50 +196,36 @@ A focused repair cannot change requirements, scope, non-goals, architecture, wor
 
 ## Prompt storage decision
 
-Prompt text is a reviewed source artifact. The SQLite `prompts` table and its runtime override API have been removed.
+Prompt text and lifecycle skills are reviewed source artefacts. The SQLite `prompts` table and its runtime override API have been removed.
 
-Mutable prompt overrides conflicted with the role architecture because they could change consequential instructions without a reviewed Git diff, contract/version review, exact-head CI, deterministic tests, reproducible workspace content, or rollback to a known application SHA.
-
-Canonical and compatibility prompts therefore resolve only from registered repository files. `AgenticPromptContract.allowDatabaseOverride` is always `false`; `loadAgenticPrompt()` and `loadWorkerPrompt()` have no database-template input.
-
-## Legacy override retirement
-
-Retirement is complete in PR #160:
-
-1. the owner confirmed every production table has zero rows and revised source prompts replace the legacy path;
-2. all handler reads and `BridgeDb.getPrompt()` / `setPrompt()` were removed;
-3. loader database-template options and obsolete database-key metadata were removed;
-4. migration 2 drops an absent or empty table transactionally;
-5. an unexpected populated table fails closed, rolls back, and preserves schema version 1 for investigation;
-6. fresh databases never create the table.
-
-Prompt rollback is application rollback to a reviewed SHA. No platform, operator, or runtime surface may reintroduce mutable prompt text.
+Canonical and compatibility prompts resolve only from registered repository files. `AgenticPromptContract.allowDatabaseOverride` is always `false`; `loadAgenticPrompt()` and `loadWorkerPrompt()` have no database-template input. Prompt rollback is application rollback to a reviewed SHA.
 
 ## Compatibility
 
-Existing keys such as feature planning, defect/refactor scanning, TDD red/green, repair, and CI-fix prompts remain explicit compatibility aliases while their corresponding legacy handlers are migrated.
+Existing feature-planning, defect/refactor scanning, TDD, repair, CI-fix, and orchestrated-task keys remain explicit compatibility aliases while role-native dispatch is introduced.
 
-Compatibility aliases:
+Compatibility paths:
 
-- cannot become canonical role prompts silently;
+- resolve source-controlled prompt files only;
+- consume the same canonical lifecycle skill loader and fragments as role-native prompts;
+- preserve existing validators, permissions, handler ownership, and output contracts;
+- cannot silently become canonical role prompts;
 - are reported as legacy/degraded once role routing is authoritative;
-- preserve existing output validators and permissions;
-- may read an existing database override only until that specific handler is migrated;
-- may not accept new override-management features;
-- are retired after the replacement role prompt is qualified and existing rows are inventoried or migrated.
+- are retired only after their replacement role path is qualified.
 
-PR #157's focused execution-contract recovery pattern remains the model for section-specific repair. Issue #159 extends this pattern to comprehensive red-test repair rather than folding repair instructions into the full planning prompt.
+PR #157's focused execution-contract recovery remains the model for section-specific repair. Issue #159 extends this pattern to comprehensive red-test repair rather than folding repair instructions into the full planning prompt.
 
 ## Required verification
 
 Implementation must prove:
 
-- every role/mode resolves one distinct registered source-controlled prompt contract;
-- planning, review, operations, executor guidance, and documentation prompts cannot be substituted for one another;
-- changing one prompt does not alter sibling prompt content or permissions;
-- canonical role prompts cannot consume database text;
-- fallback models receive the same prompt key, contract version, structured schema, validator, and content hash;
-- prompt key/version/hash survive restart and are included in audit metadata;
+- every lifecycle skill has exactly one valid marked guidance block and a matching manifest version;
+- every role/mode and compatibility prompt declares its lifecycle skills explicitly;
+- missing, duplicated, malformed, oversized, or version-mismatched skill guidance fails closed;
+- role/mode prompts remain separate and consume only their declared skills;
+- changing one skill changes only consuming skill-set, composed, and rendered hashes;
+- provider fallback preserves prompt and lifecycle-skill identities;
+- compatibility and role-native prompts share the canonical skill loader rather than copied lifecycle supplements;
 - comprehensive red-test validation and focused repair work across supported Technical Lead targets;
-- legacy prompt rows are inventoried before reads or schema are removed;
-- legacy prompt paths remain unchanged until their explicit migration slice.
+- canonical prompts cannot consume database text;
+- exact-head tests, typecheck, Architecture Lint, and diff checks pass.

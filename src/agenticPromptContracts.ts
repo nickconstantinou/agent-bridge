@@ -1,12 +1,16 @@
 /**
  * PURPOSE: Own the versioned source-controlled prompt registry for Engineering Worker roles and modes.
  * INPUTS: Canonical prompt keys, bounded render variables, and a prompt-file reader.
- * OUTPUTS: Effective built-in prompt text with role/mode metadata and a reproducible SHA-256 content hash.
+ * OUTPUTS: Effective built-in prompt text with stable template identity and invocation-specific rendered identity.
  * NEIGHBORS: src/workerPrompts.ts, src/advisor.ts, src/handlers/*, prompts/worker/roles/*
  */
 
 import { createHash } from "node:crypto";
-import { renderWorkerPrompt, type WorkerPromptReader } from "./workerPrompts.js";
+import {
+  renderWorkerPrompt,
+  truncateWorkerPromptValue,
+  type WorkerPromptReader,
+} from "./workerPrompts.js";
 
 export type AgentRole = "technical_lead" | "code_worker" | "documentation_steward";
 
@@ -40,6 +44,7 @@ export interface AgenticPromptContract {
   mode: string;
   filePath: string;
   outputContract: string;
+  requiredVariables: readonly string[];
   required: true;
   source: "builtin";
   /** Canonical role prompts are reviewable source artifacts, never mutable DB text. */
@@ -54,10 +59,67 @@ export interface EffectiveAgenticPrompt {
   mode: string;
   source: "builtin";
   content: string;
+  /** Stable identity of the reviewed source-controlled template. */
   contentHash: string;
+  /** Invocation-specific identity after bounded context rendering. */
+  renderedContentHash: string;
 }
 
 const ROOT = "prompts/worker/roles";
+const MAX_VARIABLE_CHARS = 16_000;
+const MAX_RENDERED_PROMPT_CHARS = 96_000;
+
+export const AGENTIC_PROMPT_REQUIRED_VARIABLES: Record<AgenticPromptKey, readonly string[]> = {
+  "technical_lead:requirements": [
+    "repository", "request", "source_context", "evidence_catalog", "known_decisions",
+  ],
+  "technical_lead:issue_validation": [
+    "change_type", "candidate_issue", "evidence_catalog", "decisions",
+  ],
+  "technical_lead:issue_authoring": [
+    "change_type", "validated_requirements", "evidence_catalog", "decisions",
+  ],
+  "technical_lead:planning": [
+    "canonical_issue", "repository_evidence", "documentation_impact", "constraints",
+  ],
+  "technical_lead:planning_repair:execution_contract": ["validation_errors", "original_plan"],
+  "technical_lead:planning_repair:red_tests": [
+    "validation_errors", "canonical_issue", "original_plan", "repository_evidence",
+  ],
+  "technical_lead:executor_guidance": [
+    "canonical_issue", "approved_plan", "blocked_evidence", "repository_evidence",
+  ],
+  "technical_lead:implementation_review": [
+    "canonical_issue", "approved_plan", "implementation_evidence", "verification_evidence",
+    "documentation_evidence",
+  ],
+  "technical_lead:operations_review": [
+    "issue_and_plan", "implementation_evidence", "operations_evidence",
+  ],
+  "technical_lead:pr_readiness": [
+    "issue_and_plan", "implementation_review", "operations_review", "documentation_validation",
+    "verification_evidence", "pr_evidence",
+  ],
+  "code_worker:scan:defect": ["repository", "scan_scope", "repository_evidence"],
+  "code_worker:scan:refactor": ["repository", "scan_scope", "repository_evidence"],
+  "code_worker:investigate": ["target", "questions", "repository_evidence"],
+  "code_worker:red": ["canonical_issue", "approved_packet", "repository_state"],
+  "code_worker:green": ["canonical_issue", "approved_packet", "red_evidence"],
+  "code_worker:repair": ["approved_packet", "repair_evidence", "repository_state"],
+  "code_worker:verify": ["verification_contract", "repository_state"],
+  "documentation_steward:impact": [
+    "issue_and_plan", "documentation_manifest", "change_evidence",
+  ],
+  "documentation_steward:author": [
+    "documentation_impact", "implementation_context", "path_policy",
+  ],
+  "documentation_steward:validate": [
+    "documentation_impact", "implementation_evidence", "documents",
+  ],
+  "documentation_steward:maintenance": [
+    "documentation_manifest", "documentation_inventory", "implementation_evidence",
+  ],
+};
 
 function contract(
   key: AgenticPromptKey,
@@ -74,6 +136,7 @@ function contract(
     mode,
     filePath: `${ROOT}/${fileName}`,
     outputContract,
+    requiredVariables: AGENTIC_PROMPT_REQUIRED_VARIABLES[key],
     required: true,
     source: "builtin",
     allowDatabaseOverride: false,
@@ -179,14 +242,33 @@ export function getAgenticPromptContract(key: AgenticPromptKey): AgenticPromptCo
   return AGENTIC_PROMPT_CONTRACTS[key];
 }
 
+function sha256(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
 export async function loadAgenticPrompt(
   key: AgenticPromptKey,
   variables: Record<string, unknown>,
   reader: WorkerPromptReader,
 ): Promise<EffectiveAgenticPrompt> {
   const promptContract = getAgenticPromptContract(key);
-  const template = await reader.readText(promptContract.filePath);
-  const content = renderWorkerPrompt(template, variables).trim();
+  const missingVariables = promptContract.requiredVariables.filter(name => !(name in variables));
+  if (missingVariables.length > 0) {
+    throw new Error(`Missing required variables for ${key}: ${missingVariables.join(", ")}`);
+  }
+
+  const template = (await reader.readText(promptContract.filePath)).trim();
+  const boundedVariables = Object.fromEntries(
+    Object.entries(variables).map(([name, value]) => [
+      name,
+      truncateWorkerPromptValue(value, MAX_VARIABLE_CHARS),
+    ]),
+  );
+  const content = renderWorkerPrompt(template, boundedVariables).trim();
+  if (content.length > MAX_RENDERED_PROMPT_CHARS) {
+    throw new Error(`Rendered prompt ${key} exceeds ${MAX_RENDERED_PROMPT_CHARS} characters`);
+  }
+
   return {
     key,
     version: promptContract.version,
@@ -194,6 +276,7 @@ export async function loadAgenticPrompt(
     mode: promptContract.mode,
     source: "builtin",
     content,
-    contentHash: createHash("sha256").update(content).digest("hex"),
+    contentHash: sha256(template),
+    renderedContentHash: sha256(content),
   };
 }

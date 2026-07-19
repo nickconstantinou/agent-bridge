@@ -384,6 +384,31 @@ describe("guarded rollout helper", () => {
     expect(readFileSync(join(artifacts, "rollout.log"), "utf8")).toContain("rollout completed");
   });
 
+  it("attaches per-database resolving-units evidence, correctly collapsing the shared antigravity/claude/codex unit onto one database", () => {
+    // Issue #135 Phase 4C.3: rollout-db.ts inspect gains a resolving-units
+    // evidence field, sourced from the same unit->canonical-path resolution
+    // rollout-agent-bridge.sh already proves (unit_databases), not
+    // re-derived. dbPaths[0] is shared by all three antigravity/claude/codex
+    // units in this fixture (see createFixture's env-file wiring above).
+    const fixture = createFixture();
+    const result = runRollout(fixture);
+    expect(result.status, result.stderr).toBe(0);
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+    const evidence = JSON.parse(readFileSync(join(artifacts, "preflight-evidence.json"), "utf8"));
+    const byPath: Record<string, string[]> = Object.fromEntries(
+      evidence.databases.map((entry: { path: string; resolvingUnits: string[] }) => [entry.path, [...entry.resolvingUnits].sort()]),
+    );
+    expect(byPath[fixture.dbPaths[0]]).toEqual([
+      "agent-bridge-antigravity.service",
+      "agent-bridge-claude.service",
+      "agent-bridge-codex.service",
+    ]);
+    expect(byPath[fixture.dbPaths[1]]).toEqual(["agent-bridge-discord-interactive.service"]);
+    expect(byPath[fixture.dbPaths[2]]).toEqual(["agent-bridge-health.service"]);
+    expect(byPath[fixture.dbPaths[3]]).toEqual(["agent-bridge-interactive.service"]);
+    expect(byPath[fixture.dbPaths[4]]).toEqual(["agent-bridge-worker-bot.service"]);
+  });
+
   it.each([
     ["missing database", { missingDb: true }, /missing database/i],
     ["unknown schema", { unknownSchema: true }, /unknown schema/i],

@@ -53,3 +53,36 @@ sudo -n /usr/local/sbin/rollout-agent-bridge --expected-commit <full-40-characte
 Artifacts are written beneath the configured `log_dir`; database snapshots are written beneath `backup_dir`. On any failure, keep services stopped and inspect the newest artifact path recorded in `log_dir/latest` before taking further action.
 
 Legacy queue discard is intentionally unsupported. A nonzero legacy queue count aborts before service stop and requires a separate explicit operational decision and tool.
+
+## Bootstrap: genuinely missing databases (Phase 4C.3, issue #135)
+
+A database that doesn't exist yet — first install, or a genuinely new role added later — is not "behind schema," it's absent. `rollout-agent-bridge` never creates one implicitly: `inspect`/`migrate`/`validate` all require every configured database to already exist. Creating a new-role database is a **separate, explicitly-invoked** tool, `rollout-bootstrap`, with its own fixed allowlist. It is never bundled into the same invocation as a migration of existing databases — no pre-migration backup exists for a database that didn't exist, so it cannot participate in the whole-cohort restore guarantee the ordinary rollout provides.
+
+`rollout-bootstrap` reuses `openDb()`'s existing, already-tested missing-file → full-migration-plan path (`scripts/rollout-db.ts bootstrap`) at the database layer — the same migration 1 DDL every other database goes through, so there is no duplicated or shortcut schema definition — but creates the file atomically: a randomly-named temp file in the target's own directory, migrated to `CURRENT_SCHEMA_VERSION`, then renamed into place only on success. Any failure — the migration itself, or the final rename — removes the temp file (and any `-wal`/`-shm` sidecars), so an interrupted bootstrap never leaves debris at either the temp or final path.
+
+### Installation
+
+```bash
+sudo install -D -m 0750 -o root -g root scripts/rollout-bootstrap.sh /usr/local/sbin/rollout-bootstrap-agent-bridge
+sudo install -D -m 0600 -o root -g root systemd/agent-bridge-rollout-bootstrap.conf.example /etc/agent-bridge/rollout-bootstrap.conf
+sudoedit /etc/agent-bridge/rollout-bootstrap.conf
+sudo visudo -f /etc/sudoers.d/agent-bridge-rollout-bootstrap
+```
+
+Sudoers content:
+
+```sudoers
+content-crawler ALL=(root) NOPASSWD: /usr/local/sbin/rollout-bootstrap-agent-bridge
+```
+
+The config must remain `root:root`, must not be group/world writable, and lists only `project_dir`, `runtime_user`, `node_bin`, and one or more `bootstrap_database=` entries — the fixed allowlist of exact absolute paths this tool is ever permitted to create. It is a separate config file from `rollout.conf`; a path is not eligible for bootstrap just because it appears in the ordinary rollout's `database=` allowlist, and vice versa.
+
+### Authorized invocation
+
+Only after separate production approval, confirming the missing file is an expected new role rather than misconfiguration or accidental deletion:
+
+```bash
+sudo -n /usr/local/sbin/rollout-bootstrap-agent-bridge --new-role <absolute path> --confirm-new-role <same absolute path>
+```
+
+`--confirm-new-role` must exactly repeat `--new-role` — an explicit, per-invocation operator confirmation, the same exact-match discipline `--expected-commit` uses elsewhere in this tooling. The target must not already exist, must sit under a canonical, non-symlink, root-owned parent directory with no group/world write bits, and must be on the fixed `bootstrap_database` allowlist. `rollout-bootstrap` acquires the **same** exclusive OS lock file as `rollout-agent-bridge`, so a bootstrap can never run concurrently with an active migrate rollout, even though the two are structurally separate tools and invocations.

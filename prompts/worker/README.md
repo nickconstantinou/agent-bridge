@@ -6,17 +6,40 @@ This directory contains the version-controlled prompts used by the Agent Bridge 
 
 - `roles/` contains canonical Technical Lead, Code Worker, and Documentation Steward prompts registered in `src/agenticPromptContracts.ts`.
 - Files in this directory retain current handler keys while Issue #159 migrates dispatch to role-native keys.
-- `supplements/` contains compact phase-specific guidance appended only by the registered source-controlled prompt definition.
+- `supplements/` contains only additional Agent Bridge-specific, phase-specific guidance.
+- Canonical reusable software-development lifecycle know-how remains under `skills/` and is composed by `src/lifecycleSkillGuidance.ts`.
 
 ## Authority boundary
 
-Prompts guide model behaviour but never grant authority. Agent Bridge code owns role and mode selection, evidence, tools, permissions, budgets, validators, lifecycle state, persistence, approvals, merge, deployment, and destructive-operation gates.
+Prompts and skills guide model behaviour but never grant authority. Agent Bridge code owns role and mode selection, evidence, tools, permissions, budgets, validators, lifecycle state, persistence, approvals, merge, deployment, and destructive-operation gates.
 
 ## Resolution
 
-Every prompt resolves from its reviewed repository file. There is no database template precedence, mutable prompt override, or runtime fallback text.
+Every prompt resolves from reviewed repository files. There is no database template precedence, mutable prompt override, or runtime fallback text.
 
-The loader resolves the registered file, bounds variables, renders the source template, appends only registered supplements, and fails closed on unreadable files or invalid required context. Canonical role prompts additionally record stable template and invocation-specific rendered hashes. Provider fallback changes only the target/model, not the prompt contract.
+The loaders:
+
+1. resolve the registered role or compatibility prompt file;
+2. load only the explicitly mapped canonical lifecycle skills;
+3. validate each skill manifest and its single marked runtime-guidance block;
+4. append additional registered worker supplements only where applicable;
+5. bound variables and render the prompt;
+6. fail closed on missing files, malformed skill blocks, version drift, duplicates, or budget violations.
+
+Canonical role prompts record stable role-template, skill-set, composed-template, and invocation-specific rendered hashes. Provider fallback changes only the target/model, not the prompt or skill contract.
+
+## Canonical lifecycle skills
+
+The authoritative reusable lifecycle sources are:
+
+- `skills/requirements-to-acceptance/SKILL.md`;
+- `skills/risk-based-test-strategy/SKILL.md`;
+- `skills/red-green-refactor-tdd/SKILL.md`;
+- `skills/release-readiness-review/SKILL.md`.
+
+Each skill exposes one block between `BEGIN AGENT_BRIDGE_RUNTIME_GUIDANCE` and `END AGENT_BRIDGE_RUNTIME_GUIDANCE`. Do not copy those passages into role prompts or compatibility supplements. Update the skill once and let all consuming prompt contracts receive the reviewed change through their explicit mapping.
+
+The former duplicated `supplements/test-driven-development.md` has been removed. TDD guidance now comes only from the canonical `red-green-refactor-tdd` skill.
 
 ## Database retirement
 
@@ -30,6 +53,6 @@ Technical Lead planning owns comprehensive red-test design. Plans map acceptance
 
 ## Maintenance
 
-Prompt changes require a reviewed Git diff, contract/version review when compatibility changes, focused semantic tests, full CI, and a known application-SHA rollback.
+Prompt or lifecycle-skill changes require a reviewed Git diff, version/contract review when compatibility changes, focused semantic and drift tests, full CI, and a known application-SHA rollback.
 
 See [`WIRING.md`](./WIRING.md) and `docs/architecture/agentic-prompt-contracts.md`.

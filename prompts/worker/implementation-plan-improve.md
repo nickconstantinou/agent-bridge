@@ -26,6 +26,20 @@ Retain approved requirements, scope, non-goals, architecture, compatibility, per
 
 `## Acceptance Criteria` must give every approved criterion a stable requirement ID such as `AC-1`.
 
+`## Target Files` must contain a JSON array. Every entry must contain:
+
+```json
+{
+  "path": "src/exact-file.ts",
+  "classification": "existing_at_base | existing_in_dependency | proposed_new_production | proposed_new_test",
+  "owner": "current owning module or boundary",
+  "dependency_ref": null,
+  "rationale": "why this path changes or why a new file is required"
+}
+```
+
+For `existing_in_dependency`, name the dependency PR and exact reviewed ref. For proposed production files, name the neighbouring owner and why no existing path is sufficient. Invalid or unclassified paths block approval.
+
 `## Red Tests` must contain a JSON array. Every object must use this exact shape and contain substantive repository-grounded values:
 
 ```json
@@ -98,10 +112,11 @@ The `## Execution Contract` section must contain a compact JSON object under 120
 Rules:
 - Keep the plan grounded in the existing repository, canonical issue, and evidence.
 - Do not invent broad work or resolve product decisions silently.
-- Make each phase small, verifiable, dependency-ordered, and bounded by files or ownership.
+- Make each phase small, verifiable, dependency-ordered, and bounded by classified files or ownership.
 - Include exact commands and authoritative expected evidence.
 - Preserve compatibility and sibling behaviour unless the issue explicitly changes them.
 - Include operational prerequisites, abort conditions, rollback, and postconditions where triggered.
 - Keep the execution contract concise so red/green/repair prompts do not need the full plan.
-- The plan is invalid if product intent, architectural intent, real caller coverage, expected current failure, authoritative oracle, triggered-risk tests, or sibling behaviour is missing.
+- Stale, contradictory, or missing required documentation must be corrected in the same delivery; it cannot be deferred while claiming readiness.
+- The plan is invalid if a target path is invalid or unclassified, product intent, architectural intent, real caller coverage, expected current failure, authoritative oracle, triggered-risk tests, or sibling behaviour is missing.
 - Do not implement code.

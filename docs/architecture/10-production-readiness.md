@@ -6,7 +6,7 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 
 - [ ] Exactly three configurable roles: Technical Lead, Code Worker, Documentation Steward
 - [ ] Scanner is a Code Worker mode; review and operations are Technical Lead modes
-- [ ] Agent Bridge owns transitions, permissions, budgets, approvals, and audit
+- [ ] Agent Bridge owns transitions, issue/PR mutation, permissions, budgets, approvals, and audit
 - [ ] Technical Lead uses the authoritative AdvisorService boundary
 - [ ] Provider/model capability and role resolution are registry-driven
 - [ ] One central prompt registry owns role/mode contracts
@@ -14,17 +14,25 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 - [ ] Requirements, risk-based testing, TDD, and release readiness have one canonical skill source each
 - [ ] Role, audit, and lifecycle SQL is confined to owning repositories
 - [ ] Companion and worker architecture boundaries remain green
-- [ ] `agentic-maintenance.yaml` references existing canonical documents
+- [ ] `agentic-maintenance.yaml` references every existing canonical document, including current architecture
 
-## Requirements and planning
+## Requirements, decomposition, and planning
 
 - [ ] Feature, defect, and refactor inputs pass validation before planning
 - [ ] Apparently complete GitHub/local issues receive validation
 - [ ] Scan findings remain candidates until Technical Lead disposition
 - [ ] `requirements_ready` is durable and restart-safe
 - [ ] Product decisions pause for human input
+- [ ] Multi-issue bodies are assembled without mutation before decomposition review
+- [ ] Decomposition review separates implementation delivery order from runtime phase order
+- [ ] One invariant matrix covers owners/callers, lifecycle/state, permissions, persistence, GitHub, platform/appliance, compatibility, and repair invalidation
+- [ ] Inconsistent bundles produce zero GitHub issue mutations
 - [ ] Technical Lead plans trace acceptance criteria and produce bounded work packets
-- [ ] Planning receives the canonical requirements, risk-based testing, and TDD skill set
+- [ ] Every new or repaired plan target is classified as existing-at-base, dependency-owned, proposed production, or proposed test
+- [ ] Dependency-owned paths include dependency PR and exact reviewed ref
+- [ ] Invalid or unclassified targets fail closed
+- [ ] Already-persisted pre-provenance plans use only the narrow compatibility validator
+- [ ] Planning receives canonical requirements, risk-based testing, and TDD skills
 - [ ] Structured output and bounded repair fail closed before persistence
 - [ ] Legacy scribe planning is explicit compatibility behaviour only
 
@@ -68,26 +76,44 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 
 - [ ] Disposable workspaces remain mandatory
 - [ ] Mechanical red/green commit separation remains active
-- [ ] Red and green modes consume the canonical TDD skill rather than a copied supplement
+- [ ] Red and green modes consume canonical TDD guidance rather than a copied supplement
 - [ ] Red mode also receives canonical risk-based testing guidance
 - [ ] Deterministic focused and broad verification precedes review
 - [ ] Scope expansion is rejected or returned for new planning
 - [ ] PR head-SHA, CI, and merge approval gates remain unchanged
 
+## Review and exact-head evidence
+
+- [ ] Implementation review runs only after deterministic verification
+- [ ] Implementation review occurs before Documentation Steward authoring
+- [ ] Operations review occurs before documentation when triggered
+- [ ] Review, operations, documentation, readiness, and CI records carry the same current `subject_head_sha`
+- [ ] Required gate status distinguishes passed, failed, not run, not scheduled, stale, and unknown
+- [ ] Only authoritative passed evidence for the exact current head satisfies a required gate
+- [ ] `not_run`, `not_scheduled`, stale, unknown, failed, and moved-head evidence are never reported as green
+- [ ] Required and actual review-independence levels are recorded separately
+- [ ] Same-model fresh-session review is not reported as independent
+- [ ] Required unavailable independence holds for human decision
+- [ ] Any code-changing repair invalidates verification, review, operations, documentation, and readiness evidence for the previous head
+
 ## Documentation
 
 - [ ] Documentation impact is recorded for every planned change
 - [ ] Manifest triggers resolve required documents deterministically
-- [ ] Required documents are current before PR readiness
+- [ ] Every required document is current and exact-head validated before PR readiness
+- [ ] Missing, stale, contradictory, or materially misleading required documentation blocks readiness
+- [ ] Required documentation is corrected and revalidated in the same delivery
+- [ ] A later issue, owner assignment, archive recommendation, or follow-up does not satisfy readiness
+- [ ] Material scope required for documentation correction produces a human-scope hold, not deferral
 - [ ] `no_documentation_change` requires rationale, trigger evaluation, and Technical Lead validation
-- [ ] README, AGENTS, worker guide, architecture, ADR, configuration, operations, testing, and maintenance documents are current
+- [ ] Current architecture, README, AGENTS, worker guide, target architecture, ADR, configuration, operations, testing, and maintenance documents are current
 - [ ] Documentation Steward cannot change production or test code
 
 ## Operations
 
-- [ ] Implementation and PR-readiness review consume the canonical risk/readiness skill mapping
+- [ ] Implementation and PR-readiness review consume canonical risk/readiness skill mappings
 - [ ] Operations review consumes canonical release-readiness guidance
-- [ ] Effective role/status surface reports targets, models, permissions, fallbacks, prompt/skill identities, source, and degradation
+- [ ] Effective role/status reports targets, models, permissions, fallbacks, prompt/skill identities, source, and degradation
 - [ ] Safe enablement completed in a disposable workspace
 - [ ] Operator runbook covers enablement, degradation, cancellation, restart, incident, and rollback
 - [ ] Deployment/rollback plan identifies prerequisites, abort conditions, postconditions, and exact evidence
@@ -99,7 +125,7 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 - [ ] Every role/mode and compatibility prompt declares an explicit skill mapping
 - [ ] Skill drift changes only consuming composed/rendered identities
 - [ ] Compatibility and role-native prompts use the same canonical skill loader
-- [ ] Focused role, prompt, skill, workflow, permission, lifecycle, migration, and platform tests pass
+- [ ] Focused decomposition, prompt, skill, target-provenance, workflow, permission, exact-head, documentation, lifecycle, migration, and platform tests pass
 - [ ] Full suite passes at exact head
 - [ ] Typecheck passes
 - [ ] Architecture Lint passes
@@ -122,5 +148,6 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 ## Human gates
 
 - [ ] Unresolved product decisions require human input
+- [ ] Material scope changes require human approval
 - [ ] Merge remains explicitly approved
 - [ ] Destructive Git, service restart, deployment, secret/config/permission change, cap exception, and policy change remain explicitly approved

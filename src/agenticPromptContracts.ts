@@ -1,3 +1,10 @@
+/**
+ * PURPOSE: Own the versioned source-controlled prompt registry for Engineering Worker roles and modes.
+ * INPUTS: Canonical prompt keys, bounded render variables, and a prompt-file reader.
+ * OUTPUTS: Effective built-in prompt text with role/mode metadata and a reproducible SHA-256 content hash.
+ * NEIGHBORS: src/workerPrompts.ts, src/advisor.ts, src/handlers/*, prompts/worker/roles/*
+ */
+
 import { createHash } from "node:crypto";
 import { renderWorkerPrompt, type WorkerPromptReader } from "./workerPrompts.js";
 

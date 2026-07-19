@@ -47,6 +47,13 @@ const RED_TEST_COVERAGE_FIELDS = [
   "triggered_risk_coverage",
 ];
 
+const TARGET_FILE_CLASSIFICATIONS = new Set([
+  "existing_at_base",
+  "existing_in_dependency",
+  "proposed_new_production",
+  "proposed_new_test",
+]);
+
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -66,12 +73,53 @@ function containsAllFields(sectionText: string, fields: readonly string[]): bool
   return fields.every(field => new RegExp(`\\b${escapeRegex(field)}\\b`, "i").test(sectionText));
 }
 
+function extractJsonValue(sectionText: string): unknown {
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(sectionText);
+  const raw = (fenced?.[1] ?? sectionText).trim();
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasValidTargetFileClassification(sectionText: string): boolean {
+  const parsed = extractJsonValue(sectionText);
+  if (!Array.isArray(parsed) || parsed.length === 0) return false;
+
+  return parsed.every(entry => {
+    if (typeof entry !== "object" || entry === null) return false;
+    const record = entry as Record<string, unknown>;
+    if (!isNonEmptyString(record.path)) return false;
+    if (!isNonEmptyString(record.classification)) return false;
+    if (!TARGET_FILE_CLASSIFICATIONS.has(record.classification)) return false;
+    if (!isNonEmptyString(record.owner)) return false;
+    if (!isNonEmptyString(record.rationale)) return false;
+    if (record.classification === "existing_in_dependency" && !isNonEmptyString(record.dependency_ref)) {
+      return false;
+    }
+    return record.dependency_ref === null
+      || record.dependency_ref === undefined
+      || isNonEmptyString(record.dependency_ref);
+  });
+}
+
 export function validateImplementationPlan(planText: string | null | undefined): PlanValidationResult {
   const text = planText?.trim() ?? "";
   const missing: string[] = [];
   for (const section of REQUIRED_SECTIONS) {
     const pattern = new RegExp(`^#{1,3}\\s+${escapeRegex(section)}\\s*$`, "im");
     if (!pattern.test(text)) missing.push(section);
+  }
+
+  const targetFiles = extractSection(text, "Target Files");
+  if (!hasValidTargetFileClassification(targetFiles)) {
+    missing.push("Target-file classification");
   }
 
   const redTests = extractSection(text, "Red Tests");

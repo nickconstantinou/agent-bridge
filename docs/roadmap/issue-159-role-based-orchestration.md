@@ -22,7 +22,7 @@ Agent Bridge remains authoritative for requirements state, workflow transitions,
 
 ## Delivered foundation — PR #160
 
-PR #160 now delivers:
+PR #160 delivers:
 
 - a source-controlled canonical registry for 21 role/mode prompt contracts;
 - separate Technical Lead requirements, issue, planning, focused repair, guidance, review, operations, and readiness prompts;

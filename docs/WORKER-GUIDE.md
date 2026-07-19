@@ -1,8 +1,8 @@
 # Engineering Worker — User and Operator Guide
 
-The worker bot turns feature requests, defect reports, refactor opportunities, imported GitHub issues, and repository scans into validated issues, implementation plans, tested draft pull requests, and current documentation.
+The worker turns feature requests, defect reports, refactor opportunities, imported GitHub issues, and repository scans into validated issues, implementation plans, tested draft pull requests, and current documentation.
 
-Agent Bridge orchestrates the work. It assigns authenticated CLIs and models to three roles while retaining authoritative state, prompts, permissions, deterministic gates, and human approvals.
+Agent Bridge orchestrates the work. It assigns authenticated CLIs and models to three roles while retaining authoritative state, prompt selection, permissions, deterministic gates, and human approvals.
 
 ## The three roles
 
@@ -12,7 +12,7 @@ Agent Bridge orchestrates the work. It assigns authenticated CLIs and models to 
 | Code Worker | Scans and investigates repositories read-only, then performs approved TDD implementation, repair, and verification in disposable workspaces |
 | Documentation Steward | Assesses documentation impact and updates or validates approved documentation paths after implementation evidence is available |
 
-Scanner is a Code Worker mode. Independent review and operations are Technical Lead modes, not separate roles.
+Scanner is a Code Worker mode. Independent review and operations are Technical Lead modes, not separate configurable roles.
 
 ## The invariant
 
@@ -30,7 +30,7 @@ Feature request, defect/refactor report, imported issue, or scan finding
 → Technical Lead implementation plan and comprehensive red-test contract
 → documentation impact
 → approval when required
-→ Code Worker implements the approved red tests and green change
+→ Code Worker implements approved red tests and the green change
 → deterministic verification
 → Technical Lead implementation and operations review
 → Documentation Steward updates and validation
@@ -82,9 +82,9 @@ Role assignment may also be managed through the hosted platform or the OSS confi
 1. Send `/feature <brief>` or import a GitHub issue.
 2. The Technical Lead reads bounded repository and documentation evidence.
 3. If the issue is clear, it is validated without unnecessary questions. If a product decision is missing, the item pauses for your answer.
-4. The worker records a canonical feature issue and marks it `requirements_ready`.
+4. The worker records a canonical issue and marks it `requirements_ready`.
 5. The Technical Lead creates a repository-grounded plan, bounded Code Worker packets, execution contract, risks, verification, documentation obligations, and comprehensive red-test specifications.
-6. The plan validator rejects generic instructions such as `write tests`; each red test must identify the product/architectural intent, production boundary, fixture, real caller action, expected observable result, why current code fails, focused command, authoritative oracle, and sibling behaviour remaining green.
+6. The plan validator rejects generic instructions such as `write tests`; each red test identifies product and architectural intent, production boundary, fixture, real caller action, expected result, current failure, focused command, authoritative oracle, false-positive controls, and sibling behaviour remaining green.
 7. After required approval, the Code Worker creates a disposable workspace and implements the exact approved red-test packet before the green change.
 8. Deterministic verification runs before model review.
 9. The Technical Lead reviews requirement satisfaction, test-contract completion, and operational impact.
@@ -96,13 +96,7 @@ Role assignment may also be managed through the hosted platform or the OSS confi
 1. Send `/review <repo>` or trigger an approved refactor scan.
 2. The Code Worker scans under read-only permissions.
 3. Candidate findings include evidence, affected boundaries, confidence, and required next evidence.
-4. The Technical Lead returns one disposition:
-   - validated issue;
-   - needs more evidence;
-   - needs a human decision;
-   - duplicate or superseded;
-   - not justified;
-   - split into multiple issues.
+4. The Technical Lead returns one disposition: validated issue, needs more evidence, needs a human decision, duplicate/superseded, not justified, or split.
 5. Only a validated canonical issue can proceed to planning and implementation.
 
 ## Role assignment
@@ -120,7 +114,7 @@ Assignment modes:
 
 - **Automatic:** Agent Bridge selects suitable authenticated targets.
 - **Recommended:** Agent Bridge proposes assignments for approval.
-- **Manual:** you select every primary and fallback CLI/model.
+- **Manual:** the user selects every primary and fallback CLI/model.
 
 Detailed configuration: `docs/configuration/agent-role-assignment.md`.
 
@@ -140,9 +134,9 @@ Independent-model review: unavailable
 
 Work continues unless repository policy requires model-independent review for the detected risk.
 
-## Prompt contracts and overrides
+## Prompt contracts
 
-Prompts are separate by role, mode, and repair purpose. The full Technical Lead planning prompt is not reused for requirements, review, operations, code execution, or documentation. Focused red-test repair and execution-contract repair also use distinct keys.
+Prompts are separate by role, mode, and repair purpose. The Technical Lead planning prompt is not reused for requirements, review, operations, code execution, or documentation. Focused red-test repair and execution-contract repair use distinct keys.
 
 Agent Bridge selects the prompt contract and separately enforces:
 
@@ -154,17 +148,19 @@ Agent Bridge selects the prompt contract and separately enforces:
 - logical-call and repair budgets;
 - lifecycle ownership.
 
-A prompt or database override cannot change those controls.
+Canonical role prompts are registered in `src/agenticPromptContracts.ts` and stored as reviewed Markdown files under `prompts/worker/roles/`. Each contract has a version and effective content hash. Fallback models receive the same prompt contract; only the CLI/model target changes.
 
-The canonical registry includes separate prompts for:
+Canonical role prompts do **not** support database overrides. The SQLite `prompts` table is not a backup: the source-controlled file is already the fallback. The table is a legacy mutable override channel and is being retired.
 
-- Technical Lead requirements, validation, issue authoring, planning, red-test repair, execution-contract repair, guidance, implementation review, operations review, and readiness;
-- Code Worker defect/refactor scans, investigation, red, green, repair, and verification;
-- Documentation Steward impact, authoring, validation, and maintenance.
+Retirement is staged because existing rows have not yet been inventoried and dropping the table is a guarded database migration:
 
-Existing named prompt templates remain explicit compatibility aliases while legacy phases are active. Database overrides replace prompt text only and must match a registered key and compatible contract version. They remain subject to the built-in validator and permission/tool policy.
+1. inventory legacy rows by workspace and key without logging contents;
+2. move approved custom behaviour into source-controlled files and tests;
+3. disable reads handler by handler during role migration;
+4. remove legacy write/read methods after callers are gone;
+5. drop the table through a separately approved backup/rollback-qualified migration.
 
-Effective status and audit report prompt key, contract version, source, and content hash without exposing raw sensitive context.
+No new role prompt or platform setting may create a database override. Existing legacy prompt keys remain compatibility aliases only while their handlers are migrated.
 
 Canonical prompt design: `docs/architecture/agentic-prompt-contracts.md`.
 
@@ -177,7 +173,7 @@ Read-only typed evidence tools. No file mutation, unrestricted shell, GitHub mut
 ### Code Worker
 
 - scan/investigate: read-only;
-- red: test-only mutation implementing the approved `RedTestSpec` and expected failing assertion;
+- red: test-only mutation implementing the approved red-test specification and expected failing assertion;
 - green: production mutation without changing committed red tests;
 - repair: bounded to the approved packet;
 - verify: approved commands and evidence without new changes.
@@ -216,10 +212,10 @@ Status and probes are read-only. Reconciliation is a separate explicit action.
 - Failed executor work remains bounded; no open-ended model loop is allowed.
 - Cancellation prevents new role calls and fences late output.
 - Lost leases and stale workers cannot persist or dispatch duplicate calls.
-- Restart resumes from authoritative durable phase state and preserves task budgets and prompt contract identity.
+- Restart resumes from authoritative durable phase state and preserves budgets and prompt contract identity.
 - Completed phases are not repeated.
-- Missing Technical Lead, Code Worker, or required Documentation Steward capability produces an explicit blocked/degraded state.
-- Existing disposable-workspace cleanup, supervisor, head-SHA, CI, and merge protections remain active.
+- Missing role capability produces an explicit blocked/degraded state.
+- Existing workspace cleanup, supervisor, head-SHA, CI, and merge protections remain active.
 
 Operations and rollback: `docs/operations/agentic-worker-runbook.md`.
 
@@ -227,41 +223,39 @@ Operations and rollback: `docs/operations/agentic-worker-runbook.md`.
 
 `agentic-maintenance.yaml` lists canonical documents and deterministic change triggers. A PR cannot become ready until required documents are current or a validated `no_documentation_change` result records rationale and trigger evaluation.
 
-The Documentation Steward is expected to maintain README/user entry points, AGENTS policy signposting, architecture, prompt contracts, ADRs, configuration, operations, testing, and maintenance documents as applicable.
-
 ## Troubleshooting
 
 ### Work never reaches planning
 
-Inspect `/issue <id>` for missing facts, unresolved decisions, validation errors, or the `requirements_ready` state. A blocked product decision requires human input; missing repository facts should be gathered by the Technical Lead.
+Inspect `/issue <id>` for missing facts, unresolved decisions, validation errors, or the `requirements_ready` state. A product decision requires human input; repository facts should be gathered by the Technical Lead.
 
 ### Plan rejected for red-test quality
 
-Inspect the typed validation errors. The plan must cover every acceptance criterion and affected architectural/risk boundary. A focused red-test repair is allowed only when the rest of the plan is valid.
+Inspect typed validation errors. Every acceptance criterion and affected architectural/risk boundary must be covered. Focused red-test repair is allowed only when the rest of the plan is valid.
 
-### Prompt override rejected
+### A legacy database prompt row exists
 
-Check the registered key, contract version, required inputs/placeholders, and effective source. An override cannot select a sibling mode or weaken the built-in schema, validator, tools, permissions, or budgets.
+Treat it as deprecated configuration, not a backup. Inventory its key and content hash, identify whether it contains required custom behaviour, and migrate that behaviour through a reviewed prompt-file change. Do not add another row or expose prompt contents in logs.
 
 ### Scan produced no implementation job
 
-This is expected until the Technical Lead validates the finding. Inspect its disposition and evidence.
+This is expected until the Technical Lead validates the finding.
 
 ### Role unavailable
 
-Check effective role status, CLI authentication, model probe freshness, capability compatibility, fallbacks, and repository policy. A provider name alone is insufficient; the assigned model must be usable.
+Check effective role status, CLI authentication, model probe freshness, capability compatibility, fallbacks, and repository policy.
 
 ### Review is marked non-independent
 
-Only one suitable model/target was available. Role separation remains active, but the same target performed implementation and review in isolated sessions. Authenticate or assign another suitable target when policy requires independence.
+Only one suitable target was available. Role separation remains active, but the same target reviewed in an isolated session. Add another suitable target when policy requires independence.
 
 ### Documentation blocks readiness
 
-Inspect the documentation impact and manifest trigger evaluation. Configure a Documentation Steward fallback or update the required documents through the documentation-only lane.
+Inspect documentation impact and manifest trigger evaluation. Configure a fallback or update required documents through the documentation-only lane.
 
 ### Job stuck or restarted
 
-Use `/job <id>` to inspect the authoritative owner, lease, role attempt, prompt contract, and phase. Do not manually force status. Follow the worker lifecycle and operations runbook.
+Use `/job <id>` to inspect authoritative owner, lease, role attempt, prompt contract, and phase. Do not manually force status.
 
 ### Lost approval controls
 
@@ -274,6 +268,7 @@ Use `/approvals`; the approval remains pending while blocking evidence is unreso
 - accept vague test instructions instead of a comprehensive red-test contract;
 - let a scan agent approve its own finding;
 - let prompts or models expand permissions or scope;
+- load canonical role prompts from mutable database text;
 - mutate live checkouts for implementation;
 - weaken red/green separation;
 - claim readiness over failed deterministic evidence;

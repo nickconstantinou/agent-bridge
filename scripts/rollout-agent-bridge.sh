@@ -400,6 +400,10 @@ git_check
 
 db_args=()
 for database in "${databases[@]}"; do db_args+=(--db "$database"); done
+# Per-database resolving-units evidence field (Phase 4C.3, issue #135):
+# reuses the unit->canonical-path resolution already proven above rather
+# than having rollout-db.ts re-derive it independently.
+for unit in "${!unit_databases[@]}"; do db_args+=(--resolving-unit "${unit_databases[$unit]}=$unit"); done
 run_db_tool() {
   run_as_runtime "$node_bin" "$project_dir/node_modules/tsx/dist/cli.mjs" "$project_dir/scripts/rollout-db.ts" "$@"
 }

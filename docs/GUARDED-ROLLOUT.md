@@ -53,3 +53,40 @@ sudo -n /usr/local/sbin/rollout-agent-bridge --expected-commit <full-40-characte
 Artifacts are written beneath the configured `log_dir`; database snapshots are written beneath `backup_dir`. On any failure, keep services stopped and inspect the newest artifact path recorded in `log_dir/latest` before taking further action.
 
 Legacy queue discard is intentionally unsupported. A nonzero legacy queue count aborts before service stop and requires a separate explicit operational decision and tool.
+
+## Bootstrap: genuinely missing databases (Phase 4C.3, issue #135)
+
+A database that doesn't exist yet — first install, or a genuinely new role added later — is not "behind schema," it's absent. `rollout-agent-bridge` never creates one implicitly: `inspect`/`migrate`/`validate` all require every configured database to already exist. Creating a new-role database is a **separate, explicitly-invoked** tool, `rollout-bootstrap`, with its own fixed allowlist. It is never bundled into the same invocation as a migration of existing databases — no pre-migration backup exists for a database that didn't exist, so it cannot participate in the whole-cohort restore guarantee the ordinary rollout provides.
+
+`rollout-bootstrap` reuses `openDb()`'s existing, already-tested missing-file → full-migration-plan path (`scripts/rollout-db.ts bootstrap`) at the database layer — the same migration 1 DDL every other database goes through, so there is no duplicated or shortcut schema definition — but creates the file atomically: a randomly-named temp file in the target's own directory, migrated to `CURRENT_SCHEMA_VERSION`, then validated (integrity check, foreign-key check, exact schema version) before it is ever published. Publication itself uses no-replace `link()`+`unlink()` semantics, not `rename()` — a destination that appears concurrently (a genuine race, not just a stale precondition check) makes the `link()` fail with `EEXIST` rather than silently overwriting whatever is there.
+
+Any failure **before** the final `link()`+`unlink()` commit step — the missing-file precondition, parent-directory validation, the migration itself, post-migration validation, a concurrent-destination race at publish time, or a `SIGTERM`/`SIGINT` serviced at one of the two real checkpoints (after migration, after validation) — removes the temp file (and any `-wal`/`-shm` sidecars) and leaves the final path completely untouched.
+
+The `link()`+`unlink()` step itself is a deliberately minimal, uninterrupted synchronous pair — nothing yields there, so it stays as short as two syscalls. A `SIGKILL` or machine reboot landing in that specific, narrow window — after `link()` publishes the database but before `unlink()` removes the temp name — **is not observable or handleable by any process**, the same as any other unrecoverable interruption. It leaves the destination fully valid (the same already-validated content, already published) plus a harmless extra hard link at the stale temp name. The **next** bootstrap attempt against that same target recovers it automatically, under the same exclusive lock, by verifying the stale name shares the destination's exact inode before removing it — this runs even though the destination already exists by then, which is exactly the case an ordinary "already exists" refusal would otherwise mask. A name match with a *different* inode is treated as unexpected and requires manual operator review rather than being silently deleted.
+
+### Installation
+
+```bash
+sudo install -D -m 0750 -o root -g root scripts/rollout-bootstrap.sh /usr/local/sbin/rollout-bootstrap-agent-bridge
+sudo install -D -m 0600 -o root -g root systemd/agent-bridge-rollout-bootstrap.conf.example /etc/agent-bridge/rollout-bootstrap.conf
+sudoedit /etc/agent-bridge/rollout-bootstrap.conf
+sudo visudo -f /etc/sudoers.d/agent-bridge-rollout-bootstrap
+```
+
+Sudoers content:
+
+```sudoers
+content-crawler ALL=(root) NOPASSWD: /usr/local/sbin/rollout-bootstrap-agent-bridge
+```
+
+The config must remain `root:root`, must not be group/world writable, and lists only `project_dir`, `runtime_user`, `node_bin`, and one or more `bootstrap_role=<role>:<absolute path>` entries — the fixed allowlist of exact **role/path pairs** this tool is ever permitted to create, not bare paths. `<role>` must be one of the five canonical roles (`shared`, `discord`, `health`, `interactive`, `worker`; see the five-database-role inventory in `docs/roadmap/issue-135-phase4c-migration-ownership.md` §4). It is a separate config file from `rollout.conf`; a path is not eligible for bootstrap just because it appears in the ordinary rollout's `database=` allowlist, and vice versa.
+
+### Authorized invocation
+
+Only after separate production approval, confirming the missing file is an expected new role rather than misconfiguration or accidental deletion:
+
+```bash
+sudo -n /usr/local/sbin/rollout-bootstrap-agent-bridge --role <shared|discord|health|interactive|worker> --new-role <absolute path> --confirm-new-role <same absolute path>
+```
+
+`--confirm-new-role` must exactly repeat `--new-role` — an explicit, per-invocation operator confirmation, the same exact-match discipline `--expected-commit` uses elsewhere in this tooling. `--role` must name one of the five canonical roles, and the exact `(role, path)` **pair** — not the path alone — must appear in the fixed `bootstrap_role` allowlist; the correct path under the wrong role is refused just like an unlisted path. The target must not already exist and must not be a symlink, even a dangling one (`-e`/`-L` are both checked — a plain existence check alone would miss a dangling symlink sitting at the target path), and must sit under a canonical, non-symlink parent directory with no group/world write bits. `rollout-bootstrap` acquires the **same** exclusive OS lock file as `rollout-agent-bridge`, so a bootstrap can never run concurrently with an active migrate rollout, even though the two are structurally separate tools and invocations.

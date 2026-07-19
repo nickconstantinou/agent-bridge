@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 describe("role assignment migration rollback", () => {
-  it("leaves schema version 2 and pre-existing data unchanged when a lookalike role table is malformed", () => {
+  it("leaves schema version 2 and pre-existing data unchanged when a role table already exists", () => {
     const root = mkdtempSync(join(tmpdir(), "agent-bridge-role-migration-rollback-"));
     roots.push(root);
     const path = join(root, "bridge.sqlite");
@@ -40,7 +40,7 @@ describe("role assignment migration rollback", () => {
     raw.close();
 
     expect(() => openDb(path, { serviceId: "role-migration-rollback-test" }))
-      .toThrow(/unexpected role_assignment_revisions schema/i);
+      .toThrow(/unexpected pre-existing role-assignment tables at schema version 2/i);
 
     const verify = new Database(path, { readonly: true });
     expect(verify.pragma("user_version", { simple: true })).toBe(2);

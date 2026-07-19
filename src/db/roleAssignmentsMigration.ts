@@ -17,6 +17,7 @@ const ASSIGNMENT_COLUMNS = [
   "primary_model",
   "fallbacks_json",
 ] as const;
+const ROLE_TABLES = ["role_assignment_revisions", "role_assignments"] as const;
 
 function assertExactColumns(
   raw: Database.Database,
@@ -39,8 +40,20 @@ function assertExactColumns(
  * tables for provider selection.
  */
 export function applyRoleAssignmentsMigration(raw: Database.Database): void {
+  const preExisting = raw.prepare(`
+    SELECT name
+    FROM sqlite_master
+    WHERE type = 'table' AND name IN (?, ?)
+    ORDER BY name
+  `).all(...ROLE_TABLES) as Array<{ name: string }>;
+  if (preExisting.length > 0) {
+    throw new Error(
+      `unexpected pre-existing role-assignment tables at schema version 2: ${preExisting.map((row) => row.name).join(",")}`,
+    );
+  }
+
   raw.exec(`
-    CREATE TABLE IF NOT EXISTS role_assignment_revisions (
+    CREATE TABLE role_assignment_revisions (
       id               INTEGER PRIMARY KEY AUTOINCREMENT,
       scope_key        TEXT NOT NULL,
       revision         INTEGER NOT NULL,
@@ -52,7 +65,7 @@ export function applyRoleAssignmentsMigration(raw: Database.Database): void {
       UNIQUE(scope_key, idempotency_key)
     );
 
-    CREATE TABLE IF NOT EXISTS role_assignments (
+    CREATE TABLE role_assignments (
       revision_id      INTEGER NOT NULL,
       role             TEXT NOT NULL CHECK (role IN ('technical_lead', 'code_worker', 'documentation_steward')),
       selection_mode   TEXT NOT NULL CHECK (selection_mode IN ('automatic', 'recommended', 'manual')),
@@ -63,14 +76,13 @@ export function applyRoleAssignmentsMigration(raw: Database.Database): void {
       FOREIGN KEY(revision_id) REFERENCES role_assignment_revisions(id) ON DELETE CASCADE
     );
 
-    CREATE INDEX IF NOT EXISTS idx_role_assignment_revisions_scope_revision
+    CREATE INDEX idx_role_assignment_revisions_scope_revision
       ON role_assignment_revisions(scope_key, revision DESC);
   `);
 
-  // CREATE TABLE IF NOT EXISTS deliberately supports idempotent retries, but
-  // must not bless a pre-existing lookalike table. The assertions execute
-  // inside the migration transaction, so a mismatch leaves user_version and
-  // every migration-created object unchanged.
+  // The assertions execute inside the migration transaction. A defect in the
+  // migration DDL leaves user_version and every migration-created object
+  // unchanged rather than blessing an incomplete current schema.
   assertExactColumns(raw, "role_assignment_revisions", REVISION_COLUMNS);
   assertExactColumns(raw, "role_assignments", ASSIGNMENT_COLUMNS);
 }

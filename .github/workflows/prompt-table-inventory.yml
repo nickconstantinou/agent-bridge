@@ -17,11 +17,8 @@ jobs:
         shell: bash
         run: |
           {
-            echo '## prompt accessors and callers'
-            grep -RInE --exclude-dir=node_modules --exclude-dir=.git 'getPrompt|setPrompt|CREATE TABLE( IF NOT EXISTS)? prompts|DROP TABLE( IF EXISTS)? prompts|FROM prompts|INTO prompts|prompt_text' src test prompts docs || true
-            echo
-            echo '## prompt-related files'
-            find src test prompts docs -type f | sort | grep -Ei 'prompt|schema|migration|implementationPlan|featurePlan|defectScan|refactorScan|tddImplementation|orchestratedTask|workCallbacks' || true
+            echo '## prompt table, accessors, loader override API, callers, and documentation'
+            grep -RInE --exclude-dir=node_modules --exclude-dir=.git 'getPrompt|setPrompt|dbTemplate|includeSupplementsForDbTemplate|CREATE TABLE( IF NOT EXISTS)? prompts|DROP TABLE( IF EXISTS)? prompts|FROM prompts|INTO prompts|prompt_text|database[- ]backed prompt override|database prompt override|DB override' src test prompts docs || true
           } | tee prompt-table-inventory.txt
       - uses: actions/upload-artifact@v4
         with:

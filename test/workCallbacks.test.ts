@@ -68,17 +68,50 @@ Fix the work item.
 - test/workCallbacks.test.ts
 
 ## Architectural Intent
-Keep approval gating explicit.
+Keep approval gating explicit and preserve the existing callback and queue ownership boundaries.
 
 ## Test Plan
-Add a failing assertion in test/workCallbacks.test.ts.
+Exercise the registered callback through the real caller and observe durable work-item and job state.
+
+## Red Tests
+[{
+  "id": "RT-1",
+  "requirement_ids": ["AC-1"],
+  "intent": {
+    "product": ["Approval queues implementation"],
+    "architecture": ["callback and queue ownership remain explicit"],
+    "invariants": ["a valid plan is required before approval"],
+    "risks": ["compatibility"]
+  },
+  "test_classes": ["behavioural", "architecture", "compatibility"],
+  "characterization_required": false,
+  "test_file": "test/workCallbacks.test.ts",
+  "test_name": "approves one planned work item",
+  "production_boundary": "registered worker callback and work queue",
+  "fixture_and_state": "one proposed planned work item",
+  "action_through_real_caller": "invoke handleWorkerCallback with wi:id:appv",
+  "expected_observable_result": "approved work item and exactly one implementation job",
+  "why_current_code_fails": "approval is not yet demonstrated against the planned boundary",
+  "expected_red_assertion": "expected approved state and queued job",
+  "focused_red_command": "npm test -- test/workCallbacks.test.ts",
+  "sibling_behaviour_remaining_green": ["view and close callbacks remain unchanged"],
+  "authoritative_oracle": "persisted work item and work job rows",
+  "false_positive_controls": ["baseline callback tests pass before the new assertion"]
+}]
+
+## Red Test Coverage
+{
+  "acceptance_coverage": [{"requirement_id":"AC-1", "red_test_ids":["RT-1"]}],
+  "architecture_coverage": [{"boundary_or_invariant":"callback and queue ownership", "red_test_ids":["RT-1"]}],
+  "triggered_risk_coverage": [{"risk":"compatibility", "required_test_classes":["compatibility"], "red_test_ids":["RT-1"]}]
+}
 
 ## Implementation Phases
 1. Red test.
 2. Green implementation.
 
 ## Acceptance Criteria
-- Approval queues implementation.
+- AC-1: Approval queues implementation.
 
 ## Verification Commands
 npm run typecheck

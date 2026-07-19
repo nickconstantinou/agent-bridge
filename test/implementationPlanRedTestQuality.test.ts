@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateImplementationPlan } from "../src/implementationPlanQuality.js";
+import { validateGeneratedImplementationPlan } from "../src/implementationPlanQuality.js";
 
 const BASE_PLAN = `
 ## Problem Summary
@@ -81,7 +81,7 @@ const COMPLETE_RED_TESTS = `
 
 describe("implementation plan red-test quality", () => {
   it("rejects a plan that omits the red-test contract", () => {
-    const result = validateImplementationPlan(BASE_PLAN);
+    const result = validateGeneratedImplementationPlan(BASE_PLAN);
 
     expect(result.valid).toBe(false);
     expect(result.missing).toContain("Red Tests");
@@ -89,7 +89,7 @@ describe("implementation plan red-test quality", () => {
   });
 
   it("rejects generic test wording without production-boundary intent", () => {
-    const result = validateImplementationPlan(`${BASE_PLAN}\n## Red Tests\nWrite unit tests.\n\n## Red Test Coverage\nAdd coverage.`);
+    const result = validateGeneratedImplementationPlan(`${BASE_PLAN}\n## Red Tests\nWrite unit tests.\n\n## Red Test Coverage\nAdd coverage.`);
 
     expect(result.valid).toBe(false);
     expect(result.missing).toContain("Comprehensive red-test fields");
@@ -97,7 +97,7 @@ describe("implementation plan red-test quality", () => {
   });
 
   it("rejects target paths without structured provenance", () => {
-    const result = validateImplementationPlan(`${BASE_PLAN.replace(
+    const result = validateGeneratedImplementationPlan(`${BASE_PLAN.replace(
       /## Target Files[\s\S]*?## Architectural Intent/,
       "## Target Files\n- src/example.ts\n- test/example.test.ts\n\n## Architectural Intent",
     )}\n${COMPLETE_RED_TESTS}`);
@@ -107,7 +107,7 @@ describe("implementation plan red-test quality", () => {
   });
 
   it("rejects invalid or unclassified target paths", () => {
-    const result = validateImplementationPlan(`${BASE_PLAN.replace(
+    const result = validateGeneratedImplementationPlan(`${BASE_PLAN.replace(
       '"classification": "existing_at_base"',
       '"classification": "invalid_or_unclassified"',
     )}\n${COMPLETE_RED_TESTS}`);
@@ -117,7 +117,7 @@ describe("implementation plan red-test quality", () => {
   });
 
   it("requires an exact dependency reference for dependency-owned paths", () => {
-    const result = validateImplementationPlan(`${BASE_PLAN.replace(
+    const result = validateGeneratedImplementationPlan(`${BASE_PLAN.replace(
       '"classification": "existing_at_base"',
       '"classification": "existing_in_dependency"',
     )}\n${COMPLETE_RED_TESTS}`);
@@ -127,7 +127,7 @@ describe("implementation plan red-test quality", () => {
   });
 
   it("accepts a plan containing classified targets and comprehensive red-test coverage", () => {
-    const result = validateImplementationPlan(`${BASE_PLAN}\n${COMPLETE_RED_TESTS}`);
+    const result = validateGeneratedImplementationPlan(`${BASE_PLAN}\n${COMPLETE_RED_TESTS}`);
 
     expect(result).toEqual({ valid: true, missing: [] });
   });

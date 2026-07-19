@@ -17,8 +17,8 @@ jobs:
         shell: bash
         run: |
           {
-            echo '## prompt table, accessors, loader override API, callers, and documentation'
-            grep -RInE --exclude-dir=node_modules --exclude-dir=.git 'getPrompt|setPrompt|dbTemplate|includeSupplementsForDbTemplate|CREATE TABLE( IF NOT EXISTS)? prompts|DROP TABLE( IF EXISTS)? prompts|FROM prompts|INTO prompts|prompt_text|database[- ]backed prompt override|database prompt override|DB override' src test prompts docs || true
+            echo '## prompt override implementation and guidance'
+            grep -RInEi --exclude-dir=node_modules --exclude-dir=.git 'getPrompt|setPrompt|dbTemplate|includeSupplementsForDbTemplate|CREATE TABLE( IF NOT EXISTS)? prompts|DROP TABLE( IF EXISTS)? prompts|FROM prompts|INTO prompts|prompt_text|prompt[- ]override|prompt override|database rows|DB override|legacy override|override retirement|prompts table' . || true
             echo
             echo '## schema version assumptions'
             grep -RInE --exclude-dir=node_modules --exclude-dir=.git 'CURRENT_SCHEMA_VERSION|user_version[^\n]*1|schema version 1|version 1 database|at 1\b|versioned baseline' src test scripts docs systemd || true

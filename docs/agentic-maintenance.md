@@ -9,16 +9,17 @@ Canonical operating model. This document describes the implemented Engineering W
 1. Agent Bridge orchestrates the workflow and owns authoritative state.
 2. Incoming requests, imported issues, and scan findings are inputs, not assumed-complete specifications.
 3. The Technical Lead gathers or validates requirements before planning.
-4. The Code Worker performs bounded repository investigation and mutation under mode-specific permissions.
-5. The Documentation Steward keeps canonical documents aligned with final code and operations.
-6. Deterministic evidence outranks model claims.
-7. Humans retain product decisions, merge authority, destructive actions, deployments, and policy exceptions.
+4. The Technical Lead designs the implementation and red-test strategy; the Code Worker executes bounded packets.
+5. The Code Worker performs bounded repository investigation and mutation under mode-specific permissions.
+6. The Documentation Steward keeps canonical documents aligned with final code and operations.
+7. Deterministic evidence outranks model claims.
+8. Humans retain product decisions, merge authority, destructive actions, deployments, and policy exceptions.
 
 ## Roles
 
 ### Technical Lead
 
-The Technical Lead is the strongest available read-only reasoning path. It owns requirements discovery, issue authoring and validation, planning, task decomposition, bounded executor guidance, implementation review, operations assessment, and PR-readiness advice.
+The Technical Lead is the strongest available read-only reasoning path. It owns requirements discovery, issue authoring and validation, planning, comprehensive red-test design, task decomposition, bounded executor guidance, implementation review, operations assessment, and PR-readiness advice.
 
 It does not edit files, execute unrestricted commands, mutate GitHub, merge, deploy, or approve its own output.
 
@@ -26,7 +27,7 @@ It does not edit files, execute unrestricted commands, mutate GitHub, merge, dep
 
 The Code Worker performs repository scans, focused investigation, TDD implementation, repair, and verification. Agent Bridge selects a read-only or mutating permission profile for each mode.
 
-A scan result is a candidate. The Code Worker cannot promote its own finding into approved implementation work.
+A scan result is a candidate. The Code Worker cannot promote its own finding into approved implementation work or independently redefine the approved test strategy.
 
 ### Documentation Steward
 
@@ -123,6 +124,8 @@ The Technical Lead creates the implementation plan only after `requirements_read
 - affected architecture and ownership boundaries;
 - target and test files based on current evidence;
 - red-green-refactor phases;
+- comprehensive structured red-test specifications;
+- acceptance, architecture/invariant, and triggered-risk coverage matrices;
 - bounded Code Worker packets;
 - dependencies and sequencing;
 - invariants and prohibited scope;
@@ -132,19 +135,49 @@ The Technical Lead creates the implementation plan only after `requirements_read
 - conditions that return to requirements or human decision;
 - a validated machine-readable execution contract.
 
-Plan structural validation and bounded repair remain fail-closed before persistence.
+Each red-test specification identifies:
+
+- acceptance criteria and product intent protected;
+- architecture boundaries, invariants, and risks protected;
+- test classes such as behavioural, architecture, lifecycle, compatibility, security, and operations;
+- exact test file and test name;
+- production boundary and fixture/state;
+- action through the real caller path;
+- expected authoritative observable result;
+- why current code must fail;
+- expected failing assertion and focused red command;
+- sibling behaviour that must remain green;
+- characterization required before change;
+- authoritative oracle and false-positive controls.
+
+Generic instructions such as `write tests`, `add unit tests`, or `increase coverage` are invalid. Helper-only tests are invalid when correctness depends on production wiring, persistence, permissions, lifecycle, child processes, Git/GitHub, platform status, or operations.
+
+Every acceptance criterion maps to one or more red tests or a justified deterministic non-test proof. Every affected architecture boundary/invariant and triggered lifecycle, compatibility, security, operations, migration, or rollback risk maps to appropriate coverage.
+
+Plan structural validation and bounded repair remain fail-closed before persistence. Full planning, red-test repair, and execution-contract repair use separate prompt contracts. Focused repair may replace only the invalid section and the complete plan is revalidated.
+
+Canonical prompt and red-test contracts:
+
+- `docs/architecture/agentic-prompt-contracts.md`;
+- `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md`.
+
+## Prompt separation
+
+Every role and mode has a distinct registered prompt contract. Prompt text, structured schema, validator, evidence/tool grants, permissions, budgets, and lifecycle policy remain separate.
+
+Database-backed prompt overrides may replace compatible prompt text only. They cannot change role, mode, tools, permissions, schema, validator, repair count, or human gates. Legacy prompt keys remain explicit compatibility aliases until the corresponding role path is qualified.
 
 ## Execution
 
-Each Code Worker packet contains one coherent objective, permitted files or boundaries, acceptance criteria, required failing test, non-goals, relevant evidence, exact verification, and escalation conditions.
+Each Code Worker packet contains one coherent objective, permitted files or boundaries, acceptance criteria, approved `RedTestSpec` records, non-goals, relevant evidence, exact verification, and escalation conditions.
 
-The worker returns structured evidence rather than a readiness claim. Agent Bridge validates repository state and deterministic results before asking the Technical Lead for review.
+The Code Worker implements the planned red tests and proves they fail for the specified reason before green implementation. It returns structured evidence rather than a readiness claim. Agent Bridge validates repository state and deterministic results before asking the Technical Lead for review.
 
 ## Review and operations
 
 The Technical Lead performs implementation review and operations review as separate modes under the same configurable role.
 
-Implementation review checks issue satisfaction, scope, invariants, regression coverage, security, architecture, and unsupported claims.
+Implementation review checks issue satisfaction, scope, invariants, completion of the approved red-test contract, regression coverage, security, architecture, and unsupported claims.
 
 Operations review activates for deployment, services, configuration, credentials, databases, migrations, queues, rollback, backup, or production verification. It defines prerequisites, steps, abort conditions, rollback, postconditions, and required runbook changes.
 
@@ -159,6 +192,7 @@ Required document classes include:
 - README and user entry points;
 - agent execution policy;
 - architecture and data flows;
+- prompt contracts;
 - architecture decisions;
 - configuration reference;
 - operations and recovery runbooks;
@@ -174,7 +208,8 @@ A completed workflow records:
 
 - canonical issue version;
 - approved plan and execution contract;
-- role target and model used for each logical call;
+- approved red-test specifications and coverage matrices;
+- role target, model, prompt key/version/source/hash used for each logical call;
 - permission profile used by each invocation;
 - red and green commit evidence;
 - focused and broad deterministic verification;
@@ -186,4 +221,4 @@ A completed workflow records:
 
 ## Retrospective
 
-Every non-trivial change ends with a bounded retrospective. Recurring or systemic defects produce the smallest durable prevention: code guard, test, skill update, documentation correction, or proposed `AGENTS.md` rule. One-off preferences do not justify new global rules.
+Every non-trivial change ends with a bounded retrospective. Recurring or systemic defects produce the smallest durable prevention: code guard, test, prompt-contract correction, skill update, documentation correction, or proposed `AGENTS.md` rule. One-off preferences do not justify new global rules.

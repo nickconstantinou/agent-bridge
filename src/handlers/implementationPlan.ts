@@ -60,6 +60,15 @@ async function buildImprovePrompt(ctx: JobHandlerContext, planText: string, miss
   );
 }
 
+async function buildContractRepairPrompt(ctx: JobHandlerContext, planText: string): Promise<string> {
+  return loadWorkerPrompt(
+    "implementation_plan:contract_repair",
+    { planText, plan_text: planText },
+    promptReader,
+    { dbTemplate: ctx.db.getPrompt("implementation_plan:contract_repair", "") },
+  );
+}
+
 function hasLinkedIssue(ctx: JobHandlerContext, workItemId: number): boolean {
   return (ctx.db.raw.prepare(
     `SELECT 1 FROM github_links WHERE work_item_id = ? AND issue_number IS NOT NULL LIMIT 1`,
@@ -156,6 +165,24 @@ export function createImplementationPlanHandler(deps: ImplementationPlanDeps): J
       planText = await runCli(command, ["--print", "--output-format", "text", await buildImprovePrompt(ctx, planText, missing)], cwd);
       quality = validateImplementationPlan(planText);
       contractResult = extractExecutionContract(planText);
+    }
+
+    if (
+      quality.valid &&
+      !contractResult.ok &&
+      contractResult.error === "Implementation plan is missing an Execution Contract section"
+    ) {
+      const contractSection = await runCli(
+        command,
+        ["--print", "--output-format", "text", await buildContractRepairPrompt(ctx, planText)],
+        cwd,
+      );
+      const repairedPlanText = `${planText.trim()}\n\n${contractSection.trim()}`;
+      const repairedContractResult = extractExecutionContract(repairedPlanText);
+      if (repairedContractResult.ok) {
+        planText = repairedPlanText;
+        contractResult = repairedContractResult;
+      }
     }
 
     if (!quality.valid || !contractResult.ok) {

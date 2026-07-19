@@ -73,6 +73,7 @@ Do not silently fall back to the full plan when contract extraction fails.
 | `featurePlan.ts` | `feature_plan` | `feature_plan` | `repository`, `brief` |
 | `implementationPlan.ts` | `implementation_plan:create` | `implementation_plan:create` | `repository`, `kind`, `source`, `title`, `body` |
 | `implementationPlan.ts` | `implementation_plan:improve` | `implementation_plan:improve` | `missing`, `planText` |
+| `implementationPlan.ts` | `implementation_plan:contract_repair` | `implementation_plan:contract_repair` | `planText` |
 | `defectScan.ts` | `defect_scan:scan` | `defect_scan:scan` | `repository`, optional `pr_changed_files`, optional `typecheck_output` |
 | `defectScan.ts` | `defect_scan:plan` | `defect_scan:plan` | `repository`, `title`, `evidence`, `impact`, `impact_score`, `effort_score` |
 | `defectScan.ts` | `defect_scan:triage` | `defect_scan:triage` | `repository`, `findings` |
@@ -93,9 +94,10 @@ Do not silently fall back to the full plan when contract extraction fails.
 4. Extract `## Execution Contract`.
 5. If quality validation or contract extraction fails, run `implementation_plan:improve`.
 6. Validate and extract again.
-7. If still invalid, fail safe: mark the job failed or require human review.
-8. Store full Markdown in `plan_text`.
-9. Store quality plus `execution_contract` in `quality_json`.
+7. If the replacement plan is otherwise valid but still omits the contract, run one focused `implementation_plan:contract_repair` pass and append only a validated contract section.
+8. If still invalid, fail safe: mark the job failed or require human review.
+9. Store full Markdown in `plan_text`.
+10. Store quality plus `execution_contract` in `quality_json`.
 
 ## TDD wiring
 

@@ -31,7 +31,7 @@ PR #160 delivers:
 - comprehensive advisor-authored red-test instructions protecting product intent, architecture, invariants, compatibility, and triggered risks;
 - strengthened active implementation-plan and TDD red/green prompts;
 - prompt contract version/content-hash support and contract tests;
-- source-only prompt resolution for canonical and compatibility handlers;
+- source-only prompt resolution for canonical and compatibility-key handlers;
 - removal of `BridgeDb.getPrompt()`, `BridgeDb.setPrompt()`, loader database-template options, and every handler override read;
 - schema migration 2, which removes an absent or empty legacy `prompts` table and fails closed if an unexpected row exists;
 - target-state architecture, testing, configuration, operations, documentation, and rollout policy.
@@ -54,7 +54,7 @@ Role routing, durable role assignment, requirements lifecycle, complete structur
 
 ## Prompt storage decision
 
-Prompt text is a reviewed source artifact. Canonical and compatibility prompts resolve only from registered repository files; there is no SQLite prompt precedence or mutable runtime override API.
+Prompt text is a reviewed source artifact. Canonical and compatibility-key prompts resolve only from registered repository files; there is no SQLite prompt precedence or mutable runtime override API.
 
 Schema migration 2 retires the legacy table. It treats an absent table as already removed, drops an empty table transactionally, and aborts without data loss if an unexpected row exists. On rejection, schema version 1 and the table contents remain intact for guarded investigation. Prompt rollback is application rollback to a reviewed SHA.
 

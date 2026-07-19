@@ -10,10 +10,11 @@ Canonical operating model. This document describes the implemented Engineering W
 2. Incoming requests, imported issues, and scan findings are inputs, not assumed-complete specifications.
 3. The Technical Lead gathers or validates requirements before planning.
 4. The Technical Lead designs the implementation and red-test strategy; the Code Worker executes bounded packets.
-5. The Code Worker performs bounded repository investigation and mutation under mode-specific permissions.
-6. The Documentation Steward keeps canonical documents aligned with final code and operations.
-7. Deterministic evidence outranks model claims.
-8. Humans retain product decisions, merge authority, destructive actions, deployments, and policy exceptions.
+5. Reusable requirements, test-strategy, TDD, and release-readiness know-how remains canonical in repository skills and is composed explicitly into each relevant prompt mode.
+6. The Code Worker performs bounded repository investigation and mutation under mode-specific permissions.
+7. The Documentation Steward keeps canonical documents aligned with final code and operations.
+8. Deterministic evidence outranks model claims.
+9. Humans retain product decisions, merge authority, destructive actions, deployments, and policy exceptions.
 
 ## Roles
 
@@ -161,9 +162,20 @@ Canonical prompt and red-test contracts:
 - `docs/architecture/agentic-prompt-contracts.md`;
 - `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md`.
 
-## Prompt separation
+## Prompt and lifecycle-skill separation
 
 Every role and mode has a distinct registered prompt contract. Prompt text, structured schema, validator, evidence/tool grants, permissions, budgets, and lifecycle policy remain separate.
+
+Reusable lifecycle knowledge is authoritative in exactly four versioned repository skills:
+
+- `requirements-to-acceptance`;
+- `risk-based-test-strategy`;
+- `red-green-refactor-tdd`;
+- `release-readiness-review`.
+
+Each role/mode and compatibility prompt declares an ordered `lifecycleSkills` set. `src/lifecycleSkillGuidance.ts` validates the matching manifest and one marked runtime-guidance block, enforces budgets and uniqueness, and composes only the declared skills. Prompts own role/stage/output instructions; skills own reusable engineering know-how; code owns authority and deterministic gates.
+
+Changing a skill affects only consuming prompts' skill-set, composed-template, and rendered hashes. Provider fallback preserves the same prompt and skill identities. Missing markers, duplicate blocks, empty or oversized content, manifest/version drift, or duplicate injection fails closed.
 
 Canonical and compatibility prompts are versioned source-controlled files and never consume database prompt text. The legacy prompt table, accessors, loader override options, and handler reads were removed in schema migration 2. Legacy prompt keys remain explicit source-file compatibility aliases until the corresponding role path is qualified; they cannot change role, mode, tools, permissions, schema, validator, repair count, lifecycle authority, or human gates.
 
@@ -192,7 +204,7 @@ Required document classes include:
 - README and user entry points;
 - agent execution policy;
 - architecture and data flows;
-- prompt contracts;
+- prompt and lifecycle-skill contracts;
 - architecture decisions;
 - configuration reference;
 - operations and recovery runbooks;
@@ -209,7 +221,10 @@ A completed workflow records:
 - canonical issue version;
 - approved plan and execution contract;
 - approved red-test specifications and coverage matrices;
-- role target, model, prompt key/version/source/template hash and rendered invocation hash used for each logical call;
+- role target and model;
+- prompt key/version/source and role-template hash;
+- ordered lifecycle skill key/version/content hashes and skill-set hash;
+- composed-template and rendered invocation hashes used for each logical call;
 - permission profile used by each invocation;
 - red and green commit evidence;
 - focused and broad deterministic verification;

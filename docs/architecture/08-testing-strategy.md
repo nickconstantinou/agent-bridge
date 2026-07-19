@@ -1,47 +1,104 @@
 # 08 — Testing Strategy
 
-Baseline: 73 files / 1,335 tests / vitest / typecheck clean. Strict red-green-refactor per repo CLAUDE.md.
+Strict red-green-refactor applies to every behaviour change. Acceptance and boundary tests are written before implementation; deterministic evidence outranks model claims.
 
-## Layers
+## Test layers
 
-| Layer | Location | Runs | Purpose |
-|---|---|---|---|
-| Acceptance (per epic) | `test/acceptance/<epic>/` | CI, separate step | Epic-level behaviour + structural intent; written BEFORE implementation |
-| Integration | `test/*.test.ts` (existing pattern) | CI + pre-commit | Module seams: executor+handlers, engine+adapters, sync jobs (mocked GitHub) |
-| Unit | alongside | CI + pre-commit | Pure logic |
-| Characterization | tagged `@characterization` | CI | Lock current behaviour before strangler refactors (Epic 2 arg builders/parsers, Epic 4 db methods) |
-| Architectural lint | `scripts/arch-lint.sh` | pre-commit + worker acceptance | Intent enforcement (ADR-007) |
+| Layer | Location | Purpose |
+|---|---|---|
+| Acceptance | `test/acceptance/**` or the current repository acceptance convention | End-to-end workflow and structural intent |
+| Integration | existing `test/*.test.ts` pattern | Handler, repository, advisor, provider, workspace, and lifecycle seams |
+| Unit | current pure-logic test locations | Validators, ranking, schemas, and policy functions |
+| Characterization | current integration fixtures | Preserve existing worker, provider, TDD, and compatibility behaviour before refactoring |
+| Architecture Lint | `scripts/arch-lint.sh` | Ownership, permission, SQL, import, and bypass rules |
+| Migration/rollback | database/config fixtures | Existing workspace upgrade and safe fallback |
+| Disposable qualification | isolated repository/workspace | Real CLI/model and workflow evidence without production mutation |
 
-## arch-lint rules (initial set)
+## Per-slice protocol
+
+1. Write a failing behavioural or structural test.
+2. Commit the red test without production implementation.
+3. Confirm failure occurs for the intended reason.
+4. Implement the smallest coherent change.
+5. Commit production implementation separately.
+6. Run focused tests, then broader verification.
+7. Refactor only while tests remain green.
+8. Perform the required retrospective.
+
+## Role orchestration suites
+
+### Role and configuration
+
+Test exactly three configurable roles, explicit CLI/model assignments, automatic/recommended/manual selection, ordered fallbacks, capability rejection, configuration-source status, and legacy-chain precedence.
+
+### Single CLI and model
+
+Test per-role model selection from one CLI, one-model role separation, separate sessions and permission profiles, degradation reporting, and policy-required independent review.
+
+### Requirements and issue contracts
+
+Test feature, defect, and refactor schemas; apparently complete issue validation; missing product decisions; durable `requirements_ready`; facts versus hypotheses; refactor evidence; candidate-finding dispositions; restart and retry.
+
+### Technical Lead boundary
+
+Test that every mode routes through the existing AdvisorService, only typed bounded read-only evidence tools are reachable, freshness/authority metadata is preserved, output contracts are validated, repair is bounded, and mutation capabilities are absent.
+
+### Code Worker modes
+
+Test read-only scan/investigate, test-only red, production-only green, bounded repair, verification without new changes, capability revocation, and nested child environment stripping.
+
+### Documentation Steward
+
+Test manifest trigger evaluation, documentation-only mutation, deny precedence, required-document readiness blocking, and validated `no_documentation_change` outcomes.
+
+### Review and operations
+
+Test different-target preference, fresh-session fallback, accurate independence status, deterministic-evidence precedence, and activation of operations review for services, configuration, credentials, schema, migrations, queues, deployment, or rollback.
+
+### Lifecycle
+
+Test cancellation, timeout, lease loss, stale owner, restart after every phase, logical-call budgets across retry, terminal-state fencing, and rollback compatibility.
+
+Detailed contract: `docs/testing/agentic-worker-verification.md`.
+
+## Architecture Lint additions
+
+Enforce:
+
+- role IDs and mode-permission mappings have one owner;
+- worker handlers cannot invoke provider CLIs directly for role work;
+- Technical Lead calls use AdvisorService;
+- documentation authoring cannot import production mutation helpers;
+- role and audit SQL remains in owning repositories;
+- status and probe surfaces are read-only;
+- legacy scribe calls cannot become canonical planning without an explicit compatibility marker.
+
+## Required final verification
+
+At the exact final head:
 
 ```bash
-# 1. no test harness in production
-rg -l "from ['\"]vitest|VITEST_WORKER_ID" src/ && fail
-# 2. SQL only in repositories/db
-rg -l "\.prepare\(" src/ --glob '!src/repositories/**' --glob '!src/db.ts' --glob '!src/db/**' && fail
-# 3. layering: providers never import messaging; workflows never import providers directly
-rg -l "from ['\"]\.\./telegram|from ['\"]\.\./discord" src/providers/ && fail
-rg -l "from ['\"]\.\./providers/" src/workflows/ && fail
-# 4. no duplicated bots config (entry points must import src/config)
-rg -l "modelPreference: parseModelPreference" src/index*.ts && fail   # after Epic 1
+npm test
+npm run typecheck
+bash scripts/arch-lint.sh src
+npm run cleanup:check
+git diff --check
 ```
 
-## Per-epic acceptance-first protocol
-1. Write acceptance tests (red) — behavioural + structural.
-2. Characterization tests for any code being moved (green, locking).
-3. Implement smallest change; suite green.
-4. Refactor; suite green; arch-lint green.
-5. Regression tests for every defect found en route (e.g. G6 "session not found must not fallback").
+Account for pre-existing cleanup findings and prove none were introduced in changed files. Run lifecycle/concurrency-sensitive suites repeatedly and serially where isolation risk warrants it. Verify exact-head GitHub Actions checks.
 
-## Golden tests
-- Workflow migration (Epic 5): tdd_implementation output via legacy handler vs workflow engine must be byte-identical on fixture jobs.
-- Rendering migration (Epic 3): fixture markdown corpus → IR renderer output snapshots for worker surface.
+## Live qualification
 
-## Consistency property tests
-- Epic 6: for seeded random event sequences, reducer state == column state.
-- Epic 8: table-driven fallback walks (429 / model-missing / auth / transient) → exact expected chain.
+Use a disposable workspace to demonstrate:
 
-## Worker-bot integration of this strategy
-- Acceptance-criteria templates (implementationPlan handler) must include at least one structural assertion for architecture/refactor task types.
-- arch-lint added to tdd handler's gate alongside existing TEST_ONLY_SOURCE_PATTERN check (handlers/tddImplementation.ts:14).
-- Repair jobs triggered by acceptance failure carry the failing assertion text as context.
+- one CLI with per-role model selection;
+- one-model degraded operation;
+- requirements clarification and validation of a complete issue;
+- rejected scan candidate;
+- read-only scan followed by approved TDD implementation;
+- documentation-only mutation enforcement;
+- restart and cancellation without duplicate calls;
+- accurate independent/non-independent review;
+- rollback to legacy routing without queue or state corruption.
+
+Production rollout is separately approved and is not implied by passing disposable qualification.

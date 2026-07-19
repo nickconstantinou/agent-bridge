@@ -1,0 +1,42 @@
+name: Lifecycle Skill Diagnostics
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/lifecycle-skill-diagnostics.yml'
+      - 'src/lifecycleSkillGuidance.ts'
+      - 'src/agenticPromptContracts.ts'
+      - 'src/workerPrompts.ts'
+      - 'skills/**'
+      - 'test/lifecycleSkillGuidance.test.ts'
+      - 'test/workerPromptLoader.test.ts'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Capture full test output
+        shell: bash
+        run: |
+          set +e
+          npm test -- --reporter=verbose > lifecycle-skill-test-output.txt 2>&1
+          status=$?
+          cat lifecycle-skill-test-output.txt
+          echo "$status" > lifecycle-skill-test-status.txt
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-skill-test-output
+          path: |
+            lifecycle-skill-test-output.txt
+            lifecycle-skill-test-status.txt
+          if-no-files-found: error

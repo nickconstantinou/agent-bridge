@@ -18,7 +18,7 @@ The worker exposes exactly three configurable roles:
 - Code Worker;
 - Documentation Steward.
 
-Agent Bridge remains authoritative for requirements state, workflow transitions, permissions, role/model resolution, prompts, validators, evidence, budgets, retries, cancellation, approvals, merge, deployment, and audit.
+Agent Bridge remains authoritative for requirements state, workflow transitions, permissions, role/model resolution, prompts, lifecycle skills, validators, evidence, budgets, retries, cancellation, approvals, merge, deployment, and audit.
 
 ## Delivered foundation — PR #160
 
@@ -30,13 +30,16 @@ PR #160 delivers:
 - separate Documentation Steward impact, authoring, validation, and maintenance prompts;
 - comprehensive advisor-authored red-test instructions protecting product intent, architecture, invariants, compatibility, and triggered risks;
 - strengthened active implementation-plan and TDD red/green prompts;
-- prompt contract version/content-hash support and contract tests;
+- canonical runtime-guidance blocks in the four repository SDLC skills;
+- explicit ordered lifecycle-skill mappings for every role/mode and compatibility prompt;
+- fail-closed skill marker, manifest version, duplication, and budget validation;
+- role-template, lifecycle-skill-set, composed-template, and rendered-content identity tests;
 - source-only prompt resolution for canonical and compatibility-key handlers;
 - removal of `BridgeDb.getPrompt()`, `BridgeDb.setPrompt()`, loader database-template options, and every handler override read;
 - schema migration 2, which removes an absent or empty legacy `prompts` table and fails closed if an unexpected row exists;
 - target-state architecture, testing, configuration, operations, documentation, and rollout policy.
 
-Role routing, durable role assignment, requirements lifecycle, complete structured plan persistence, permissions, Documentation Steward execution, platform allocation, and final role-workflow qualification remain to be implemented through the slices below.
+Role routing, durable role assignment, requirements lifecycle, complete structured plan persistence, permissions, Documentation Steward execution, platform allocation, durable prompt/skill audit persistence, and final role-workflow qualification remain to be implemented through the slices below.
 
 ## Approved scope
 
@@ -47,14 +50,17 @@ Role routing, durable role assignment, requirements lifecycle, complete structur
 - Code Worker read-only scan/investigate plus bounded TDD mutation modes;
 - Documentation Steward impact, documentation-only authoring, and validation;
 - explicit CLI/model/fallback assignment for each role;
-- source-controlled prompt key/version/hash per role invocation;
+- source-controlled prompt key/version and role-template hash per role invocation;
+- source-controlled lifecycle skill key/version/content hashes and composed-template hash per role invocation;
 - single-CLI and single-model operation with degradation reporting;
 - lifecycle, cancellation, restart, lease, audit, migration, rollback, and platform coordination;
 - completed removal of legacy database prompt overrides and their schema table.
 
-## Prompt storage decision
+## Prompt and skill storage decision
 
-Prompt text is a reviewed source artifact. Canonical and compatibility-key prompts resolve only from registered repository files; there is no SQLite prompt precedence or mutable runtime override API.
+Prompt text and reusable SDLC know-how are reviewed source artefacts. Canonical and compatibility-key prompts resolve only from registered repository files; there is no SQLite prompt precedence or mutable runtime override API.
+
+The four canonical skills are `requirements-to-acceptance`, `risk-based-test-strategy`, `red-green-refactor-tdd`, and `release-readiness-review`. Role and compatibility contracts declare exactly which skills they consume. The loader validates one marked runtime block and the matching manifest version, then composes the skills deterministically. Prompt-specific authority and structured output remain in role prompts and code.
 
 Schema migration 2 retires the legacy table. It treats an absent table as already removed, drops an empty table transactionally, and aborts without data loss if an unexpected row exists. On rejection, schema version 1 and the table contents remain intact for guarded investigation. Prompt rollback is application rollback to a reviewed SHA.
 
@@ -62,9 +68,9 @@ Schema migration 2 retires the legacy table. It treats an absent table as alread
 
 Deliver this as a strangler extension of the current worker, not a rewrite.
 
-Retain the current queue, repositories, handler map, executor loop, leases, cancellation, TDD commit guards, workspaces, process supervisor, AdvisorService, source-controlled prompt registry, plan validator, GitHub lifecycle, and merge gate.
+Retain the current queue, repositories, handler map, executor loop, leases, cancellation, TDD commit guards, workspaces, process supervisor, AdvisorService, source-controlled prompt and skill registries, plan validator, GitHub lifecycle, and merge gate.
 
-Add role configuration, deterministic resolution, requirements/canonical issue phases, role-aware planning/review, documentation phases, and desired/effective platform configuration behind compatibility controls. Do not introduce a new workflow engine, prompt service, queue, supervisor, state store, or merge path.
+Add role configuration, deterministic resolution, requirements/canonical issue phases, role-aware planning/review, documentation phases, durable prompt/skill audit identity, and desired/effective platform configuration behind compatibility controls. Do not introduce a new workflow engine, prompt service, queue, supervisor, state store, or merge path.
 
 ## Delivery slices
 
@@ -73,11 +79,11 @@ Add role configuration, deterministic resolution, requirements/canonical issue p
 2. CLI/model discovery and deterministic role resolution.
 3. Mode-specific permission enforcement through existing dispatch boundaries.
 4. Requirements validation, human clarification, and canonical GitHub issue reconciliation.
-5. Bounded Technical Lead tools, canonical prompt routing, comprehensive plan validation, and advisor-authored planning.
+5. Bounded Technical Lead tools, canonical prompt/skill routing, comprehensive plan validation, and advisor-authored planning.
 6. Code Worker scan candidates and bounded execution packets through existing TDD handlers.
 7. Documentation Steward phases in the existing implementation workspace.
 8. Technical Lead implementation and operations review after deterministic verification.
-9. Lifecycle, audit, compatibility, migration, and rollback qualification.
+9. Lifecycle, durable prompt/skill audit, compatibility, migration, and rollback qualification.
 10. Platform desired/effective role assignment API and UI.
 
 Each child issue must enumerate production-boundary red tests, product and architectural intent, expected current failure, authoritative oracle, focused red command, false-positive controls, sibling behaviour that remains green, migration/rollback impact, documentation triggers, and exact dependency.
@@ -113,4 +119,4 @@ Human approval remains required for:
 
 ## Completion
 
-Complete only when all linked OSS and platform slices are implemented and independently reviewed, all role phases use the canonical prompt registry, existing worker flows remain compatible except for explicitly approved phase changes, comprehensive red tests and exact-head evidence pass, legacy database prompt overrides remain absent, migration and rollback are qualified, target-state documentation matches reality, and no unresolved blocker remains.
+Complete only when all linked OSS and platform slices are implemented and independently reviewed, all role phases use the canonical prompt and lifecycle-skill registries, existing worker flows remain compatible except for explicitly approved phase changes, comprehensive red tests and exact-head evidence pass, prompt/skill identities are durably auditable, legacy database prompt overrides remain absent, migration and rollback are qualified, target-state documentation matches reality, and no unresolved blocker remains.

@@ -6,8 +6,24 @@ const strongPlan = `## Problem Summary
 Fix the imported issue.
 
 ## Target Files
-- src/workerBot.ts
-- test/workerBot.test.ts
+\`\`\`json
+[
+  {
+    "path": "src/workerBot.ts",
+    "classification": "existing_at_base",
+    "owner": "worker bot handler",
+    "dependency_ref": null,
+    "rationale": "change the current production caller"
+  },
+  {
+    "path": "test/workerBot.test.ts",
+    "classification": "existing_at_base",
+    "owner": "worker bot integration tests",
+    "dependency_ref": null,
+    "rationale": "extend the existing production-boundary coverage"
+  }
+]
+\`\`\`
 
 ## Architectural Intent
 Keep GitHub as source of truth and SQLite as orchestration mirror.
@@ -128,7 +144,6 @@ describe("implementation plan handler", () => {
       const handler = createImplementationPlanHandler({ runCli });
 
       const result = await handler({ work_item_id: item.id }, { db, workerId: "worker", phase: "initial", phaseData: {} });
-
       expect(result.work_item_id).toBe(item.id);
       expect(db.getWorkItemPlan(item.id)?.plan_text).toContain("Problem Summary");
       expect(runCli).toHaveBeenCalledOnce();

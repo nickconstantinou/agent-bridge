@@ -43,7 +43,7 @@ Canonical role prompts resolve only from reviewed source-controlled files:
 4. bounded context rendering;
 5. stable source-template hash plus invocation-specific rendered-content hash.
 
-Canonical role contracts set `allowDatabaseOverride: false`. A row in SQLite is not a backup and cannot replace a canonical prompt.
+Canonical role contracts set `allowDatabaseOverride: false`. A row in SQLite is not a backup and cannot replace a canonical prompt. Git history, reviewed release artifacts, and the recorded application SHA provide reproducible prompt rollback.
 
 Missing required variables, unknown keys, invalid contract versions, unreadable source files, or oversized rendered output fail closed. Fallback models receive the same key, version, source template, schema, validator, tools, and permissions; only the target/model changes.
 

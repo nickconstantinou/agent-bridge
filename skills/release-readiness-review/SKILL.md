@@ -7,6 +7,7 @@ description: Use before merging or releasing software changes to check scope, mi
 
 Use this skill for pre-merge, pre-release, or deployment-readiness checks.
 
+<!-- BEGIN AGENT_BRIDGE_RUNTIME_GUIDANCE -->
 ## Review Areas
 
 - Scope: confirm the change matches the stated goal and has no unrelated churn.
@@ -20,3 +21,4 @@ Use this skill for pre-merge, pre-release, or deployment-readiness checks.
 ## Output
 
 Lead with blocking risks. Then list non-blocking follow-ups and final release confidence.
+<!-- END AGENT_BRIDGE_RUNTIME_GUIDANCE -->

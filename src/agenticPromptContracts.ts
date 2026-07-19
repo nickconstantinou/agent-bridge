@@ -26,6 +26,7 @@ export type AgenticPromptKey =
   | "technical_lead:requirements"
   | "technical_lead:issue_validation"
   | "technical_lead:issue_authoring"
+  | "technical_lead:decomposition_review"
   | "technical_lead:planning"
   | "technical_lead:planning_repair:execution_contract"
   | "technical_lead:planning_repair:red_tests"
@@ -95,6 +96,9 @@ export const AGENTIC_PROMPT_REQUIRED_VARIABLES: Record<AgenticPromptKey, readonl
   "technical_lead:issue_authoring": [
     "change_type", "validated_requirements", "evidence_catalog", "decisions",
   ],
+  "technical_lead:decomposition_review": [
+    "proposed_issue_bundle", "canonical_invariants", "repository_evidence", "dependency_evidence",
+  ],
   "technical_lead:planning": [
     "canonical_issue", "repository_evidence", "documentation_impact", "constraints",
   ],
@@ -107,14 +111,14 @@ export const AGENTIC_PROMPT_REQUIRED_VARIABLES: Record<AgenticPromptKey, readonl
   ],
   "technical_lead:implementation_review": [
     "canonical_issue", "approved_plan", "implementation_evidence", "verification_evidence",
-    "documentation_evidence",
+    "subject_head_sha", "required_independence",
   ],
   "technical_lead:operations_review": [
-    "issue_and_plan", "implementation_evidence", "operations_evidence",
+    "issue_and_plan", "implementation_evidence", "operations_evidence", "subject_head_sha",
   ],
   "technical_lead:pr_readiness": [
     "issue_and_plan", "implementation_review", "operations_review", "documentation_validation",
-    "verification_evidence", "pr_evidence",
+    "verification_evidence", "pr_evidence", "subject_head_sha", "required_independence",
   ],
   "code_worker:scan:defect": ["repository", "scan_scope", "repository_evidence"],
   "code_worker:scan:refactor": ["repository", "scan_scope", "repository_evidence"],
@@ -127,13 +131,15 @@ export const AGENTIC_PROMPT_REQUIRED_VARIABLES: Record<AgenticPromptKey, readonl
     "issue_and_plan", "documentation_manifest", "change_evidence",
   ],
   "documentation_steward:author": [
-    "documentation_impact", "implementation_context", "path_policy",
+    "documentation_impact", "implementation_context", "accepted_review_evidence", "subject_head_sha",
+    "path_policy",
   ],
   "documentation_steward:validate": [
-    "documentation_impact", "implementation_evidence", "documents",
+    "documentation_impact", "implementation_evidence", "accepted_review_evidence", "subject_head_sha",
+    "documents",
   ],
   "documentation_steward:maintenance": [
-    "documentation_manifest", "documentation_inventory", "implementation_evidence",
+    "documentation_manifest", "documentation_inventory", "implementation_evidence", "subject_head_sha",
   ],
 };
 
@@ -141,6 +147,11 @@ export const AGENTIC_PROMPT_LIFECYCLE_SKILLS: Record<AgenticPromptKey, readonly 
   "technical_lead:requirements": ["requirements-to-acceptance"],
   "technical_lead:issue_validation": ["requirements-to-acceptance"],
   "technical_lead:issue_authoring": ["requirements-to-acceptance"],
+  "technical_lead:decomposition_review": [
+    "requirements-to-acceptance",
+    "risk-based-test-strategy",
+    "release-readiness-review",
+  ],
   "technical_lead:planning": [
     "requirements-to-acceptance",
     "risk-based-test-strategy",
@@ -210,6 +221,10 @@ export const AGENTIC_PROMPT_CONTRACTS: Record<AgenticPromptKey, AgenticPromptCon
   "technical_lead:issue_authoring": contract(
     "technical_lead:issue_authoring", "technical_lead", "issue_authoring",
     "technical-lead-issue-authoring.md", "canonical_issue_v1",
+  ),
+  "technical_lead:decomposition_review": contract(
+    "technical_lead:decomposition_review", "technical_lead", "decomposition_review",
+    "technical-lead-decomposition-review.md", "decomposition_review_v1",
   ),
   "technical_lead:planning": contract(
     "technical_lead:planning", "technical_lead", "planning",

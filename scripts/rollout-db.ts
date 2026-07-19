@@ -295,17 +295,20 @@ function escapeRegExp(value: string): string {
 }
 
 /**
- * Best-effort recovery for debris left by a *previous* bootstrap attempt on
- * this exact target that was interrupted in a way this process could never
- * catch — SIGKILL or a machine reboot between the atomic link() publish and
- * the temp name's unlink(), or any earlier failure whose own cleanup never
- * ran. Only ever removes files matching this target's own randomly-named
- * temp pattern (`.bootstrap-<32 hex chars>-<this target's basename>`, plus
- * its -wal/-shm sidecars) in the target's own directory — never touches
+ * Recovery for debris left by a *previous* bootstrap attempt on this exact
+ * target that was interrupted in a way this process could never catch —
+ * SIGKILL or a machine reboot before the atomic link() publish, or any
+ * earlier failure whose own cleanup never ran. Only ever removes files
+ * matching this target's own randomly-named temp pattern
+ * (`.bootstrap-<32 hex chars>-<this target's basename>`, plus its
+ * -wal/-shm sidecars) in the target's own directory — never touches
  * anything else. Safe to run unconditionally at the start of a new attempt
  * because the caller (rollout-bootstrap.sh) holds the same exclusive
  * rollout lock for the whole invocation, so no other legitimate process can
- * be concurrently using a leftover temp name for this target.
+ * be concurrently using a leftover temp name for this target. Fails closed
+ * (throws) if a matched file can't actually be removed — silently ignoring
+ * a removal failure here could mask a real permissions/filesystem problem
+ * rather than genuine stale debris.
  */
 function cleanupStaleTempFiles(dir: string, path: string): void {
   const pattern = new RegExp(`^\\.bootstrap-[0-9a-f]{32}-${escapeRegExp(basename(path))}(-wal|-shm)?$`);
@@ -317,20 +320,80 @@ function cleanupStaleTempFiles(dir: string, path: string): void {
   }
   for (const entry of entries) {
     if (!pattern.test(entry)) continue;
-    try { rmSync(join(dir, entry), { force: true }); } catch { /* best-effort */ }
+    const full = join(dir, entry);
+    try {
+      rmSync(full);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw new Error(`failed to remove stale bootstrap temp file ${full}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }
 
 /**
- * Publishes with no-replace semantics: `link()` fails atomically with
- * EEXIST if anything now occupies `path`, including something that
- * appeared concurrently after every earlier check in this function ran —
- * unlike `rename()`, which would silently replace it. The temp path is
- * unlinked only after the link succeeds, so `path` and the temp name are
- * briefly two hard links to the same inode, never a window where neither
- * refers to the completed database.
+ * Recovery specifically for the post-commit interruption window: link()
+ * succeeded (the destination now exists and is fully valid — it's a hard
+ * link to the same already-validated inode as the temp file) but unlink()
+ * of the temp name never ran, because the process was SIGKILLed or the
+ * machine rebooted in the narrow gap between the two. Unlike
+ * cleanupStaleTempFiles(), this runs even when the destination already
+ * exists — the whole point is recovering debris left *after* a successful
+ * publish. Only removes a stale temp entry that is provably the *same
+ * inode* as the current destination (same device + inode number, verified
+ * via stat, not just a name match) — a name match with a *different* inode
+ * would mean something unexpected is going on (not ordinary leftover
+ * debris), so that case fails closed rather than being silently deleted.
  */
-function publishAtomic(tempPath: string, path: string): void {
+function cleanupStalePostCommitLink(dir: string, path: string): void {
+  let destinationStat;
+  try {
+    destinationStat = lstatSync(path);
+  } catch {
+    return; // destination doesn't exist — nothing to reconcile here
+  }
+  if (!destinationStat.isFile()) return;
+  const pattern = new RegExp(`^\\.bootstrap-[0-9a-f]{32}-${escapeRegExp(basename(path))}$`);
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!pattern.test(entry)) continue;
+    const full = join(dir, entry);
+    let entryStat;
+    try {
+      entryStat = lstatSync(full);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw new Error(`failed to inspect stale post-commit temp file ${full}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (entryStat.dev !== destinationStat.dev || entryStat.ino !== destinationStat.ino) {
+      throw new Error(
+        `stale temp file ${full} shares a name with the published database at ${path} but not its inode — refusing to remove it automatically; this needs manual operator review`,
+      );
+    }
+    try {
+      rmSync(full);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw new Error(`failed to remove stale post-commit temp file ${full}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    removeSidecars(full);
+  }
+}
+
+/**
+ * Attempts the no-replace half of publication: `link()` fails atomically
+ * with EEXIST if anything now occupies `path`, including something that
+ * appeared concurrently after every earlier check ran — unlike `rename()`,
+ * which would silently replace it. Deliberately does *not* also unlink the
+ * temp name — the caller controls that separately so it can record the
+ * commit point (link succeeded, `path` now exists) before the final,
+ * genuinely-uninterruptible unlink step.
+ */
+function publishLink(tempPath: string, path: string): void {
   try {
     linkSync(tempPath, path);
   } catch (err) {
@@ -339,35 +402,84 @@ function publishAtomic(tempPath: string, path: string): void {
     }
     throw err;
   }
-  unlinkSync(tempPath);
+}
+
+/** A genuine, unconditional event-loop yield — allows a pending signal to actually be serviced at this point. A real production checkpoint, not a test-only mechanism. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * Test-only pause, gated behind AGENT_BRIDGE_BOOTSTRAP_TEST_MODE, that
+ * *extends* one of the real, unconditional production checkpoints
+ * identified by `checkpoint` so a test can deterministically observe the
+ * mid-flight state and inject a signal there. It does not introduce any
+ * yield point that isn't already present in the unconditional production
+ * path — "post-commit" is the one exception, and is only ever awaited when
+ * this specific hook is active, never in production (see bootstrapDatabase).
+ */
+async function testPause(checkpoint: "post-migration" | "post-validation" | "post-commit"): Promise<void> {
+  const pauseFile = testHook("AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_FILE");
+  if (!pauseFile || testHook("AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_AT") !== checkpoint) return;
+  writeFileSync(pauseFile, "paused\n");
+  const resumeFile = `${pauseFile}.resume`;
+  const deadline = Date.now() + 5000;
+  while (!existsSync(resumeFile) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
+interface BootstrapSignalState {
+  tempPath: string;
+  /** Set true the moment link() succeeds — path now exists and is valid. */
+  committed: boolean;
 }
 
 /**
  * Registers process-level cleanup for a graceful termination signal
  * (SIGTERM/SIGINT) received mid-bootstrap. This can only ever help for
- * *graceful* termination — SIGKILL and a machine power loss are, by
- * definition, unobservable by any process and cannot be handled here at
- * all; recovery from those specific cases is `cleanupStaleTempFiles()`'s
- * job on the *next* invocation, not this one's. Removes its own listeners
- * before re-raising so the process actually terminates with the expected
- * signal semantics rather than hanging or exiting 0.
+ * *graceful* termination at an actual event-loop yield point — SIGKILL and
+ * a machine power loss are, by definition, unobservable by any process and
+ * cannot be handled here at all, and neither can a signal arriving during
+ * the tight, deliberately-not-yielded link()+unlink() commit tail; recovery
+ * from those specific cases is `cleanupStalePostCommitLink()`'s /
+ * `cleanupStaleTempFiles()`'s job on the *next* invocation, not this one's.
+ *
+ * Reports two structurally different outcomes so a signal can never
+ * produce an ambiguous result: if `state.committed` is already true (link()
+ * succeeded — the database is genuinely, validly published), the message
+ * says so explicitly and warns against retrying; otherwise it reports that
+ * nothing was created. Removes its own listeners before exiting so the
+ * process actually terminates with the expected semantics rather than
+ * hanging or exiting 0.
  */
 const SIGNAL_EXIT_CODES: Record<string, number> = { SIGINT: 130, SIGTERM: 143 };
 
-async function withSignalCleanup<T>(tempPath: string, fn: () => Promise<T>): Promise<T> {
+async function withSignalCleanup<T>(state: BootstrapSignalState, fn: () => Promise<T>): Promise<T> {
   const handler = (signal: NodeJS.Signals) => {
-    try { rmSync(tempPath, { force: true }); } catch { /* best-effort */ }
-    removeSidecars(tempPath);
-    process.stderr.write(`rollout-db: bootstrap interrupted by ${signal}, cleaned up temp state\n`);
-    // Re-sending the signal to ourselves (process.kill(pid, signal)) after
-    // removing our own handler does not reliably terminate the process in
-    // the same tick — exiting explicitly with the conventional 128+N code
-    // is the standard, dependable pattern for "cleaned up, now die". Note
-    // this handler can only ever run at a genuine event-loop yield point
-    // (an `await`, timer, or I/O callback) — a tight synchronous operation
-    // (a long-running native call with no `await` in between) blocks Node
-    // from servicing the pending signal at all until it returns, same as
-    // any other Node.js signal handler.
+    if (state.committed) {
+      // The destination already exists and is fully valid — only the
+      // redundant temp hard link name is left. Best-effort removal here;
+      // cleanupStalePostCommitLink() recovers it on the next invocation
+      // regardless, so a failure here isn't fatal to correctness.
+      try { rmSync(state.tempPath, { force: true }); } catch { /* best-effort */ }
+      process.stderr.write(
+        `rollout-db: bootstrap interrupted by ${signal} AFTER the database was already published at the destination — ` +
+        "the database exists and is valid; do NOT retry bootstrap for this target. Only a redundant temp hard link name was involved.\n",
+      );
+      process.exit(SIGNAL_EXIT_CODES[signal] ?? 1);
+      return;
+    }
+    try {
+      rmSync(state.tempPath, { force: true });
+      removeSidecars(state.tempPath);
+      process.stderr.write(`rollout-db: bootstrap interrupted by ${signal} before publication — no database was created, temp state cleaned up\n`);
+    } catch (err) {
+      process.stderr.write(
+        `rollout-db: bootstrap interrupted by ${signal} before publication, but cleanup of ${state.tempPath} itself failed: ` +
+        `${err instanceof Error ? err.message : String(err)} — cleanupStaleTempFiles() will recover it on the next attempt\n`,
+      );
+    }
     process.exit(SIGNAL_EXIT_CODES[signal] ?? 1);
   };
   process.on("SIGTERM", handler);
@@ -389,35 +501,46 @@ async function withSignalCleanup<T>(tempPath: string, fn: () => Promise<T>): Pro
  *
  * Atomicity is layered on top of that unchanged path, not inside it: the
  * new database is created and migrated at a randomly-named temp path in the
- * *same* directory as the final target (so the eventual publish is same-
- * filesystem), validated (integrity, foreign keys, exact schema version),
- * then published with no-replace link()+unlink() semantics only after every
- * check passes. If anything fails synchronously — missing-file
- * precondition, parent validation, the migration itself, post-migration
- * validation, or publication racing a concurrently-created destination —
- * the temp file (and any -wal/-shm sidecars it produced) is removed and the
- * final path is left completely untouched. A graceful termination signal
- * (SIGTERM/SIGINT) mid-attempt is also cleaned up. SIGKILL or a machine
- * reboot between the atomic link() publish and the temp name's unlink()
- * cannot be observed or handled by this process at all — that specific,
- * narrow window can leave a harmless extra hard link (same inode, same
- * validated content as the published database, not a partial/corrupt file)
- * at a stale temp name; `cleanupStaleTempFiles()` removes it opportunistically
- * on the next bootstrap attempt against the same target, under the same
- * exclusive rollout lock.
+ * *same* directory as the final target, validated (integrity, foreign keys,
+ * exact schema version), then published with no-replace link()+unlink()
+ * semantics only after every check passes. Two real, unconditional
+ * event-loop yields — after migration and after validation, both always
+ * present in production, not just under a test hook — let a pending
+ * SIGTERM/SIGINT actually be serviced before the final commit; the
+ * link()+unlink() tail itself is deliberately *not* interrupted by any
+ * yield, so it stays the minimal possible synchronous window. If anything
+ * fails before that window — missing-file precondition, parent validation,
+ * the migration itself, post-migration validation, publication racing a
+ * concurrently-created destination, or a serviced signal — the temp file
+ * (and any -wal/-shm sidecars) is removed and the final path is left
+ * completely untouched. SIGKILL or a machine reboot inside the
+ * link()+unlink() window itself cannot be observed or handled by any
+ * process at all — that narrow window can leave a harmless extra hard link
+ * (same inode, same already-validated content as the published database,
+ * never a partial/corrupt file) at the stale temp name;
+ * `cleanupStalePostCommitLink()` recovers it opportunistically on the next
+ * bootstrap attempt against the same target, under the same exclusive
+ * rollout lock, even though the destination already exists by then.
  */
 async function bootstrapDatabase(path: string, role: string): Promise<DbEvidence> {
-  if (pathOccupied(path)) throw new Error(`database already exists, use migrate instead: ${path}`);
   const dir = dirname(path);
   validateParentDir(dir);
+  // Runs even when the destination already exists — recovers a stale
+  // extra hard link left by a SIGKILL/reboot between a *previous*
+  // attempt's link() and unlink(), verified by inode, not name alone. Must
+  // run before the occupied-check below, and under the shared rollout
+  // lock the shell wrapper holds for the whole invocation.
+  cleanupStalePostCommitLink(dir, path);
+  if (pathOccupied(path)) throw new Error(`database already exists, use migrate instead: ${path}`);
   cleanupStaleTempFiles(dir, path);
   const tempPath = join(dir, `.bootstrap-${randomBytes(16).toString("hex")}-${basename(path)}`);
+  const state: BootstrapSignalState = { tempPath, committed: false };
   const cleanupTemp = () => {
     try { rmSync(tempPath, { force: true }); } catch { /* best-effort */ }
     removeSidecars(tempPath);
   };
   try {
-    await withSignalCleanup(tempPath, async () => {
+    await withSignalCleanup(state, async () => {
       if (testHook("AGENT_BRIDGE_BOOTSTRAP_TEST_FORCE_MIGRATION_FAILURE") === path) {
         // Pre-creates a file at the exact temp path with a future,
         // unsupported schema version, so openDb()'s own existing
@@ -428,37 +551,43 @@ async function bootstrapDatabase(path: string, role: string): Promise<DbEvidence
         raw.close();
       }
       openDb(tempPath, { serviceId: `rollout:bootstrap:${role}` }).close();
-      const pauseFile = testHook("AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_FILE");
-      if (pauseFile) {
-        // Test-only hook proving the SIGTERM/SIGINT cleanup path in
-        // withSignalCleanup() actually runs, not just that it typechecks:
-        // signals the test harness (by creating pauseFile) that the temp
-        // database now exists on disk, then awaits — via a real
-        // setTimeout-based async delay loop, a genuine event-loop yield
-        // point, unlike a synchronous blocking call, which would prevent
-        // Node from ever servicing the pending signal — until either a
-        // resume file appears or a bounded deadline passes, so a broken
-        // hook can't hang forever.
-        writeFileSync(pauseFile, "paused\n");
-        const resumeFile = `${pauseFile}.resume`;
-        const deadline = Date.now() + 5000;
-        while (!existsSync(resumeFile) && Date.now() < deadline) {
-          await new Promise((resolve) => setTimeout(resolve, 25));
-        }
-      }
+
+      // Real production checkpoint 1: unconditional, always present.
+      await yieldToEventLoop();
+      await testPause("post-migration");
+
       if (testHook("AGENT_BRIDGE_BOOTSTRAP_TEST_FORCE_INVALID_SCHEMA") === path) {
         const raw = new Database(tempPath);
         raw.exec("PRAGMA user_version = 4242;");
         raw.close();
       }
       validateBootstrapped(tempPath);
+
+      // Real production checkpoint 2: unconditional, always present. Only
+      // the minimal link()+unlink() commit tail below is not interrupted.
+      await yieldToEventLoop();
+      await testPause("post-validation");
+
       if (testHook("AGENT_BRIDGE_BOOTSTRAP_TEST_PRE_PUBLISH_OCCUPY") === path) {
         writeFileSync(path, "concurrently created by a different process\n");
       }
-      publishAtomic(tempPath, path);
+      publishLink(tempPath, path);
+      state.committed = true;
+      // "post-commit" is test-only and never awaits in production — see
+      // testPause()'s doc comment. It exists solely so a test can prove the
+      // committed-state signal-handler branch above (never "nothing
+      // happened") without requiring a genuinely unobservable SIGKILL race.
+      await testPause("post-commit");
+      unlinkSync(tempPath);
     });
   } catch (err) {
     cleanupTemp();
+    if (state.committed) {
+      throw new Error(
+        `bootstrap published ${path} successfully but failed to remove its temp hard link (${tempPath}): ` +
+        `${err instanceof Error ? err.message : String(err)} — do not retry bootstrap for this target, the database exists and is valid`,
+      );
+    }
     throw err;
   }
   removeSidecars(tempPath);

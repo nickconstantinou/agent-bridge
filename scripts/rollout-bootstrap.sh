@@ -112,9 +112,15 @@ if (( test_mode == 0 )); then /usr/bin/id -u "$runtime_user" >/dev/null || die "
 [[ -n "${bootstrap_roles[$new_role]:-}" ]] || die "requested role is not in the fixed bootstrap allowlist: $new_role"
 [[ "${bootstrap_roles[$new_role]}" == "$new_role_path" ]] || die "requested role/path pair is not in the fixed bootstrap allowlist: $new_role:$new_role_path"
 
-# -e alone follows symlinks and would miss a dangling symlink sitting at the
-# target path; -L catches the symlink itself regardless of what it points to.
-[[ ! -e "$new_role_path" && ! -L "$new_role_path" ]] || die "target already exists, not a genuinely missing database: $new_role_path"
+# Deliberately no destination-existence check here, before the lock: a
+# SIGKILL or reboot between rollout-db.ts's atomic link() publish and its
+# own temp-name unlink() can leave the destination genuinely, validly
+# published *and* a stale extra hard link at the old temp name — recovering
+# from that must run under the same exclusive lock every other bootstrap
+# state check runs under, not before it. rollout-db.ts's own bootstrap mode
+# performs that inode-verified recovery first, then still refuses with
+# "already exists" if the destination turns out to be a real, already-
+# completed database rather than debris.
 parent_dir="$(/usr/bin/dirname "$new_role_path")"
 [[ -d "$parent_dir" && ! -L "$parent_dir" ]] || die "new-role parent directory is missing or symlinked: $parent_dir"
 [[ "$(/usr/bin/realpath -e "$parent_dir")" == "$parent_dir" ]] || die "new-role parent directory is not canonical: $parent_dir"

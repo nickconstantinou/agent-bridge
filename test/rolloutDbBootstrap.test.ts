@@ -270,15 +270,12 @@ describe("rollout-db.ts bootstrap", () => {
     });
   });
 
-  it("recovers from a stale temp file left by a previous, uncleanly-interrupted attempt (SIGKILL/reboot recovery)", () => {
-    // Simulates the one case no in-process handler can ever catch: SIGKILL
-    // or a machine reboot between the atomic link() publish and the temp
-    // name's unlink(), leaving a harmless extra hard link (same inode, same
-    // validated content) at a stale temp name. A fresh bootstrap attempt
-    // against the *same target* must opportunistically clean it up (safe,
-    // since it only ever runs under the shared rollout lock, so nothing
-    // else can be legitimately using that stale name) rather than leaving
-    // it to accumulate forever.
+  it("recovers from a stale temp file left by a previous, uncleanly-interrupted attempt with no destination yet (SIGKILL/reboot before link())", () => {
+    // Simulates SIGKILL or a machine reboot before the atomic link() ever
+    // ran, leaving orphaned temp debris and no destination. A fresh
+    // bootstrap attempt against the *same target* must opportunistically
+    // clean it up (safe, since it only ever runs under the shared rollout
+    // lock) rather than leaving it to accumulate forever.
     const dir = tempDir();
     const dbPath = join(dir, "bridge.sqlite");
     const staleTemp = join(dir, ".bootstrap-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bridge.sqlite");
@@ -296,14 +293,59 @@ describe("rollout-db.ts bootstrap", () => {
     expect(existsSync(dbPath)).toBe(true);
   });
 
-  it("cleans up on SIGTERM received mid-bootstrap (graceful-termination signal handling)", async () => {
-    // AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_FILE pauses right after the temp
-    // database is fully created and migrated (a real on-disk temp file
-    // exists) but before validation/publish — the exact kind of window a
-    // SIGTERM could arrive in during a real bootstrap. Once the pause file
-    // appears, the temp file is provably on disk; sending SIGTERM at that
-    // point and confirming full cleanup proves withSignalCleanup() actually
-    // runs, not just that it typechecks.
+  it("recovers a stale hard link left after a successful publish (SIGKILL/reboot between link() and unlink()), even though the destination already exists", () => {
+    // Reproduces the exact documented post-commit interruption state: the
+    // destination exists and is fully valid (link() succeeded), but the
+    // temp name was never unlinked. A real hard link to the SAME inode as
+    // the destination is what a genuine SIGKILL/reboot in that window
+    // leaves behind — not just a same-named file. cleanupStalePostCommitLink()
+    // must recover it even though pathOccupied() would otherwise refuse
+    // immediately, and the bootstrap invocation still correctly refuses
+    // afterward with "already exists" (this database is not missing).
+    const dir = tempDir();
+    const dbPath = join(dir, "bridge.sqlite");
+    const first = runBootstrap(bootstrapArgs(dbPath));
+    expect(first.status, first.stderr).toBe(0);
+    const staleLink = join(dir, ".bootstrap-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb-bridge.sqlite");
+    execFileSync("ln", [dbPath, staleLink]);
+    expect(existsSync(staleLink)).toBe(true);
+
+    const second = runBootstrap(bootstrapArgs(dbPath));
+    expect(second.status).not.toBe(0);
+    expect(second.stderr).toMatch(/already exists/i);
+    expect(existsSync(staleLink), "stale post-commit hard link should have been recovered").toBe(false);
+    expect(existsSync(dbPath)).toBe(true);
+    const db = new Database(dbPath, { readonly: true });
+    expect(db.pragma("user_version", { simple: true })).toBe(CURRENT_SCHEMA_VERSION);
+    db.close();
+  });
+
+  it("fails closed (does not delete) when a stale-named temp file shares the destination's name but not its inode", () => {
+    // A name match with a *different* inode is not ordinary leftover
+    // debris — it's an unexpected state that needs manual operator review,
+    // not automatic deletion. Proves the inode check is load-bearing, not
+    // just a name-pattern match.
+    const dir = tempDir();
+    const dbPath = join(dir, "bridge.sqlite");
+    const first = runBootstrap(bootstrapArgs(dbPath));
+    expect(first.status, first.stderr).toBe(0);
+    const unrelatedTemp = join(dir, ".bootstrap-cccccccccccccccccccccccccccccccc-bridge.sqlite");
+    writeFileSync(unrelatedTemp, "not actually linked to the destination\n");
+
+    const second = runBootstrap(bootstrapArgs(dbPath));
+    expect(second.status).not.toBe(0);
+    expect(second.stderr).toMatch(/not its inode|manual operator review/i);
+    expect(existsSync(unrelatedTemp), "mismatched-inode file must not be silently deleted").toBe(true);
+  });
+
+  it("cleans up on SIGTERM received after migration, before validation (checkpoint 1)", async () => {
+    // AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_AT=post-migration extends the
+    // first real, unconditional production checkpoint so the test can
+    // deterministically observe the mid-flight state and inject a signal
+    // there. Once the pause file appears, the temp file is provably on
+    // disk; sending SIGTERM at that point and confirming full cleanup
+    // proves withSignalCleanup() actually runs at a real production
+    // checkpoint, not just under an artificial mechanism.
     const dir = tempDir();
     const dbPath = join(dir, "bridge.sqlite");
     const pauseFile = join(dir, ".pause-signal");
@@ -314,6 +356,7 @@ describe("rollout-db.ts bootstrap", () => {
       env: {
         ...process.env,
         AGENT_BRIDGE_BOOTSTRAP_TEST_MODE: "1",
+        AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_AT: "post-migration",
         AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_FILE: pauseFile,
       },
     });
@@ -326,6 +369,7 @@ describe("rollout-db.ts bootstrap", () => {
       expect(existsSync(pauseFile), "child never reached the pause point").toBe(true);
       const tempFilesWhilePaused = readdirSync(dir).filter((name) => name.startsWith(".bootstrap-"));
       expect(tempFilesWhilePaused.length, "expected a temp database on disk while paused").toBeGreaterThan(0);
+      expect(existsSync(dbPath), "destination must not exist yet at this checkpoint").toBe(false);
 
       child.kill("SIGTERM");
       const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
@@ -342,6 +386,94 @@ describe("rollout-db.ts bootstrap", () => {
     expect(existsSync(dbPath)).toBe(false);
     const leftoverEntries = readdirSync(dir).filter((name) => name !== ".pause-signal");
     expect(leftoverEntries, `unexpected leftovers: ${leftoverEntries.join(", ")}`).toEqual([]);
+  }, 15000);
+
+  it("cleans up on SIGTERM received after validation, before the commit window (checkpoint 2)", async () => {
+    const dir = tempDir();
+    const dbPath = join(dir, "bridge.sqlite");
+    const pauseFile = join(dir, ".pause-signal");
+    const child = spawn(process.execPath, [
+      tsxCli, migrationScript, "bootstrap",
+      ...bootstrapArgs(dbPath),
+    ], {
+      env: {
+        ...process.env,
+        AGENT_BRIDGE_BOOTSTRAP_TEST_MODE: "1",
+        AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_AT: "post-validation",
+        AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_FILE: pauseFile,
+      },
+    });
+
+    try {
+      const deadline = Date.now() + 8000;
+      while (!existsSync(pauseFile) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(existsSync(pauseFile), "child never reached the pause point").toBe(true);
+      expect(existsSync(dbPath), "destination must not exist yet at this checkpoint").toBe(false);
+
+      child.kill("SIGTERM");
+      const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+        child.on("exit", (code, signal) => resolve({ code, signal }));
+      });
+      expect(exit.code).toBe(143);
+    } finally {
+      if (!child.killed) child.kill("SIGKILL");
+    }
+
+    expect(existsSync(dbPath)).toBe(false);
+    const leftoverEntries = readdirSync(dir).filter((name) => name !== ".pause-signal");
+    expect(leftoverEntries, `unexpected leftovers: ${leftoverEntries.join(", ")}`).toEqual([]);
+  }, 15000);
+
+  it("reports the committed (already-published) outcome, not an ambiguous failure, when SIGTERM arrives after link() but before unlink()", async () => {
+    // AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_AT=post-commit is test-only — it
+    // never awaits in production (see testPause()'s doc comment) — and
+    // exists solely to prove the withSignalCleanup() committed-state branch
+    // reports success, not "cleaned up, nothing happened", since by this
+    // point the destination is genuinely, validly published.
+    const dir = tempDir();
+    const dbPath = join(dir, "bridge.sqlite");
+    const pauseFile = join(dir, ".pause-signal");
+    const child = spawn(process.execPath, [
+      tsxCli, migrationScript, "bootstrap",
+      ...bootstrapArgs(dbPath),
+    ], {
+      env: {
+        ...process.env,
+        AGENT_BRIDGE_BOOTSTRAP_TEST_MODE: "1",
+        AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_AT: "post-commit",
+        AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_FILE: pauseFile,
+      },
+    });
+
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+
+    try {
+      const deadline = Date.now() + 8000;
+      while (!existsSync(pauseFile) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(existsSync(pauseFile), "child never reached the pause point").toBe(true);
+      // By this checkpoint link() has already succeeded — the destination
+      // must already exist, unlike the two earlier checkpoints.
+      expect(existsSync(dbPath), "destination must already be published at this checkpoint").toBe(true);
+
+      child.kill("SIGTERM");
+      const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+        child.on("exit", (code, signal) => resolve({ code, signal }));
+      });
+      expect(exit.code).toBe(143);
+    } finally {
+      if (!child.killed) child.kill("SIGKILL");
+    }
+
+    expect(stderr).toMatch(/already published|do NOT retry/i);
+    expect(existsSync(dbPath)).toBe(true);
+    const db = new Database(dbPath, { readonly: true });
+    expect(db.pragma("user_version", { simple: true })).toBe(CURRENT_SCHEMA_VERSION);
+    db.close();
   }, 15000);
 });
 

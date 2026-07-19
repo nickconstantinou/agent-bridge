@@ -2,7 +2,7 @@
 
 Status: canonical documentation index.
 
-Validated against: `agent/role-based-worker-orchestration-docs` for the Issue #159 target-state and prompt-foundation implementation set.
+Validated against: `agent/role-based-worker-orchestration-docs` for the Issue #159 target-state, prompt-foundation implementation, and completed prompt-storage retirement.
 
 ## Authority order
 
@@ -54,7 +54,7 @@ last_validated_against: <commit-sha-or-branch>
 3. `docs/architecture/agentic-worker-orchestration.md` — role, workflow, permission, and lifecycle architecture.
 4. `docs/architecture/agentic-prompt-contracts.md` — source-controlled role/mode prompts, validators, focused repair, red-test planning, and completed override removal.
 5. `docs/agentic-maintenance.md` — feature, defect, and refactor requirements/planning contracts.
-6. `docs/roadmap/issue-159-role-based-orchestration.md` — active implementation roadmap and delivered prompt foundation.
+6. `docs/roadmap/issue-159-role-based-orchestration.md` — active implementation roadmap and delivered prompt/storage foundation.
 7. `docs/implementation-plans/issue-159-role-based-orchestration.md` — epic coding-agent handoff and delivery slices.
 8. `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md` — normative prompt and comprehensive red-test addendum.
 9. `docs/configuration/agent-role-assignment.md` — CLI/model allocation and degraded operation.
@@ -94,7 +94,7 @@ last_validated_against: <commit-sha-or-branch>
 | `docs/roadmap/epic-11-runtime-hardening.md` | implemented-record | historical/advisory | Completed runtime-hardening roadmap retained as delivery history. |
 | `docs/roadmap/issue-69-compact-memory-handoff.md` | active-roadmap | canonical | TDD implementation plan for compact-first memory and one-time CLI handoff context. |
 | `docs/roadmap/issue-69-coding-agent-prompt.md` | active-roadmap | advisory | Ready-to-use implementation prompt; subordinate to architecture and roadmap docs. |
-| `docs/roadmap/issue-159-role-based-orchestration.md` | active-roadmap, partially implemented | canonical | Prompt foundation delivered; remaining role orchestration tracked by slices. |
+| `docs/roadmap/issue-159-role-based-orchestration.md` | active-roadmap, partially implemented | canonical | Prompt foundation and legacy prompt-storage retirement delivered; remaining role orchestration tracked by slices. |
 | `docs/implementation-plans/issue-159-role-based-orchestration.md` | detailed implementation handoff | advisory under roadmap | Minimal-change delivery slices, red-test catalogue, migration, rollout, verification, and execution contract. |
 | `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md` | normative implementation addendum | advisory under roadmap | Prompt separation, comprehensive advisor-authored red-test requirements, and completed database-override removal. |
 | `docs/agentic-maintenance.md` | authoritative workflow | canonical | Feature, defect, refactor, planning, prompt, and completion contracts. |
@@ -129,7 +129,7 @@ last_validated_against: <commit-sha-or-branch>
 
 - `docs/soul.md` is a design document. Runtime loading is handled by `src/soul.ts`, which defaults to `<project>/SOUL.md` or `AGENT_BRIDGE_SOUL_PATH`.
 - `docs/architecture/memory-and-handoff.md` is the current intended memory and provider-handoff architecture. Implementation work is tracked in `docs/roadmap/issue-69-compact-memory-handoff.md`.
-- Canonical role prompts are loaded from source-controlled files registered by `src/agenticPromptContracts.ts`; legacy handlers still use `src/workerPrompts.ts` until migrated.
+- Canonical role prompts are loaded from source-controlled files registered by `src/agenticPromptContracts.ts`; compatibility handlers use source-controlled files registered by `src/workerPrompts.ts` until role-native routing replaces their keys.
 - Schema migration 2 removes the legacy SQLite `prompts` table; runtime prompts resolve only from reviewed source files.
 - `docs/prompt-optimization-loop-research.md` is referenced by `AGENTS.md` for optimizer methodology. It is not loaded by runtime services.
 - `docs/WORKER-GUIDE.md` and `docs/SAFE-RESTART.md` are authoritative operator docs. They are not loaded by services.

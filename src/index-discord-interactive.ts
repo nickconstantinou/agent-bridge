@@ -20,7 +20,7 @@
 
 import dotenv from "dotenv";
 import { getBridgeProjectDir } from "./bridge.js";
-import { openDb } from "./db.js";
+import { openProductionDb } from "./db.js";
 import { shutdownCliProcesses } from "./cliSupervisor.js";
 import { loadBotsConfig } from "./config.js";
 import { DiscordClient, type DiscordUpdate } from "./discord.js";
@@ -86,7 +86,7 @@ const soulContext = loadSoulContext({
 });
 if (soulContext) console.log(`[discord-interactive] loaded SOUL.md context (${soulContext.length} chars)`);
 
-const db = openDb(dbPath, { serviceId: "discord:interactive" });
+const db = openProductionDb(dbPath, { serviceId: "discord:interactive" });
 const advisorBroker = await startConfiguredAdvisorBroker({ db, bots: config.bots, runCli });
 
 // ── Fallback chain ────────────────────────────────────────────────────────────

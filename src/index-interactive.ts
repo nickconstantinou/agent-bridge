@@ -10,7 +10,7 @@ import dotenv from "dotenv";
 import {
   getBridgeProjectDir,
 } from "./bridge.js";
-import { openDb } from "./db.js";
+import { openProductionDb } from "./db.js";
 import { TelegramClient } from "./telegram.js";
 import { BridgeEngine } from "./engine.js";
 import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
@@ -79,7 +79,7 @@ const soulContext = loadSoulContext({
 });
 if (soulContext) console.log(`[interactive] loaded SOUL.md context (${soulContext.length} chars)`);
 
-const db = openDb(dbPath, { serviceId: "telegram:interactive" });
+const db = openProductionDb(dbPath, { serviceId: "telegram:interactive" });
 const advisorBroker = await startConfiguredAdvisorBroker({ db, bots: config.bots, runCli });
 const client = new TelegramClient(token, fetch, 45_000);
 

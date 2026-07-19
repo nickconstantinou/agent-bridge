@@ -8,7 +8,7 @@
 
 import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { LockRepository, type ExecutionLaneHandle } from "./repositories/lockRepository.js";
 export type { ExecutionLaneHandle } from "./repositories/lockRepository.js";
@@ -25,7 +25,7 @@ import {
 import { AdvisorRepository } from "./repositories/advisorRepository.js";
 import { ConversationRepository, DEFAULT_CONTEXT_MAX_CHARS } from "./repositories/conversationRepository.js";
 export { DEFAULT_CONTEXT_MAX_CHARS, DEFAULT_CONTEXT_RECENT_TURN_LIMIT } from "./repositories/conversationRepository.js";
-import { applyMigrations, CURRENT_SCHEMA_VERSION, UnsupportedSchemaVersionError } from "./db/schema.js";
+import { applyMigrations, CURRENT_SCHEMA_VERSION, MigrationRequiredError, UnsupportedSchemaVersionError } from "./db/schema.js";
 
 // Sentinel row keys stored in bridge_state for non-chat state
 const pollingKey = (bot: string) => `$polling:${bot}`;
@@ -89,20 +89,28 @@ export class ExecutionLockLostError extends Error {
   constructor() { super("execution lock ownership lost"); }
 }
 
-export function openDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
-  if (dbPath !== ":memory:") {
-    mkdirSync(dirname(dbPath), { recursive: true });
+/**
+ * Thrown by openProductionDb() (Phase 4C.2, issue #135) when the database
+ * file does not exist. Unlike openDb(), openProductionDb() never creates a
+ * database implicitly — missing-file bootstrap is a distinct, explicitly
+ * owned path (the guarded rollout helper's bootstrap mode), not an ordinary
+ * startup side effect.
+ */
+export class DatabaseMissingError extends Error {
+  constructor(dbPath: string) {
+    super(`production database does not exist: ${dbPath}`);
+    this.name = "DatabaseMissingError";
   }
-  const raw = new Database(dbPath);
-  // Version-gate before WAL mode or any other write-affecting operation, so a
-  // future, negative, or otherwise unsupported database is rejected without
-  // being mutated. Mirrors the validation in applyMigrationsUpTo() so no
-  // invalid version can reach WAL mode via this earlier gate.
-  const schemaVersion = Number(raw.pragma("user_version", { simple: true }));
-  if (!Number.isInteger(schemaVersion) || schemaVersion < 0 || schemaVersion > CURRENT_SCHEMA_VERSION) {
-    raw.close();
-    throw new UnsupportedSchemaVersionError(schemaVersion);
-  }
+}
+
+/**
+ * Shared post-version-check construction tail for openDb() and
+ * openProductionDb() (Phase 4C.2, issue #135): WAL/foreign-key pragmas,
+ * migration application, non-schema runtime maintenance, and BridgeDb
+ * construction. Both callers have already validated dbPath/schemaVersion
+ * before reaching here, so this never needs to reject or close raw itself.
+ */
+function finishOpen(raw: Database.Database, options: OpenDbOptions): BridgeDb {
   raw.pragma("journal_mode = WAL");
   raw.pragma("foreign_keys = ON");
   applyMigrations(raw);
@@ -142,6 +150,65 @@ export function openDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
     leaseMs,
     clock: options.clock,
   });
+}
+
+export function openDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
+  if (dbPath !== ":memory:") {
+    mkdirSync(dirname(dbPath), { recursive: true });
+  }
+  const raw = new Database(dbPath);
+  // Version-gate before WAL mode or any other write-affecting operation, so a
+  // future, negative, or otherwise unsupported database is rejected without
+  // being mutated. Mirrors the validation in applyMigrationsUpTo() so no
+  // invalid version can reach WAL mode via this earlier gate.
+  const schemaVersion = Number(raw.pragma("user_version", { simple: true }));
+  if (!Number.isInteger(schemaVersion) || schemaVersion < 0 || schemaVersion > CURRENT_SCHEMA_VERSION) {
+    raw.close();
+    throw new UnsupportedSchemaVersionError(schemaVersion);
+  }
+  return finishOpen(raw, options);
+}
+
+/**
+ * Strict, production-only opener (Phase 4C.2, issue #135). Used only by the
+ * five ordinary-startup service entrypoints. Unlike openDb():
+ *  - Never creates a missing file — fails closed with DatabaseMissingError.
+ *  - Only accepts a database already at exactly CURRENT_SCHEMA_VERSION — a
+ *    valid but behind-current (legacy/migratable) version fails closed with
+ *    MigrationRequiredError instead of being auto-migrated. Schema migration
+ *    on a production database is owned exclusively by the guarded rollout
+ *    helper (scripts/rollout-agent-bridge.sh + scripts/rollout-db.ts).
+ *  - Future/negative/non-integer versions still fail closed with the
+ *    existing UnsupportedSchemaVersionError, exactly as openDb() does today.
+ * All checks happen before WAL mode is enabled or any write occurs.
+ *
+ * The `{ fileMustExist: true }` open itself is the authoritative check —
+ * there is deliberately no separate existsSync() pre-check, which would
+ * leave a check-then-open race (the file could be deleted between the check
+ * and the open). Missing-file translation happens in the open's own failure
+ * path instead: existsSync() is consulted only after the open has already
+ * failed, purely to classify the failure, not to gate it.
+ */
+export function openProductionDb(dbPath: string, options: OpenDbOptions = {}): BridgeDb {
+  let raw: Database.Database;
+  try {
+    raw = new Database(dbPath, { fileMustExist: true });
+  } catch (err) {
+    if (dbPath !== ":memory:" && !existsSync(dbPath)) {
+      throw new DatabaseMissingError(dbPath);
+    }
+    throw err;
+  }
+  const schemaVersion = Number(raw.pragma("user_version", { simple: true }));
+  if (!Number.isInteger(schemaVersion) || schemaVersion < 0 || schemaVersion > CURRENT_SCHEMA_VERSION) {
+    raw.close();
+    throw new UnsupportedSchemaVersionError(schemaVersion);
+  }
+  if (schemaVersion !== CURRENT_SCHEMA_VERSION) {
+    raw.close();
+    throw new MigrationRequiredError(schemaVersion);
+  }
+  return finishOpen(raw, options);
 }
 
 export class BridgeDb {

@@ -17,7 +17,7 @@ import { ExternalPlugin } from "./health/plugins/external.js";
 import { ServerPlugin } from "./health/plugins/server.js";
 import { parseHealthEnabled, parseCadenceSeconds, parseHealthCliConfig } from "./health/config.js";
 import { formatReport } from "./health/reporter.js";
-import { openDb } from "./db.js";
+import { openProductionDb } from "./db.js";
 import { BridgeEngine } from "./engine.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
 import { shutdownCliProcesses } from "./cliSupervisor.js";
@@ -75,7 +75,7 @@ const cliBotConfig = {
 const dbPath = process.env.HEALTH_DB_PATH || ".data-health/health.sqlite";
 
 // ── Infrastructure ───────────────────────────────────────────────────────────
-const bridgeDb = openDb(dbPath, { serviceId: "telegram:health" });
+const bridgeDb = openProductionDb(dbPath, { serviceId: "telegram:health" });
 const rawDb = bridgeDb.raw;
 const client = new TelegramClient(token, fetch, resolveTimeoutsForKind(cliBot).fetchTimeoutMs);
 

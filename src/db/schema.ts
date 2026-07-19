@@ -17,6 +17,22 @@ export class UnsupportedSchemaVersionError extends Error {
   }
 }
 
+/**
+ * Thrown by openProductionDb() (Phase 4C.2, issue #135) when a database is at
+ * a valid, migratable version below CURRENT_SCHEMA_VERSION. Distinct from
+ * UnsupportedSchemaVersionError (future/negative/non-integer) so operators
+ * and logs can tell "you're behind, run the guarded rollout helper" from
+ * "you're ahead or corrupt" at a glance.
+ */
+export class MigrationRequiredError extends Error {
+  constructor(version: number) {
+    super(
+      `database schema version ${version} requires migration to ${CURRENT_SCHEMA_VERSION} via the guarded rollout helper`,
+    );
+    this.name = "MigrationRequiredError";
+  }
+}
+
 export interface ForeignKeyViolation {
   table: string;
   rowid: number | bigint | null;

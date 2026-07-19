@@ -165,7 +165,7 @@ Canonical prompt and red-test contracts:
 
 Every role and mode has a distinct registered prompt contract. Prompt text, structured schema, validator, evidence/tool grants, permissions, budgets, and lifecycle policy remain separate.
 
-Canonical role prompts are versioned source-controlled files and never consume database prompt text. Existing database rows remain a temporary legacy compatibility input only for handlers that have not yet migrated. They cannot change role, mode, tools, permissions, schema, validator, repair count, lifecycle authority, or human gates; no new role prompt or operator/platform workflow may create them. Legacy prompt keys remain explicit compatibility aliases until the corresponding role path is qualified and its existing rows are inventoried or migrated.
+Canonical and compatibility prompts are versioned source-controlled files and never consume database prompt text. The legacy prompt table, accessors, loader override options, and handler reads were removed in schema migration 2. Legacy prompt keys remain explicit source-file compatibility aliases until the corresponding role path is qualified; they cannot change role, mode, tools, permissions, schema, validator, repair count, lifecycle authority, or human gates.
 
 ## Execution
 

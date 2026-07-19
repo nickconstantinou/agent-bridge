@@ -48,7 +48,7 @@ Role routing, durable role assignment, requirements lifecycle, complete structur
 - source-controlled prompt key/version/hash per role invocation;
 - single-CLI and single-model operation with degradation reporting;
 - lifecycle, cancellation, restart, lease, audit, migration, rollback, and platform coordination;
-- staged retirement of legacy database prompt overrides.
+- completed removal of legacy database prompt overrides and their schema table.
 
 ## Prompt storage decision
 
@@ -113,4 +113,4 @@ Human approval remains required for:
 
 ## Completion
 
-Complete only when all linked OSS and platform slices are implemented and independently reviewed, all role phases use the canonical prompt registry, existing worker flows remain compatible except for explicitly approved phase changes, comprehensive red tests and exact-head evidence pass, legacy database prompt overrides are safely retired, migration and rollback are qualified, target-state documentation matches reality, and no unresolved blocker remains.
+Complete only when all linked OSS and platform slices are implemented and independently reviewed, all role phases use the canonical prompt registry, existing worker flows remain compatible except for explicitly approved phase changes, comprehensive red tests and exact-head evidence pass, legacy database prompt overrides remain absent, migration and rollback are qualified, target-state documentation matches reality, and no unresolved blocker remains.

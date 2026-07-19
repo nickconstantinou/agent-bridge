@@ -47,14 +47,15 @@ A second, separate **appliance** deployment lives outside this repo at `/opt/age
 
 ### Persistence
 - `src/db.ts` — BridgeDb compatibility façade: version-gates before WAL/any write, applies migrations, then performs non-schema runtime maintenance (session expiry, conversation-turn pruning). Callers continue using the public database API unchanged.
-- `src/db/schema.ts` — explicit SQLite schema boundary. `CURRENT_SCHEMA_VERSION` is `1`; existing `user_version = 0` files are the legacy baseline, future versions fail closed, and `applyMigrationsUpTo()` applies numbered migrations transactionally, verifying `PRAGMA foreign_key_check` before commit.
-- `src/db/legacyBaselineMigration.ts` — migration 1: owns the full legacy DDL and every historical shape-detected repair, applied once and transactionally. `user_version` is authoritative once a database reaches 1 — repairs no longer re-run on every open.
+- `src/db/schema.ts` — explicit SQLite schema boundary. `CURRENT_SCHEMA_VERSION` is `2`; migration 1 establishes the legacy-compatible baseline and migration 2 removes the empty legacy prompt-override table. Future versions fail closed, and `applyMigrationsUpTo()` applies numbered migrations transactionally, verifying `PRAGMA foreign_key_check` before commit.
+- `src/db/legacyBaselineMigration.ts` — migration 1: owns the legacy-compatible DDL and historical shape-detected repairs.
+- `src/db/dropLegacyPromptOverridesMigration.ts` — migration 2: removes the absent/empty legacy `prompts` table and fails closed if an unexpected row exists.
 - `src/repositories/` — 9 repository classes (session, lock, settings, runRepository, workQueue, memory, compaction, advisor, conversation). All connection-bound SQL owners with no independent transactions of their own, except `AdvisorRepository.reserveAdvisorCall()` and `LockRepository`, which wrap their own dedup/ownership check in a transaction exactly as the pre-extraction `BridgeDb` methods did. `BridgeDb` remains the compatibility façade — every extracted method keeps its original name, signature, and behavior; `pending_messages` queue SQL (tightly coupled to `LockRepository`'s ownership/lease semantics) is intentionally still owned directly by `BridgeDb` (Issue #135 Phase 4B; a Phase 4C candidate, not yet scoped).
 - `src/events/` — `types.ts` (BridgeEvent union: run.started, text.delta, run.completed, run.failed, run.cancelled), `store.ts` (EventStore persisting to `bridge_runs`/`bridge_events`), `reducer.ts`, `telegramAdapter.ts`.
 - `src/projectMemory.ts`, `src/contextCommand.ts`, `src/compactSummary.ts` — memory capture, retrieval, /compact, context command CLI. `/compact` is the single automatic durable-memory distillation path; the former post-turn extractor (`src/memoryExtractor.ts`, `BRIDGE_MEMORY_EXTRACTOR_ENABLED`) has been removed. `contextCommand.ts` deliberately queries the SQLite file directly (readonly, bypassing `BridgeDb`) for its conversation-turn/summary reads — a pre-existing, out-of-scope exception documented inline and allowlisted in `scripts/arch-lint.sh`.
 
 ### Tables (from `src/db.ts` DDL)
-`bridge_state`, `settings`, `bridge_runs`, `bridge_events`, `work_items`, `work_jobs`, `approvals`, `github_links`, `feature_plans`, `work_item_plans`, `prompts`, `conversation_turns`, `pending_messages`, `conversation_summaries`, `project_memories`.
+`bridge_state`, `settings`, `bridge_runs`, `bridge_events`, `work_items`, `work_jobs`, `approvals`, `github_links`, `feature_plans`, `work_item_plans`, `conversation_turns`, `pending_messages`, `conversation_summaries`, `project_memories`.
 
 ## 3. Runtime lifecycle
 

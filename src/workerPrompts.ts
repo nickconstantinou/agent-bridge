@@ -34,8 +34,6 @@ export interface WorkerPromptBudget {
 }
 
 export interface WorkerPromptDefinition {
-  /** Existing or future DB prompt override key. */
-  dbKey: WorkerPromptKey;
   /** Version-controlled bundled prompt path. */
   filePath: string;
   /** Distilled skill supplements to append when the bundled prompt is loaded. */
@@ -49,12 +47,8 @@ export interface WorkerPromptReader {
 }
 
 export interface LoadWorkerPromptOptions {
-  /** Optional DB template. When provided, it wins over the bundled prompt file. */
-  dbTemplate?: string | null;
-  /** Allows tests or future callers to suppress supplement injection. */
+  /** Allows tests or callers to suppress supplement injection. */
   includeSupplements?: boolean;
-  /** DB overrides are assumed complete by default; opt in only if an override needs bundled supplements. */
-  includeSupplementsForDbTemplate?: boolean;
   /** Allows a caller to tighten placeholder limits for a specific job. */
   variableLimits?: Partial<Record<string, number>>;
 }
@@ -93,7 +87,6 @@ const FAILURE_VARIABLE_LIMITS = {
 
 export const WORKER_PROMPTS: Record<WorkerPromptKey, WorkerPromptDefinition> = {
   "feature_plan": {
-    dbKey: "feature_plan",
     filePath: `${WORKER_PROMPT_ROOT}/feature-plan.md`,
     supplements: ["planning-and-task-breakdown", "test-driven-development"],
     budget: {
@@ -103,7 +96,6 @@ export const WORKER_PROMPTS: Record<WorkerPromptKey, WorkerPromptDefinition> = {
     },
   },
   "implementation_plan:create": {
-    dbKey: "implementation_plan:create",
     filePath: `${WORKER_PROMPT_ROOT}/implementation-plan-create.md`,
     supplements: [
       "planning-and-task-breakdown",
@@ -118,7 +110,6 @@ export const WORKER_PROMPTS: Record<WorkerPromptKey, WorkerPromptDefinition> = {
     },
   },
   "implementation_plan:improve": {
-    dbKey: "implementation_plan:improve",
     filePath: `${WORKER_PROMPT_ROOT}/implementation-plan-improve.md`,
     supplements: ["planning-and-task-breakdown", "test-driven-development", "security-and-risk-gate"],
     budget: {
@@ -128,7 +119,6 @@ export const WORKER_PROMPTS: Record<WorkerPromptKey, WorkerPromptDefinition> = {
     },
   },
   "implementation_plan:contract_repair": {
-    dbKey: "implementation_plan:contract_repair",
     filePath: `${WORKER_PROMPT_ROOT}/implementation-plan-contract-repair.md`,
     supplements: [],
     budget: {
@@ -138,7 +128,6 @@ export const WORKER_PROMPTS: Record<WorkerPromptKey, WorkerPromptDefinition> = {
     },
   },
   "defect_scan:scan": {
-    dbKey: "defect_scan:scan",
     filePath: `${WORKER_PROMPT_ROOT}/defect-scan.md`,
     supplements: ["code-review-and-quality", "debugging-and-error-recovery"],
     budget: {
@@ -148,7 +137,6 @@ export const WORKER_PROMPTS: Record<WorkerPromptKey, WorkerPromptDefinition> = {
     },
   },
   "defect_scan:plan": {
-    dbKey: "defect_scan:plan",
     filePath: `${WORKER_PROMPT_ROOT}/defect-plan.md`,
     supplements: ["debugging-and-error-recovery", "test-driven-development"],
     budget: {
@@ -158,7 +146,6 @@ export const WORKER_PROMPTS: Record<WorkerPromptKey, WorkerPromptDefinition> = {
     },
   },
   "defect_scan:triage": {
-    dbKey: "defect_scan:triage",
     filePath: `${WORKER_PROMPT_ROOT}/defect-triage.md`,
     supplements: ["code-review-and-quality", "security-and-risk-gate"],
     budget: {
@@ -168,7 +155,6 @@ export const WORKER_PROMPTS: Record<WorkerPromptKey, WorkerPromptDefinition> = {
     },
   },
   "refactor_scan:scan": {
-    dbKey: "refactor_scan:scan",
     filePath: `${WORKER_PROMPT_ROOT}/refactor-scan.md`,
     supplements: ["code-review-and-quality", "incremental-implementation"],
     budget: {
@@ -178,7 +164,6 @@ export const WORKER_PROMPTS: Record<WorkerPromptKey, WorkerPromptDefinition> = {
     },
   },
   "refactor_scan:plan": {
-    dbKey: "refactor_scan:plan",
     filePath: `${WORKER_PROMPT_ROOT}/refactor-plan.md`,
     supplements: ["incremental-implementation", "test-driven-development"],
     budget: {
@@ -188,7 +173,6 @@ export const WORKER_PROMPTS: Record<WorkerPromptKey, WorkerPromptDefinition> = {
     },
   },
   "tdd_implementation:red_test": {
-    dbKey: "tdd_implementation:red_test",
     filePath: `${WORKER_PROMPT_ROOT}/tdd-red-test.md`,
     supplements: ["test-driven-development"],
     budget: {
@@ -198,7 +182,6 @@ export const WORKER_PROMPTS: Record<WorkerPromptKey, WorkerPromptDefinition> = {
     },
   },
   "tdd_implementation:green_implementation": {
-    dbKey: "tdd_implementation:green_implementation",
     filePath: `${WORKER_PROMPT_ROOT}/tdd-green-implementation.md`,
     supplements: ["incremental-implementation", "security-and-risk-gate"],
     budget: {
@@ -208,7 +191,6 @@ export const WORKER_PROMPTS: Record<WorkerPromptKey, WorkerPromptDefinition> = {
     },
   },
   "tdd_implementation:ci_fix": {
-    dbKey: "tdd_implementation:ci_fix",
     filePath: `${WORKER_PROMPT_ROOT}/tdd-ci-fix.md`,
     supplements: ["debugging-and-error-recovery"],
     budget: {
@@ -218,7 +200,6 @@ export const WORKER_PROMPTS: Record<WorkerPromptKey, WorkerPromptDefinition> = {
     },
   },
   "tdd_implementation:repair": {
-    dbKey: "tdd_implementation:repair",
     filePath: `${WORKER_PROMPT_ROOT}/tdd-repair.md`,
     supplements: ["debugging-and-error-recovery", "security-and-risk-gate"],
     budget: {
@@ -228,7 +209,6 @@ export const WORKER_PROMPTS: Record<WorkerPromptKey, WorkerPromptDefinition> = {
     },
   },
   "orchestrated_task:plan": {
-    dbKey: "orchestrated_task:plan",
     filePath: `${WORKER_PROMPT_ROOT}/orchestrated-plan.md`,
     supplements: ["planning-and-task-breakdown", "security-and-risk-gate"],
     budget: {
@@ -238,7 +218,6 @@ export const WORKER_PROMPTS: Record<WorkerPromptKey, WorkerPromptDefinition> = {
     },
   },
   "orchestrated_task:execute": {
-    dbKey: "orchestrated_task:execute",
     filePath: `${WORKER_PROMPT_ROOT}/orchestrated-execute.md`,
     supplements: ["incremental-implementation", "security-and-risk-gate"],
     budget: {
@@ -328,18 +307,12 @@ export async function loadWorkerPrompt(
   options: LoadWorkerPromptOptions = {},
 ): Promise<string> {
   const definition = WORKER_PROMPTS[key];
-  const usingDbTemplate = Boolean(options.dbTemplate?.trim());
-  const baseTemplate = usingDbTemplate
-    ? String(options.dbTemplate)
-    : await reader.readText(definition.filePath);
+  const baseTemplate = await reader.readText(definition.filePath);
 
   const limitedVariables = limitWorkerPromptVariables(key, variables, options.variableLimits);
   const renderedBase = renderWorkerPrompt(baseTemplate, limitedVariables);
 
-  const shouldAppendSupplements = options.includeSupplements !== false &&
-    (!usingDbTemplate || options.includeSupplementsForDbTemplate === true);
-
-  if (!shouldAppendSupplements) {
+  if (options.includeSupplements === false) {
     return renderedBase.trim();
   }
 

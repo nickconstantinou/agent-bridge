@@ -96,13 +96,10 @@ function getPlanContext(
 }
 
 async function loadTddPrompt(
-  ctx: JobHandlerContext,
   key: WorkerPromptKey,
   variables: Record<string, unknown>,
 ): Promise<string> {
-  return loadWorkerPrompt(key, variables, promptReader, {
-    dbTemplate: ctx.db.getPrompt(key, ""),
-  });
+  return loadWorkerPrompt(key, variables, promptReader);
 }
 
 async function assertNoTestOnlyCodeInProduction(runGit: RunGit, repoPath: string): Promise<void> {
@@ -164,7 +161,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
         const ciSummary = typeof input.ci_failure_summary === "string" ? input.ci_failure_summary : "";
         const ciLog = typeof input.ci_failure_log === "string" ? input.ci_failure_log : "";
         const promptContext = getPlanContext(ctx, item, "ci_fix", `${ciSummary}\n${ciLog}`);
-        const ciPrompt = await loadTddPrompt(ctx, "tdd_implementation:ci_fix", {
+        const ciPrompt = await loadTddPrompt("tdd_implementation:ci_fix", {
           title: item.title,
           execution_contract: promptContext.execution_contract,
           plan_text: promptContext.plan_text,
@@ -210,7 +207,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
         });
         const priorError = typeof input.repair_context === "string" ? input.repair_context : "";
         const promptContext = getPlanContext(ctx, item, "repair", priorError);
-        const repairPrompt = await loadTddPrompt(ctx, "tdd_implementation:repair", {
+        const repairPrompt = await loadTddPrompt("tdd_implementation:repair", {
           title: item.title,
           execution_contract: promptContext.execution_contract,
           plan_text: promptContext.plan_text,
@@ -256,7 +253,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
       }
 
       const redContext = getPlanContext(ctx, item, "red");
-      const redPrompt = await loadTddPrompt(ctx, "tdd_implementation:red_test", {
+      const redPrompt = await loadTddPrompt("tdd_implementation:red_test", {
         work_item_id: workItemId,
         title: item.title,
         execution_contract: redContext.execution_contract,
@@ -285,7 +282,7 @@ export function createTddImplementationHandler(deps: TddImplementationDeps): Job
       );
 
       const greenContext = getPlanContext(ctx, item, "green");
-      const greenPrompt = await loadTddPrompt(ctx, "tdd_implementation:green_implementation", {
+      const greenPrompt = await loadTddPrompt("tdd_implementation:green_implementation", {
         work_item_id: workItemId,
         title: item.title,
         execution_contract: greenContext.execution_contract,

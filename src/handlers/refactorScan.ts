@@ -84,16 +84,15 @@ function buildIssueBody(finding: RefactorFinding, planText: string, repository: 
   ].filter(l => l !== null).join("\n");
 }
 
-async function buildScanPrompt(ctx: JobHandlerContext, repository: string): Promise<string> {
+async function buildScanPrompt( repository: string): Promise<string> {
   return loadWorkerPrompt(
     "refactor_scan:scan",
     { repository },
     promptReader,
-    { dbTemplate: ctx.db.getPrompt("refactor_scan:scan", "") },
   );
 }
 
-async function buildPlanPrompt(ctx: JobHandlerContext, finding: RefactorFinding, repository: string): Promise<string> {
+async function buildPlanPrompt( finding: RefactorFinding, repository: string): Promise<string> {
   return loadWorkerPrompt(
     "refactor_scan:plan",
     {
@@ -105,7 +104,6 @@ async function buildPlanPrompt(ctx: JobHandlerContext, finding: RefactorFinding,
       effort_score: String(finding.effort_score ?? "?"),
     },
     promptReader,
-    { dbTemplate: ctx.db.getPrompt("refactor_scan:plan", "") },
   );
 }
 
@@ -119,7 +117,7 @@ export function createRefactorScanHandler(deps: RefactorScanDeps): JobHandler {
     const repoPath = resolveRepoPath(repository);
     const cwd = repoPath ?? process.cwd();
 
-    const prompt = await buildScanPrompt(ctx, repository);
+    const prompt = await buildScanPrompt( repository);
     const output = await runCli(command, ["-p", prompt], cwd);
 
     const findings = parseFindings(output);
@@ -133,7 +131,7 @@ export function createRefactorScanHandler(deps: RefactorScanDeps): JobHandler {
     for (const f of ranked) {
       let planText = "";
       try {
-        const planPrompt = await buildPlanPrompt(ctx, f, repository);
+        const planPrompt = await buildPlanPrompt( f, repository);
         planText = await runCli(command, ["-p", planPrompt], cwd);
       } catch (err) {
         console.warn("[refactor-scan] plan generation failed for:", f.title, err);

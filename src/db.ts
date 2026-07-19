@@ -818,20 +818,6 @@ export class BridgeDb {
     return this.memories.getMemoryCount();
   }
 
-  getPrompt(name: string, fallback: string): string {
-    const row = this.raw.prepare("SELECT prompt_text FROM prompts WHERE name = ?").get(name) as { prompt_text: string } | undefined;
-    return row ? row.prompt_text : fallback;
-  }
-
-  setPrompt(name: string, promptText: string): void {
-    this.raw.prepare(
-      `INSERT INTO prompts (name, prompt_text)
-       VALUES (?, ?)
-       ON CONFLICT(name) DO UPDATE SET
-         prompt_text = excluded.prompt_text,
-         updated_at = CURRENT_TIMESTAMP`
-    ).run(name, promptText);
-  }
 
   close(): void {
     this.raw.close();

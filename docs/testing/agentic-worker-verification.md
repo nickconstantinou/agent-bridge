@@ -73,7 +73,7 @@ Cover:
 - malformed or unavailable required output fails closed;
 - no shell, file mutation, GitHub mutation, merge, deploy, secret, or service capability is reachable.
 
-### Prompt registry and override isolation
+### Prompt registry and source isolation
 
 Cover:
 
@@ -83,10 +83,11 @@ Cover:
 - changing one prompt does not change sibling prompt template hashes or contracts;
 - every canonical prompt declares its required render variables and missing inputs fail closed;
 - supplied context is bounded before rendering;
-- canonical role prompts ignore database prompt rows and always resolve `source: builtin`;
-- legacy database overrides remain available only to explicitly unmigrated compatibility handlers;
-- legacy override text cannot change role, mode, tools, permissions, budget, validator, repair count, or lifecycle authority;
-- unknown keys and incompatible legacy override inputs fail safely;
+- canonical and compatibility prompts resolve only from registered source-controlled files and report `source: builtin`;
+- the database prompt table, accessors, loader override options, and handler reads are absent;
+- schema migration 2 drops an absent or empty legacy table transactionally;
+- an unexpected populated table fails closed and preserves schema version 1 plus its rows for investigation;
+- unknown prompt keys and incompatible contract inputs fail safely;
 - compatibility aliases remain explicit and degraded;
 - stable source-template hash and invocation-specific rendered-content hash are distinguished and audit-safe;
 - raw repository context and sensitive prompt inputs are not stored in metadata-only audit.

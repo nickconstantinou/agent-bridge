@@ -35,7 +35,7 @@ Applies to a **new, additive** strict opener — provisionally `openProductionDb
 | `migratable` (`0 < user_version < CURRENT_SCHEMA_VERSION`, once multi-step migrations exist) | Auto-migrates | Fails closed with `MigrationRequiredError`, same as legacy |
 | `future` (`> CURRENT_SCHEMA_VERSION`) | Fails closed before WAL, connection closed, `UnsupportedSchemaVersionError` | Same — this is already correct in `openDb()` today and `openProductionDb()` inherits it unchanged |
 | Negative / non-integer | Fails closed before WAL (per PR #147 round-2 review fix) | Same |
-| **Missing file** | Creates the file (`new Database(dbPath)`'s default mode), applies migration 1's full DDL, ends at `CURRENT_SCHEMA_VERSION` — this is already correct and already tested (`dbSchema.test.ts`'s "keeps a fresh database at the current version" case) and is the mechanism bootstrap reuses (§3) | `{ fileMustExist: true }` — fails closed with a distinct `DatabaseMissingError`. No directory or file is created by production service startup, ever. |
+| **Missing file** | Creates the file (`new Database(dbPath)`'s default mode), applies the complete registered migration plan, and ends at `CURRENT_SCHEMA_VERSION` — this is already correct and already tested (`dbSchema.test.ts`'s "keeps a fresh database at the current version" case) and is the mechanism bootstrap reuses (§3) | `{ fileMustExist: true }` — fails closed with a distinct `DatabaseMissingError`. No directory or file is created by production service startup, ever. |
 
 ## 3. Rollout-time behaviour matrix
 

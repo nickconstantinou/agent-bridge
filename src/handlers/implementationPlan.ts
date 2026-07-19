@@ -32,7 +32,7 @@ const GH_ISSUE = "issue";
 const GH_VIEW = "view";
 const GH_COMMENT = "comment";
 
-async function buildCreatePrompt(ctx: JobHandlerContext, input: WorkItem): Promise<string> {
+async function buildCreatePrompt( input: WorkItem): Promise<string> {
   return loadWorkerPrompt(
     "implementation_plan:create",
     {
@@ -43,11 +43,10 @@ async function buildCreatePrompt(ctx: JobHandlerContext, input: WorkItem): Promi
       body: input.body ?? "(none)",
     },
     promptReader,
-    { dbTemplate: ctx.db.getPrompt("implementation_plan:create", "") },
   );
 }
 
-async function buildImprovePrompt(ctx: JobHandlerContext, planText: string, missing: string[]): Promise<string> {
+async function buildImprovePrompt( planText: string, missing: string[]): Promise<string> {
   return loadWorkerPrompt(
     "implementation_plan:improve",
     {
@@ -56,16 +55,14 @@ async function buildImprovePrompt(ctx: JobHandlerContext, planText: string, miss
       plan_text: planText,
     },
     promptReader,
-    { dbTemplate: ctx.db.getPrompt("implementation_plan:improve", "") },
   );
 }
 
-async function buildContractRepairPrompt(ctx: JobHandlerContext, planText: string): Promise<string> {
+async function buildContractRepairPrompt( planText: string): Promise<string> {
   return loadWorkerPrompt(
     "implementation_plan:contract_repair",
     { planText, plan_text: planText },
     promptReader,
-    { dbTemplate: ctx.db.getPrompt("implementation_plan:contract_repair", "") },
   );
 }
 
@@ -153,7 +150,7 @@ export function createImplementationPlanHandler(deps: ImplementationPlanDeps): J
     const canonicalItem = await refreshFromLinkedGithubIssue(item, ctx, runCommand);
 
     const cwd = canonicalItem.repository ? resolveRepoPath(canonicalItem.repository) ?? process.cwd() : process.cwd();
-    let planText = await runCli(command, ["--print", "--output-format", "text", await buildCreatePrompt(ctx, canonicalItem)], cwd);
+    let planText = await runCli(command, ["--print", "--output-format", "text", await buildCreatePrompt( canonicalItem)], cwd);
     let quality = validateImplementationPlan(planText);
     let contractResult = extractExecutionContract(planText);
 
@@ -162,7 +159,7 @@ export function createImplementationPlanHandler(deps: ImplementationPlanDeps): J
         ...quality.missing,
         ...(contractResult.ok ? [] : [`missing or invalid execution contract: ${contractResult.error}`]),
       ];
-      planText = await runCli(command, ["--print", "--output-format", "text", await buildImprovePrompt(ctx, planText, missing)], cwd);
+      planText = await runCli(command, ["--print", "--output-format", "text", await buildImprovePrompt( planText, missing)], cwd);
       quality = validateImplementationPlan(planText);
       contractResult = extractExecutionContract(planText);
     }
@@ -174,7 +171,7 @@ export function createImplementationPlanHandler(deps: ImplementationPlanDeps): J
     ) {
       const contractSection = await runCli(
         command,
-        ["--print", "--output-format", "text", await buildContractRepairPrompt(ctx, planText)],
+        ["--print", "--output-format", "text", await buildContractRepairPrompt( planText)],
         cwd,
       );
       const repairedPlanText = `${planText.trim()}\n\n${contractSection.trim()}`;

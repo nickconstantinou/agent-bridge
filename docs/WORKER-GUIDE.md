@@ -2,7 +2,7 @@
 
 The worker bot turns feature requests, defect reports, refactor opportunities, imported GitHub issues, and repository scans into validated issues, implementation plans, tested draft pull requests, and current documentation.
 
-Agent Bridge orchestrates the work. It assigns authenticated CLIs and models to three roles while retaining authoritative state, permissions, deterministic gates, and human approvals.
+Agent Bridge orchestrates the work. It assigns authenticated CLIs and models to three roles while retaining authoritative state, prompts, permissions, deterministic gates, and human approvals.
 
 ## The three roles
 
@@ -18,7 +18,7 @@ Scanner is a Code Worker mode. Independent review and operations are Technical L
 
 Nothing merges, deploys, changes secrets or permissions, or performs a destructive operation without the existing explicit human gate.
 
-Models do not own workflow state, role selection, permissions, or approval. Agent Bridge owns those boundaries.
+Models do not own workflow state, role selection, prompts, validators, permissions, or approval. Agent Bridge owns those boundaries.
 
 ## Workflow at a glance
 
@@ -27,10 +27,10 @@ Feature request, defect/refactor report, imported issue, or scan finding
 → requirements discovery or validation
 → canonical issue
 → requirements_ready
-→ Technical Lead implementation plan
+→ Technical Lead implementation plan and comprehensive red-test contract
 → documentation impact
 → approval when required
-→ Code Worker red tests and green implementation
+→ Code Worker implements the approved red tests and green change
 → deterministic verification
 → Technical Lead implementation and operations review
 → Documentation Steward updates and validation
@@ -68,7 +68,7 @@ Existing commands remain the user entry points:
 | `/issues` | List candidate, requirements, approved, and held work items with available actions. |
 | `/issue <id>` | Show one work item, validation status, decisions, plan, and linked GitHub state. |
 | `/jobs` | List active, pending, blocked, and resumable jobs. |
-| `/job <id>` | Show phase, owner, lease, role target, attempts, evidence, and errors. |
+| `/job <id>` | Show phase, owner, lease, role target, prompt contract, attempts, evidence, and errors. |
 | `/approvals` | Re-list pending human decisions, merge approvals, and policy exceptions. |
 | `/models` | Show models exposed by the active interactive CLI. |
 | `/chain` | Show legacy chain compatibility plus effective role targets. |
@@ -83,12 +83,13 @@ Role assignment may also be managed through the hosted platform or the OSS confi
 2. The Technical Lead reads bounded repository and documentation evidence.
 3. If the issue is clear, it is validated without unnecessary questions. If a product decision is missing, the item pauses for your answer.
 4. The worker records a canonical feature issue and marks it `requirements_ready`.
-5. The Technical Lead creates a repository-grounded plan, bounded Code Worker packets, execution contract, risks, verification, and documentation obligations.
-6. After required approval, the Code Worker creates a disposable workspace and performs strict red-green-refactor TDD.
-7. Deterministic verification runs before model review.
-8. The Technical Lead reviews requirement satisfaction and operational impact.
-9. The Documentation Steward updates required documents under a documentation-only path policy.
-10. A draft PR opens and the existing CI/head-SHA merge gate requests approval.
+5. The Technical Lead creates a repository-grounded plan, bounded Code Worker packets, execution contract, risks, verification, documentation obligations, and comprehensive red-test specifications.
+6. The plan validator rejects generic instructions such as `write tests`; each red test must identify the product/architectural intent, production boundary, fixture, real caller action, expected observable result, why current code fails, focused command, authoritative oracle, and sibling behaviour remaining green.
+7. After required approval, the Code Worker creates a disposable workspace and implements the exact approved red-test packet before the green change.
+8. Deterministic verification runs before model review.
+9. The Technical Lead reviews requirement satisfaction, test-contract completion, and operational impact.
+10. The Documentation Steward updates required documents under a documentation-only path policy.
+11. A draft PR opens and the existing CI/head-SHA merge gate requests approval.
 
 ## Typical scan session
 
@@ -113,7 +114,7 @@ Each role binds:
 - ordered fallbacks;
 - permission profile;
 - call/time budget;
-- structured contracts.
+- prompt and structured-output contracts.
 
 Assignment modes:
 
@@ -129,7 +130,7 @@ One CLI is sufficient. Agent Bridge selects a model separately for the Technical
 
 ### One available model
 
-One model can serve every role using separate sessions, prompts, permissions, budgets, and audit. Status reports:
+One model can serve every role using separate sessions, prompts, validators, permissions, budgets, and audit. Status reports:
 
 ```text
 Role separation: preserved
@@ -138,6 +139,34 @@ Independent-model review: unavailable
 ```
 
 Work continues unless repository policy requires model-independent review for the detected risk.
+
+## Prompt contracts and overrides
+
+Prompts are separate by role, mode, and repair purpose. The full Technical Lead planning prompt is not reused for requirements, review, operations, code execution, or documentation. Focused red-test repair and execution-contract repair also use distinct keys.
+
+Agent Bridge selects the prompt contract and separately enforces:
+
+- role and mode;
+- typed input/output schemas;
+- validator;
+- evidence/tool grants;
+- permission profile;
+- logical-call and repair budgets;
+- lifecycle ownership.
+
+A prompt or database override cannot change those controls.
+
+The canonical registry includes separate prompts for:
+
+- Technical Lead requirements, validation, issue authoring, planning, red-test repair, execution-contract repair, guidance, implementation review, operations review, and readiness;
+- Code Worker defect/refactor scans, investigation, red, green, repair, and verification;
+- Documentation Steward impact, authoring, validation, and maintenance.
+
+Existing named prompt templates remain explicit compatibility aliases while legacy phases are active. Database overrides replace prompt text only and must match a registered key and compatible contract version. They remain subject to the built-in validator and permission/tool policy.
+
+Effective status and audit report prompt key, contract version, source, and content hash without exposing raw sensitive context.
+
+Canonical prompt design: `docs/architecture/agentic-prompt-contracts.md`.
 
 ## Permission behaviour
 
@@ -148,7 +177,7 @@ Read-only typed evidence tools. No file mutation, unrestricted shell, GitHub mut
 ### Code Worker
 
 - scan/investigate: read-only;
-- red: test-only mutation and expected failing test;
+- red: test-only mutation implementing the approved `RedTestSpec` and expected failing assertion;
 - green: production mutation without changing committed red tests;
 - repair: bounded to the approved packet;
 - verify: approved commands and evidence without new changes.
@@ -169,6 +198,7 @@ The effective status shows:
 - requested and effective CLI/model per role;
 - fallbacks and configuration source;
 - authentication and model probe state;
+- prompt key/version/source/hash;
 - permission profile;
 - logical-call and timeout budgets;
 - model-diversity and review-independence state;
@@ -179,12 +209,14 @@ Status and probes are read-only. Reconciliation is a separate explicit action.
 
 ## Failure and recovery
 
-- Structured issue, plan, review, and documentation output is validated before persistence.
+- Structured issue, plan, red-test, review, and documentation output is validated before persistence.
+- A plan that says only `write tests` or omits product/architectural intent fails validation.
+- An otherwise valid plan with only an inadequate red-test contract may receive one focused red-test repair; execution-contract repair remains separate.
 - Required malformed output receives only the configured bounded repair and otherwise fails closed.
 - Failed executor work remains bounded; no open-ended model loop is allowed.
 - Cancellation prevents new role calls and fences late output.
 - Lost leases and stale workers cannot persist or dispatch duplicate calls.
-- Restart resumes from authoritative durable phase state and preserves task budgets.
+- Restart resumes from authoritative durable phase state and preserves task budgets and prompt contract identity.
 - Completed phases are not repeated.
 - Missing Technical Lead, Code Worker, or required Documentation Steward capability produces an explicit blocked/degraded state.
 - Existing disposable-workspace cleanup, supervisor, head-SHA, CI, and merge protections remain active.
@@ -195,13 +227,21 @@ Operations and rollback: `docs/operations/agentic-worker-runbook.md`.
 
 `agentic-maintenance.yaml` lists canonical documents and deterministic change triggers. A PR cannot become ready until required documents are current or a validated `no_documentation_change` result records rationale and trigger evaluation.
 
-The Documentation Steward is expected to maintain README/user entry points, AGENTS policy signposting, architecture, ADRs, configuration, operations, testing, and maintenance documents as applicable.
+The Documentation Steward is expected to maintain README/user entry points, AGENTS policy signposting, architecture, prompt contracts, ADRs, configuration, operations, testing, and maintenance documents as applicable.
 
 ## Troubleshooting
 
 ### Work never reaches planning
 
 Inspect `/issue <id>` for missing facts, unresolved decisions, validation errors, or the `requirements_ready` state. A blocked product decision requires human input; missing repository facts should be gathered by the Technical Lead.
+
+### Plan rejected for red-test quality
+
+Inspect the typed validation errors. The plan must cover every acceptance criterion and affected architectural/risk boundary. A focused red-test repair is allowed only when the rest of the plan is valid.
+
+### Prompt override rejected
+
+Check the registered key, contract version, required inputs/placeholders, and effective source. An override cannot select a sibling mode or weaken the built-in schema, validator, tools, permissions, or budgets.
 
 ### Scan produced no implementation job
 
@@ -221,7 +261,7 @@ Inspect the documentation impact and manifest trigger evaluation. Configure a Do
 
 ### Job stuck or restarted
 
-Use `/job <id>` to inspect the authoritative owner, lease, role attempt, and phase. Do not manually force status. Follow the worker lifecycle and operations runbook.
+Use `/job <id>` to inspect the authoritative owner, lease, role attempt, prompt contract, and phase. Do not manually force status. Follow the worker lifecycle and operations runbook.
 
 ### Lost approval controls
 
@@ -231,8 +271,9 @@ Use `/approvals`; the approval remains pending while blocking evidence is unreso
 
 - assume a brief, imported issue, or scan finding is complete;
 - plan before validated requirements;
+- accept vague test instructions instead of a comprehensive red-test contract;
 - let a scan agent approve its own finding;
-- let models expand permissions or scope;
+- let prompts or models expand permissions or scope;
 - mutate live checkouts for implementation;
 - weaken red/green separation;
 - claim readiness over failed deterministic evidence;
@@ -244,10 +285,12 @@ Use `/approvals`; the approval remains pending while blocking evidence is unreso
 
 - Architecture: `docs/architecture/engineering-worker.md`
 - Role orchestration: `docs/architecture/agentic-worker-orchestration.md`
+- Prompt contracts: `docs/architecture/agentic-prompt-contracts.md`
 - Maintenance workflow: `docs/agentic-maintenance.md`
 - Configuration: `docs/configuration/agent-role-assignment.md`
 - Operations: `docs/operations/agentic-worker-runbook.md`
 - Testing: `docs/testing/agentic-worker-verification.md`
-- Decision: `docs/decisions/ADR-009-role-based-agentic-orchestration.md`
-- Implementation plan: `docs/implementation-plans/issue-159-role-based-orchestration.md`
+- Decision: `docs/adr/ADR-005-role-based-agentic-orchestration.md`
+- Epic plan: `docs/implementation-plans/issue-159-role-based-orchestration.md`
+- Prompt/red-test addendum: `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md`
 - Document registry: `agentic-maintenance.yaml`

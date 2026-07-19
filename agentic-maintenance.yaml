@@ -1,0 +1,160 @@
+version: 1
+status: canonical
+
+roles:
+  technical_lead:
+    modes:
+      - requirements
+      - issue_validation
+      - issue_authoring
+      - planning
+      - executor_guidance
+      - implementation_review
+      - operations_review
+      - pr_readiness
+    default_permission: advisor_read_only
+  code_worker:
+    modes:
+      - scan
+      - investigate
+      - red
+      - green
+      - repair
+      - verify
+    permissions:
+      scan: repository_read_only
+      investigate: repository_read_only
+      red: test_only_mutation
+      green: worktree_mutation
+      repair: bounded_worktree_mutation
+      verify: verification_only
+  documentation_steward:
+    modes:
+      - impact
+      - author
+      - validate
+      - maintenance
+    permissions:
+      impact: repository_read_only
+      author: documentation_only
+      validate: repository_read_only
+      maintenance: documentation_only
+
+canonical_documents:
+  entry_point:
+    - README.md
+  agent_policy:
+    - AGENTS.md
+  maintenance:
+    - docs/agentic-maintenance.md
+  worker_user_guide:
+    - docs/WORKER-GUIDE.md
+  architecture:
+    - docs/architecture/engineering-worker.md
+    - docs/architecture/agentic-worker-orchestration.md
+    - docs/architecture/03-target-architecture.md
+  decisions:
+    - docs/decisions/ADR-009-role-based-agentic-orchestration.md
+  configuration:
+    - docs/configuration/agent-role-assignment.md
+  operations:
+    - docs/operations/agentic-worker-runbook.md
+  testing:
+    - docs/testing/agentic-worker-verification.md
+    - docs/architecture/08-testing-strategy.md
+  production_readiness:
+    - docs/architecture/10-production-readiness.md
+  implementation_plan:
+    - docs/implementation-plans/issue-159-role-based-orchestration.md
+
+documentation_paths:
+  allow:
+    - README.md
+    - AGENTS.md
+    - "docs/**"
+    - agentic-maintenance.yaml
+  deny:
+    - "src/**"
+    - "test/**"
+    - "scripts/**"
+    - "systemd/**"
+    - "package.json"
+    - "package-lock.json"
+
+change_triggers:
+  role_contract:
+    required:
+      - maintenance
+      - architecture
+      - decisions
+      - configuration
+      - testing
+  requirements_or_issue_schema:
+    required:
+      - maintenance
+      - worker_user_guide
+      - testing
+  provider_or_model_selection:
+    required:
+      - configuration
+      - architecture
+      - operations
+      - testing
+  permission_profile:
+    required:
+      - agent_policy
+      - architecture
+      - operations
+      - testing
+  workflow_state_or_lifecycle:
+    required:
+      - maintenance
+      - architecture
+      - operations
+      - testing
+      - production_readiness
+  database_schema_or_migration:
+    required:
+      - architecture
+      - operations
+      - testing
+      - production_readiness
+  service_or_deployment:
+    required:
+      - operations
+      - production_readiness
+  user_command_or_status_surface:
+    required:
+      - entry_point
+      - worker_user_guide
+      - configuration
+  documentation_policy:
+    required:
+      - agent_policy
+      - maintenance
+      - testing
+
+readiness:
+  require_documentation_impact: true
+  allow_no_documentation_change: true
+  no_documentation_change_requires:
+    - rationale
+    - technical_lead_validation
+    - manifest_trigger_evaluation
+  block_on_missing_required_document: true
+
+independence:
+  preference_order:
+    - different_cli_and_model
+    - different_model_same_cli
+    - fresh_session_technical_lead
+    - same_target_non_independent
+  report_degradation: true
+
+human_gates:
+  - unresolved_product_decision
+  - merge
+  - destructive_operation
+  - production_deployment
+  - secret_or_permission_change
+  - policy_exception

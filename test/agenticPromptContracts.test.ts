@@ -32,9 +32,23 @@ const EXPECTED_KEYS: AgenticPromptKey[] = [
   "documentation_steward:maintenance",
 ];
 
+const reader = {
+  readText: async (path: string) => readFileSync(resolve(process.cwd(), path), "utf8"),
+};
+
 function readPrompt(key: AgenticPromptKey): string {
   const contract = getAgenticPromptContract(key);
   return readFileSync(resolve(process.cwd(), contract.filePath), "utf8");
+}
+
+function requirementsVariables(request: string): Record<string, string> {
+  return {
+    repository: "owner/repo",
+    request,
+    source_context: "Imported issue",
+    evidence_catalog: "E-1: current repository evidence",
+    known_decisions: "No accepted decisions yet",
+  };
 }
 
 describe("agentic role prompt contracts", () => {
@@ -45,25 +59,60 @@ describe("agentic role prompt contracts", () => {
 
     for (const key of EXPECTED_KEYS) {
       const contract = getAgenticPromptContract(key);
+      const prompt = readPrompt(key);
+      const placeholders = [...prompt.matchAll(/\$?\{([A-Za-z0-9_]+)\}/g)].map(match => match[1]);
+
       expect(contract.version).toBe(1);
       expect(contract.source).toBe("builtin");
       expect(contract.allowDatabaseOverride).toBe(false);
-      expect(readPrompt(key).trim().length, key).toBeGreaterThan(120);
+      expect(prompt.trim().length, key).toBeGreaterThan(120);
+      expect(new Set(placeholders), `${key} placeholder contract`).toEqual(new Set(contract.requiredVariables));
     }
   });
 
-  it("loads a deterministic built-in prompt and records its content hash", async () => {
-    const loaded = await loadAgenticPrompt(
+  it("records stable template identity separately from rendered invocation identity", async () => {
+    const first = await loadAgenticPrompt(
       "technical_lead:requirements",
-      { request: "Add role-aware planning", repository: "owner/repo" },
-      { readText: async (path) => readFileSync(resolve(process.cwd(), path), "utf8") },
+      requirementsVariables("Add role-aware planning"),
+      reader,
+    );
+    const second = await loadAgenticPrompt(
+      "technical_lead:requirements",
+      requirementsVariables("Investigate a queue defect"),
+      reader,
     );
 
-    expect(loaded.key).toBe("technical_lead:requirements");
-    expect(loaded.version).toBe(1);
-    expect(loaded.source).toBe("builtin");
-    expect(loaded.content).toContain("Add role-aware planning");
-    expect(loaded.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(first.key).toBe("technical_lead:requirements");
+    expect(first.version).toBe(1);
+    expect(first.source).toBe("builtin");
+    expect(first.content).toContain("Add role-aware planning");
+    expect(first.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(first.renderedContentHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(first.contentHash).toBe(second.contentHash);
+    expect(first.renderedContentHash).not.toBe(second.renderedContentHash);
+  });
+
+  it("fails closed when a required prompt input is absent", async () => {
+    await expect(loadAgenticPrompt(
+      "technical_lead:requirements",
+      { repository: "owner/repo", request: "Incomplete context" },
+      reader,
+    )).rejects.toThrow(
+      "Missing required variables for technical_lead:requirements: source_context, evidence_catalog, known_decisions",
+    );
+  });
+
+  it("bounds supplied prompt context before rendering", async () => {
+    const loaded = await loadAgenticPrompt(
+      "technical_lead:requirements",
+      {
+        ...requirementsVariables("A".repeat(20_000)),
+      },
+      reader,
+    );
+
+    expect(loaded.content).toContain("[truncated 4000 chars for worker prompt budget]");
+    expect(loaded.content.length).toBeLessThan(20_000);
   });
 
   it("requires Technical Lead planning to cover product, architecture, and triggered risks", () => {

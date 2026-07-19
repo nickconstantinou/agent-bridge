@@ -102,6 +102,18 @@ describe("agentic role prompt contracts", () => {
     );
   });
 
+  it("treats null or undefined required prompt inputs as missing", async () => {
+    for (const value of [null, undefined]) {
+      await expect(loadAgenticPrompt(
+        "technical_lead:requirements",
+        { ...requirementsVariables("Incomplete context"), known_decisions: value },
+        reader,
+      )).rejects.toThrow(
+        "Missing required variables for technical_lead:requirements: known_decisions",
+      );
+    }
+  });
+
   it("bounds supplied prompt context before rendering", async () => {
     const loaded = await loadAgenticPrompt(
       "technical_lead:requirements",

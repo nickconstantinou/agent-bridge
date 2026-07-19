@@ -9,6 +9,9 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 - [ ] Agent Bridge owns transitions, permissions, budgets, approvals, and audit
 - [ ] Technical Lead uses the authoritative AdvisorService boundary
 - [ ] Provider/model capability and role resolution are registry-driven
+- [ ] One central prompt registry owns role/mode contracts
+- [ ] One central lifecycle-skill registry owns extraction, version checks, budgets, composition, and hashes
+- [ ] Requirements, risk-based testing, TDD, and release readiness have one canonical skill source each
 - [ ] Role, audit, and lifecycle SQL is confined to owning repositories
 - [ ] Companion and worker architecture boundaries remain green
 - [ ] `agentic-maintenance.yaml` references existing canonical documents
@@ -21,6 +24,7 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 - [ ] `requirements_ready` is durable and restart-safe
 - [ ] Product decisions pause for human input
 - [ ] Technical Lead plans trace acceptance criteria and produce bounded work packets
+- [ ] Planning receives the canonical requirements, risk-based testing, and TDD skill set
 - [ ] Structured output and bounded repair fail closed before persistence
 - [ ] Legacy scribe planning is explicit compatibility behaviour only
 
@@ -30,7 +34,7 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 - [ ] Automatic, recommended, and manual assignment work
 - [ ] Ordered fallbacks and configuration source are visible
 - [ ] One CLI can assign different models to different roles
-- [ ] One model preserves role/session/permission separation
+- [ ] One model preserves role/session/prompt/skill/permission separation
 - [ ] Model diversity and independent-review degradation are accurate
 - [ ] Role test probes are non-mutating and freshness-aware
 
@@ -43,6 +47,7 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 - [ ] Documentation author mode is restricted to manifest-approved paths
 - [ ] Capability tokens expire on completion, cancellation, timeout, and lease loss
 - [ ] Child environments strip credentials not required by the role mode
+- [ ] Prompt and skill text cannot grant tools, permissions, budgets, lifecycle authority, or human-gate exceptions
 - [ ] Status, probes, and audit contain no secrets or unrestricted prompt content
 
 ## Reliability and lifecycle
@@ -53,6 +58,9 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 - [ ] Completed role phases are not repeated
 - [ ] Lease loss/stale owner cannot dispatch or persist duplicate calls
 - [ ] Logical-call budgets survive retry and restart
+- [ ] Prompt key/version, role-template hash, lifecycle skill identities, skill-set hash, composed-template hash, and rendered hash remain bound to each logical call
+- [ ] Provider fallback preserves the same prompt and lifecycle-skill identities
+- [ ] Missing, malformed, duplicate, oversized, or version-mismatched skill guidance fails closed before a model call
 - [ ] Provider and model probes are revalidated when stale
 - [ ] Role routing rollback preserves new records and holds incompatible jobs safely
 
@@ -60,6 +68,8 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 
 - [ ] Disposable workspaces remain mandatory
 - [ ] Mechanical red/green commit separation remains active
+- [ ] Red and green modes consume the canonical TDD skill rather than a copied supplement
+- [ ] Red mode also receives canonical risk-based testing guidance
 - [ ] Deterministic focused and broad verification precedes review
 - [ ] Scope expansion is rejected or returned for new planning
 - [ ] PR head-SHA, CI, and merge approval gates remain unchanged
@@ -75,7 +85,9 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 
 ## Operations
 
-- [ ] Effective role/status surface reports targets, models, permissions, fallbacks, source, and degradation
+- [ ] Implementation and PR-readiness review consume the canonical risk/readiness skill mapping
+- [ ] Operations review consumes canonical release-readiness guidance
+- [ ] Effective role/status surface reports targets, models, permissions, fallbacks, prompt/skill identities, source, and degradation
 - [ ] Safe enablement completed in a disposable workspace
 - [ ] Operator runbook covers enablement, degradation, cancellation, restart, incident, and rollback
 - [ ] Deployment/rollback plan identifies prerequisites, abort conditions, postconditions, and exact evidence
@@ -83,7 +95,11 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 
 ## Verification
 
-- [ ] Focused role, workflow, permission, lifecycle, migration, and platform tests pass
+- [ ] Every canonical skill has exactly one marked runtime block and matching manifest version
+- [ ] Every role/mode and compatibility prompt declares an explicit skill mapping
+- [ ] Skill drift changes only consuming composed/rendered identities
+- [ ] Compatibility and role-native prompts use the same canonical skill loader
+- [ ] Focused role, prompt, skill, workflow, permission, lifecycle, migration, and platform tests pass
 - [ ] Full suite passes at exact head
 - [ ] Typecheck passes
 - [ ] Architecture Lint passes
@@ -96,6 +112,7 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 ## Recovery
 
 - [ ] Database migration and rollback verified on representative existing worker databases
+- [ ] Prompt and lifecycle-skill rollback is reproducible through an exact reviewed application SHA
 - [ ] Role configuration can be disabled without deleting assignments or audit
 - [ ] Legacy routing is restored only through explicit validated configuration
 - [ ] Jobs using incompatible new states are held for human review

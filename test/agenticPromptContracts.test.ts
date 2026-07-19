@@ -12,6 +12,7 @@ const EXPECTED_KEYS: AgenticPromptKey[] = [
   "technical_lead:requirements",
   "technical_lead:issue_validation",
   "technical_lead:issue_authoring",
+  "technical_lead:decomposition_review",
   "technical_lead:planning",
   "technical_lead:planning_repair:execution_contract",
   "technical_lead:planning_repair:red_tests",
@@ -127,7 +128,7 @@ describe("agentic role prompt contracts", () => {
     expect(loaded.content.length).toBeLessThan(20_000);
   });
 
-  it("requires Technical Lead planning to cover product, architecture, and triggered risks", () => {
+  it("requires Technical Lead planning to cover product, architecture, triggered risks, and path provenance", () => {
     const prompt = readPrompt("technical_lead:planning");
     for (const requirement of [
       "requirement_ids",
@@ -144,11 +145,66 @@ describe("agentic role prompt contracts", () => {
       "acceptance_coverage",
       "architecture_coverage",
       "triggered_risk_coverage",
+      "classification",
+      "existing_at_base",
+      "existing_in_dependency",
+      "proposed_new_production",
+      "proposed_new_test",
+      "dependency_ref",
     ]) {
       expect(prompt, requirement).toContain(requirement);
     }
     expect(prompt).toMatch(/write tests|add tests/i);
     expect(prompt).toMatch(/invalid|reject|must not/i);
+  });
+
+  it("requires a bundle-wide decomposition review before issue mutation", () => {
+    const prompt = readPrompt("technical_lead:decomposition_review");
+    for (const requirement of [
+      "ready_for_issue_mutation",
+      "implementation_delivery_order",
+      "runtime_phase_order",
+      "invariant_matrix",
+      "ownership_and_caller_conflicts",
+      "state_and_lifecycle_authority_conflicts",
+      "platform_appliance_authority_conflicts",
+      "required_bundle_repairs",
+    ]) {
+      expect(prompt, requirement).toContain(requirement);
+    }
+    expect(prompt).toMatch(/before any GitHub issue mutation/i);
+  });
+
+  it("enforces review-before-documentation and exact-head invalidation", () => {
+    const implementationReview = readPrompt("technical_lead:implementation_review");
+    const documentationAuthor = readPrompt("documentation_steward:author");
+    const documentationValidate = readPrompt("documentation_steward:validate");
+    const readiness = readPrompt("technical_lead:pr_readiness");
+
+    expect(implementationReview).toContain("subject_head_sha");
+    expect(implementationReview).toContain("ready_for_documentation");
+    expect(implementationReview).not.toContain("{documentation_evidence}");
+    expect(documentationAuthor).toContain("{accepted_review_evidence}");
+    expect(documentationAuthor).toContain("{subject_head_sha}");
+    expect(documentationValidate).toContain("{accepted_review_evidence}");
+    expect(documentationValidate).toContain("{subject_head_sha}");
+    expect(readiness).toContain("{subject_head_sha}");
+    expect(readiness).toContain("not_scheduled");
+    expect(readiness).toMatch(/code-changing repair|different head|same `subject_head_sha`/i);
+  });
+
+  it("makes stale required documentation a blocking condition", () => {
+    for (const key of [
+      "technical_lead:planning",
+      "technical_lead:pr_readiness",
+      "documentation_steward:author",
+      "documentation_steward:validate",
+      "documentation_steward:maintenance",
+    ] as const) {
+      const prompt = readPrompt(key);
+      expect(prompt, key).toMatch(/stale/i);
+      expect(prompt, key).toMatch(/block|cannot be deferred|do not defer|same delivery/i);
+    }
   });
 
   it("keeps red-test and execution-contract repairs section-specific", () => {
@@ -184,6 +240,8 @@ describe("agentic role prompt contracts", () => {
       expect(prompt).toContain("real caller");
       expect(prompt).toContain("authoritative oracle");
       expect(prompt).toContain("sibling behaviour");
+      expect(prompt).toContain("classification");
+      expect(prompt).toContain("dependency_ref");
     }
   });
 });

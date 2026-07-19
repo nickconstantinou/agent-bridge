@@ -14,9 +14,10 @@ Use this skill before implementation when the requested outcome is ambiguous, cr
 2. Identify assumptions, constraints, and known unknowns.
 3. Separate goals from non-goals.
 4. Convert the goal into acceptance criteria that can be tested or manually verified.
-5. Name the verification steps before implementation begins.
+5. When one request is decomposed into multiple issues, assemble the complete proposed issue bundle before mutation and audit it against one canonical invariant table. Check implementation dependency order separately from runtime phase order, ownership, state/lifecycle authority, permissions, persistence, GitHub authority, and cross-system authority.
+6. Name the verification steps before implementation begins.
 
-Ask a concise question only when a missing answer would make a reasonable implementation risky. Otherwise, state the assumption and continue.
+Ask a concise question only when a missing answer would make a reasonable implementation risky. Otherwise, state the assumption and continue. Do not mutate issue records until a multi-issue bundle is internally consistent.
 
 ## Output Shape
 

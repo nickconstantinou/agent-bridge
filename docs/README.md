@@ -2,7 +2,16 @@
 
 Status: canonical documentation index.
 
-Validated against: `agent/role-based-worker-orchestration-docs` for the Issue #159 target-state, prompt-foundation implementation, and completed prompt-storage retirement.
+Validated against: Slice 1 branch `agent/issue-161-role-assignment-persistence` for dormant role-assignment validation, schema-version-3 persistence, guarded migration qualification, and truthful `/chain` status. PR #160 remains the target-state authority for later role routing and orchestration slices.
+
+## Current Issue #159 implementation boundary
+
+The delivered foundation now has two layers:
+
+1. **Slice 0 / prompt foundation:** canonical three-role contracts, role/mode prompts, lifecycle policy, documentation ownership, and source-only prompt resolution.
+2. **Slice 1 / dormant role persistence:** exact role assignments can be validated, versioned, persisted, reopened, and displayed as `configured_dormant`.
+
+Slice 1 does **not** activate capability resolution, role routing, permission profiles, role-native prompts, review-target selection, or any later-slice lifecycle. Existing worker interactive, code, and scribe chains remain the effective dispatch policy. See `docs/configuration/agent-role-assignment.md` for the exact current configuration and compatibility contract.
 
 ## Authority order
 
@@ -57,7 +66,7 @@ last_validated_against: <commit-sha-or-branch>
 6. `docs/roadmap/issue-159-role-based-orchestration.md` — active implementation roadmap and delivered prompt/storage foundation.
 7. `docs/implementation-plans/issue-159-role-based-orchestration.md` — epic coding-agent handoff and delivery slices.
 8. `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md` — normative prompt and comprehensive red-test addendum.
-9. `docs/configuration/agent-role-assignment.md` — CLI/model allocation and degraded operation.
+9. `docs/configuration/agent-role-assignment.md` — current dormant assignment configuration plus later target state.
 10. `docs/operations/agentic-worker-runbook.md` — enablement, recovery, and rollback.
 11. `docs/testing/agentic-worker-verification.md` — verification contract.
 12. `agentic-maintenance.yaml` — machine-readable document registry and triggers.
@@ -94,17 +103,19 @@ last_validated_against: <commit-sha-or-branch>
 | `docs/roadmap/epic-11-runtime-hardening.md` | implemented-record | historical/advisory | Completed runtime-hardening roadmap retained as delivery history. |
 | `docs/roadmap/issue-69-compact-memory-handoff.md` | active-roadmap | canonical | TDD implementation plan for compact-first memory and one-time CLI handoff context. |
 | `docs/roadmap/issue-69-coding-agent-prompt.md` | active-roadmap | advisory | Ready-to-use implementation prompt; subordinate to architecture and roadmap docs. |
-| `docs/roadmap/issue-159-role-based-orchestration.md` | active-roadmap, partially implemented | canonical | Prompt foundation and legacy prompt-storage retirement delivered; remaining role orchestration tracked by slices. |
+| `docs/roadmap/issue-159-role-based-orchestration.md` | active-roadmap, partially implemented | canonical | Prompt foundation, prompt-storage retirement, and dormant role persistence delivered; routing remains a later slice. |
 | `docs/implementation-plans/issue-159-role-based-orchestration.md` | detailed implementation handoff | advisory under roadmap | Minimal-change delivery slices, red-test catalogue, migration, rollout, verification, and execution contract. |
 | `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md` | normative implementation addendum | advisory under roadmap | Prompt separation, comprehensive advisor-authored red-test requirements, and completed database-override removal. |
 | `docs/agentic-maintenance.md` | authoritative workflow | canonical | Feature, defect, refactor, planning, prompt, and completion contracts. |
-| `docs/configuration/agent-role-assignment.md` | authoritative configuration | canonical | Role CLI/model allocation, fallbacks, and degraded operation. |
-| `docs/operations/agentic-worker-runbook.md` | authoritative operations | canonical | Role enablement, status, cancellation, recovery, and rollback. |
-| `docs/testing/agentic-worker-verification.md` | authoritative testing | canonical | Detailed role, prompt, planning, lifecycle, and rollout verification contract. |
+| `docs/configuration/agent-role-assignment.md` | authoritative configuration | canonical | Current dormant role persistence/status and later CLI/model allocation target state. |
+| `docs/operations/agentic-worker-runbook.md` | authoritative operations | canonical | Role enablement, status, cancellation, recovery, migration, and rollback. |
+| `docs/testing/agentic-worker-verification.md` | authoritative testing | canonical | Detailed role, prompt, planning, lifecycle, migration, and rollout verification contract. |
 | `agentic-maintenance.yaml` | machine-readable policy | canonical | Canonical documents, triggers, authoring paths, readiness, prompt changes, and role modes. |
 | `src/agenticPromptContracts.ts` | implemented prompt foundation | canonical runtime registry | Versioned 21-key role/mode prompt registry; source-controlled only. |
 | `prompts/worker/roles/` | implemented prompt foundation | canonical runtime prompts | Separate Technical Lead, Code Worker, and Documentation Steward prompt files. |
-| `docs/WORKER-GUIDE.md` | authoritative operations | canonical for worker use | Role-based worker guide, prompt contracts, red-test quality, and source-only prompt operation. |
+| `src/agentRoles.ts` | implemented Slice 1 domain | canonical runtime domain | Exact role IDs/modes and bounded dormant assignment parser. |
+| `src/repositories/roleAssignmentRepository.ts` | implemented Slice 1 persistence | canonical SQL owner | Append-only desired assignment revisions through `BridgeDb`. |
+| `docs/WORKER-GUIDE.md` | authoritative operations | canonical for worker use | Role-based worker guide, prompt contracts, red-test quality, source-only prompts, and dormant assignment status. |
 | `docs/SAFE-RESTART.md` | authoritative operations | canonical for safe restart helper | Referenced by `AGENTS.md` restart policy. |
 | `docs/PRD.md` | partially-implemented product reference | advisory | Broad product/architecture reference; defer to ADRs and architecture docs on conflicts. |
 | `docs/soul.md` | runtime-design | advisory/canonical for SOUL.md behavior | Documents root `SOUL.md` runtime injection; the doc itself is not the default loaded file. |
@@ -130,7 +141,7 @@ last_validated_against: <commit-sha-or-branch>
 - `docs/soul.md` is a design document. Runtime loading is handled by `src/soul.ts`, which defaults to `<project>/SOUL.md` or `AGENT_BRIDGE_SOUL_PATH`.
 - `docs/architecture/memory-and-handoff.md` is the current intended memory and provider-handoff architecture. Implementation work is tracked in `docs/roadmap/issue-69-compact-memory-handoff.md`.
 - Canonical role prompts are loaded from source-controlled files registered by `src/agenticPromptContracts.ts`; current compatibility-key prompts are loaded from source-controlled files registered by `src/workerPrompts.ts` until role-native routing replaces their keys.
-- Schema migration 2 removes the legacy SQLite `prompts` table; runtime prompts resolve only from reviewed source files.
+- Schema migration 2 removes the legacy SQLite `prompts` table. Schema migration 3 adds dormant role-assignment revisions and child assignment rows. Runtime prompts remain source-only.
 - `docs/prompt-optimization-loop-research.md` is referenced by `AGENTS.md` for optimizer methodology. It is not loaded by runtime services.
 - `docs/WORKER-GUIDE.md` and `docs/SAFE-RESTART.md` are authoritative operator docs. They are not loaded by services.
 - Superseded pointer files should stay until inbound references are cleaned up, then they can move fully into `docs/archive/`.

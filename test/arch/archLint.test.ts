@@ -429,6 +429,71 @@ describe("arch-lint", () => {
       }
     });
 
+    it("catches a dynamic import() whose specifier is a variable, not a string literal (regex-only checks matched only a literal quote/backtick right after \"import(\")", () => {
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-dynamic-var-"));
+      try {
+        writeFileSync(
+          join(dir, "sneaky.ts"),
+          [
+            'const modulePath = "./db.js";',
+            "export async function f() {",
+            "  const { openDb } = await import(modulePath);",
+            "  return openDb(\":memory:\");",
+            "}",
+            "",
+          ].join("\n"),
+        );
+        const res = runLint(dir);
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain("dynamic import() with a non-literal specifier");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("catches a dynamic import() with a concatenated/template specifier", () => {
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-dynamic-template-"));
+      try {
+        writeFileSync(
+          join(dir, "sneaky.ts"),
+          'export async function f() {\n  const { openDb } = await import(`./${"db"}.js`);\n  return openDb(":memory:");\n}\n',
+        );
+        const res = runLint(dir);
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain("dynamic import() with a non-literal specifier");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it("does not blank a real import when a string literal contains comment-delimiter-looking text (regex comment-stripping was not string-aware)", () => {
+      // Regression for the exact bypass from review comment 5015149297: a
+      // regex "strip anything between /* and */" pass would treat the `/*`
+      // inside `const marker = "/*";` as the start of a comment, blanking
+      // the real `import { openDb } from "./db.js";` statement below it
+      // before the import-detection regex ever ran. A real parser knows the
+      // `/*` is inside a string literal, not a comment token, so it can't be
+      // fooled this way.
+      const dir = mkdtempSync(join(tmpdir(), "archlint-migown-fake-comment-string-"));
+      try {
+        writeFileSync(
+          join(dir, "sneaky.ts"),
+          [
+            'const marker = "/*";',
+            'import { openDb } from "./db.js";',
+            'const endMarker = "*/";',
+            "export function f() { return openDb(\":memory:\"); }",
+            "",
+          ].join("\n"),
+        );
+        const res = runLint(dir);
+        expect(res.code).not.toBe(0);
+        expect(res.output).toContain("openDb");
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
     it("fails when src/db.ts imports a primitive outside its exact permitted set (applyMigrationsUpTo, not just applyMigrations)", () => {
       const repoDir = mkdtempSync(join(tmpdir(), "archlint-migown-db-overscope-"));
       try {

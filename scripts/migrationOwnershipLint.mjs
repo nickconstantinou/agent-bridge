@@ -13,22 +13,32 @@
 // repo-root-relative path equality, not a path suffix, so a nested
 // "foo/src/db.ts" is never mistaken for the real owner file.
 //
-// Deny-by-default, not detect-then-allow: rather than trying to prove a
-// namespace binding or dynamic import never reaches a primitive (which an
-// AST-free regex check cannot do soundly — computed property access,
-// destructuring off a dynamically-imported module, etc. all evade a
-// property-access scan), any namespace import (`import * as ns`) or dynamic
-// `import(...)` call naming a migration-owning module is an unconditional
-// violation, and any wildcard re-export (`export *` / `export * as ns`) is
-// too. No file in this codebase needs any of those three forms to reach a
-// migration primitive today, so this has zero legitimate cost.
+// This walks the real TypeScript AST (via the `typescript` compiler API,
+// already a project dependency) rather than pattern-matching source text.
+// Two prior regex-based iterations were each shown to be bypassable:
+//   - A regex "does this look like a comment" pass blanked `/*`/`*/`
+//     *inside string literals* (e.g. `const marker = "/*";`), which could
+//     blank out a real import statement before the import regex ran.
+//   - A regex dynamic-import check only matched a literal quote/backtick
+//     immediately after `import(`, so `import(someVariable)` passed
+//     undetected.
+// A real parser distinguishes string-literal contents from actual comments
+// and from actual call-expression arguments by construction, closing both
+// classes of bypass rather than patching individual examples of them.
 //
-// Comments are stripped (length-preserving, so line numbers stay accurate)
-// before matching, so a comment interleaved inside an import clause (e.g.
-// `import { /* x */ openDb } from "./db.js"`) can't hide the identifier
-// from the named-specifier check.
+// Deny-by-default, not detect-then-allow: any namespace import
+// (`import * as ns`) or wildcard re-export naming a migration-owning module
+// is an unconditional violation regardless of downstream usage — no file in
+// this codebase needs either form to reach a primitive. Any dynamic
+// `import(...)` naming a migration-owning module (by string-literal
+// specifier) is also unconditional. A dynamic `import(...)` whose specifier
+// is NOT a string literal (a variable, template expression, concatenation,
+// etc.) is rejected outright under production src/ — its target cannot be
+// statically proven to avoid a migration-owning module, so it fails closed
+// rather than being allowed through unresolved.
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import ts from "typescript";
 
 const PRIMITIVES = new Set([
   "openDb",
@@ -47,21 +57,6 @@ const OWNER_IMPORT_ALLOWLIST = new Map([
 
 const SENSITIVE_MODULE_SUFFIXES = ["db.js", "db/schema.js", "schema.js", "legacyBaselineMigration.js"];
 
-// Matches `import`/`export` statements of the form:
-//   import { a, b as c } from "spec";
-//   import type { a } from "spec";
-//   import * as ns from "spec";
-//   export { a, b as c } from "spec";
-//   export * from "spec";
-//   export * as ns from "spec";
-// The named-list/namespace/bare-star alternatives are tried in this order so
-// "* as ns" (namespace) is preferred over the bare "*" (wildcard) branch.
-const STATEMENT = /\b(import|export)\s+(type\s+)?(\*\s+as\s+(\w+)|\{([^}]*)\}|\*)\s+from\s+["']([^"']+)["']/g;
-
-// `import("spec")` / `await import("spec")`, anywhere (not just at statement
-// start), so a dynamic import used mid-expression is still caught.
-const DYNAMIC_IMPORT = /\bimport\s*\(\s*["'`]([^"'`]+)["'`]/g;
-
 function listFiles(dir) {
   const out = [];
   for (const entry of readdirSync(dir)) {
@@ -79,85 +74,100 @@ function isSensitiveModule(specifier) {
   );
 }
 
-/** Strips // and /* *\/ comments, preserving length and newlines so offsets/line numbers stay valid. */
-function stripComments(src) {
-  return src
-    .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, " "))
-    .replace(/\/\/[^\n]*/g, (m) => " ".repeat(m.length));
-}
-
-function offsetToLine(content, offset) {
-  let line = 1;
-  for (let i = 0; i < offset && i < content.length; i++) {
-    if (content[i] === "\n") line++;
-  }
-  return line;
+/** The bound/imported/exported name — the identifier before `as`, or the name itself. */
+function elementName(el) {
+  return (el.propertyName ?? el.name).text;
 }
 
 function lintFile(filePath, relPath) {
   const violations = [];
   const permitted = OWNER_IMPORT_ALLOWLIST.get(relPath) ?? new Set();
-  const rawContent = readFileSync(filePath, "utf8");
-  const content = stripComments(rawContent);
+  const text = readFileSync(filePath, "utf8");
+  const sourceFile = ts.createSourceFile(filePath, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
 
-  STATEMENT.lastIndex = 0;
-  let m;
-  while ((m = STATEMENT.exec(content)) !== null) {
-    const [full, keyword, , , namespaceName, namedList, specifier] = m;
-    if (!isSensitiveModule(specifier)) continue;
-    const lineNumber = offsetToLine(content, m.index);
+  function lineOf(node) {
+    return sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+  }
 
-    if (namespaceName) {
-      // Namespace import/re-export of a migration-owning module: always a
-      // violation, regardless of owner status or downstream usage (see file
-      // header). Nothing legitimate needs this form.
-      const kind = keyword === "export" ? "wildcard namespace re-export" : "namespace import";
-      violations.push(
-        `${relPath}:${lineNumber}: ${kind} ("${full.trim()}") of a migration-owning module is not allowed — use a named import of only the specific permitted primitive`,
-      );
-      continue;
-    }
-
-    if (namedList !== undefined) {
-      for (const rawSpecifier of namedList.split(",")) {
-        const trimmed = rawSpecifier.trim();
-        if (!trimmed) continue;
-        // For `{ openDb as x }` the imported/exported name is the identifier
-        // before `as`; for a bare `{ openDb }` it's the whole specifier.
-        const importedName = trimmed.split(/\s+as\s+/)[0].trim().replace(/^type\s+/, "");
-        if (!PRIMITIVES.has(importedName)) continue;
-        if (keyword === "export") {
+  function visit(node) {
+    // Static `import ... from "spec"` (including `import type`).
+    if (ts.isImportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
+      const specifier = node.moduleSpecifier.text;
+      if (isSensitiveModule(specifier)) {
+        const lineNumber = lineOf(node);
+        const bindings = node.importClause?.namedBindings;
+        if (bindings && ts.isNamespaceImport(bindings)) {
           violations.push(
-            `${relPath}:${lineNumber}: re-export of "${importedName}" from a migration-owning module ("${specifier}") is not allowed`,
+            `${relPath}:${lineNumber}: namespace import ("import * as ${bindings.name.text} from \\"${specifier}\\"") of a migration-owning module is not allowed — use a named import of only the specific permitted primitive`,
           );
-        } else if (!permitted.has(importedName)) {
-          violations.push(
-            `${relPath}:${lineNumber}: import of "${importedName}" from "${specifier}" is not in this file's permitted primitive set (${
-              permitted.size > 0 ? [...permitted].join(", ") : "none"
-            })`,
-          );
+        } else if (bindings && ts.isNamedImports(bindings)) {
+          for (const el of bindings.elements) {
+            const importedName = elementName(el);
+            if (!PRIMITIVES.has(importedName)) continue;
+            if (!permitted.has(importedName)) {
+              violations.push(
+                `${relPath}:${lineNumber}: import of "${importedName}" from "${specifier}" is not in this file's permitted primitive set (${
+                  permitted.size > 0 ? [...permitted].join(", ") : "none"
+                })`,
+              );
+            }
+          }
         }
       }
-      continue;
     }
 
-    // Bare `*` with no `as` binding only occurs as `export * from "sensitive"`
-    // (a bare `import * from` isn't valid JS/TS) — a wildcard re-export.
-    violations.push(
-      `${relPath}:${lineNumber}: wildcard re-export ("export * from \\"${specifier}\\"") of a migration-owning module is not allowed`,
-    );
+    // `export { a, b as c } from "spec"`, `export * from "spec"`,
+    // `export * as ns from "spec"`.
+    if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)) {
+      const specifier = node.moduleSpecifier.text;
+      if (isSensitiveModule(specifier)) {
+        const lineNumber = lineOf(node);
+        const clause = node.exportClause;
+        if (!clause) {
+          violations.push(
+            `${relPath}:${lineNumber}: wildcard re-export ("export * from \\"${specifier}\\"") of a migration-owning module is not allowed`,
+          );
+        } else if (ts.isNamespaceExport(clause)) {
+          violations.push(
+            `${relPath}:${lineNumber}: wildcard namespace re-export ("export * as ${clause.name.text} from \\"${specifier}\\"") of a migration-owning module is not allowed`,
+          );
+        } else if (ts.isNamedExports(clause)) {
+          for (const el of clause.elements) {
+            const exportedName = elementName(el);
+            if (!PRIMITIVES.has(exportedName)) continue;
+            violations.push(
+              `${relPath}:${lineNumber}: re-export of "${exportedName}" from a migration-owning module ("${specifier}") is not allowed`,
+            );
+          }
+        }
+      }
+    }
+
+    // Dynamic `import(...)` call expressions, anywhere in an expression.
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const lineNumber = lineOf(node);
+      const arg = node.arguments[0];
+      if (arg && ts.isStringLiteralLike(arg)) {
+        if (isSensitiveModule(arg.text)) {
+          violations.push(
+            `${relPath}:${lineNumber}: dynamic import("${arg.text}") of a migration-owning module is not allowed — use a named import of only the specific permitted primitive`,
+          );
+        }
+      } else {
+        // Non-literal specifier (variable, template expression,
+        // concatenation, ...): its target cannot be statically verified to
+        // avoid a migration-owning module, so it fails closed rather than
+        // being allowed through unresolved.
+        violations.push(
+          `${relPath}:${lineNumber}: dynamic import() with a non-literal specifier is not allowed under production src/ — the target cannot be statically verified to avoid migration-owning modules`,
+        );
+      }
+    }
+
+    ts.forEachChild(node, visit);
   }
 
-  DYNAMIC_IMPORT.lastIndex = 0;
-  let dm;
-  while ((dm = DYNAMIC_IMPORT.exec(content)) !== null) {
-    if (!isSensitiveModule(dm[1])) continue;
-    const lineNumber = offsetToLine(content, dm.index);
-    violations.push(
-      `${relPath}:${lineNumber}: dynamic import("${dm[1]}") of a migration-owning module is not allowed — use a named import of only the specific permitted primitive`,
-    );
-  }
-
+  visit(sourceFile);
   return violations;
 }
 

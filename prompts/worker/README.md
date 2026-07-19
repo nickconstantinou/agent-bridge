@@ -79,6 +79,7 @@ The follow-up wiring should store the full Markdown plan for humans and extract/
 | `feature_plan` | `feature-plan.md` | Plan a user-requested feature before work-item approval. |
 | `implementation_plan:create` | `implementation-plan-create.md` | Produce the canonical approval/execution plan for a work item. |
 | `implementation_plan:improve` | `implementation-plan-improve.md` | Repair a weak implementation plan. |
+| `implementation_plan:contract_repair` | `implementation-plan-contract-repair.md` | Recover a missing machine contract from an otherwise valid plan. |
 | `defect_scan:scan` | `defect-scan.md` | Read-only defect discovery. |
 | `defect_scan:plan` | `defect-plan.md` | TDD plan for a defect finding. |
 | `defect_scan:triage` | `defect-triage.md` | Conservative approve/reject gate for scan findings. |

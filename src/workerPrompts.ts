@@ -2,6 +2,7 @@ export type WorkerPromptKey =
   | "feature_plan"
   | "implementation_plan:create"
   | "implementation_plan:improve"
+  | "implementation_plan:contract_repair"
   | "defect_scan:scan"
   | "defect_scan:plan"
   | "defect_scan:triage"
@@ -124,6 +125,16 @@ export const WORKER_PROMPTS: Record<WorkerPromptKey, WorkerPromptDefinition> = {
       maxPromptChars: 20_000,
       maxSupplementChars: 2_500,
       variableLimits: { ...PLAN_VARIABLE_LIMITS, title: 1_000 },
+    },
+  },
+  "implementation_plan:contract_repair": {
+    dbKey: "implementation_plan:contract_repair",
+    filePath: `${WORKER_PROMPT_ROOT}/implementation-plan-contract-repair.md`,
+    supplements: [],
+    budget: {
+      maxPromptChars: 14_000,
+      maxSupplementChars: 0,
+      variableLimits: { plan_text: 10_000 },
     },
   },
   "defect_scan:scan": {

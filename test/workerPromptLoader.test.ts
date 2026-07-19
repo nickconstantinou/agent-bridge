@@ -8,6 +8,19 @@ import {
 const reader = {
   readText(path: string): string {
     if (path.endsWith("feature-plan.md")) return "Feature {value}";
+    const skillMatch = path.match(/^skills\/([^/]+)\/(SKILL\.md|skill\.json)$/);
+    if (skillMatch) {
+      const [, name, file] = skillMatch;
+      if (file === "skill.json") {
+        return JSON.stringify({ name, version: "1.0.0", description: `${name} test skill` });
+      }
+      return [
+        `# ${name}`,
+        "<!-- BEGIN AGENT_BRIDGE_RUNTIME_GUIDANCE -->",
+        `Canonical guidance from ${name}`,
+        "<!-- END AGENT_BRIDGE_RUNTIME_GUIDANCE -->",
+      ].join("\n");
+    }
     return "Supplement text";
   },
 };
@@ -17,7 +30,7 @@ describe("worker loader basics", () => {
     expect(renderWorkerPrompt("Hello {name}", { name: "Nick" })).toBe("Hello Nick");
   });
 
-  it("loads a bundled template", async () => {
+  it("loads a bundled template without optional guidance", async () => {
     const prompt = await loadWorkerPrompt("feature_plan", { value: "abc" }, reader, {
       includeSupplements: false,
     });
@@ -25,10 +38,14 @@ describe("worker loader basics", () => {
     expect(prompt).toBe("Feature abc");
   });
 
-  it("appends registered supplements to a bundled template", async () => {
+  it("appends canonical lifecycle skills and registered worker supplements", async () => {
     const prompt = await loadWorkerPrompt("feature_plan", { value: "abc" }, reader);
 
     expect(prompt).toContain("Feature abc");
+    expect(prompt).toContain("Lifecycle skill: requirements-to-acceptance@1.0.0");
+    expect(prompt).toContain("Canonical guidance from risk-based-test-strategy");
+    expect(prompt).toContain("Canonical guidance from red-green-refactor-tdd");
+    expect(prompt).toContain("# Worker-specific supplements");
     expect(prompt).toContain("Supplement text");
   });
 

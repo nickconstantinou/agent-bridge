@@ -7,6 +7,7 @@ description: Use when turning product requests, bug reports, or vague implementa
 
 Use this skill before implementation when the requested outcome is ambiguous, cross-functional, user-facing, or likely to affect multiple modules.
 
+<!-- BEGIN AGENT_BRIDGE_RUNTIME_GUIDANCE -->
 ## Workflow
 
 1. Restate the goal in one or two plain sentences.
@@ -29,3 +30,4 @@ Prefer this structure when a written requirements pass is useful:
 - Open questions
 
 Keep the result short enough to guide implementation without becoming a spec theater detour.
+<!-- END AGENT_BRIDGE_RUNTIME_GUIDANCE -->

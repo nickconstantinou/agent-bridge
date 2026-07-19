@@ -6,9 +6,10 @@ Missing or weak sections:
 Current plan:
 {planText}
 
-Return a complete replacement plan in Markdown with these sections:
+Return a complete replacement plan in Markdown with exactly these sections:
 
 ## Problem Summary
+## Acceptance Criteria
 ## Target Files
 ## Architectural Intent
 ## Test Plan
@@ -16,27 +17,65 @@ Return a complete replacement plan in Markdown with these sections:
 ## Red Test Coverage
 ## Implementation Phases
 ## Execution Contract
-## Acceptance Criteria
 ## Verification Commands
 ## Risks / Rollback
 ## Human Decisions Required
 ## Out of Scope
 
-The improved plan must retain approved requirements and scope. It must not delegate test-strategy design to the coding worker with generic wording such as `write tests`, `add coverage`, or `write unit tests`.
+Retain approved requirements, scope, non-goals, architecture, compatibility, permission policy, operations policy, and human gates. Do not delegate test-strategy design to the coding worker with generic wording such as `write tests`, `add coverage`, or `write unit tests`.
 
-For every item in `## Red Tests`, require:
-- mapped acceptance criterion and product intent;
-- architectural boundary or invariant;
-- applicable lifecycle, compatibility, security, data, operations, migration, or rollback risk;
-- exact test class, file, and name;
-- production boundary, fixture/state, and action through the real caller;
-- expected observable result and authoritative oracle;
-- why current code fails and exact expected red assertion;
-- focused red command;
-- sibling behaviour remaining green;
-- characterization needs and false-positive controls.
+`## Acceptance Criteria` must give every approved criterion a stable requirement ID such as `AC-1`.
 
-`## Red Test Coverage` must map every acceptance criterion, affected architectural boundary/invariant, and triggered risk to a red test or justified deterministic proof. Helper-only tests are invalid where handler wiring, repositories, lifecycle ownership, permissions, child processes, Git, GitHub, platform status, or deployment behaviour are material. The oracle must not duplicate the production algorithm.
+`## Red Tests` must contain a JSON array. Every object must use this exact shape and contain substantive repository-grounded values:
+
+```json
+[
+  {
+    "id": "RT-1",
+    "requirement_ids": ["AC-1"],
+    "intent": {
+      "product": ["observable product behaviour protected"],
+      "architecture": ["ownership or production boundary protected"],
+      "invariants": ["behaviour or safety rule that must remain true"],
+      "risks": ["triggered lifecycle, compatibility, security, data, operations, migration, or rollback risk"]
+    },
+    "test_classes": ["behavioural", "architecture", "lifecycle", "compatibility", "security", "operations"],
+    "characterization_required": false,
+    "test_file": "test/exact-file.test.ts",
+    "test_name": "exact test name",
+    "production_boundary": "real handler/repository/service/CLI/platform boundary",
+    "fixture_and_state": "authoritative initial state and fixtures",
+    "action_through_real_caller": "action through the actual production caller, not a copied helper path",
+    "expected_observable_result": "persisted state, emitted call, filesystem/Git result, status, API result, or user-visible behaviour",
+    "why_current_code_fails": "specific missing or incorrect current behaviour",
+    "expected_red_assertion": "exact assertion or expected failure evidence before implementation",
+    "focused_red_command": "copy-pasteable narrow command",
+    "sibling_behaviour_remaining_green": ["unchanged task/provider/mode/transport/public contract"],
+    "authoritative_oracle": "source of truth observed by the test",
+    "false_positive_controls": ["how syntax, fixture, import, timeout, baseline, and copied-algorithm failures are excluded"]
+  }
+]
+```
+
+Use only applicable test classes, but do not omit a class triggered by the approved issue or architecture. Helper-only tests are invalid where handler wiring, repositories, lifecycle ownership, permissions, child processes, Git, GitHub, platform status, or deployment behaviour are material. The oracle must not duplicate the production algorithm.
+
+`## Red Test Coverage` must contain one JSON object using these exact keys:
+
+```json
+{
+  "acceptance_coverage": [
+    {"requirement_id":"AC-1", "red_test_ids":["RT-1"], "non_test_proof":null}
+  ],
+  "architecture_coverage": [
+    {"boundary_or_invariant":"", "red_test_ids":["RT-1"], "characterization_test_ids":[]}
+  ],
+  "triggered_risk_coverage": [
+    {"risk":"", "required_test_classes":["lifecycle"], "red_test_ids":["RT-1"]}
+  ]
+}
+```
+
+Map every acceptance criterion, affected architectural boundary/invariant, and triggered risk to a red test or justified deterministic proof. Specify characterization and sibling behaviour that remain green.
 
 The `## Execution Contract` section must contain a compact JSON object under 1200 words with:
 
@@ -45,6 +84,7 @@ The `## Execution Contract` section must contain a compact JSON object under 120
   "target_files": [],
   "test_files": [],
   "phase_order": [],
+  "red_test_ids": [],
   "red_test_command": "",
   "verification_command": "",
   "risk_level": "low | medium | high",

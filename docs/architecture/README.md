@@ -1,42 +1,51 @@
-# Agent Bridge OSS v1.0 — Architecture Review & Roadmap
+# Agent Bridge OSS — Architecture Index
 
-Architecture-first, TDD-first. No implementation begins until this set is approved.
+Architecture-first and TDD-first. Canonical documents describe the approved target behaviour; implementation is checked against them.
 
 | Doc | Deliverable | Status |
 |---|---|---|
-| [01-current-architecture.md](01-current-architecture.md) | Current Architecture Review (modules, lifecycle, state model, abstractions, dependency notes) | Draft |
-| [02-gap-analysis.md](02-gap-analysis.md) | Gap Analysis (current vs desired, priority, risk, migration) | Draft |
-| [03-target-architecture.md](03-target-architecture.md) | Target Architecture | Draft |
-| [04-adrs.md](04-adrs.md) | ADRs 001–007 | Draft |
-| [05-epics.md](05-epics.md) | Implementation Roadmap + Epic Breakdown (12 epics) + suggested order | Draft |
-| [06-interface-specs.md](06-interface-specs.md) | Interface Specifications (ProviderAdapter, Workflow, Events, Memory, Boundary APIs, GitHub sync) | Draft |
-| [07-data-and-event-model.md](07-data-and-event-model.md) | Database/Event Model + migrations | Draft |
-| [08-testing-strategy.md](08-testing-strategy.md) | Testing Strategy (acceptance-first, arch-lint, golden tests) | Draft |
-| [09-risk-register.md](09-risk-register.md) | Risk Register (R1–R12) | Draft |
-| [10-production-readiness.md](10-production-readiness.md) | Production Readiness Checklist | Draft |
+| [01-current-architecture.md](01-current-architecture.md) | Current Architecture Review | Historical baseline |
+| [02-gap-analysis.md](02-gap-analysis.md) | Gap Analysis | Historical roadmap input |
+| [03-target-architecture.md](03-target-architecture.md) | Target Architecture | Canonical |
+| [04-adrs.md](04-adrs.md) | Consolidated ADR summary | Canonical index |
+| [05-epics.md](05-epics.md) | Earlier implementation roadmap | Historical roadmap input |
+| [06-interface-specs.md](06-interface-specs.md) | Interface specifications | Maintained where still authoritative |
+| [07-data-and-event-model.md](07-data-and-event-model.md) | Database and event model | Maintained where still authoritative |
+| [08-testing-strategy.md](08-testing-strategy.md) | Testing strategy | Canonical |
+| [09-risk-register.md](09-risk-register.md) | Risk register | Maintained |
+| [10-production-readiness.md](10-production-readiness.md) | Production readiness checklist | Canonical |
+| [engineering-worker.md](engineering-worker.md) | Engineering Worker product boundary and invariants | Canonical |
+| [agentic-worker-orchestration.md](agentic-worker-orchestration.md) | Role-based requirements, planning, execution, review, and documentation architecture | Canonical |
 
-Deliverables 3 (Target Architecture) and 12 (implementation order) are folded into docs 03 and 05 respectively; dependency graph and runtime lifecycle live in doc 01.
+## Role-based orchestration decision
 
-## Ground rules honored
-- Extend, don't replace: every recommendation maps to existing modules (see "Non-gaps" in doc 02).
-- Reference projects (gstack, agent-orchestrator) used for patterns only — influences table in doc 03.
-- Platform (auth/billing/provisioning) excluded; boundary APIs specified in doc 06.
+Issue #159 establishes three configurable roles:
 
-## Recommended approach (approved)
+- Technical Lead;
+- Code Worker;
+- Documentation Steward.
 
-Implement in **strict value order** and reassess after the first tranche. Roughly half the roadmap pays off regardless of product ambition; the other half only pays off if OSS Agent Bridge gains real external users. Do not build the second half on spec.
+Scanner is a Code Worker mode. Independent review and operations are Technical Lead modes. Agent Bridge remains authoritative for workflow state, permissions, role/model resolution, validation, deterministic evidence, approvals, merge, deployment, and audit.
 
-**Tranche 1 — do now (felt pain, live defects, proven bug classes):**
+Read alongside:
 
-| Order | Item | Justification |
-|---|---|---|
-| 0 | Phase 0 hotfixes: R1 error-classification scoping, R2 appliance token collision | Live defects, not architecture |
-| 1 | Epic 1 (config consolidation + boundaries) | 4-way config duplication already shipped a real bug |
-| 2 | Epic 11 (arch-lint + acceptance-first) | Worker shipped intent-miss defects twice; cheapest fix in the set |
-| 3 | Epic 2 (Provider Adapter) | Kimchi integration required 9+ file edits; more CLIs are coming |
-| 4 | Epic 9 (GitHub feedback loop + issue import) | Dead /import and /list-issues commands; explicitly requested workflow |
-| 5 | Finish repository wiring (Epic 4 subset) | Half-done migration is worse than none |
+- `docs/agentic-maintenance.md`;
+- `docs/decisions/ADR-009-role-based-agentic-orchestration.md`;
+- `docs/configuration/agent-role-assignment.md`;
+- `docs/operations/agentic-worker-runbook.md`;
+- `docs/testing/agentic-worker-verification.md`;
+- `docs/implementation-plans/issue-159-role-based-orchestration.md`;
+- `agentic-maintenance.yaml`.
 
-**Tranche 2 — deferred until a trigger fires** (second real user exists, or a concrete wall is hit): Epic 5 (declarative workflows), Epic 6 (event sourcing as truth — status columns are adequate for single-operator use), Epic 7 beyond repo+failure memory kinds, Epic 10 (journalctl is adequate at current scale), Bootstrap/Heartbeat APIs (only if the hosted platform materialises).
+## Ground rules
 
-Guardrail: the roadmap's biggest risk is the one it names — drifting into building an engineering OS instead of using one. Reassess after Tranche 1 before starting anything in Tranche 2.
+- Extend existing provider, advisor, worker, repository, workspace, supervisor, and lifecycle boundaries rather than introducing competing systems.
+- Incoming issues and scan findings are requirements inputs, not automatically implementation-ready work.
+- No implementation plan is created before a canonical issue is `requirements_ready`.
+- The Technical Lead is read-only; mutation is performed only by bounded Code Worker or Documentation Steward modes.
+- Deterministic evidence and human gates outrank model output.
+- Architecture and documentation changes must be reflected in the machine-readable document registry.
+
+## Implementation order
+
+Follow `docs/implementation-plans/issue-159-role-based-orchestration.md`. Coordinate advisor evidence with Issues #100 and #146, durable lifecycle with Issue #119, and revise the checkpoint-only assumptions in Issue #132 rather than creating duplicate services.

@@ -1,0 +1,30 @@
+name: Prompt Table Inventory
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/prompt-table-inventory.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inventory prompt table and override references
+        shell: bash
+        run: |
+          {
+            echo '## prompt accessors and callers'
+            rg -n --hidden --glob '!node_modules/**' --glob '!.git/**' 'getPrompt|setPrompt|CREATE TABLE( IF NOT EXISTS)? prompts|DROP TABLE( IF EXISTS)? prompts|FROM prompts|INTO prompts|prompt_text'
+            echo
+            echo '## prompt-related files'
+            find src test prompts docs -type f | sort | grep -Ei 'prompt|schema|migration|implementationPlan|featurePlan|defectScan|refactorScan|tddImplementation|orchestratedTask|workCallbacks' || true
+          } | tee prompt-table-inventory.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prompt-table-inventory
+          path: prompt-table-inventory.txt
+          if-no-files-found: error

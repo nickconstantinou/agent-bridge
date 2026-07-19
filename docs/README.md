@@ -129,7 +129,7 @@ last_validated_against: <commit-sha-or-branch>
 
 - `docs/soul.md` is a design document. Runtime loading is handled by `src/soul.ts`, which defaults to `<project>/SOUL.md` or `AGENT_BRIDGE_SOUL_PATH`.
 - `docs/architecture/memory-and-handoff.md` is the current intended memory and provider-handoff architecture. Implementation work is tracked in `docs/roadmap/issue-69-compact-memory-handoff.md`.
-- Canonical role prompts are loaded from source-controlled files registered by `src/agenticPromptContracts.ts`; compatibility handlers use source-controlled files registered by `src/workerPrompts.ts` until role-native routing replaces their keys.
+- Canonical role prompts are loaded from source-controlled files registered by `src/agenticPromptContracts.ts`; current compatibility-key prompts are loaded from source-controlled files registered by `src/workerPrompts.ts` until role-native routing replaces their keys.
 - Schema migration 2 removes the legacy SQLite `prompts` table; runtime prompts resolve only from reviewed source files.
 - `docs/prompt-optimization-loop-research.md` is referenced by `AGENTS.md` for optimizer methodology. It is not loaded by runtime services.
 - `docs/WORKER-GUIDE.md` and `docs/SAFE-RESTART.md` are authoritative operator docs. They are not loaded by services.

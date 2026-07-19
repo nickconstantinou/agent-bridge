@@ -1,35 +1,32 @@
-name: Prompt Override Retirement Candidate
+name: Apply Qualified Prompt Override Retirement
 
 on:
   pull_request:
     paths:
       - '.github/workflows/prompt-table-retirement-candidate.yml'
-      - 'scripts/retirePromptOverridesCandidate.py'
-      - 'scripts/retirePromptOverridesDocsCandidate.py'
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  qualify:
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'agent/role-based-worker-orchestration-docs'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: agent/role-based-worker-orchestration-docs
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Apply candidate retirement
-        shell: bash
+      - name: Apply qualified retirement
         run: |
-          set -o pipefail
-          {
-            python scripts/retirePromptOverridesCandidate.py
-            python scripts/retirePromptOverridesDocsCandidate.py
-          } 2>&1 | tee prompt-retirement-transform.log
+          python scripts/retirePromptOverridesCandidate.py
+          python scripts/retirePromptOverridesDocsCandidate.py
       - name: Check retired references
-        shell: bash
         run: |
           ! grep -RInE --exclude-dir=node_modules --exclude-dir=.git 'getPrompt|setPrompt|dbTemplate|includeSupplementsForDbTemplate|^[[:space:]]*dbKey:' src test prompts docs
           ! grep -n 'CREATE TABLE IF NOT EXISTS prompts' src/db/legacyBaselineMigration.ts
@@ -45,28 +42,22 @@ jobs:
           test/implementationPlanHandler.test.ts
           test/orchestratedTaskHandler.test.ts
           test/tddImplementationHandler.test.ts
-      - name: Run full suite
-        run: npm test
-      - name: Typecheck
-        run: npm run typecheck
-      - name: Architecture Lint
-        run: bash scripts/arch-lint.sh src
-      - name: Diff check
-        run: git diff --check
-      - name: Capture candidate
-        if: always()
+      - run: npm test
+      - run: npm run typecheck
+      - run: bash scripts/arch-lint.sh src
+      - run: git diff --check
+      - name: Commit qualified retirement and remove temporary tooling
         shell: bash
         run: |
-          git status --short > prompt-retirement-status.txt
-          git diff --stat > prompt-retirement-stat.txt
-          git diff > prompt-retirement.patch
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: prompt-table-retirement-candidate
-          path: |
+          rm -f \
+            .github/workflows/prompt-table-inventory.yml \
+            .github/workflows/prompt-table-retirement-candidate.yml \
+            scripts/retirePromptOverridesCandidate.py \
+            scripts/retirePromptOverridesDocsCandidate.py \
             prompt-retirement-transform.log
-            prompt-retirement-status.txt
-            prompt-retirement-stat.txt
-            prompt-retirement.patch
-          if-no-files-found: error
+          git config user.name 'agent-bridge-maintenance'
+          git config user.email 'agent-bridge-maintenance@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat(worker): retire legacy prompt overrides'
+          git push origin HEAD:agent/role-based-worker-orchestration-docs

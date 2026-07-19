@@ -53,7 +53,10 @@ canonical_documents:
   architecture:
     - docs/architecture/engineering-worker.md
     - docs/architecture/agentic-worker-orchestration.md
+    - docs/architecture/agentic-prompt-contracts.md
     - docs/architecture/03-target-architecture.md
+  prompt_contracts:
+    - docs/architecture/agentic-prompt-contracts.md
   decisions:
     - docs/adr/ADR-005-role-based-agentic-orchestration.md
   roadmap:
@@ -69,6 +72,7 @@ canonical_documents:
     - docs/architecture/10-production-readiness.md
   implementation_handoff:
     - docs/implementation-plans/issue-159-role-based-orchestration.md
+    - docs/implementation-plans/issue-159-prompt-and-red-test-contract.md
 
 documentation_paths:
   allow:
@@ -89,6 +93,7 @@ change_triggers:
     required:
       - maintenance
       - architecture
+      - prompt_contracts
       - decisions
       - roadmap
       - configuration
@@ -97,8 +102,24 @@ change_triggers:
     required:
       - maintenance
       - worker_user_guide
+      - prompt_contracts
       - roadmap
       - testing
+  prompt_or_output_contract:
+    required:
+      - prompt_contracts
+      - maintenance
+      - worker_user_guide
+      - roadmap
+      - testing
+      - production_readiness
+  implementation_plan_schema:
+    required:
+      - prompt_contracts
+      - maintenance
+      - roadmap
+      - testing
+      - production_readiness
   provider_or_model_selection:
     required:
       - configuration
@@ -109,6 +130,7 @@ change_triggers:
     required:
       - agent_policy
       - architecture
+      - prompt_contracts
       - operations
       - testing
   workflow_state_or_lifecycle:

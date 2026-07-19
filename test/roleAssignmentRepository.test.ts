@@ -164,14 +164,17 @@ describe("role assignment repository migration", () => {
     const assignmentColumns = (reopened.raw.prepare(
       "PRAGMA table_info(role_assignments)",
     ).all() as Array<{ name: string }>).map((column) => column.name);
-    const persisted = JSON.stringify(reopened.getCurrentRoleAssignmentRevision(config.scopeKey));
-    expect([...revisionColumns, ...assignmentColumns]).not.toEqual(expect.arrayContaining([
+    const allColumns = [...revisionColumns, ...assignmentColumns];
+    for (const forbidden of [
       "token",
       "api_key",
       "secret",
       "prompt_text",
       "repository_content",
-    ]));
+    ]) {
+      expect(allColumns).not.toContain(forbidden);
+    }
+    const persisted = JSON.stringify(reopened.getCurrentRoleAssignmentRevision(config.scopeKey));
     expect(persisted).not.toMatch(/token|api[_-]?key|secret|prompt_text|repository_content/i);
     reopened.close();
   });

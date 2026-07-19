@@ -54,7 +54,7 @@ export interface WorkerPromptReader {
 }
 
 export interface LoadWorkerPromptOptions {
-  /** Allows tests or callers to suppress lifecycle guidance and additional supplements. */
+  /** Allows tests or callers to suppress optional worker-specific supplements; lifecycle skills remain mandatory. */
   includeSupplements?: boolean;
   /** Allows a caller to tighten placeholder limits for a specific job. */
   variableLimits?: Partial<Record<string, number>>;
@@ -347,13 +347,13 @@ export async function loadWorkerPrompt(
 
   const limitedVariables = limitWorkerPromptVariables(key, variables, options.variableLimits);
   const renderedBase = renderWorkerPrompt(baseTemplate, limitedVariables);
-
-  if (options.includeSupplements === false) {
-    return renderedBase.trim();
-  }
-
   const lifecycleSkills = await loadLifecycleSkillGuidance(definition.lifecycleSkills, reader);
   const withLifecycleSkills = appendLifecycleSkillGuidance(renderedBase, lifecycleSkills);
+
+  if (options.includeSupplements === false) {
+    return withLifecycleSkills;
+  }
+
   const supplementTexts = await Promise.all(
     definition.supplements.map(supplement => reader.readText(WORKER_PROMPT_SUPPLEMENT_FILES[supplement])),
   );

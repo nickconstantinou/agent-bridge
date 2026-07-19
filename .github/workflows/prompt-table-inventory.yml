@@ -18,7 +18,7 @@ jobs:
         run: |
           {
             echo '## prompt accessors and callers'
-            rg -n --hidden --glob '!node_modules/**' --glob '!.git/**' 'getPrompt|setPrompt|CREATE TABLE( IF NOT EXISTS)? prompts|DROP TABLE( IF EXISTS)? prompts|FROM prompts|INTO prompts|prompt_text'
+            rg -n --hidden --glob '!node_modules/**' --glob '!.git/**' 'getPrompt|setPrompt|CREATE TABLE( IF NOT EXISTS)? prompts|DROP TABLE( IF EXISTS)? prompts|FROM prompts|INTO prompts|prompt_text' || true
             echo
             echo '## prompt-related files'
             find src test prompts docs -type f | sort | grep -Ei 'prompt|schema|migration|implementationPlan|featurePlan|defectScan|refactorScan|tddImplementation|orchestratedTask|workCallbacks' || true

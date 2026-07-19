@@ -39,11 +39,12 @@ const ALLOWED_TABLES = new Set([
   "compaction_attempts", "conversation_summaries", "conversation_turns", "execution_locks", "feature_plans",
   "github_links", "health_context", "pending_messages", "project_memories", "project_memories_fts",
   "project_memories_fts_config", "project_memories_fts_content", "project_memories_fts_data",
-  "project_memories_fts_docsize", "project_memories_fts_idx", "prompts", "settings", "sqlite_sequence",
-  "work_item_plans", "work_items", "work_jobs",
+  "project_memories_fts_docsize", "project_memories_fts_idx", "prompts", "role_assignment_revisions",
+  "role_assignments", "settings", "sqlite_sequence", "work_item_plans", "work_items", "work_jobs",
 ]);
 
 const REQUIRED_TABLES = new Set(["bridge_state", "pending_messages", "settings"]);
+const CURRENT_ROLE_TABLES = ["role_assignment_revisions", "role_assignments"] as const;
 const LEGACY_PENDING_COLUMNS = new Set([
   "id", "chat_key", "prompt", "chat_id", "thread_id", "chat_type", "user_id", "created_at",
 ]);
@@ -111,13 +112,14 @@ function inspectDatabase(path: string, requireCurrent: boolean): DbEvidence {
     const lockColumns = tables.includes("execution_locks") ? columnNames(db, "execution_locks") : [];
     const currentPending = sameSet(pendingColumns, CURRENT_PENDING_COLUMNS);
     const currentLocks = sameSet(lockColumns, CURRENT_LOCK_COLUMNS);
+    const currentRoleTables = CURRENT_ROLE_TABLES.every((table) => tables.includes(table));
     const schema = userVersion === 0
       ? "legacy"
-      : currentPending && currentLocks
+      : userVersion === CURRENT_SCHEMA_VERSION && currentPending && currentLocks && currentRoleTables
         ? "current"
-      : sameSet(pendingColumns, LEGACY_PENDING_COLUMNS) && lockColumns.length === 0
-        ? "legacy"
-        : "migratable";
+        : sameSet(pendingColumns, LEGACY_PENDING_COLUMNS) && lockColumns.length === 0
+          ? "legacy"
+          : "migratable";
     if (requireCurrent && schema !== "current") throw new Error(`unknown schema after migration for ${path}: ${schema}`);
     const legacyQueueCount = pendingColumns.includes("surface")
       ? Number((db.prepare("SELECT COUNT(*) AS count FROM pending_messages WHERE surface = 'legacy'").get() as { count: number }).count)

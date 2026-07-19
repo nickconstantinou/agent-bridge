@@ -8,7 +8,7 @@ Canonical target-state architecture. This document describes the Engineering Wor
 
 The Engineering Worker converts incomplete intent, imported GitHub issues, and repository scan findings into validated engineering work, implementation plans, tested pull requests, and current documentation.
 
-Agent Bridge remains the authoritative orchestrator. Models provide bounded reasoning or execution inside Bridge-owned lifecycle, permission, validation, retry, budget, and approval controls.
+Agent Bridge remains the authoritative orchestrator. Models provide bounded reasoning or execution inside Bridge-owned lifecycle, permission, validation, retry, budget, exact-head, issue-mutation, and approval controls.
 
 ## Configurable roles
 
@@ -16,9 +16,9 @@ The platform exposes three workspace roles:
 
 | Role | Responsibility | Default authority |
 |---|---|---|
-| Technical Lead | Requirements discovery, canonical issue creation and validation, implementation planning, task decomposition, executor guidance, implementation review, operations assessment, and PR readiness | Read-only evidence tools |
+| Technical Lead | Requirements discovery, canonical issue creation and validation, cross-issue decomposition review, implementation planning, task decomposition, executor guidance, implementation review, operations assessment, and PR readiness | Read-only evidence tools |
 | Code Worker | Defect and refactor scanning, repository investigation, TDD implementation, repair, and deterministic verification | Permission varies by workflow mode |
-| Documentation Steward | Documentation impact assessment and creation or update of README, architecture, operations, configuration, testing, and maintenance documentation | Documentation-only mutation |
+| Documentation Steward | Documentation impact assessment and creation, update, and validation of README, architecture, operations, configuration, testing, and maintenance documentation | Documentation-only mutation |
 
 A role is independent of provider authentication. A role assignment binds:
 
@@ -36,13 +36,14 @@ A role is independent of provider authentication. A role assignment binds:
 - `requirements`: gather facts, identify assumptions, and expose product decisions;
 - `issue_validation`: validate an apparently complete issue against repository evidence;
 - `issue_authoring`: create the canonical issue contract;
-- `planning`: create the implementation plan and execution contract;
+- `decomposition_review`: audit a complete proposed child-issue bundle against one invariant table before any GitHub issue mutation;
+- `planning`: create the implementation plan, target-path provenance, and execution contract;
 - `executor_guidance`: assess bounded evidence from a blocked or incomplete worker pass;
-- `implementation_review`: compare final changes with requirements, invariants, and evidence;
-- `operations_review`: define rollout, rollback, migration, and operational evidence;
-- `pr_readiness`: produce the final advisory verdict after deterministic gates.
+- `implementation_review`: compare exact-head changes with requirements, invariants, and deterministic evidence before documentation;
+- `operations_review`: define exact-head rollout, rollback, migration, and operational evidence before documentation;
+- `pr_readiness`: produce the final advisory verdict after deterministic, review, operations, and documentation gates.
 
-The Technical Lead owns independent review and operations reasoning. Agent Bridge prefers a model different from the implementing Code Worker when available, but does not expose separate user-configurable reviewer or operations roles.
+The Technical Lead owns independent review and operations reasoning. Agent Bridge prefers a model different from the implementing Code Worker when available, but does not expose separate user-configurable reviewer or operations roles. Required and actual independence are recorded separately; the workflow holds when policy requires more independence than is available.
 
 ### Code Worker modes
 
@@ -58,11 +59,11 @@ The same CLI and model may perform every mode, but Agent Bridge applies a distin
 ### Documentation Steward modes
 
 - `impact`: read-only documentation impact assessment during planning;
-- `author`: documentation-only mutation after implementation facts are available;
-- `validate`: compare documentation with the final code and operational evidence;
-- `maintenance`: identify missing or stale canonical repository documents.
+- `author`: documentation-only mutation after deterministic verification and accepted Technical Lead review for the same exact head;
+- `validate`: compare all required documentation with the final exact-head code, review, and operational evidence;
+- `maintenance`: identify and require correction of missing, stale, contradictory, or misleading canonical repository documents.
 
-The Documentation Steward may not change production code. A required code correction returns to the Code Worker.
+The Documentation Steward may not change production code. A required code correction returns to the Code Worker and invalidates prior review, documentation, and readiness evidence for that code head.
 
 ## Change workflows
 
@@ -76,10 +77,11 @@ Raw request or imported feature issue
 → approval when policy requires it
 → Code Worker red/green implementation
 → deterministic verification
-→ Technical Lead implementation and operations review
-→ Documentation Steward updates
-→ documentation validation
-→ PR readiness and human merge gate
+→ Technical Lead implementation review
+→ Technical Lead operations review when triggered
+→ Documentation Steward authoring and validation
+→ Technical Lead PR readiness
+→ exact-head CI and human merge gate
 ```
 
 ### Defect workflow
@@ -92,9 +94,11 @@ Code Worker read-only scan or reported defect
 → regression-first implementation plan
 → Code Worker red/green repair
 → deterministic verification
-→ Technical Lead review
-→ Documentation Steward updates when behaviour or operations changed
-→ PR readiness and human merge gate
+→ Technical Lead implementation review
+→ Technical Lead operations review when triggered
+→ Documentation Steward authoring and validation when required
+→ Technical Lead PR readiness
+→ exact-head CI and human merge gate
 ```
 
 A scan finding is never implementation-ready by itself.
@@ -109,9 +113,11 @@ Code Worker read-only refactor scan or maintainer request
 → behaviour-preserving implementation plan
 → Code Worker characterization/red/green work
 → deterministic verification
-→ Technical Lead invariant review
-→ Documentation Steward architecture and maintenance updates
-→ PR readiness and human merge gate
+→ Technical Lead implementation review
+→ Technical Lead operations review when triggered
+→ Documentation Steward architecture and maintenance authoring and validation
+→ Technical Lead PR readiness
+→ exact-head CI and human merge gate
 ```
 
 A refactor must have concrete evidence and measurable benefit. Consistency or cleanliness alone is insufficient.
@@ -156,6 +162,12 @@ Even a detailed GitHub or local issue passes through Technical Lead validation. 
 
 Repository facts are gathered through typed, allowlisted, read-only Bridge tools. Product choices are surfaced to a human and are never silently invented.
 
+When validation or authoring produces multiple child issues, Agent Bridge assembles every proposed issue body without mutation and invokes `technical_lead:decomposition_review`. The bundle review separates implementation delivery order from runtime phase order and checks one canonical invariant table covering owners/callers, lifecycle/state authority, permissions, schema/SQL ownership, GitHub authority, platform/appliance authority, compatibility, repair invalidation, and prohibited duplicate abstractions. GitHub issue mutation is blocked until the complete bundle is consistent.
+
+## Implementation planning
+
+Every target production or test path is classified as `existing_at_base`, `existing_in_dependency`, `proposed_new_production`, or `proposed_new_test`. Dependency paths identify the dependency PR and exact reviewed ref. Proposed production files identify their neighbouring owner and why no current file is sufficient. Invalid or unclassified paths block plan approval.
+
 ## Role assignment and model selection
 
 The hosted platform and OSS configuration persist explicit role targets rather than relying on one global worker chain.
@@ -175,6 +187,8 @@ Review target preference is:
 3. the Technical Lead model in a fresh isolated session;
 4. the same target, explicitly marked non-independent.
 
+A fresh session does not by itself make a same-model review independent.
+
 ## Authority boundaries
 
 Agent Bridge owns:
@@ -185,17 +199,35 @@ Agent Bridge owns:
 - permission profiles and capability tokens;
 - context selection, redaction, and budgets;
 - structured-output validation and repair limits;
-- deterministic tests and evidence gates;
+- GitHub issue and PR mutation;
+- deterministic tests and exact-head evidence gates;
 - approvals, merge, deployment, and destructive-operation policy;
 - audit and restart recovery.
 
-Models cannot grant themselves tools, change role, expand scope, approve their own work, merge, deploy, or bypass deterministic or human gates.
+Models cannot grant themselves tools, change role, expand scope, approve their own work, mutate GitHub, merge, deploy, or bypass deterministic or human gates.
+
+## Exact-head evidence and repair invalidation
+
+Verification, implementation review, operations review, documentation authoring/validation, and PR readiness record the same `subject_head_sha`.
+
+Required gate states distinguish:
+
+- `passed`;
+- `failed`;
+- `not_run`;
+- `not_scheduled`;
+- `stale`;
+- `unknown`.
+
+Only authoritative `passed` evidence for the exact current head satisfies a required gate. A code-changing repair invalidates all verification, review, operations, documentation, and readiness evidence for the previous head. The workflow returns to deterministic verification and proceeds through the canonical order again.
 
 ## Documentation contract
 
 The repository document registry is `agentic-maintenance.yaml`. The Documentation Steward uses it to determine which canonical documents are required for each change trigger.
 
-A PR cannot become ready until required documents are current or a validated `no_documentation_change` decision is recorded.
+A PR cannot become ready until every required document is current or a validated `no_documentation_change` decision is recorded. A missing, stale, contradictory, or materially misleading required document is a blocker and must be corrected and revalidated in the same delivery. It cannot be deferred to a later issue while the current delivery is declared ready.
+
+When the required documentation correction would materially change approved product, architecture, authority, or scope, the workflow holds for human scope approval. That hold is not a deferral and cannot receive a ready verdict.
 
 ## Degraded operation
 
@@ -217,4 +249,5 @@ Degradation is explicit and audited; it is not silently presented as independent
 - no model-owned workflow state;
 - no requirement that every role use a different provider;
 - no automatic merge, production mutation, or destructive action;
-- no assumption that incoming issues or scan findings are complete.
+- no assumption that incoming issues or scan findings are complete;
+- no deferred stale required documentation while a delivery is represented as ready.

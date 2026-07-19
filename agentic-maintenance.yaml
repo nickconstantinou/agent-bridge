@@ -7,6 +7,7 @@ roles:
       - requirements
       - issue_validation
       - issue_authoring
+      - decomposition_review
       - planning
       - planning_repair
       - executor_guidance
@@ -52,6 +53,7 @@ canonical_documents:
   worker_user_guide:
     - docs/WORKER-GUIDE.md
   architecture:
+    - docs/architecture/01-current-architecture.md
     - docs/architecture/engineering-worker.md
     - docs/architecture/agentic-worker-orchestration.md
     - docs/architecture/agentic-prompt-contracts.md
@@ -160,7 +162,39 @@ change_triggers:
     required:
       - agent_policy
       - maintenance
+      - architecture
       - testing
+      - production_readiness
+
+workflow_contract:
+  multi_issue_mutation_requires:
+    - complete_read_only_issue_bundle
+    - technical_lead_decomposition_review
+    - canonical_invariant_matrix
+    - ready_for_issue_mutation
+  canonical_runtime_order:
+    - deterministic_verification
+    - technical_lead_implementation_review
+    - technical_lead_operations_review_when_triggered
+    - documentation_steward_author
+    - documentation_steward_validate
+    - technical_lead_pr_readiness
+    - exact_head_ci
+    - human_merge_gate
+  code_change_invalidates:
+    - deterministic_verification
+    - technical_lead_implementation_review
+    - technical_lead_operations_review
+    - documentation_authoring
+    - documentation_validation
+    - pr_readiness
+  exact_head_evidence_statuses:
+    - passed
+    - failed
+    - not_run
+    - not_scheduled
+    - stale
+    - unknown
 
 readiness:
   require_documentation_impact: true
@@ -170,6 +204,12 @@ readiness:
     - technical_lead_validation
     - manifest_trigger_evaluation
   block_on_missing_required_document: true
+  block_on_stale_required_document: true
+  block_on_contradictory_required_document: true
+  block_on_materially_misleading_required_document: true
+  require_same_delivery_documentation_correction: true
+  deferral_satisfies_readiness: false
+  block_on_non_current_head_evidence: true
 
 independence:
   preference_order:
@@ -178,9 +218,12 @@ independence:
     - fresh_session_technical_lead
     - same_target_non_independent
   report_degradation: true
+  record_required_and_actual_levels: true
+  block_when_required_level_unavailable: true
 
 human_gates:
   - unresolved_product_decision
+  - material_scope_change
   - merge
   - destructive_operation
   - production_deployment

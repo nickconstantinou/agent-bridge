@@ -148,16 +148,23 @@ fi
 (( sentinel_removed == 1 )) || die "failed to remove sentinel: $sentinel_path — audit shows an authorized attempt only, sentinel may still be present, manual review required"
 [[ ! -e "$sentinel_path" && ! -L "$sentinel_path" ]] || die "sentinel still present after removal attempt: $sentinel_path — manual review required"
 
+# The sentinel is gone and verified absent — the clear has committed. From
+# here on nothing is allowed to change the tool's result: every remaining
+# step (the confirmation echo, the optional completion audit entry, its own
+# warning on failure) is purely informational. `set +e` makes this region
+# genuinely non-failing rather than merely "individually guarded" — a
+# closed/broken stdout on the confirmation echo, or a failed warning echo
+# after a failed completion-audit write, must not make an already-committed
+# clear exit nonzero.
+set +e
 echo "rollout-sentinel-clear: sentinel cleared (expected_commit=$sentinel_commit artifact_dir=$sentinel_artifact_dir)"
-
-# Best-effort only from here on: the clear already committed above. A
-# failure appending this optional completion record must never change the
-# tool's exit status or make a completed clear look ambiguous.
 completion_audit_log="$audit_log"
 if (( test_mode == 1 )) && [[ -n "${AGENT_BRIDGE_ROLLOUT_TEST_FORCE_COMPLETION_AUDIT_FAILURE:-}" ]]; then
   completion_audit_log="$log_dir/does-not-exist/sentinel-clear.log"
 fi
 printf '%s hostname=%s pid=%s action=clear_completed expected_commit=%s artifact_dir=%s\n' \
-  "$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(/usr/bin/hostname)" "$$" "$sentinel_commit" "$sentinel_artifact_dir" >> "$completion_audit_log" 2>/dev/null \
-  || echo "rollout-sentinel-clear: warning: failed to append the optional clear_completed audit entry (sentinel was already removed and verified successfully)" >&2
+  "$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(/usr/bin/hostname)" "$$" "$sentinel_commit" "$sentinel_artifact_dir" >> "$completion_audit_log" 2>/dev/null
+if (( $? != 0 )); then
+  echo "rollout-sentinel-clear: warning: failed to append the optional clear_completed audit entry (sentinel was already removed and verified successfully)" >&2
+fi
 exit 0

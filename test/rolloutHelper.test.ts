@@ -1243,5 +1243,34 @@ describe("interrupted-rollout sentinel (Phase 4C.4, issue #135)", () => {
       expect(auditContent).toMatch(/action=clear_authorized/);
       expect(auditContent).not.toMatch(/action=clear_completed/);
     });
+
+    it("still exits 0 with the sentinel gone when stdout/stderr are closed and the completion audit write also fails", () => {
+      // The reviewer's exact scenario: unlink is the commit point, but
+      // everything after it — the confirmation echo, the completion audit
+      // append, and its own warning echo on failure — must be unable to
+      // flip the result. Closing both output descriptors makes even the
+      // plain `echo` calls fail, proving `set +e` (not just individually
+      // guarding one fallible command) is what makes this region safe.
+      const fixture = useMinimalInventory(createFixture());
+      const failed = runRollout(fixture, "backup");
+      expect(failed.status).not.toBe(0);
+      const sentinelContent = readFileSync(sentinelPath(fixture), "utf8");
+      const recordedArtifactDir = /^artifact_dir=(.*)$/m.exec(sentinelContent)?.[1]!;
+
+      const result = spawnSync(
+        "bash",
+        ["-c", 'exec "$0" "$@" 1>&- 2>&-', sentinelClearPath, "--expected-commit", fixture.expectedCommit, "--artifact-dir", recordedArtifactDir],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            AGENT_BRIDGE_ROLLOUT_TEST_ROOT: fixture.root,
+            AGENT_BRIDGE_ROLLOUT_TEST_FORCE_COMPLETION_AUDIT_FAILURE: "1",
+          },
+        },
+      );
+      expect(result.status, JSON.stringify(result)).toBe(0);
+      expect(existsSync(sentinelPath(fixture)), "sentinel must be gone — the clear genuinely committed regardless of closed output descriptors").toBe(false);
+    });
   });
 });

@@ -79,7 +79,7 @@ last_validated_against: <commit-sha-or-branch>
 | `docs/architecture/agentic-prompt-contracts.md` | authoritative | canonical | Source-controlled role/mode prompt registry, red-test planning, focused repair, and DB override retirement. |
 | `docs/architecture/shared-runtime.md` | authoritative | canonical | Shared Runtime boundary, including the memory/handoff seam note for issue #69. |
 | `docs/architecture/memory-and-handoff.md` | authoritative | canonical | Compact-first memory, persistent memory promotion, and CLI handoff architecture for issue #69. |
-| `docs/architecture/capability-registry.md` | active architecture | canonical for intended design | Scope controlled by Epic 11 roadmap. |
+| `docs/architecture/capability-registry.md` | active architecture | canonical for intended design | Scope controlled by the completed Epic 11 record and current runtime evidence. |
 | `docs/architecture/platform-boundary.md` | authoritative | canonical | OSS/platform ownership boundary. |
 | `docs/architecture/01-current-architecture.md` | implemented-record | advisory | Snapshot audit; useful evidence, not higher than newer ADRs. |
 | `docs/architecture/02-gap-analysis.md` | partially-implemented | advisory | Backlog/gap list; revalidate before building. |
@@ -91,7 +91,7 @@ last_validated_against: <commit-sha-or-branch>
 | `docs/architecture/08-testing-strategy.md` | authoritative testing summary | canonical | Acceptance-first and role-boundary testing strategy. |
 | `docs/architecture/09-risk-register.md` | risk register | advisory | Revalidate risks during implementation and rollout. |
 | `docs/architecture/10-production-readiness.md` | authoritative readiness | canonical | Role orchestration production qualification gate. |
-| `docs/roadmap/epic-11-runtime-hardening.md` | active-roadmap | canonical | Earlier approved runtime-hardening roadmap. |
+| `docs/roadmap/epic-11-runtime-hardening.md` | implemented-record | historical/advisory | Completed runtime-hardening roadmap retained as delivery history. |
 | `docs/roadmap/issue-69-compact-memory-handoff.md` | active-roadmap | canonical | TDD implementation plan for compact-first memory and one-time CLI handoff context. |
 | `docs/roadmap/issue-69-coding-agent-prompt.md` | active-roadmap | advisory | Ready-to-use implementation prompt; subordinate to architecture and roadmap docs. |
 | `docs/roadmap/issue-159-role-based-orchestration.md` | active-roadmap, partially implemented | canonical | Prompt foundation delivered; remaining role orchestration tracked by slices. |

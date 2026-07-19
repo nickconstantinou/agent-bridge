@@ -1,99 +1,142 @@
 # Worker Prompt Pack
 
-This directory contains the version-controlled default prompts for the Agent Bridge engineering worker.
+This directory contains the version-controlled prompts for the Agent Bridge Engineering Worker.
 
-This is a scaffold only. The current worker handlers still use their existing inline prompts and DB override paths until the follow-up wiring work is completed.
+There are two explicit prompt generations:
 
-For the exact handler-by-handler wiring contract, see [`WIRING.md`](./WIRING.md).
+1. **Canonical role prompts** under `roles/`, registered by `src/agenticPromptContracts.ts`.
+2. **Legacy handler prompts** in this directory, registered by `src/workerPrompts.ts`, retained while Issue #159 migrates existing worker phases.
 
-## Boundary
+For the handler-by-handler map and migration rules, see [`WIRING.md`](./WIRING.md). The architecture contract is `docs/architecture/agentic-prompt-contracts.md`.
 
-Prompts may guide CLI behavior, but they are not the source of truth for safety. These invariants must remain mechanically enforced in code:
+## Authority boundary
 
-- No live checkout mutation.
-- No merge without explicit approval.
-- Red tests must fail before implementation.
-- Red commits may only contain test files.
-- Green commits may not modify test files.
-- Test-only imports must not leak into production code.
-- PR merge approval must verify the expected head SHA and green CI.
-- Repair attempts, PR caps, and stale handling remain code-controlled.
+Prompts guide model behaviour but never grant authority. Agent Bridge code owns:
 
-## Prompt precedence after wiring
+- role and mode;
+- evidence and context selection;
+- tools and permissions;
+- budgets and timeouts;
+- structured output schemas and validators;
+- repair limits;
+- workflow state and persistence;
+- approvals, merge, deployment, and destructive-operation gates.
 
-The intended follow-up implementation should use this precedence:
+A prompt cannot weaken these controls. Existing mechanical invariants remain authoritative:
 
-1. DB override template, if present.
-2. Bundled prompt file from this directory.
-3. Hardcoded emergency fallback only for critical paths.
+- no live-checkout implementation mutation;
+- no merge without explicit approval;
+- red tests must fail for the planned reason before implementation;
+- red commits contain test changes only;
+- green commits do not alter committed red tests;
+- test-only imports do not leak into production code;
+- merge verifies the expected PR head and green CI;
+- cancellation, retries, leases, PR caps, and stale handling remain code-controlled.
 
-DB overrides are assumed to be complete templates. The prompt loader should not append bundled supplements to DB overrides unless a caller explicitly opts in.
+## Canonical prompt resolution
 
-## Token budget policy
+Canonical role prompts resolve only from reviewed source-controlled files:
 
-The prompt pack should preserve quality without appending all context to every CLI call.
+1. registered prompt key and contract version;
+2. source file under `prompts/worker/roles/`;
+3. declared required render variables;
+4. bounded context rendering;
+5. stable source-template hash plus invocation-specific rendered-content hash.
 
-Wiring rules:
+Canonical role contracts set `allowDatabaseOverride: false`. A row in SQLite is not a backup and cannot replace a canonical prompt.
 
-- Inject only the supplements mapped to the current prompt key.
-- Keep supplements compact and phase-specific.
-- Do not paste full Agent Skills documents into runtime prompts.
-- Create a compact execution contract during implementation planning and pass that to red/green/repair phases instead of repeatedly passing the full plan.
-- Cap large variables before rendering, especially `body`, `plan_text`, `failure_output`, CI logs, and PR diff excerpts.
-- Prefer narrow excerpts for execution phases: relevant phase, target files, verification command, risk boundary, and out-of-scope list.
-- Keep the full human-readable plan for approval packs and PR context, not for every CLI execution pass.
-- Add prompt-size tests or snapshot checks when wiring handlers.
+Missing required variables, unknown keys, invalid contract versions, unreadable source files, or oversized rendered output fail closed. Fallback models receive the same key, version, source template, schema, validator, tools, and permissions; only the target/model changes.
 
-Recommended context shape:
+## Legacy database overrides
 
-| Phase | Context to pass |
-|---|---|
-| Feature, defect, refactor scan | Repository name plus concise scan instructions; let the CLI inspect the repo locally. |
-| Implementation planning | Full work item context, capped, plus compact supplements. |
-| Red test | Execution contract plus relevant plan slice only. |
-| Green implementation | Execution contract, failing-test summary, target files, and verification command. |
-| CI fix | Execution contract plus capped CI failure excerpt. |
-| Repair | Execution contract plus capped prior failure and current phase. |
+Some existing handlers still call `ctx.db.getPrompt(...)`. Those rows are mutable legacy runtime overrides, not the canonical source and not a disaster-recovery backup.
 
-## Execution contract
+During migration:
 
-Implementation planning prompts should emit a compact machine-facing section that later phases can consume without the full plan:
+- no new role prompt or platform/operator workflow may create a database override;
+- existing rows remain usable only by explicitly unmigrated legacy handlers;
+- an override cannot change tools, permissions, validators, budgets, lifecycle authority, or human gates;
+- rows must be inventoried without logging contents before retirement;
+- approved custom behaviour moves into reviewed prompt files and tests;
+- reads are disabled handler by handler;
+- `setPrompt()`, `getPrompt()`, and the table are removed only after callers and retained rows reach zero through a separately approved migration.
 
-```json
-{
-  "target_files": ["src/example.ts"],
-  "test_files": ["src/example.test.ts"],
-  "phase": "red-test | green-implementation | ci-fix | repair",
-  "verification": "npm test -- example",
-  "risk_level": "low | medium | high",
-  "out_of_scope": ["unrelated cleanup", "schema migration"]
-}
-```
+## Prompt budgets
 
-The follow-up wiring should store the full Markdown plan for humans and extract/store this compact execution contract for execution prompts.
+Prompt quality must not depend on unbounded context.
 
-## Prompt families
+- Inject only context needed by the current role and mode.
+- Bound every supplied variable before rendering.
+- Keep planning evidence rich enough to establish product and architectural intent.
+- Pass validated work packets and `RedTestSpec` records to execution rather than the whole planning transcript.
+- Cap bodies, plan text, failure output, CI logs, diffs, and repository evidence.
+- Keep the full human plan for approval and audit surfaces, not every CLI pass.
+- Test template identity, required variables, rendered bounds, and sibling prompt isolation.
 
-| Prompt key | File | Purpose |
-|---|---|---|
-| `feature_plan` | `feature-plan.md` | Plan a user-requested feature before work-item approval. |
-| `implementation_plan:create` | `implementation-plan-create.md` | Produce the canonical approval/execution plan for a work item. |
-| `implementation_plan:improve` | `implementation-plan-improve.md` | Repair a weak implementation plan. |
-| `implementation_plan:contract_repair` | `implementation-plan-contract-repair.md` | Recover a missing machine contract from an otherwise valid plan. |
-| `defect_scan:scan` | `defect-scan.md` | Read-only defect discovery. |
-| `defect_scan:plan` | `defect-plan.md` | TDD plan for a defect finding. |
-| `defect_scan:triage` | `defect-triage.md` | Conservative approve/reject gate for scan findings. |
-| `refactor_scan:scan` | `refactor-scan.md` | Read-only refactor opportunity discovery. |
-| `refactor_scan:plan` | `refactor-plan.md` | Safe refactor implementation plan. |
-| `tdd_implementation:red_test` | `tdd-red-test.md` | Failing-test-only pass. |
-| `tdd_implementation:green_implementation` | `tdd-green-implementation.md` | Minimal production implementation pass. |
-| `tdd_implementation:ci_fix` | `tdd-ci-fix.md` | Existing PR branch CI repair pass. |
-| `tdd_implementation:repair` | `tdd-repair.md` | Repair a failed autonomous attempt. |
-| `orchestrated_task:plan` | `orchestrated-plan.md` | Legacy orchestrated task planning prompt. |
-| `orchestrated_task:execute` | `orchestrated-execute.md` | Legacy orchestrated task execution prompt. |
+## Advisor-authored red tests
+
+Technical Lead planning owns the test strategy. A plan is invalid when it says only `write tests`, `add unit tests`, or `increase coverage`.
+
+Each planned red test identifies:
+
+- mapped acceptance criteria and product intent;
+- architecture boundaries, invariants, and triggered risks;
+- exact test class, file, name, production boundary, fixture, and real caller action;
+- authoritative expected result and oracle;
+- why current code fails and the exact expected red assertion;
+- focused red command;
+- sibling behaviour remaining green;
+- characterization needs and false-positive controls.
+
+The active `implementation-plan-create.md` and `implementation-plan-improve.md` prompts use the same structured Red Tests and Red Test Coverage contracts. The existing plan validator fails closed when those sections or required fields are absent.
+
+## Canonical role prompt families
+
+### Technical Lead
+
+- `technical_lead:requirements`
+- `technical_lead:issue_validation`
+- `technical_lead:issue_authoring`
+- `technical_lead:planning`
+- `technical_lead:planning_repair:red_tests`
+- `technical_lead:planning_repair:execution_contract`
+- `technical_lead:executor_guidance`
+- `technical_lead:implementation_review`
+- `technical_lead:operations_review`
+- `technical_lead:pr_readiness`
+
+### Code Worker
+
+- `code_worker:scan:defect`
+- `code_worker:scan:refactor`
+- `code_worker:investigate`
+- `code_worker:red`
+- `code_worker:green`
+- `code_worker:repair`
+- `code_worker:verify`
+
+### Documentation Steward
+
+- `documentation_steward:impact`
+- `documentation_steward:author`
+- `documentation_steward:validate`
+- `documentation_steward:maintenance`
+
+## Legacy prompt families
+
+Legacy keys remain compatibility aliases or inputs until their handler phase migrates:
+
+- `feature_plan`;
+- `implementation_plan:create`;
+- `implementation_plan:improve`;
+- `implementation_plan:contract_repair`;
+- `defect_scan:*`;
+- `refactor_scan:*`;
+- `tdd_implementation:*`;
+- `orchestrated_task:*`.
+
+They must not silently become canonical role prompts. Status and audit should report their compatibility/degraded state.
 
 ## Skill supplements
 
-The files under `supplements/` are compact local adaptations inspired by `addyosmani/agent-skills`. They are intentionally distilled rather than copied wholesale so the worker can inject phase-specific guidance without bloating every prompt.
-
-The follow-up wiring should keep supplements small, deterministic, and specific to each worker phase.
+Files under `supplements/` are compact, phase-specific guidance. Canonical role contracts do not gain authority from supplements. Legacy handlers may append their registered supplements within the existing prompt budget; database overrides do not receive them unless an existing caller explicitly opts in.

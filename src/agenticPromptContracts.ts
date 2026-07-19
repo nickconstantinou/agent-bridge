@@ -1,11 +1,19 @@
 /**
  * PURPOSE: Own the versioned source-controlled prompt registry for Engineering Worker roles and modes.
- * INPUTS: Canonical prompt keys, bounded render variables, and a prompt-file reader.
- * OUTPUTS: Effective built-in prompt text with stable template identity and invocation-specific rendered identity.
- * NEIGHBORS: src/workerPrompts.ts, src/advisor.ts, src/handlers/*, prompts/worker/roles/*
+ * INPUTS: Canonical prompt keys, bounded render variables, prompt files, and canonical lifecycle skills.
+ * OUTPUTS: Effective prompts with stable template, skill-set, composed, and rendered identity.
+ * NEIGHBORS: src/workerPrompts.ts, src/lifecycleSkillGuidance.ts, src/advisor.ts, src/handlers/*
  */
 
 import { createHash } from "node:crypto";
+import {
+  appendLifecycleSkillGuidance,
+  lifecycleSkillIdentities,
+  lifecycleSkillSetHash as hashLifecycleSkillSet,
+  loadLifecycleSkillGuidance,
+  type LifecycleSkillIdentity,
+  type LifecycleSkillKey,
+} from "./lifecycleSkillGuidance.js";
 import {
   renderWorkerPrompt,
   truncateWorkerPromptValue,
@@ -45,6 +53,8 @@ export interface AgenticPromptContract {
   filePath: string;
   outputContract: string;
   requiredVariables: readonly string[];
+  /** Canonical reusable SDLC know-how composed into this mode in declared order. */
+  lifecycleSkills: readonly LifecycleSkillKey[];
   required: true;
   source: "builtin";
   /** Canonical role prompts are reviewable source artifacts, never mutable DB text. */
@@ -59,8 +69,14 @@ export interface EffectiveAgenticPrompt {
   mode: string;
   source: "builtin";
   content: string;
-  /** Stable identity of the reviewed source-controlled template. */
+  /** Stable identity of the role/mode template alone. */
   contentHash: string;
+  /** Ordered canonical lifecycle skills and their source-fragment identities. */
+  lifecycleSkills: LifecycleSkillIdentity[];
+  /** Stable identity of the ordered lifecycle-skill set. */
+  lifecycleSkillSetHash: string;
+  /** Stable identity of the role template after canonical skill composition, before invocation context. */
+  composedContentHash: string;
   /** Invocation-specific identity after bounded context rendering. */
   renderedContentHash: string;
 }
@@ -121,6 +137,43 @@ export const AGENTIC_PROMPT_REQUIRED_VARIABLES: Record<AgenticPromptKey, readonl
   ],
 };
 
+export const AGENTIC_PROMPT_LIFECYCLE_SKILLS: Record<AgenticPromptKey, readonly LifecycleSkillKey[]> = {
+  "technical_lead:requirements": ["requirements-to-acceptance"],
+  "technical_lead:issue_validation": ["requirements-to-acceptance"],
+  "technical_lead:issue_authoring": ["requirements-to-acceptance"],
+  "technical_lead:planning": [
+    "requirements-to-acceptance",
+    "risk-based-test-strategy",
+    "red-green-refactor-tdd",
+  ],
+  "technical_lead:planning_repair:execution_contract": ["red-green-refactor-tdd"],
+  "technical_lead:planning_repair:red_tests": [
+    "risk-based-test-strategy",
+    "red-green-refactor-tdd",
+  ],
+  "technical_lead:executor_guidance": ["red-green-refactor-tdd"],
+  "technical_lead:implementation_review": [
+    "risk-based-test-strategy",
+    "release-readiness-review",
+  ],
+  "technical_lead:operations_review": ["release-readiness-review"],
+  "technical_lead:pr_readiness": [
+    "risk-based-test-strategy",
+    "release-readiness-review",
+  ],
+  "code_worker:scan:defect": ["risk-based-test-strategy"],
+  "code_worker:scan:refactor": ["risk-based-test-strategy"],
+  "code_worker:investigate": ["risk-based-test-strategy"],
+  "code_worker:red": ["risk-based-test-strategy", "red-green-refactor-tdd"],
+  "code_worker:green": ["red-green-refactor-tdd"],
+  "code_worker:repair": ["risk-based-test-strategy", "red-green-refactor-tdd"],
+  "code_worker:verify": ["risk-based-test-strategy", "release-readiness-review"],
+  "documentation_steward:impact": ["release-readiness-review"],
+  "documentation_steward:author": [],
+  "documentation_steward:validate": ["release-readiness-review"],
+  "documentation_steward:maintenance": ["release-readiness-review"],
+};
+
 function contract(
   key: AgenticPromptKey,
   role: AgentRole,
@@ -137,6 +190,7 @@ function contract(
     filePath: `${ROOT}/${fileName}`,
     outputContract,
     requiredVariables: AGENTIC_PROMPT_REQUIRED_VARIABLES[key],
+    lifecycleSkills: AGENTIC_PROMPT_LIFECYCLE_SKILLS[key],
     required: true,
     source: "builtin",
     allowDatabaseOverride: false,
@@ -260,13 +314,15 @@ export async function loadAgenticPrompt(
   }
 
   const template = (await reader.readText(promptContract.filePath)).trim();
+  const loadedSkills = await loadLifecycleSkillGuidance(promptContract.lifecycleSkills, reader);
+  const composedTemplate = appendLifecycleSkillGuidance(template, loadedSkills);
   const boundedVariables = Object.fromEntries(
     Object.entries(variables).map(([name, value]) => [
       name,
       truncateWorkerPromptValue(value, MAX_VARIABLE_CHARS),
     ]),
   );
-  const content = renderWorkerPrompt(template, boundedVariables).trim();
+  const content = renderWorkerPrompt(composedTemplate, boundedVariables).trim();
   if (content.length > MAX_RENDERED_PROMPT_CHARS) {
     throw new Error(`Rendered prompt ${key} exceeds ${MAX_RENDERED_PROMPT_CHARS} characters`);
   }
@@ -279,6 +335,9 @@ export async function loadAgenticPrompt(
     source: "builtin",
     content,
     contentHash: sha256(template),
+    lifecycleSkills: lifecycleSkillIdentities(loadedSkills),
+    lifecycleSkillSetHash: hashLifecycleSkillSet(loadedSkills),
+    composedContentHash: sha256(composedTemplate),
     renderedContentHash: sha256(content),
   };
 }

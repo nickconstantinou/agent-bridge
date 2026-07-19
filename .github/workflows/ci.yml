@@ -20,18 +20,6 @@ jobs:
 
       - run: npm ci
 
-      - name: Run tests
-        shell: bash
-        run: |
-          set -o pipefail
-          npm test 2>&1 | tee test-output.log
-
-      - name: Upload failing test output
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-output
-          path: test-output.log
-          retention-days: 1
+      - run: npm test
 
       - run: npm run typecheck

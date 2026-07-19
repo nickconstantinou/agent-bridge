@@ -8,6 +8,7 @@ roles:
       - issue_validation
       - issue_authoring
       - planning
+      - planning_repair
       - executor_guidance
       - implementation_review
       - operations_review

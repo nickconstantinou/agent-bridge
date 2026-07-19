@@ -30,12 +30,17 @@ describe("worker loader basics", () => {
     expect(renderWorkerPrompt("Hello {name}", { name: "Nick" })).toBe("Hello Nick");
   });
 
-  it("loads a bundled template without optional guidance", async () => {
+  it("keeps canonical lifecycle skills when optional worker supplements are disabled", async () => {
     const prompt = await loadWorkerPrompt("feature_plan", { value: "abc" }, reader, {
       includeSupplements: false,
     });
 
-    expect(prompt).toBe("Feature abc");
+    expect(prompt).toContain("Feature abc");
+    expect(prompt).toContain("Lifecycle skill: requirements-to-acceptance@1.0.0");
+    expect(prompt).toContain("Canonical guidance from risk-based-test-strategy");
+    expect(prompt).toContain("Canonical guidance from red-green-refactor-tdd");
+    expect(prompt).not.toContain("# Worker-specific supplements");
+    expect(prompt).not.toContain("Supplement text");
   });
 
   it("appends canonical lifecycle skills and registered worker supplements", async () => {

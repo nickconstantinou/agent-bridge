@@ -344,6 +344,21 @@ function cleanupStaleTempFiles(dir: string, path: string): void {
  * would mean something unexpected is going on (not ordinary leftover
  * debris), so that case fails closed rather than being silently deleted.
  */
+/**
+ * Recovers debris from a previous bootstrap's post-commit interruption
+ * window, grouped by stem and strictly two-phase: nothing is deleted until
+ * *every* matching stem's main temp file (if present) has been validated.
+ * Directory iteration order is unspecified, so a single combined pass that
+ * deletes a sidecar as soon as it's seen — before a *later*-iterated main
+ * file for that same stem turns out to be inode-mismatched — could delete
+ * part of an unexpected state before the mismatch is even discovered.
+ * Phase 1 only groups entries; phase 2 validates every stem's main file
+ * (throwing before anything is removed if any stem fails validation);
+ * phase 3 is the only place anything is actually unlinked, and only runs
+ * once every stem has passed phase 2 cleanly. A sidecar is only ever
+ * queued for removal once its own stem's main file is confirmed either
+ * absent or the exact same inode as the destination.
+ */
 function cleanupStalePostCommitLink(dir: string, path: string): void {
   let destinationStat;
   try {
@@ -353,51 +368,66 @@ function cleanupStalePostCommitLink(dir: string, path: string): void {
   }
   if (!destinationStat.isFile()) return;
   const base = escapeRegExp(basename(path));
-  const mainPattern = new RegExp(`^\\.bootstrap-[0-9a-f]{32}-${base}$`);
-  // A sidecar can outlive its main temp file: withSignalCleanup()'s
-  // committed-state branch removes the main hard link immediately but only
-  // best-effort-removes its sidecars, so a crash right at that point can
-  // leave an orphaned -wal/-shm with no corresponding main temp file at
-  // all. These are never hard links to the destination themselves (WAL/SHM
-  // files aren't linked the way the main database file is), so no inode
-  // check applies to them — they're always safe to remove as debris tied
-  // to this target's own temp-name pattern.
-  const sidecarPattern = new RegExp(`^\\.bootstrap-[0-9a-f]{32}-${base}(-wal|-shm)$`);
+  // Captures the shared stem (group 1) plus an optional -wal/-shm suffix
+  // (group 2) so every entry tied to the same temp attempt groups together
+  // regardless of which one directory listing happens to return first.
+  const stemPattern = new RegExp(`^(\\.bootstrap-[0-9a-f]{32}-${base})(-wal|-shm)?$`);
   let entries: string[];
   try {
     entries = readdirSync(dir);
   } catch {
     return;
   }
+
+  // Phase 1: group by stem. No filesystem mutation yet.
+  const stems = new Map<string, { hasMain: boolean; sidecars: string[] }>();
   for (const entry of entries) {
-    const full = join(dir, entry);
-    if (mainPattern.test(entry)) {
-      let entryStat;
+    const match = stemPattern.exec(entry);
+    if (!match) continue;
+    const stem = match[1];
+    const suffix = match[2];
+    const info = stems.get(stem) ?? { hasMain: false, sidecars: [] };
+    if (suffix) info.sidecars.push(entry);
+    else info.hasMain = true;
+    stems.set(stem, info);
+  }
+
+  // Phase 2: validate every stem's main file before queuing *anything* —
+  // including that stem's own sidecars — for removal. Throws immediately,
+  // before phase 3 ever runs, if any stem's main file is inode-mismatched.
+  const toRemove: string[] = [];
+  for (const [stem, info] of stems) {
+    let mainStat: ReturnType<typeof lstatSync> | undefined;
+    if (info.hasMain) {
+      const full = join(dir, stem);
       try {
-        entryStat = lstatSync(full);
+        mainStat = lstatSync(full);
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
-        throw new Error(`failed to inspect stale post-commit temp file ${full}: ${err instanceof Error ? err.message : String(err)}`);
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw new Error(`failed to inspect stale post-commit temp file ${full}: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        // Vanished between listing and stat — nothing to validate; falls
+        // through to "absent", so this stem's sidecars are still safe.
       }
-      if (entryStat.dev !== destinationStat.dev || entryStat.ino !== destinationStat.ino) {
-        throw new Error(
-          `stale temp file ${full} shares a name with the published database at ${path} but not its inode — refusing to remove it automatically; this needs manual operator review`,
-        );
+      if (mainStat) {
+        if (mainStat.dev !== destinationStat.dev || mainStat.ino !== destinationStat.ino) {
+          throw new Error(
+            `stale temp file ${full} shares a name with the published database at ${path} but not its inode — refusing to remove it or its sidecars automatically; this needs manual operator review`,
+          );
+        }
+        toRemove.push(full);
       }
-      try {
-        rmSync(full);
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
-        throw new Error(`failed to remove stale post-commit temp file ${full}: ${err instanceof Error ? err.message : String(err)}`);
-      }
-      removeSidecars(full);
-    } else if (sidecarPattern.test(entry)) {
-      try {
-        rmSync(full);
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
-        throw new Error(`failed to remove orphaned post-commit sidecar file ${full}: ${err instanceof Error ? err.message : String(err)}`);
-      }
+    }
+    for (const sidecar of info.sidecars) toRemove.push(join(dir, sidecar));
+  }
+
+  // Phase 3: every stem passed validation — now it's safe to actually remove.
+  for (const full of toRemove) {
+    try {
+      rmSync(full);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw new Error(`failed to remove stale post-commit temp file ${full}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }
@@ -436,12 +466,13 @@ function yieldToEventLoop(): Promise<void> {
  * path — "post-commit" is the one exception (between link() and unlink(),
  * proving the committed-state handler branch without requiring a genuinely
  * unobservable SIGKILL race), and is only ever awaited when this specific
- * hook is active, never in production (see bootstrapDatabase). "post-unlink"
- * extends the real checkpoint after unlink() but still inside
- * withSignalCleanup()'s guarded region, covering the post-publication
- * evidence-read window.
+ * hook is active, never in production (see bootstrapDatabase). "post-unlink",
+ * "post-inspection", and "post-evidence" each extend one of the three real
+ * checkpoints spanning the post-publication work — inspection, evidence-file
+ * writing, and the final guard-teardown point — all still inside
+ * withSignalCleanup()'s guarded region.
  */
-async function testPause(checkpoint: "post-migration" | "post-validation" | "post-commit" | "post-unlink"): Promise<void> {
+async function testPause(checkpoint: "post-migration" | "post-validation" | "post-commit" | "post-unlink" | "post-inspection" | "post-evidence"): Promise<void> {
   const pauseFile = testHook("AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_FILE");
   if (!pauseFile || testHook("AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_AT") !== checkpoint) return;
   writeFileSync(pauseFile, "paused\n");
@@ -528,14 +559,17 @@ async function withSignalCleanup<T>(state: BootstrapSignalState, fn: () => Promi
  * new database is created and migrated at a randomly-named temp path in the
  * *same* directory as the final target, validated (integrity, foreign keys,
  * exact schema version), then published with no-replace link()+unlink()
- * semantics only after every check passes. Three real, unconditional
- * event-loop yields — after migration, after validation, and after the
- * final unlink() (still inside withSignalCleanup()'s guarded region, so the
- * committed-state handler is still installed for the post-publication
- * evidence read too) — all always present in production, not just under a
- * test hook, let a pending SIGTERM/SIGINT actually be serviced. Only the
- * link()+unlink() pair itself is deliberately *not* interrupted by any
- * yield, so it stays the minimal possible synchronous window. If anything
+ * semantics only after every check passes. Five real, unconditional
+ * event-loop yields — after migration, after validation, after unlink(),
+ * after the post-publication inspection read, and after the evidence file
+ * is written — all always present in production, not just under a test
+ * hook, let a pending SIGTERM/SIGINT actually be serviced. All three
+ * post-commit checkpoints stay inside withSignalCleanup()'s guarded
+ * region, so the committed-state handler remains installed through every
+ * fallible step of the post-publication work, right up to the last thing
+ * this function does. Only the link()+unlink() pair itself is deliberately
+ * *not* interrupted by any yield, so it stays the minimal possible
+ * synchronous window. If anything
  * fails before that window — missing-file precondition, parent validation,
  * the migration itself, post-migration validation, publication racing a
  * concurrently-created destination, or a serviced signal — the temp file
@@ -550,7 +584,7 @@ async function withSignalCleanup<T>(state: BootstrapSignalState, fn: () => Promi
  * bootstrap attempt against the same target, under the same exclusive
  * rollout lock, even though the destination already exists by then.
  */
-async function bootstrapDatabase(path: string, role: string): Promise<DbEvidence> {
+async function bootstrapDatabase(path: string, role: string, evidencePath: string | null): Promise<DbEvidence> {
   const dir = dirname(path);
   validateParentDir(dir);
   // Runs even when the destination already exists — recovers a stale
@@ -617,8 +651,26 @@ async function bootstrapDatabase(path: string, role: string): Promise<DbEvidence
       await testPause("post-unlink");
 
       removeSidecars(tempPath);
-      const evidence = inspectDatabase(path, true);
-      return { ...evidence, role };
+      const evidence = { ...inspectDatabase(path, true), role };
+
+      // Real production checkpoint 4: unconditional, always present, after
+      // the (synchronous, but now-complete) inspection read and before the
+      // evidence file is written — still guarded, same reasoning as
+      // checkpoint 3.
+      await yieldToEventLoop();
+      await testPause("post-inspection");
+
+      writeEvidence(evidencePath, "bootstrap", [evidence]);
+
+      // Real production checkpoint 5: unconditional, always present — the
+      // final yield before the guard is removed, so a signal arriving
+      // immediately after the evidence file is written is still reported
+      // as "already published," not silently missed the instant this
+      // callback resolves and withSignalCleanup() tears down its listeners.
+      await yieldToEventLoop();
+      await testPause("post-evidence");
+
+      return evidence;
     });
   } catch (err) {
     cleanupTemp();
@@ -647,8 +699,9 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (argv[0] === "bootstrap") {
     const options = parseBootstrapArgs(argv.slice(1));
-    const evidence = await bootstrapDatabase(options.path, options.role);
-    writeEvidence(options.evidencePath, "bootstrap", [evidence]);
+    // writeEvidence() runs *inside* bootstrapDatabase(), still within
+    // withSignalCleanup()'s guarded region — see its checkpoint 4/5 comments.
+    await bootstrapDatabase(options.path, options.role, options.evidencePath);
     return;
   }
   const options = parseArgs(argv);

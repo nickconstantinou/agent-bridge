@@ -568,6 +568,137 @@ describe("rollout-db.ts bootstrap", () => {
     expect(db.pragma("user_version", { simple: true })).toBe(CURRENT_SCHEMA_VERSION);
     db.close();
   });
+
+  it("leaves a mismatched-inode main file AND both its sidecars completely untouched (two-phase validate-before-delete)", () => {
+    // Regression for the round-5 review finding: a single combined
+    // group-and-delete pass could remove a stem's sidecars as soon as they
+    // were seen in directory iteration (unspecified order), *before* that
+    // same stem's main file was later found to be inode-mismatched —
+    // deleting part of an unexpected state before the mismatch was even
+    // discovered. cleanupStalePostCommitLink() must validate every stem's
+    // main file first and only delete anything once every stem has passed,
+    // so a mismatched main's own sidecars are never touched either.
+    const dir = tempDir();
+    const dbPath = join(dir, "bridge.sqlite");
+    const first = runBootstrap(bootstrapArgs(dbPath));
+    expect(first.status, first.stderr).toBe(0);
+    const mismatchedMain = join(dir, ".bootstrap-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-bridge.sqlite");
+    const mismatchedWal = `${mismatchedMain}-wal`;
+    const mismatchedShm = `${mismatchedMain}-shm`;
+    writeFileSync(mismatchedMain, "not actually linked to the destination\n");
+    writeFileSync(mismatchedWal, "sidecar belonging to the mismatched main\n");
+    writeFileSync(mismatchedShm, "sidecar belonging to the mismatched main\n");
+
+    const second = runBootstrap(bootstrapArgs(dbPath));
+    expect(second.status).not.toBe(0);
+    expect(second.stderr).toMatch(/not its inode|manual operator review/i);
+    expect(existsSync(mismatchedMain), "mismatched main must not be deleted").toBe(true);
+    expect(existsSync(mismatchedWal), "sidecar of a mismatched main must not be deleted").toBe(true);
+    expect(existsSync(mismatchedShm), "sidecar of a mismatched main must not be deleted").toBe(true);
+    expect(existsSync(dbPath)).toBe(true);
+  });
+});
+
+describe("rollout-db.ts bootstrap post-publication signal checkpoints (round 5)", () => {
+  async function runWithPause(dbPath: string, checkpoint: string, pauseFile: string) {
+    return spawn(process.execPath, [
+      tsxCli, migrationScript, "bootstrap",
+      ...bootstrapArgs(dbPath),
+    ], {
+      env: {
+        ...process.env,
+        AGENT_BRIDGE_BOOTSTRAP_TEST_MODE: "1",
+        AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_AT: checkpoint,
+        AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_FILE: pauseFile,
+      },
+    });
+  }
+
+  it("reports the committed outcome when SIGTERM arrives after the post-publication inspection read, before evidence is written", async () => {
+    // Evidence-file behavior itself (that it's already written by this
+    // point) is covered by the "post-evidence" case below; this case
+    // doesn't pass --evidence at all, just proving the checkpoint itself.
+    const dir = tempDir();
+    const dbPath = join(dir, "bridge.sqlite");
+    const pauseFile = join(dir, ".pause-signal");
+    const child = await runWithPause(dbPath, "post-inspection", pauseFile);
+
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+
+    try {
+      const deadline = Date.now() + 8000;
+      while (!existsSync(pauseFile) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(existsSync(pauseFile), "child never reached the pause point").toBe(true);
+      expect(existsSync(dbPath), "destination must already be published at this checkpoint").toBe(true);
+
+      child.kill("SIGTERM");
+      const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+        child.on("exit", (code, signal) => resolve({ code, signal }));
+      });
+      expect(exit.code).toBe(143);
+    } finally {
+      if (!child.killed) child.kill("SIGKILL");
+    }
+
+    expect(stderr).toMatch(/already published|do NOT retry/i);
+    expect(existsSync(dbPath)).toBe(true);
+    const db = new Database(dbPath, { readonly: true });
+    expect(db.pragma("user_version", { simple: true })).toBe(CURRENT_SCHEMA_VERSION);
+    db.close();
+    const leftoverEntries = readdirSync(dir).filter((name) => name !== ".pause-signal");
+    const staleDebris = leftoverEntries.filter((name) => name.startsWith(".bootstrap-"));
+    expect(staleDebris, `unexpected .bootstrap-* debris: ${staleDebris.join(", ")}`).toEqual([]);
+  }, 15000);
+
+  it("reports the committed outcome and still writes the evidence file when SIGTERM arrives immediately after evidence is written", async () => {
+    const dir = tempDir();
+    const dbPath = join(dir, "bridge.sqlite");
+    const pauseFile = join(dir, ".pause-signal");
+    const child = spawn(process.execPath, [
+      tsxCli, migrationScript, "bootstrap",
+      ...bootstrapArgs(dbPath),
+      "--evidence", join(dir, "evidence.json"),
+    ], {
+      env: {
+        ...process.env,
+        AGENT_BRIDGE_BOOTSTRAP_TEST_MODE: "1",
+        AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_AT: "post-evidence",
+        AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_FILE: pauseFile,
+      },
+    });
+
+    let stderr = "";
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+
+    try {
+      const deadline = Date.now() + 8000;
+      while (!existsSync(pauseFile) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(existsSync(pauseFile), "child never reached the pause point").toBe(true);
+      // By this checkpoint the evidence file must already be written.
+      expect(existsSync(join(dir, "evidence.json")), "evidence file must already exist at this checkpoint").toBe(true);
+
+      child.kill("SIGTERM");
+      const exit = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+        child.on("exit", (code, signal) => resolve({ code, signal }));
+      });
+      expect(exit.code).toBe(143);
+    } finally {
+      if (!child.killed) child.kill("SIGKILL");
+    }
+
+    expect(stderr).toMatch(/already published|do NOT retry/i);
+    expect(existsSync(dbPath)).toBe(true);
+    const evidence = JSON.parse(readFileSync(join(dir, "evidence.json"), "utf8"));
+    expect(evidence.databases[0].path).toBe(dbPath);
+    const leftoverEntries = readdirSync(dir).filter((name) => name !== ".pause-signal" && name !== "evidence.json");
+    const staleDebris = leftoverEntries.filter((name) => name.startsWith(".bootstrap-"));
+    expect(staleDebris, `unexpected .bootstrap-* debris: ${staleDebris.join(", ")}`).toEqual([]);
+  }, 15000);
 });
 
 describe("rollout-db.ts ordinary modes never bootstrap", () => {

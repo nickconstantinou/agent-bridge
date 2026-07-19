@@ -25,7 +25,21 @@ Trace the approved issue and evidence. Separate established facts from residual 
 Give every approved acceptance criterion a stable requirement ID and map it to affected behaviour and verification. Do not invent or weaken criteria.
 
 ## Target Files
-List concrete repository-relative files and the owning functions, classes, repositories, handlers, schemas, prompts, scripts, services, or platform surfaces. State ownership boundaries that must not move or be bypassed.
+Provide a JSON array. Every referenced production and test path must use this exact shape:
+
+```json
+[
+  {
+    "path": "src/exact-file.ts",
+    "classification": "existing_at_base | existing_in_dependency | proposed_new_production | proposed_new_test",
+    "owner": "current module, function, repository, handler, schema, prompt, script, service, or platform surface",
+    "dependency_ref": null,
+    "rationale": "why this path is changed or why a new file is required"
+  }
+]
+```
+
+For `existing_in_dependency`, `dependency_ref` must name the dependency PR and exact reviewed ref. For a proposed new production file, identify the existing neighbouring owner it extends and why no current file is sufficient. `invalid_or_unclassified` is a blocking result and must never appear in an approvable plan. State ownership boundaries that must not move or be bypassed.
 
 ## Architectural Intent
 Describe the production path, ownership model, invariants, compatibility rules, permission boundaries, lifecycle authority, and prohibited shortcuts.
@@ -90,7 +104,7 @@ Every acceptance criterion must map to a red test or a justified deterministic n
 Break work into small dependency-ordered red/green/repair/verify packets. Each packet must state objective, permitted files or boundary, linked requirements and red tests, non-goals, exact commands, expected evidence, escalation conditions, and separate test/implementation commit intent.
 
 ## Documentation Obligations
-Identify documents to update or create, final-diff triggers to re-evaluate, and facts the Documentation Steward needs from implementation.
+Identify every document to update or create, final-diff triggers to re-evaluate, and facts the Documentation Steward needs from implementation. A stale, contradictory, or missing required document is a release blocker and must be corrected in the same delivery before readiness. Do not defer stale documentation to a later issue. When the required correction would materially expand approved product or architecture scope, stop for human scope approval rather than claiming readiness.
 
 ## Operations, Migration, and Rollback
 State prerequisites, compatibility, rollout order, abort conditions, rollback, authoritative postconditions, and human gates where applicable. Say `not applicable` with evidence when genuinely irrelevant.
@@ -126,4 +140,4 @@ List only unresolved consequential decisions. A plan requiring one cannot be dis
 ## Out of Scope
 Repeat explicit non-goals and prohibited refactors.
 
-Do not implement code. Do not claim tests exist unless cited by exact file and test name. The complete plan must be rejected if product, architecture, or triggered-risk test coverage is absent or if the red failure could be caused by an unrelated test defect.
+Do not implement code. Do not claim files or tests exist unless cited by exact path and evidence. The complete plan must be rejected if any target path is invalid or unclassified, product, architecture, or triggered-risk test coverage is absent, required documentation remains stale, or the red failure could be caused by an unrelated test defect.

@@ -1,5 +1,5 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,9 +10,10 @@ import { afterEach, describe, expect, it } from "vitest";
 // separately-invoked route for creating a genuinely missing production
 // database. Distinct script from rollout-agent-bridge.sh: never invoked
 // implicitly, never bundled with migration of existing databases, requires
-// an exact-match operator confirmation, and only accepts paths from a fixed
-// allowlist. Coordinates with the same rollout lock file so a bootstrap can
-// never race an active migrate rollout.
+// an exact-match operator confirmation and an explicit role, and only
+// accepts role/path *pairs* from a fixed allowlist (not just a bare path).
+// Coordinates with the same rollout lock file so a bootstrap can never race
+// an active migrate rollout.
 
 const helperPath = fileURLToPath(new URL("../scripts/rollout-bootstrap.sh", import.meta.url));
 const migrationScript = fileURLToPath(new URL("../scripts/rollout-db.ts", import.meta.url));
@@ -53,12 +54,12 @@ function createFixture(options: { allowlist?: string[]; preExisting?: boolean } 
   const newRolePath = join(dbDir, "new-role.sqlite");
   if (options.preExisting) writeFileSync(newRolePath, "already here");
 
-  const allowlist = options.allowlist ?? [newRolePath];
+  const allowlist = options.allowlist ?? [`worker:${newRolePath}`];
   writeFileSync(configFile, [
     `project_dir=${project}`,
     "runtime_user=rollout-test",
     `node_bin=${process.execPath}`,
-    ...allowlist.map((path) => `bootstrap_database=${path}`),
+    ...allowlist.map((entry) => `bootstrap_role=${entry}`),
     "",
   ].join("\n"), { mode: 0o600 });
 
@@ -72,8 +73,8 @@ exec "$@"
   return { root, project, newRolePath, configFile, lockFile };
 }
 
-function runBootstrapHelper(fixture: Fixture, target: string, confirm: string, env: Record<string, string> = {}) {
-  return spawnSync("bash", [helperPath, "--new-role", target, "--confirm-new-role", confirm], {
+function runBootstrapHelper(fixture: Fixture, role: string, target: string, confirm: string, env: Record<string, string> = {}) {
+  return spawnSync("bash", [helperPath, "--role", role, "--new-role", target, "--confirm-new-role", confirm], {
     encoding: "utf8",
     env: { ...process.env, AGENT_BRIDGE_ROLLOUT_TEST_ROOT: fixture.root, ...env },
   });
@@ -91,9 +92,9 @@ describe("rollout-bootstrap.sh", () => {
     execFileSync("test", ["-x", helperPath]);
   });
 
-  it("bootstraps an allowlisted, genuinely missing database", () => {
+  it("bootstraps an allowlisted role/path pair for a genuinely missing database", () => {
     const fixture = createFixture();
-    const res = runBootstrapHelper(fixture, fixture.newRolePath, fixture.newRolePath);
+    const res = runBootstrapHelper(fixture, "worker", fixture.newRolePath, fixture.newRolePath);
     expect(res.status, res.stderr).toBe(0);
     expect(existsSync(fixture.newRolePath)).toBe(true);
     const db = new Database(fixture.newRolePath, { readonly: true });
@@ -101,10 +102,36 @@ describe("rollout-bootstrap.sh", () => {
     db.close();
   });
 
-  it("refuses a target not on the fixed bootstrap allowlist", () => {
+  it("refuses an unrecognized role name", () => {
+    const fixture = createFixture();
+    const res = runBootstrapHelper(fixture, "not-a-role", fixture.newRolePath, fixture.newRolePath);
+    expect(res.status).not.toBe(0);
+    expect(res.stderr).toMatch(/unknown database role/i);
+    expect(existsSync(fixture.newRolePath)).toBe(false);
+  });
+
+  it("refuses a role/path pair that isn't on the allowlist even when the role alone is valid", () => {
+    const fixture = createFixture({ allowlist: ["discord:/nonexistent/discord.sqlite"] });
+    const res = runBootstrapHelper(fixture, "worker", fixture.newRolePath, fixture.newRolePath);
+    expect(res.status).not.toBe(0);
+    expect(res.stderr).toMatch(/allowlist/i);
+    expect(existsSync(fixture.newRolePath)).toBe(false);
+  });
+
+  it("refuses the correct path under the wrong role (role/path pair must match exactly, not just the path)", () => {
+    const probe = createFixture();
+    const target = join(probe.root, "databases", "shared.sqlite");
+    const fixture = createFixture({ allowlist: [`worker:${target}`] });
+    const res = runBootstrapHelper(fixture, "discord", target, target);
+    expect(res.status).not.toBe(0);
+    expect(res.stderr).toMatch(/allowlist/i);
+    expect(existsSync(target)).toBe(false);
+  });
+
+  it("refuses a target not on the fixed bootstrap allowlist at all", () => {
     const fixture = createFixture();
     const outsidePath = join(fixture.root, "databases", "not-allowed.sqlite");
-    const res = runBootstrapHelper(fixture, outsidePath, outsidePath);
+    const res = runBootstrapHelper(fixture, "worker", outsidePath, outsidePath);
     expect(res.status).not.toBe(0);
     expect(res.stderr).toMatch(/allowlist/i);
     expect(existsSync(outsidePath)).toBe(false);
@@ -112,7 +139,7 @@ describe("rollout-bootstrap.sh", () => {
 
   it("refuses when --confirm-new-role does not exactly match --new-role", () => {
     const fixture = createFixture();
-    const res = runBootstrapHelper(fixture, fixture.newRolePath, `${fixture.newRolePath}.other`);
+    const res = runBootstrapHelper(fixture, "worker", fixture.newRolePath, `${fixture.newRolePath}.other`);
     expect(res.status).not.toBe(0);
     expect(res.stderr).toMatch(/confirm-new-role/i);
     expect(existsSync(fixture.newRolePath)).toBe(false);
@@ -120,14 +147,22 @@ describe("rollout-bootstrap.sh", () => {
 
   it("refuses when the target already exists (not a genuinely missing database)", () => {
     const fixture = createFixture({ preExisting: true });
-    const res = runBootstrapHelper(fixture, fixture.newRolePath, fixture.newRolePath);
+    const res = runBootstrapHelper(fixture, "worker", fixture.newRolePath, fixture.newRolePath);
+    expect(res.status).not.toBe(0);
+    expect(res.stderr).toMatch(/already exists/i);
+  });
+
+  it("refuses when the target is a dangling symlink", () => {
+    const fixture = createFixture();
+    symlinkSync(join(fixture.root, "databases", "nowhere.sqlite"), fixture.newRolePath);
+    const res = runBootstrapHelper(fixture, "worker", fixture.newRolePath, fixture.newRolePath);
     expect(res.status).not.toBe(0);
     expect(res.stderr).toMatch(/already exists/i);
   });
 
   it("refuses a relative target path", () => {
-    const fixture = createFixture({ allowlist: ["relative/path.sqlite"] });
-    const res = runBootstrapHelper(fixture, "relative/path.sqlite", "relative/path.sqlite");
+    const fixture = createFixture({ allowlist: ["worker:relative/path.sqlite"] });
+    const res = runBootstrapHelper(fixture, "worker", "relative/path.sqlite", "relative/path.sqlite");
     expect(res.status).not.toBe(0);
     expect(res.stderr).toMatch(/absolute/i);
   });
@@ -135,7 +170,7 @@ describe("rollout-bootstrap.sh", () => {
   it("refuses when the parent directory is world-writable", () => {
     const fixture = createFixture();
     execFileSync("chmod", ["0777", join(fixture.root, "databases")]);
-    const res = runBootstrapHelper(fixture, fixture.newRolePath, fixture.newRolePath);
+    const res = runBootstrapHelper(fixture, "worker", fixture.newRolePath, fixture.newRolePath);
     expect(res.status).not.toBe(0);
     expect(res.stderr).toMatch(/writable/i);
   });
@@ -143,17 +178,25 @@ describe("rollout-bootstrap.sh", () => {
   it("refuses when the parent directory is missing", () => {
     const fixture = createFixture();
     const target = join(fixture.root, "databases", "nope", "new-role.sqlite");
-    const withMissingParentAllowed = createFixture({ allowlist: [target] });
-    const res = runBootstrapHelper(withMissingParentAllowed, target, target);
+    const withMissingParentAllowed = createFixture({ allowlist: [`worker:${target}`] });
+    const res = runBootstrapHelper(withMissingParentAllowed, "worker", target, target);
     expect(res.status).not.toBe(0);
     expect(res.stderr).toMatch(/missing or symlinked/i);
     expect(existsSync(target)).toBe(false);
   });
 
+  it("refuses a malformed bootstrap_role config entry (missing the role: prefix)", () => {
+    const fixture = createFixture({ allowlist: [] });
+    execFileSync("bash", ["-c", `echo "bootstrap_role=${fixture.newRolePath}" >> "${fixture.configFile}"`]);
+    const res = runBootstrapHelper(fixture, "worker", fixture.newRolePath, fixture.newRolePath);
+    expect(res.status).not.toBe(0);
+    expect(res.stderr).toMatch(/role:absolute-path/i);
+  });
+
   it("refuses without a fixed config file", () => {
     const fixture = createFixture();
     execFileSync("rm", ["-f", fixture.configFile]);
-    const res = runBootstrapHelper(fixture, fixture.newRolePath, fixture.newRolePath);
+    const res = runBootstrapHelper(fixture, "worker", fixture.newRolePath, fixture.newRolePath);
     expect(res.status).not.toBe(0);
     expect(res.stderr).toMatch(/missing fixed bootstrap config/i);
   });
@@ -164,7 +207,6 @@ describe("rollout-bootstrap.sh", () => {
     // Hold the lock in a background process, then attempt bootstrap concurrently.
     const holder = spawn("bash", ["-c", `exec 9>"${fixture.lockFile}"; flock --exclusive 9; sleep 5`]);
     try {
-      // Give the holder a moment to actually acquire the lock before racing it.
       const waitUntilLocked = spawnSync("bash", ["-c", `
         exec 9>"${fixture.lockFile}"
         for i in $(seq 1 50); do
@@ -175,7 +217,7 @@ describe("rollout-bootstrap.sh", () => {
         exit 1
       `]);
       expect(waitUntilLocked.status, "lock holder never acquired the lock").toBe(0);
-      const res = runBootstrapHelper(fixture, fixture.newRolePath, fixture.newRolePath);
+      const res = runBootstrapHelper(fixture, "worker", fixture.newRolePath, fixture.newRolePath);
       expect(res.status).not.toBe(0);
       expect(res.stderr).toMatch(/already active/i);
       expect(existsSync(fixture.newRolePath)).toBe(false);

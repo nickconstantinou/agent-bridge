@@ -7,11 +7,14 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import { openDb } from "../src/db.js";
 import { CURRENT_SCHEMA_VERSION } from "../src/db/schema.js";
+
+/** The five canonical database roles (policy doc §4) — structural validity only; the actual role/path allowlist lives in the root-owned bootstrap config, outside this script's scope. */
+const VALID_ROLES = new Set(["shared", "discord", "health", "interactive", "worker"]);
 
 type Mode = "inspect" | "migrate" | "validate" | "bootstrap";
 
@@ -34,6 +37,7 @@ interface DbEvidence {
   pendingColumns: string[];
   lockColumns: string[];
   resolvingUnits: string[];
+  role?: string;
 }
 
 const ALLOWED_TABLES = new Set([
@@ -90,6 +94,7 @@ function parseArgs(argv: string[]): Options {
 
 interface BootstrapTarget {
   path: string;
+  role: string;
 }
 
 interface BootstrapOptions {
@@ -98,38 +103,50 @@ interface BootstrapOptions {
 }
 
 /**
- * Bootstrap's own arg parser (Phase 4C.3, issue #135): each --db must be
- * immediately followed by a --confirm-new-role repeating that exact same
- * path — an explicit, per-database operator confirmation that the missing
- * file is an expected new role, not a symptom of misconfiguration or
- * accidental deletion, mirroring --expected-commit's exact-match discipline
- * elsewhere in the rollout tooling.
+ * Bootstrap's own arg parser (Phase 4C.3, issue #135). Each target is a
+ * strict `--db PATH --role NAME --confirm-new-role PATH` triplet, in that
+ * exact order: an explicit expected role (one of the five canonical roles,
+ * structurally validated here — the role/path *pair* allowlist itself lives
+ * in the root-owned bootstrap config, outside this script) and an exact-
+ * match confirmation that the missing file is expected, not a symptom of
+ * misconfiguration or accidental deletion, mirroring --expected-commit's
+ * exact-match discipline elsewhere in this tooling.
  */
 function parseBootstrapArgs(argv: string[]): BootstrapOptions {
   const targets: BootstrapTarget[] = [];
   let evidencePath: string | null = null;
   let pendingPath: string | null = null;
+  let pendingRole: string | null = null;
   while (argv.length > 0) {
     const flag = argv.shift();
     const value = argv.shift();
     if (!value) throw new Error(`missing value for ${flag}`);
     if (flag === "--db") {
-      if (pendingPath) throw new Error(`--db ${pendingPath} is missing its --confirm-new-role`);
+      if (pendingPath) throw new Error(`--db ${pendingPath} is missing its --role/--confirm-new-role`);
       pendingPath = value;
+    } else if (flag === "--role") {
+      if (!pendingPath) throw new Error("--role must immediately follow its --db");
+      if (pendingRole) throw new Error(`--db ${pendingPath} already has a --role`);
+      if (!VALID_ROLES.has(value)) {
+        throw new Error(`--role must be one of ${[...VALID_ROLES].join(", ")}, got: ${value}`);
+      }
+      pendingRole = value;
     } else if (flag === "--confirm-new-role") {
-      if (!pendingPath) throw new Error("--confirm-new-role must immediately follow its --db");
+      if (!pendingPath) throw new Error("--confirm-new-role must immediately follow its --db and --role");
+      if (!pendingRole) throw new Error(`--db ${pendingPath} is missing its --role before --confirm-new-role`);
       if (value !== pendingPath) {
         throw new Error(`--confirm-new-role must exactly match the immediately preceding --db path (expected "${pendingPath}", got "${value}")`);
       }
-      targets.push({ path: pendingPath });
+      targets.push({ path: pendingPath, role: pendingRole });
       pendingPath = null;
+      pendingRole = null;
     } else if (flag === "--evidence") {
       evidencePath = value;
     } else {
       throw new Error(`unknown argument: ${flag}`);
     }
   }
-  if (pendingPath) throw new Error(`--db ${pendingPath} is missing its --confirm-new-role`);
+  if (pendingPath) throw new Error(`--db ${pendingPath} is missing its --role/--confirm-new-role`);
   if (targets.length === 0) throw new Error("at least one --db path is required");
   return { targets, evidencePath };
 }
@@ -189,6 +206,86 @@ function inspectDatabase(path: string, requireCurrent: boolean, resolvingUnits: 
   }
 }
 
+/** True if anything at all exists at `path` — including a symlink, even a dangling one. Deliberately lstat-based (not existsSync, which follows symlinks and would report a dangling symlink as "nothing here"). */
+function pathOccupied(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw err;
+  }
+}
+
+/**
+ * Same ownership/permission/no-symlink standard already applied to
+ * `backup_dir`/`log_dir` by rollout-agent-bridge.sh: canonical, a real
+ * directory (not a symlink), not group/world-writable. Root ownership
+ * itself is proven at the shell-wrapper layer *before* it drops to the
+ * unprivileged runtime user that actually executes this script — the same
+ * layering `migrate` mode already relies on — so it is deliberately not
+ * re-asserted here.
+ */
+function validateParentDir(dir: string): void {
+  let parentStat;
+  try {
+    parentStat = lstatSync(dir);
+  } catch {
+    throw new Error(`parent directory is missing or symlinked: ${dir}`);
+  }
+  if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) {
+    throw new Error(`parent directory is missing or symlinked: ${dir}`);
+  }
+  if (realpathSync(dir) !== dir) throw new Error(`parent directory is not canonical: ${dir}`);
+  if ((parentStat.mode & 0o022) !== 0) throw new Error(`parent directory must not be group/world writable: ${dir}`);
+}
+
+/** Validates the freshly-migrated temp database before it is ever published, per Phase 4C.3's "validate before publication" requirement. */
+function validateBootstrapped(tempPath: string): void {
+  const db = new Database(tempPath, { readonly: true, fileMustExist: true });
+  try {
+    const integrity = String(db.pragma("integrity_check", { simple: true }));
+    if (integrity !== "ok") throw new Error(`bootstrap integrity check failed for ${tempPath}: ${integrity}`);
+    const fkViolations = db.pragma("foreign_key_check") as unknown[];
+    if (Array.isArray(fkViolations) && fkViolations.length > 0) {
+      throw new Error(`bootstrap left ${fkViolations.length} foreign key violation(s) in ${tempPath}`);
+    }
+    const userVersion = Number(db.pragma("user_version", { simple: true }));
+    if (userVersion !== CURRENT_SCHEMA_VERSION) {
+      throw new Error(`bootstrap did not reach CURRENT_SCHEMA_VERSION for ${tempPath}: got ${userVersion}`);
+    }
+  } finally {
+    db.close();
+  }
+}
+
+function removeSidecars(base: string): void {
+  for (const suffix of ["-wal", "-shm"]) {
+    try { rmSync(`${base}${suffix}`, { force: true }); } catch { /* best-effort */ }
+  }
+}
+
+/**
+ * Publishes with no-replace semantics: `link()` fails atomically with
+ * EEXIST if anything now occupies `path`, including something that
+ * appeared concurrently after every earlier check in this function ran —
+ * unlike `rename()`, which would silently replace it. The temp path is
+ * unlinked only after the link succeeds, so `path` and the temp name are
+ * briefly two hard links to the same inode, never a window where neither
+ * refers to the completed database.
+ */
+function publishAtomic(tempPath: string, path: string): void {
+  try {
+    linkSync(tempPath, path);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(`destination appeared concurrently during publication, refusing to overwrite: ${path}`);
+    }
+    throw err;
+  }
+  unlinkSync(tempPath);
+}
+
 /**
  * Bootstrap a single genuinely-missing database (Phase 4C.3, issue #135):
  * reuses openDb()'s existing missing-file path unchanged — it already
@@ -197,36 +294,53 @@ function inspectDatabase(path: string, requireCurrent: boolean, resolvingUnits: 
  * duplicated or shortcut schema definition here.
  *
  * Atomicity is layered on top of that unchanged path, not inside it: the
- * new database is created at a randomly-named temp path in the *same*
- * directory as the final target (so the eventual rename is same-filesystem
- * and therefore atomic), then renamed into place only after migration
- * completes successfully. If anything fails — the migration itself, or the
- * final rename — the temp file (and any -wal/-shm sidecars it produced) is
- * removed, so a partial or interrupted bootstrap never leaves debris at
- * either the temp or final path.
+ * new database is created and migrated at a randomly-named temp path in the
+ * *same* directory as the final target (so the eventual publish is same-
+ * filesystem), validated (integrity, foreign keys, exact schema version),
+ * then published with no-replace link()+unlink() semantics only after every
+ * check passes. If anything fails — missing-file precondition, parent
+ * validation, the migration itself, post-migration validation, or
+ * publication racing a concurrently-created destination — the temp file
+ * (and any -wal/-shm sidecars it produced) is removed and the final path is
+ * left completely untouched, so a partial or interrupted bootstrap never
+ * leaves debris at either path and never overwrites anything.
  */
-function bootstrapDatabase(path: string): DbEvidence {
-  if (existsSync(path)) throw new Error(`database already exists, use migrate instead: ${path}`);
+function bootstrapDatabase(path: string, role: string): DbEvidence {
+  if (pathOccupied(path)) throw new Error(`database already exists, use migrate instead: ${path}`);
   const dir = dirname(path);
-  if (!existsSync(dir)) throw new Error(`parent directory does not exist: ${dir}`);
+  validateParentDir(dir);
   const tempPath = join(dir, `.bootstrap-${randomBytes(16).toString("hex")}-${basename(path)}`);
   const cleanupTemp = () => {
-    for (const suffix of ["", "-wal", "-shm"]) {
-      try { rmSync(`${tempPath}${suffix}`, { force: true }); } catch { /* best-effort */ }
-    }
+    try { rmSync(tempPath, { force: true }); } catch { /* best-effort */ }
+    removeSidecars(tempPath);
   };
   try {
-    openDb(tempPath, { serviceId: "rollout:bootstrap" }).close();
-    if (process.env.AGENT_BRIDGE_BOOTSTRAP_TEST_PRE_RENAME_OCCUPY === path) {
-      mkdirSync(path, { recursive: false });
-      writeFileSync(join(path, "occupied"), "test hook\n");
+    if (process.env.AGENT_BRIDGE_BOOTSTRAP_TEST_FORCE_MIGRATION_FAILURE === path) {
+      // Pre-creates a file at the exact temp path with a future, unsupported
+      // schema version, so openDb()'s own existing version-gate rejects it —
+      // a real migration-time failure, not a simulated one.
+      const raw = new Database(tempPath);
+      raw.exec("PRAGMA user_version = 99;");
+      raw.close();
     }
-    renameSync(tempPath, path);
+    openDb(tempPath, { serviceId: `rollout:bootstrap:${role}` }).close();
+    if (process.env.AGENT_BRIDGE_BOOTSTRAP_TEST_FORCE_INVALID_SCHEMA === path) {
+      const raw = new Database(tempPath);
+      raw.exec("PRAGMA user_version = 4242;");
+      raw.close();
+    }
+    validateBootstrapped(tempPath);
+    if (process.env.AGENT_BRIDGE_BOOTSTRAP_TEST_PRE_PUBLISH_OCCUPY === path) {
+      writeFileSync(path, "concurrently created by a different process\n");
+    }
+    publishAtomic(tempPath, path);
   } catch (err) {
     cleanupTemp();
     throw err;
   }
-  return inspectDatabase(path, true);
+  removeSidecars(tempPath);
+  const evidence = inspectDatabase(path, true);
+  return { ...evidence, role };
 }
 
 function writeEvidence(path: string | null, mode: Mode, databases: DbEvidence[]): void {
@@ -244,7 +358,7 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (argv[0] === "bootstrap") {
     const options = parseBootstrapArgs(argv.slice(1));
-    const evidence = options.targets.map((target) => bootstrapDatabase(target.path));
+    const evidence = options.targets.map((target) => bootstrapDatabase(target.path, target.role));
     writeEvidence(options.evidencePath, "bootstrap", evidence);
     return;
   }

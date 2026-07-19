@@ -1,8 +1,9 @@
 import type Database from "better-sqlite3";
 import { applyLegacyCompatibleBaseline } from "./legacyBaselineMigration.js";
+import { dropLegacyPromptOverrides } from "./dropLegacyPromptOverridesMigration.js";
 
 /** The schema version written after the legacy-compatible baseline is applied. */
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 
 export interface Migration {
   version: number;
@@ -123,4 +124,5 @@ export function applyMigrations(
  */
 const DEFAULT_MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "legacy-compatible-baseline", up: applyLegacyCompatibleBaseline },
+  { version: 2, name: "drop-empty-legacy-prompt-overrides", up: dropLegacyPromptOverrides },
 ];

@@ -153,44 +153,24 @@ A focused repair cannot change requirements, scope, non-goals, architecture, wor
 
 ## Prompt storage decision
 
-The SQLite `prompts` table is not a backup. The source-controlled Markdown prompt is already the fallback when no row exists. The table is a mutable runtime override channel.
+Prompt text is a reviewed source artifact. The SQLite `prompts` table and its runtime override API have been removed.
 
-Mutable prompt overrides conflict with the role architecture because they can change consequential planning or execution instructions without:
+Mutable prompt overrides conflicted with the role architecture because they could change consequential instructions without a reviewed Git diff, contract/version review, exact-head CI, deterministic tests, reproducible workspace content, or rollback to a known application SHA.
 
-- a reviewed Git diff;
-- a prompt-contract version change;
-- exact-head CI;
-- deterministic semantic tests;
-- reproducible content across workspaces;
-- clear rollback to a known application SHA;
-- reliable audit of the prompt that generated a plan or mutation.
-
-Canonical role prompts therefore use only source-controlled files. `AgenticPromptContract.allowDatabaseOverride` is always `false`, and `loadAgenticPrompt()` has no database-override input.
-
-The legacy table is retained temporarily only to avoid an unreviewed destructive schema change and to preserve existing legacy prompt paths until their rows are inventoried. No new role prompt, platform setting, or operator workflow may create a database prompt override.
+Canonical and compatibility prompts therefore resolve only from registered repository files. `AgenticPromptContract.allowDatabaseOverride` is always `false`; `loadAgenticPrompt()` and `loadWorkerPrompt()` have no database-template input.
 
 ## Legacy override retirement
 
-Retirement is staged:
+Retirement is complete in PR #160:
 
-1. Inventory existing rows by workspace and key without exposing prompt contents in logs.
-2. Identify whether any row is actually required or merely duplicates an older built-in prompt.
-3. Move approved custom behaviour into reviewed source-controlled prompt files and tests.
-4. Disable legacy override reads for each migrated handler and report any ignored row as deprecated configuration.
-5. Remove `BridgeDb.setPrompt()` and legacy override write instructions.
-6. Remove `BridgeDb.getPrompt()` after all callers are migrated.
-7. Drop the `prompts` table only through a separately approved guarded database migration with backup, rollback, and representative existing-database tests.
+1. the owner confirmed every production table has zero rows and revised source prompts replace the legacy path;
+2. all handler reads and `BridgeDb.getPrompt()` / `setPrompt()` were removed;
+3. loader database-template options and obsolete database-key metadata were removed;
+4. migration 2 drops an absent or empty table transactionally;
+5. an unexpected populated table fails closed, rolls back, and preserves schema version 1 for investigation;
+6. fresh databases never create the table.
 
-Dropping the table inside PR #160 would be unsafe because the production database migration boundary is separately controlled and existing rows have not yet been inventoried. Retaining it temporarily does not make it authoritative or a backup.
-
-The table must not be removed until all of these postconditions are proven:
-
-- the production row inventory is complete for every worker database;
-- every non-empty row has an explicit migrate, intentionally discard, or hold-for-human decision;
-- no production caller reads or writes prompt rows;
-- source-controlled replacements and compatibility tests are merged and deployed;
-- backup, rollback, and representative existing-database migration tests pass;
-- the guarded migration owner performs the table removal under separate explicit approval.
+Prompt rollback is application rollback to a reviewed SHA. No platform, operator, or runtime surface may reintroduce mutable prompt text.
 
 ## Compatibility
 

@@ -52,7 +52,7 @@ last_validated_against: <commit-sha-or-branch>
 1. `docs/adr/ADR-005-role-based-agentic-orchestration.md` — accepted decision.
 2. `docs/architecture/engineering-worker.md` — worker boundary and invariants.
 3. `docs/architecture/agentic-worker-orchestration.md` — role, workflow, permission, and lifecycle architecture.
-4. `docs/architecture/agentic-prompt-contracts.md` — source-controlled role/mode prompts, validators, focused repair, red-test planning, and legacy override retirement.
+4. `docs/architecture/agentic-prompt-contracts.md` — source-controlled role/mode prompts, validators, focused repair, red-test planning, and completed override removal.
 5. `docs/agentic-maintenance.md` — feature, defect, and refactor requirements/planning contracts.
 6. `docs/roadmap/issue-159-role-based-orchestration.md` — active implementation roadmap and delivered prompt foundation.
 7. `docs/implementation-plans/issue-159-role-based-orchestration.md` — epic coding-agent handoff and delivery slices.
@@ -76,7 +76,7 @@ last_validated_against: <commit-sha-or-branch>
 | `docs/architecture/companion-runtime.md` | authoritative | canonical | Companion Runtime boundary. |
 | `docs/architecture/engineering-worker.md` | authoritative | canonical | Engineering Worker boundary and role orchestration invariants. |
 | `docs/architecture/agentic-worker-orchestration.md` | authoritative | canonical | Requirements, role assignment, permissions, workflow, review, operations, and documentation architecture. |
-| `docs/architecture/agentic-prompt-contracts.md` | authoritative | canonical | Source-controlled role/mode prompt registry, red-test planning, focused repair, and DB override retirement. |
+| `docs/architecture/agentic-prompt-contracts.md` | authoritative | canonical | Source-controlled role/mode prompt registry, red-test planning, focused repair, and completed database-override removal. |
 | `docs/architecture/shared-runtime.md` | authoritative | canonical | Shared Runtime boundary, including the memory/handoff seam note for issue #69. |
 | `docs/architecture/memory-and-handoff.md` | authoritative | canonical | Compact-first memory, persistent memory promotion, and CLI handoff architecture for issue #69. |
 | `docs/architecture/capability-registry.md` | active architecture | canonical for intended design | Scope controlled by the completed Epic 11 record and current runtime evidence. |
@@ -96,7 +96,7 @@ last_validated_against: <commit-sha-or-branch>
 | `docs/roadmap/issue-69-coding-agent-prompt.md` | active-roadmap | advisory | Ready-to-use implementation prompt; subordinate to architecture and roadmap docs. |
 | `docs/roadmap/issue-159-role-based-orchestration.md` | active-roadmap, partially implemented | canonical | Prompt foundation delivered; remaining role orchestration tracked by slices. |
 | `docs/implementation-plans/issue-159-role-based-orchestration.md` | detailed implementation handoff | advisory under roadmap | Minimal-change delivery slices, red-test catalogue, migration, rollout, verification, and execution contract. |
-| `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md` | normative implementation addendum | advisory under roadmap | Prompt separation, comprehensive advisor-authored red-test requirements, and DB override retirement. |
+| `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md` | normative implementation addendum | advisory under roadmap | Prompt separation, comprehensive advisor-authored red-test requirements, and completed database-override removal. |
 | `docs/agentic-maintenance.md` | authoritative workflow | canonical | Feature, defect, refactor, planning, prompt, and completion contracts. |
 | `docs/configuration/agent-role-assignment.md` | authoritative configuration | canonical | Role CLI/model allocation, fallbacks, and degraded operation. |
 | `docs/operations/agentic-worker-runbook.md` | authoritative operations | canonical | Role enablement, status, cancellation, recovery, and rollback. |
@@ -104,7 +104,7 @@ last_validated_against: <commit-sha-or-branch>
 | `agentic-maintenance.yaml` | machine-readable policy | canonical | Canonical documents, triggers, authoring paths, readiness, prompt changes, and role modes. |
 | `src/agenticPromptContracts.ts` | implemented prompt foundation | canonical runtime registry | Versioned 21-key role/mode prompt registry; source-controlled only. |
 | `prompts/worker/roles/` | implemented prompt foundation | canonical runtime prompts | Separate Technical Lead, Code Worker, and Documentation Steward prompt files. |
-| `docs/WORKER-GUIDE.md` | authoritative operations | canonical for worker use | Role-based worker guide, prompt contracts, red-test quality, and legacy override retirement. |
+| `docs/WORKER-GUIDE.md` | authoritative operations | canonical for worker use | Role-based worker guide, prompt contracts, red-test quality, and source-only prompt operation. |
 | `docs/SAFE-RESTART.md` | authoritative operations | canonical for safe restart helper | Referenced by `AGENTS.md` restart policy. |
 | `docs/PRD.md` | partially-implemented product reference | advisory | Broad product/architecture reference; defer to ADRs and architecture docs on conflicts. |
 | `docs/soul.md` | runtime-design | advisory/canonical for SOUL.md behavior | Documents root `SOUL.md` runtime injection; the doc itself is not the default loaded file. |
@@ -130,7 +130,7 @@ last_validated_against: <commit-sha-or-branch>
 - `docs/soul.md` is a design document. Runtime loading is handled by `src/soul.ts`, which defaults to `<project>/SOUL.md` or `AGENT_BRIDGE_SOUL_PATH`.
 - `docs/architecture/memory-and-handoff.md` is the current intended memory and provider-handoff architecture. Implementation work is tracked in `docs/roadmap/issue-69-compact-memory-handoff.md`.
 - Canonical role prompts are loaded from source-controlled files registered by `src/agenticPromptContracts.ts`; legacy handlers still use `src/workerPrompts.ts` until migrated.
-- The SQLite `prompts` table is a deprecated legacy override channel, not a backup or canonical source.
+- Schema migration 2 removes the legacy SQLite `prompts` table; runtime prompts resolve only from reviewed source files.
 - `docs/prompt-optimization-loop-research.md` is referenced by `AGENTS.md` for optimizer methodology. It is not loaded by runtime services.
 - `docs/WORKER-GUIDE.md` and `docs/SAFE-RESTART.md` are authoritative operator docs. They are not loaded by services.
 - Superseded pointer files should stay until inbound references are cleaned up, then they can move fully into `docs/archive/`.

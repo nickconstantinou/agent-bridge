@@ -258,9 +258,9 @@ Inspect `/issue <id>` for missing facts, unresolved decisions, validation errors
 
 Inspect typed validation errors. Every acceptance criterion and affected architectural/risk boundary must be covered. Focused red-test repair is allowed only when the rest of the plan is valid.
 
-### A legacy database prompt row exists
+### Prompt-table migration reports an unexpected row
 
-Treat it as deprecated configuration, not a backup. Inventory its key and content hash, identify whether it contains required custom behaviour, and record migrate, discard, or hold. Do not add another row or expose prompt contents in logs.
+Do not restart services or bypass the migration. Schema migration 2 fails closed and preserves schema version 1 plus the table contents. Since production rows are expected to be absent, treat this as configuration drift: inspect it through the guarded database process without logging prompt text, resolve the discrepancy explicitly, then rerun the migration. Runtime code has no prompt-table reader or writer.
 
 ### Scan produced no implementation job
 

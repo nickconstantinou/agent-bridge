@@ -45,7 +45,7 @@ Do not introduce:
 - a new planning handler solely to hold prompt text;
 - a second plan validator;
 - provider-specific prompt schemas;
-- new database prompt overrides.
+- reintroducing database prompt overrides.
 
 ## Planning output contract
 
@@ -136,7 +136,7 @@ Do not drop the table in PR #160. The database migration boundary is separately 
 3. Inventory legacy rows by workspace/key without logging content.
 4. Move any approved customization into source-controlled files and tests.
 5. Disable reads handler by handler during role migration.
-6. Remove `setPrompt`, then `getPrompt`, after callers are gone.
+6. Completed in PR #160: remove `setPrompt`, `getPrompt`, loader override options, all callers, and the empty table through migration 2.
 7. Drop the table through a dedicated guarded migration with backup, rollback, and representative existing-database tests.
 
 ## Focused repair sequence

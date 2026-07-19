@@ -5,6 +5,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { applyMigrations, applyMigrationsUpTo, CURRENT_SCHEMA_VERSION, MigrationForeignKeyViolationError, type Migration } from "../src/db/schema.js";
+import { applyLegacyCompatibleBaseline } from "../src/db/legacyBaselineMigration.js";
+import { LegacyPromptOverridesPresentError } from "../src/db/dropLegacyPromptOverridesMigration.js";
 import { openDb } from "../src/db.js";
 
 // All five production entrypoints (index.ts, index-discord-interactive.ts,
@@ -177,6 +179,7 @@ describe("database schema versioning", () => {
       for (const table of ["conversation_turns", "pending_messages", "conversation_summaries", "compaction_attempts", "project_memories"]) {
         expect(db.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)).toBeTruthy();
       }
+      expect(db.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prompts'").get()).toBeUndefined();
 
       // The linked work_items -> work_jobs -> approvals/github_links chain
       // survived the rename-recreate repairs intact (foreign_keys is
@@ -215,8 +218,8 @@ describe("database schema versioning", () => {
       expect(tableNames.filter((name) => name.includes("_migrate_tmp") || name.includes("_legacy_migration"))).toEqual([]);
       db.close();
 
-      // Reopening an already-migrated (version 1) database must not re-run
-      // the repair path — user_version is authoritative once at 1.
+      // Reopening an already-current database must not re-run the repair
+      // or prompt-retirement paths — user_version is authoritative.
       const reopened = openDb(fixture.path, { serviceId: `schema-test:${role}` });
       expect(reopened.raw.pragma("user_version", { simple: true })).toBe(CURRENT_SCHEMA_VERSION);
       reopened.close();
@@ -237,6 +240,46 @@ describe("database schema versioning", () => {
       rmSync(fixture.dir, { recursive: true, force: true });
     }
   });
+
+it("drops an empty prompts table when migrating a version 1 database", () => {
+  const fixture = tempDbPath("prompt-retirement-empty");
+  try {
+    createLegacyFixture(fixture.path);
+    const raw = new Database(fixture.path);
+    applyMigrationsUpTo(raw, [
+      { version: 1, name: "legacy-compatible-baseline", up: applyLegacyCompatibleBaseline },
+    ], 1);
+    expect(raw.pragma("user_version", { simple: true })).toBe(1);
+    expect(raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prompts'").get()).toBeTruthy();
+    raw.close();
+
+    const migrated = openDb(fixture.path, { serviceId: "schema-test:prompt-retirement" });
+    expect(migrated.raw.pragma("user_version", { simple: true })).toBe(CURRENT_SCHEMA_VERSION);
+    expect(migrated.raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'prompts'").get()).toBeUndefined();
+    migrated.close();
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+it("rolls back prompt-table retirement when an unexpected row exists", () => {
+  const fixture = tempDbPath("prompt-retirement-populated");
+  try {
+    createLegacyFixture(fixture.path);
+    const raw = new Database(fixture.path);
+    applyMigrationsUpTo(raw, [
+      { version: 1, name: "legacy-compatible-baseline", up: applyLegacyCompatibleBaseline },
+    ], 1);
+    raw.prepare("INSERT INTO prompts (name, prompt_text) VALUES (?, ?)").run("unexpected", "legacy value");
+
+    expect(() => applyMigrations(raw)).toThrow(LegacyPromptOverridesPresentError);
+    expect(raw.pragma("user_version", { simple: true })).toBe(1);
+    expect(raw.prepare("SELECT COUNT(*) AS count FROM prompts").get()).toEqual({ count: 1 });
+    raw.close();
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true });
+  }
+});
 
   it("fails closed for a future schema version without changing the database, WAL mode, or sidecar files", () => {
     const fixture = tempDbPath("future");
@@ -305,8 +348,9 @@ describe("database schema versioning", () => {
     try {
       const raw = new Database(fixture.path);
       // Uses the explicit-target test helper (targetVersion 2) because this
-      // two-step scenario intentionally exceeds CURRENT_SCHEMA_VERSION (1).
-      // Production code always calls applyMigrations(), which never accepts
+      // The explicit-target helper injects a deliberate failing plan without
+      // changing the production migration registry. Production code always calls
+      // applyMigrations(), which never accepts
       // an override and rejects any plan that doesn't end exactly at
       // CURRENT_SCHEMA_VERSION.
       expect(() => applyMigrationsUpTo(raw, migrations, 2)).toThrow("deliberate migration failure");
@@ -372,7 +416,8 @@ describe("database schema versioning", () => {
     const fixture = tempDbPath("overshoot");
     const overshootMigrations: readonly Migration[] = [
       { version: 1, name: "legacy-compatible-baseline", up: () => undefined },
-      { version: 2, name: "unexpected-extra-step", up: () => undefined },
+      { version: 2, name: "drop-empty-legacy-prompt-overrides", up: () => undefined },
+      { version: 3, name: "unexpected-extra-step", up: () => undefined },
     ];
     try {
       const raw = new Database(fixture.path);

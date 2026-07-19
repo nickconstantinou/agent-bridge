@@ -3,7 +3,7 @@ status: active-roadmap
 type: roadmap
 authority: canonical
 implementation_status: partially-implemented
-last_validated_against: bdf59d305c19fb9dc09686d7f04f5240cb0b3d57
+last_validated_against: agent/role-based-worker-orchestration-docs
 ---
 
 # Issue #159 — Role-Based Agentic Orchestration

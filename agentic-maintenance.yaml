@@ -43,6 +43,7 @@ roles:
 canonical_documents:
   entry_point:
     - README.md
+    - docs/README.md
   agent_policy:
     - AGENTS.md
   maintenance:
@@ -54,7 +55,9 @@ canonical_documents:
     - docs/architecture/agentic-worker-orchestration.md
     - docs/architecture/03-target-architecture.md
   decisions:
-    - docs/decisions/ADR-009-role-based-agentic-orchestration.md
+    - docs/adr/ADR-005-role-based-agentic-orchestration.md
+  roadmap:
+    - docs/roadmap/issue-159-role-based-orchestration.md
   configuration:
     - docs/configuration/agent-role-assignment.md
   operations:
@@ -64,7 +67,7 @@ canonical_documents:
     - docs/architecture/08-testing-strategy.md
   production_readiness:
     - docs/architecture/10-production-readiness.md
-  implementation_plan:
+  implementation_handoff:
     - docs/implementation-plans/issue-159-role-based-orchestration.md
 
 documentation_paths:
@@ -87,12 +90,14 @@ change_triggers:
       - maintenance
       - architecture
       - decisions
+      - roadmap
       - configuration
       - testing
   requirements_or_issue_schema:
     required:
       - maintenance
       - worker_user_guide
+      - roadmap
       - testing
   provider_or_model_selection:
     required:

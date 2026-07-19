@@ -6,6 +6,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   renameSync,
   rmSync,
@@ -250,6 +251,19 @@ exec "$@"
   executable(join(bin, "journalctl"), `#!/usr/bin/env bash
 set -euo pipefail
 echo "journalctl:$*" >> "${fixture.actionLog}"
+if [ -n "\${FAKE_TAMPER_SENTINEL_REPLACE:-}" ]; then
+  # mv a freshly created, genuinely distinct-inode decoy file over the
+  # sentinel path — rm-then-recreate at the same path risks the filesystem
+  # reusing the just-freed inode number, which would defeat the point of
+  # this test (proving an identity mismatch is detected).
+  decoy="\$(mktemp)"
+  printf 'tampered\\n' > "\$decoy"
+  chmod 0600 "\$decoy"
+  mv -f -- "\$decoy" "\${FAKE_TAMPER_SENTINEL_REPLACE}"
+fi
+if [ -n "\${FAKE_TAMPER_SENTINEL_DELETE:-}" ]; then
+  rm -f -- "\${FAKE_TAMPER_SENTINEL_DELETE}"
+fi
 if [ "\${FAKE_FAIL_PHASE:-}" = smoke ]; then echo 'simulated startup error'; fi
 `);
 }
@@ -327,7 +341,7 @@ function createFixture(options: { pending?: number; unknownSchema?: boolean; mis
   return fixture;
 }
 
-function runRollout(fixture: Fixture, failPhase?: string, containmentMode?: string) {
+function runRollout(fixture: Fixture, failPhase?: string, containmentMode?: string, extraEnv: Record<string, string> = {}) {
   return spawnSync("bash", [helperPath, "--expected-commit", fixture.expectedCommit], {
     encoding: "utf8",
     env: {
@@ -336,6 +350,7 @@ function runRollout(fixture: Fixture, failPhase?: string, containmentMode?: stri
       ...(failPhase ? { FAKE_FAIL_PHASE: failPhase } : {}),
       ...(containmentMode ? { FAKE_CONTAINMENT_MODE: containmentMode } : {}),
       FAKE_CORRUPT_DB: fixture.dbPaths[0],
+      ...extraEnv,
     },
   });
 }
@@ -905,6 +920,31 @@ describe("interrupted-rollout sentinel (Phase 4C.4, issue #135)", () => {
     expect(existsSync(sentinelPath(fixture)), "sentinel must be removed after a DONE outcome").toBe(false);
   });
 
+  it("fails an otherwise-successful rollout, never claiming success, when its own sentinel is replaced before cleanup", () => {
+    // Cleanup must be fail-closed: if the sentinel this invocation created
+    // is swapped for a different file at the same path before on_exit runs
+    // (identity mismatch — different inode), the rollout must not exit 0 or
+    // print a false "removed" claim, even though every rollout phase itself
+    // succeeded.
+    const fixture = useMinimalInventory(createFixture());
+    const result = runRollout(fixture, undefined, undefined, { FAKE_TAMPER_SENTINEL_REPLACE: sentinelPath(fixture) });
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status, output).not.toBe(0);
+    expect(output).toMatch(/SENTINEL CLEANUP FAILED/i);
+    expect(output).not.toMatch(/rollout sentinel removed/);
+    expect(readFileSync(sentinelPath(fixture), "utf8")).toBe("tampered\n");
+  });
+
+  it("fails an otherwise-successful rollout, never claiming success, when its own sentinel unexpectedly disappears before cleanup", () => {
+    const fixture = useMinimalInventory(createFixture());
+    const result = runRollout(fixture, undefined, undefined, { FAKE_TAMPER_SENTINEL_DELETE: sentinelPath(fixture) });
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status, output).not.toBe(0);
+    expect(output).toMatch(/SENTINEL CLEANUP FAILED/i);
+    expect(output).toMatch(/unexpectedly missing/i);
+    expect(output).not.toMatch(/rollout sentinel removed/);
+  });
+
   it("removes the sentinel after a pure precondition failure (bare re-invocation behaves identically to the first attempt)", () => {
     const dirty = useMinimalInventory(createFixture());
     writeFileSync(join(dirty.project, "untracked"), "dirty");
@@ -914,7 +954,7 @@ describe("interrupted-rollout sentinel (Phase 4C.4, issue #135)", () => {
     expect(existsSync(sentinelPath(dirty)), "sentinel must be removed after a precondition failure — nothing was ever touched").toBe(false);
   });
 
-  it("retains the sentinel and reports STOPPED_UNCHANGED when a failure occurs before any backup write completes", () => {
+  it("retains the sentinel and reports STOPPED_UNCHANGED when the cohort backup does not complete, even though a partial backup artifact exists", () => {
     const fixture = useMinimalInventory(createFixture());
     const before = fixture.dbPaths.map(sha256);
     const result = runRollout(fixture, "backup");
@@ -924,6 +964,17 @@ describe("interrupted-rollout sentinel (Phase 4C.4, issue #135)", () => {
     expect(output).not.toMatch(/RESTORE_INCOMPLETE|FAILED_RESTORED/);
     expect(fixture.dbPaths.map(sha256)).toEqual(before);
     expect(existsSync(sentinelPath(fixture)), "sentinel must be retained — services are down and assert_service_active would reject a bare retry").toBe(true);
+
+    // backup_completed=0 means backup_databases() did not finish and verify
+    // the whole cohort — it does NOT mean nothing was ever written to disk.
+    // The fake `cp` genuinely copies the source before the forced failure,
+    // so a real, unmanifested backup file exists here. STOPPED_UNCHANGED
+    // must not claim otherwise, and must warn it's unsafe to restore from.
+    const backupSetDirs = readdirSync(fixture.backupDir);
+    expect(backupSetDirs.length, "a partial backup set directory is expected even though the cohort backup did not complete").toBe(1);
+    const partialBackupFile = join(fixture.backupDir, backupSetDirs[0], `01-${basename(fixture.dbPaths[0])}`);
+    expect(existsSync(partialBackupFile), "a partial, unmanifested backup artifact must exist and must never be treated as a valid cohort backup").toBe(true);
+    expect(output).toMatch(/partial backup artifacts may exist.*must not be used for restore/i);
   });
 
   it("retains the sentinel and reports RESTORE_INCOMPLETE when the automatic restore itself fails", () => {
@@ -982,6 +1033,41 @@ describe("interrupted-rollout sentinel (Phase 4C.4, issue #135)", () => {
     expect(actions(fixture).match(/systemctl:stop/g)?.length).toBe(stopCountAfterFirstRun);
   });
 
+  it("auto-removes the sentinel it just created when a pre-existing artifact directory blocks the same invocation (the cleanup trap must already be active at that point)", () => {
+    // Regression for the exact same-second reproduction the sentinel work
+    // was built to fix: this invocation creates its own sentinel, then dies
+    // on the pre-existing artifact_dir collision below — a precondition-type
+    // failure (stop was never attempted) that must auto-remove the sentinel
+    // it just created. A pinned timestamp (test-only seam) makes the
+    // collision deterministic instead of racing the wall clock.
+    const fixture = useMinimalInventory(createFixture());
+    const timestamp = "20260101T000000Z";
+    const artifactDir = join(fixture.logDir, `${timestamp}-${fixture.expectedCommit}`);
+    mkdirSync(artifactDir, { recursive: true, mode: 0o700 });
+
+    const result = runRollout(fixture, undefined, undefined, { AGENT_BRIDGE_ROLLOUT_TEST_TIMESTAMP: timestamp });
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/rollout artifact directory already exists/i);
+    expect(actions(fixture)).not.toContain("systemctl:stop");
+    expect(existsSync(sentinelPath(fixture)), "sentinel created by this invocation must be auto-removed — the cleanup trap must be active before the artifact_dir collision check runs, not just before sentinel creation").toBe(false);
+  });
+
+  it("auto-removes the sentinel it just created when artifact/log setup fails after sentinel publication but before any service is touched", () => {
+    // A second, independent gap: a failure in the artifact/log setup phase
+    // (writing $log_dir/latest) that happens strictly after the sentinel is
+    // published but strictly before git/service preconditions run. The
+    // cleanup trap must already be active for this failure too.
+    const fixture = useMinimalInventory(createFixture());
+    mkdirSync(join(fixture.logDir, "latest"));
+
+    const result = runRollout(fixture);
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(actions(fixture)).not.toContain("systemctl:stop");
+    expect(existsSync(sentinelPath(fixture)), "sentinel created by this invocation must be auto-removed after an artifact/log setup failure").toBe(false);
+  });
+
   it("refuses to trust a sentinel that is a symlink, never following it", () => {
     const fixture = useMinimalInventory(createFixture());
     symlinkSync("/etc/passwd", sentinelPath(fixture));
@@ -1030,7 +1116,7 @@ describe("interrupted-rollout sentinel (Phase 4C.4, issue #135)", () => {
       writeFileSync(fixture.stateFile, `${units[0]}\n`); // restore active-unit baseline the failed run tore down
       const retry = runRollout(fixture);
       expect(retry.status, `${retry.stdout}\n${retry.stderr}`).toBe(0);
-    });
+    }, 15_000);
 
     it("refuses when the recorded expected_commit does not match the operator-supplied value", () => {
       const fixture = useMinimalInventory(createFixture());
@@ -1094,6 +1180,44 @@ describe("interrupted-rollout sentinel (Phase 4C.4, issue #135)", () => {
         holder.kill();
       }
       expect(readFileSync(sentinelPath(fixture), "utf8")).toBe(before);
+    });
+
+    it("refuses to write through a symlinked sentinel-clear audit log, leaving the decoy target and the sentinel untouched", () => {
+      const fixture = useMinimalInventory(createFixture());
+      const failed = runRollout(fixture, "backup");
+      expect(failed.status).not.toBe(0);
+      const sentinelContent = readFileSync(sentinelPath(fixture), "utf8");
+      const recordedArtifactDir = /^artifact_dir=(.*)$/m.exec(sentinelContent)?.[1]!;
+
+      const decoy = join(fixture.root, "decoy-target");
+      writeFileSync(decoy, "do-not-touch\n");
+      symlinkSync(decoy, join(fixture.logDir, "sentinel-clear.log"));
+
+      const clear = runSentinelClear(fixture, fixture.expectedCommit, recordedArtifactDir);
+      const output = `${clear.stdout}\n${clear.stderr}`;
+      expect(clear.status, output).not.toBe(0);
+      expect(output).toMatch(/audit log is a symlink/i);
+      expect(readFileSync(decoy, "utf8")).toBe("do-not-touch\n");
+      expect(existsSync(sentinelPath(fixture)), "sentinel must remain — the clear tool must refuse before ever touching it").toBe(true);
+    });
+
+    it("never records a false 'cleared' completion entry when sentinel removal itself fails, and leaves the sentinel in place", () => {
+      const fixture = useMinimalInventory(createFixture());
+      const failed = runRollout(fixture, "backup");
+      expect(failed.status).not.toBe(0);
+      const sentinelContent = readFileSync(sentinelPath(fixture), "utf8");
+      const recordedArtifactDir = /^artifact_dir=(.*)$/m.exec(sentinelContent)?.[1]!;
+
+      const clear = runSentinelClear(fixture, fixture.expectedCommit, recordedArtifactDir, {
+        AGENT_BRIDGE_ROLLOUT_TEST_FORCE_SENTINEL_RM_FAILURE: "1",
+      });
+      const output = `${clear.stdout}\n${clear.stderr}`;
+      expect(clear.status, output).not.toBe(0);
+      expect(output).not.toMatch(/sentinel cleared/i);
+      expect(existsSync(sentinelPath(fixture)), "sentinel must remain in place when removal fails").toBe(true);
+      const auditContent = readFileSync(join(fixture.logDir, "sentinel-clear.log"), "utf8");
+      expect(auditContent).toMatch(/action=clear_attempt/);
+      expect(auditContent).not.toMatch(/action=clear_completed/);
     });
   });
 });

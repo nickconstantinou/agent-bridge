@@ -187,74 +187,24 @@ done
 for database in "${!canonical_databases[@]}"; do [[ -n "${discovered_databases[$database]:-}" ]] || die "extra configured database not selected by any unit: $database"; done
 for database in "${!discovered_databases[@]}"; do [[ -n "${canonical_databases[$database]:-}" ]] || die "discovered database missing from root allowlist: $database"; done
 
-/usr/bin/mkdir -p "$(/usr/bin/dirname "$lock_file")"
-exec 9>"$lock_file"
-/usr/bin/flock --exclusive --nonblock 9 || die "another rollout is already active"
-
-timestamp="$(/usr/bin/date -u +%Y%m%dT%H%M%SZ)"
-artifact_dir="$log_dir/$timestamp-$expected_commit"
-
-# Interrupted-rollout sentinel (Phase 4C.4, issue #135). Checked and, if
-# absent, created here — immediately after the lock is acquired and before
-# any precondition check runs, including the artifact-directory-uniqueness
-# check just below — to close the check-then-act race an earlier draft had:
-# a second invocation observing "no sentinel" and only acquiring the lock
-# after a third invocation had already failed and left one behind. Lives
-# beneath the already-validated canonical, root-owned $log_dir rather than
-# a new directory.
-sentinel_path="$log_dir/.rollout-in-progress"
-sentinel_removable=0
-if [[ -e "$sentinel_path" || -L "$sentinel_path" ]]; then
-  # A sentinel that doesn't look exactly like the ones this helper writes is
-  # never trusted or silently overwritten — that's its own containment-
-  # uncertain failure, distinct from "a valid sentinel is present."
-  [[ ! -L "$sentinel_path" ]] || die "existing rollout sentinel is a symlink, refusing to trust it: $sentinel_path — manual review required"
-  [[ -f "$sentinel_path" ]] || die "existing rollout sentinel is not a regular file: $sentinel_path — manual review required"
-  sentinel_check_owner="$(/usr/bin/stat -c %u "$sentinel_path")"
-  sentinel_check_mode="$(/usr/bin/stat -c %a "$sentinel_path")"
-  [[ "$sentinel_check_owner" == "$secure_owner_uid" && "$sentinel_check_mode" == "600" ]] || die "existing rollout sentinel has unsafe ownership or mode: $sentinel_path — manual review required"
-  sentinel_prior_commit="$(/usr/bin/sed -n 's/^expected_commit=//p' "$sentinel_path")"
-  sentinel_prior_artifact_dir="$(/usr/bin/sed -n 's/^artifact_dir=//p' "$sentinel_path")"
-  die "an interrupted rollout sentinel already exists: $sentinel_path (expected_commit=${sentinel_prior_commit:-unknown} artifact_dir=${sentinel_prior_artifact_dir:-unknown}) — review that evidence, then clear it with the separate rollout-sentinel-clear tool before retrying"
-fi
-sentinel_tmp="$(/usr/bin/mktemp --tmpdir="$log_dir" .rollout-in-progress.XXXXXX)"
-{
-  printf 'expected_commit=%s\n' "$expected_commit"
-  printf 'artifact_dir=%s\n' "$artifact_dir"
-  printf 'created_at=%s\n' "$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  printf 'hostname=%s\n' "$(/usr/bin/hostname)"
-  printf 'pid=%s\n' "$$"
-} > "$sentinel_tmp"
-/usr/bin/chmod 0600 "$sentinel_tmp"
-# ln (hard link) is the atomic create-if-not-exists primitive here — it
-# fails if the target already exists rather than replacing it, the same
-# O_CREAT|O_EXCL semantics called for, without needing a separate syscall
-# wrapper.
-/usr/bin/ln -- "$sentinel_tmp" "$sentinel_path" || die "failed to atomically create rollout sentinel (unexpected concurrent writer?): $sentinel_path"
-/usr/bin/rm -f -- "$sentinel_tmp"
-
-[[ ! -e "$artifact_dir" ]] || die "rollout artifact directory already exists: $artifact_dir"
-/usr/bin/mkdir --mode=0700 -- "$artifact_dir"
-/usr/bin/chmod 0700 "$artifact_dir"
-log_file="$artifact_dir/rollout.log"
-latest_tmp="$(/usr/bin/mktemp --tmpdir="$log_dir" .latest.XXXXXX)"
-printf '%s\n' "$artifact_dir" > "$latest_tmp"
-/usr/bin/chmod 0600 "$latest_tmp"
-/usr/bin/mv -T -- "$latest_tmp" "$log_dir/latest"
-exec > >(/usr/bin/tee -a "$log_file") 2>&1
-
-echo "rollout start timestamp=$timestamp expected_commit=$expected_commit"
-echo "units=${units[*]}"
-echo "database_count=${#databases[@]}"
-
-manifest="$artifact_dir/backup-manifest.tsv"
-backup_set="$backup_dir/$timestamp-$expected_commit"
-start_attempted=0
-services_started=0
-stop_attempted=0
-backup_completed=0
-completed=0
-declare -a expected_backups=()
+run_as_runtime() {
+  "$runuser_cmd" --user "$runtime_user" -- "$@"
+}
+git_check() {
+  [[ "$(run_as_runtime /usr/bin/git -C "$project_dir" rev-parse --is-inside-work-tree)" == "true" ]] || die "project is not a Git worktree"
+  [[ "$(run_as_runtime /usr/bin/git -C "$project_dir" branch --show-current)" == "main" ]] || die "project must be on main"
+  actual_commit="$(run_as_runtime /usr/bin/git -C "$project_dir" rev-parse HEAD)"
+  [[ "$actual_commit" == "$expected_commit" ]] || die "expected commit $expected_commit but found $actual_commit"
+  [[ -z "$(run_as_runtime /usr/bin/git -C "$project_dir" status --porcelain --untracked-files=normal)" ]] || die "project must have a clean working tree"
+}
+assert_service_active() {
+  local unit="$1" active_state sub_state
+  "$systemctl_cmd" is-active --quiet "$unit" || die "service is not active: $unit"
+  if "$systemctl_cmd" is-failed --quiet "$unit"; then die "service is failed: $unit"; fi
+  active_state="$("$systemctl_cmd" show "$unit" --property=ActiveState --value)"
+  sub_state="$("$systemctl_cmd" show "$unit" --property=SubState --value)"
+  [[ "$active_state" == active && "$sub_state" == running ]] || die "service is not stably running: $unit state=$active_state/$sub_state"
+}
 
 backup_databases() {
   /usr/bin/mkdir --mode=0700 -- "$backup_set"
@@ -407,12 +357,42 @@ stop_and_verify_all_services() {
 # Removes the sentinel only when sentinel_removable=1 was explicitly set —
 # never inferred from $? (the script's own exit status stays nonzero on
 # every failure path, including a cleanly auto-restored one, so exit code
-# alone can never signal "safe to retry"). A no-op if the sentinel is
-# already gone or was never this invocation's to remove.
+# alone can never signal "safe to retry"). Fail-closed: this only reports
+# success once it has positively re-verified that the sentinel still is the
+# exact one this invocation created (matched by device:inode, captured in
+# $sentinel_identity right after creation) and that it is genuinely gone
+# afterward. A sentinel that is missing, symlinked, non-regular, or no
+# longer matches that identity is never silently treated as "already fine"
+# — each of those is its own cleanup failure requiring manual review, not a
+# no-op.
 remove_sentinel_if_removable() {
   (( sentinel_removable == 1 )) || return 0
-  [[ -n "${sentinel_path:-}" && -f "$sentinel_path" && ! -L "$sentinel_path" ]] || return 0
-  /usr/bin/rm -f -- "$sentinel_path"
+  if [[ -z "${sentinel_identity:-}" ]]; then
+    echo "SENTINEL CLEANUP FAILED: no sentinel identity recorded for this invocation — manual review required" >&2
+    return 1
+  fi
+  if [[ ! -e "$sentinel_path" && ! -L "$sentinel_path" ]]; then
+    echo "SENTINEL CLEANUP FAILED: sentinel unexpectedly missing before this invocation could remove it: $sentinel_path — manual review required" >&2
+    return 1
+  fi
+  if [[ -L "$sentinel_path" || ! -f "$sentinel_path" ]]; then
+    echo "SENTINEL CLEANUP FAILED: sentinel changed shape (symlink or non-regular) before removal, refusing to touch it: $sentinel_path — manual review required" >&2
+    return 1
+  fi
+  local current_identity
+  current_identity="$(/usr/bin/stat -c '%d:%i' "$sentinel_path" 2>/dev/null || true)"
+  if [[ "$current_identity" != "$sentinel_identity" ]]; then
+    echo "SENTINEL CLEANUP FAILED: sentinel at $sentinel_path is no longer the one this invocation created (identity mismatch) — manual review required" >&2
+    return 1
+  fi
+  if ! /usr/bin/rm -f -- "$sentinel_path"; then
+    echo "SENTINEL CLEANUP FAILED: rm failed for $sentinel_path — manual review required" >&2
+    return 1
+  fi
+  if [[ -e "$sentinel_path" || -L "$sentinel_path" ]]; then
+    echo "SENTINEL CLEANUP FAILED: sentinel still present after removal attempt: $sentinel_path — manual review required" >&2
+    return 1
+  fi
   echo "rollout sentinel removed: $sentinel_path"
 }
 
@@ -421,8 +401,11 @@ on_exit() {
   set +e
   if (( status == 0 && completed == 1 )); then
     sentinel_removable=1
-    remove_sentinel_if_removable
-    return 0
+    if remove_sentinel_if_removable; then
+      return 0
+    fi
+    echo "rollout completed successfully but automatic sentinel cleanup failed; manual review required before the next rollout" >&2
+    exit 1
   fi
   echo "rollout failed status=$status start_attempted=$start_attempted services_started=$services_started; containing services"
   containment_verified=0
@@ -469,31 +452,107 @@ on_exit() {
           echo "STATE: RESTORE_INCOMPLETE — automatic restore failed or could not be fully verified for every database; manual restoration required; sentinel retained" >&2
         fi
       else
-        # Services are down and containment is fully proven, but no backup
-        # write has happened yet — database is untouched. Still not bare-
-        # retryable: rollout-agent-bridge.sh's own precondition check
-        # requires every unit to already be active before it will attempt
-        # to stop them.
-        echo "STATE: STOPPED_UNCHANGED — services stopped, database on the OLD schema and untouched, code still checked out at the NEW commit; sentinel retained, see docs/GUARDED-ROLLOUT.md recovery flow" >&2
+        # Services are down and containment is fully proven, but
+        # backup_completed=0 only means backup_databases() did not finish
+        # and verify the whole cohort — it does NOT mean nothing was ever
+        # written to disk. A partial, unmanifested backup artifact may exist
+        # under backup_set from a database copy that started before the
+        # failure; it must never be treated as a valid cohort backup. The
+        # source databases themselves remain on the OLD schema, untouched.
+        echo "STATE: STOPPED_UNCHANGED — services stopped, source databases on the OLD schema and untouched, code still checked out at the NEW commit; no complete verified cohort backup exists — partial backup artifacts may exist under $backup_set and must not be used for restore; sentinel retained, see docs/GUARDED-ROLLOUT.md recovery flow" >&2
       fi
     fi
   fi
   if (( containment_verified == 1 )); then echo "services remain stopped; operator review required"; fi
-  remove_sentinel_if_removable
+  if ! remove_sentinel_if_removable; then
+    echo "automatic sentinel cleanup also failed; manual review required in addition to the failure above" >&2
+    status=1
+  fi
   exit "${status:-1}"
 }
+
+# The cleanup trap must be active before the sentinel is ever published, and
+# before every later fallible setup operation — otherwise a failure in that
+# gap (the artifact_dir collision check right below is the exact case that
+# motivated this) would leave behind a sentinel this invocation created
+# without on_exit() ever running to auto-remove it via the pure-precondition-
+# failure path.
+/usr/bin/mkdir -p "$(/usr/bin/dirname "$lock_file")"
+exec 9>"$lock_file"
+/usr/bin/flock --exclusive --nonblock 9 || die "another rollout is already active"
+
+timestamp="$(/usr/bin/date -u +%Y%m%dT%H%M%SZ)"
+if (( test_mode == 1 )) && [[ -n "${AGENT_BRIDGE_ROLLOUT_TEST_TIMESTAMP:-}" ]]; then
+  timestamp="$AGENT_BRIDGE_ROLLOUT_TEST_TIMESTAMP"
+fi
+artifact_dir="$log_dir/$timestamp-$expected_commit"
+manifest="$artifact_dir/backup-manifest.tsv"
+backup_set="$backup_dir/$timestamp-$expected_commit"
+sentinel_path="$log_dir/.rollout-in-progress"
+
+start_attempted=0
+services_started=0
+stop_attempted=0
+backup_completed=0
+completed=0
+sentinel_removable=0
+sentinel_identity=""
+declare -a expected_backups=()
+
 trap on_exit EXIT
 
-run_as_runtime() {
-  "$runuser_cmd" --user "$runtime_user" -- "$@"
-}
-git_check() {
-  [[ "$(run_as_runtime /usr/bin/git -C "$project_dir" rev-parse --is-inside-work-tree)" == "true" ]] || die "project is not a Git worktree"
-  [[ "$(run_as_runtime /usr/bin/git -C "$project_dir" branch --show-current)" == "main" ]] || die "project must be on main"
-  actual_commit="$(run_as_runtime /usr/bin/git -C "$project_dir" rev-parse HEAD)"
-  [[ "$actual_commit" == "$expected_commit" ]] || die "expected commit $expected_commit but found $actual_commit"
-  [[ -z "$(run_as_runtime /usr/bin/git -C "$project_dir" status --porcelain --untracked-files=normal)" ]] || die "project must have a clean working tree"
-}
+# Interrupted-rollout sentinel (Phase 4C.4, issue #135). Checked and, if
+# absent, created here — immediately after the lock is acquired and before
+# any precondition check runs, including the artifact-directory-uniqueness
+# check just below — to close the check-then-act race an earlier draft had:
+# a second invocation observing "no sentinel" and only acquiring the lock
+# after a third invocation had already failed and left one behind. Lives
+# beneath the already-validated canonical, root-owned $log_dir rather than
+# a new directory.
+if [[ -e "$sentinel_path" || -L "$sentinel_path" ]]; then
+  # A sentinel that doesn't look exactly like the ones this helper writes is
+  # never trusted or silently overwritten — that's its own containment-
+  # uncertain failure, distinct from "a valid sentinel is present."
+  [[ ! -L "$sentinel_path" ]] || die "existing rollout sentinel is a symlink, refusing to trust it: $sentinel_path — manual review required"
+  [[ -f "$sentinel_path" ]] || die "existing rollout sentinel is not a regular file: $sentinel_path — manual review required"
+  sentinel_check_owner="$(/usr/bin/stat -c %u "$sentinel_path")"
+  sentinel_check_mode="$(/usr/bin/stat -c %a "$sentinel_path")"
+  [[ "$sentinel_check_owner" == "$secure_owner_uid" && "$sentinel_check_mode" == "600" ]] || die "existing rollout sentinel has unsafe ownership or mode: $sentinel_path — manual review required"
+  sentinel_prior_commit="$(/usr/bin/sed -n 's/^expected_commit=//p' "$sentinel_path")"
+  sentinel_prior_artifact_dir="$(/usr/bin/sed -n 's/^artifact_dir=//p' "$sentinel_path")"
+  die "an interrupted rollout sentinel already exists: $sentinel_path (expected_commit=${sentinel_prior_commit:-unknown} artifact_dir=${sentinel_prior_artifact_dir:-unknown}) — review that evidence, then clear it with the separate rollout-sentinel-clear tool before retrying"
+fi
+sentinel_tmp="$(/usr/bin/mktemp --tmpdir="$log_dir" .rollout-in-progress.XXXXXX)"
+{
+  printf 'expected_commit=%s\n' "$expected_commit"
+  printf 'artifact_dir=%s\n' "$artifact_dir"
+  printf 'created_at=%s\n' "$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  printf 'hostname=%s\n' "$(/usr/bin/hostname)"
+  printf 'pid=%s\n' "$$"
+} > "$sentinel_tmp"
+/usr/bin/chmod 0600 "$sentinel_tmp"
+# ln (hard link) is the atomic create-if-not-exists primitive here — it
+# fails if the target already exists rather than replacing it, the same
+# O_CREAT|O_EXCL semantics called for, without needing a separate syscall
+# wrapper.
+/usr/bin/ln -- "$sentinel_tmp" "$sentinel_path" || die "failed to atomically create rollout sentinel (unexpected concurrent writer?): $sentinel_path"
+/usr/bin/rm -f -- "$sentinel_tmp"
+sentinel_identity="$(/usr/bin/stat -c '%d:%i' "$sentinel_path")"
+
+[[ ! -e "$artifact_dir" ]] || die "rollout artifact directory already exists: $artifact_dir"
+/usr/bin/mkdir --mode=0700 -- "$artifact_dir"
+/usr/bin/chmod 0700 "$artifact_dir"
+log_file="$artifact_dir/rollout.log"
+latest_tmp="$(/usr/bin/mktemp --tmpdir="$log_dir" .latest.XXXXXX)"
+printf '%s\n' "$artifact_dir" > "$latest_tmp"
+/usr/bin/chmod 0600 "$latest_tmp"
+/usr/bin/mv -T -- "$latest_tmp" "$log_dir/latest"
+exec > >(/usr/bin/tee -a "$log_file") 2>&1
+
+echo "rollout start timestamp=$timestamp expected_commit=$expected_commit"
+echo "units=${units[*]}"
+echo "database_count=${#databases[@]}"
+
 git_check
 [[ -f "$project_dir/scripts/rollout-db.ts" ]] || die "migration helper is missing from expected commit"
 [[ -f "$project_dir/node_modules/tsx/dist/cli.mjs" ]] || die "tsx runtime is missing"
@@ -506,15 +565,6 @@ for database in "${databases[@]}"; do db_args+=(--db "$database"); done
 for unit in "${!unit_databases[@]}"; do db_args+=(--resolving-unit "${unit_databases[$unit]}=$unit"); done
 run_db_tool() {
   run_as_runtime "$node_bin" "$project_dir/node_modules/tsx/dist/cli.mjs" "$project_dir/scripts/rollout-db.ts" "$@"
-}
-
-assert_service_active() {
-  local unit="$1" active_state sub_state
-  "$systemctl_cmd" is-active --quiet "$unit" || die "service is not active: $unit"
-  if "$systemctl_cmd" is-failed --quiet "$unit"; then die "service is failed: $unit"; fi
-  active_state="$("$systemctl_cmd" show "$unit" --property=ActiveState --value)"
-  sub_state="$("$systemctl_cmd" show "$unit" --property=SubState --value)"
-  [[ "$active_state" == active && "$sub_state" == running ]] || die "service is not stably running: $unit state=$active_state/$sub_state"
 }
 
 declare -A restart_baseline=()

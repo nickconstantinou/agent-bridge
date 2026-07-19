@@ -50,7 +50,7 @@ else
   test_mode=0
 fi
 
-for command_path in /usr/bin/flock /usr/bin/realpath /usr/bin/stat /usr/bin/mkdir /usr/bin/rm /usr/bin/date /usr/bin/hostname /usr/bin/sed /usr/bin/chmod /usr/bin/dirname; do
+for command_path in /usr/bin/flock /usr/bin/realpath /usr/bin/stat /usr/bin/mkdir /usr/bin/rm /usr/bin/date /usr/bin/hostname /usr/bin/sed /usr/bin/chmod /usr/bin/dirname /usr/bin/ln /usr/bin/mktemp; do
   [[ -x "$command_path" ]] || die "required command is unavailable: $command_path"
 done
 [[ -f "$config_file" && ! -L "$config_file" ]] || die "missing fixed rollout config: $config_file"
@@ -112,9 +112,38 @@ sentinel_artifact_dir="$(/usr/bin/sed -n 's/^artifact_dir=//p' "$sentinel_path")
 [[ "$sentinel_commit" == "$confirm_commit" ]] || die "provided --expected-commit does not match the sentinel's recorded value ($sentinel_commit) — re-review the evidence before retrying"
 [[ "$sentinel_artifact_dir" == "$confirm_artifact_dir" ]] || die "provided --artifact-dir does not match the sentinel's recorded value ($sentinel_artifact_dir) — re-review the evidence before retrying"
 
-clear_log="$log_dir/sentinel-clear.log"
-printf '%s hostname=%s pid=%s cleared sentinel expected_commit=%s artifact_dir=%s\n' \
-  "$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(/usr/bin/hostname)" "$$" "$sentinel_commit" "$sentinel_artifact_dir" >> "$clear_log"
-/usr/bin/chmod 0600 "$clear_log"
-/usr/bin/rm -f -- "$sentinel_path"
+# The audit log itself gets the same non-symlink discipline as the sentinel
+# it records — a root process must never write or chmod through an
+# attacker-planted symlink at this path.
+audit_log="$log_dir/sentinel-clear.log"
+if [[ -e "$audit_log" || -L "$audit_log" ]]; then
+  [[ ! -L "$audit_log" ]] || die "sentinel-clear audit log is a symlink, refusing to write through it: $audit_log — manual review required"
+  [[ -f "$audit_log" ]] || die "sentinel-clear audit log is not a regular file, refusing to write to it: $audit_log — manual review required"
+  [[ "$(/usr/bin/stat -c %u "$audit_log")" == "$secure_owner_uid" ]] || die "sentinel-clear audit log has unsafe ownership: $audit_log — manual review required"
+else
+  audit_tmp="$(/usr/bin/mktemp --tmpdir="$log_dir" .sentinel-clear-log.XXXXXX)"
+  /usr/bin/chmod 0600 "$audit_tmp"
+  /usr/bin/ln -- "$audit_tmp" "$audit_log" 2>/dev/null || true
+  /usr/bin/rm -f -- "$audit_tmp"
+  [[ -f "$audit_log" && ! -L "$audit_log" ]] || die "failed to safely create sentinel-clear audit log: $audit_log"
+fi
+/usr/bin/chmod 0600 "$audit_log"
+
+# Record the attempt before touching the sentinel, but the "cleared"
+# completion line is only ever written after removal is verified — an
+# audit log must never claim success for a removal that didn't happen.
+printf '%s hostname=%s pid=%s action=clear_attempt expected_commit=%s artifact_dir=%s\n' \
+  "$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(/usr/bin/hostname)" "$$" "$sentinel_commit" "$sentinel_artifact_dir" >> "$audit_log"
+
+sentinel_removed=0
+if (( test_mode == 1 )) && [[ -n "${AGENT_BRIDGE_ROLLOUT_TEST_FORCE_SENTINEL_RM_FAILURE:-}" ]]; then
+  : # test-only seam: simulate a removal failure without touching the file
+else
+  /usr/bin/rm -f -- "$sentinel_path" && sentinel_removed=1
+fi
+(( sentinel_removed == 1 )) || die "failed to remove sentinel: $sentinel_path — audit shows an attempt only, sentinel may still be present, manual review required"
+[[ ! -e "$sentinel_path" && ! -L "$sentinel_path" ]] || die "sentinel still present after removal attempt: $sentinel_path — manual review required"
+
+printf '%s hostname=%s pid=%s action=clear_completed expected_commit=%s artifact_dir=%s\n' \
+  "$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(/usr/bin/hostname)" "$$" "$sentinel_commit" "$sentinel_artifact_dir" >> "$audit_log"
 echo "rollout-sentinel-clear: sentinel cleared (expected_commit=$sentinel_commit artifact_dir=$sentinel_artifact_dir)"

@@ -107,7 +107,7 @@ In every other failure shape the sentinel is retained and the failure is labeled
 
 | State | Meaning | Recovery |
 |---|---|---|
-| `STOPPED_UNCHANGED` | Services stopped, containment re-proven, but the failure happened before any real backup was written. Database is on the OLD schema, completely untouched. | Investigate the precondition/backup failure, then bare-retry once resolved — no restore needed. |
+| `STOPPED_UNCHANGED` | Services stopped, containment re-proven, but the cohort backup did not complete and verify. The source databases are on the OLD schema, untouched — but `backup_completed=0` only means the *whole cohort* wasn't verified; a partial, unmanifested backup artifact may exist under the run's `backup_set` directory and must never be treated as a valid backup or used for restore. | Investigate the precondition/backup failure, then bare-retry once resolved — no restore needed. Discard any partial backup artifact rather than trusting it. |
 | `FAILED_RESTORED` | A genuine restore attempt ran and every database verified against the manifest. | Not a bare-retry case — review why migration failed before starting services again. |
 | `RESTORE_INCOMPLETE` | The automatic restore itself failed, or could not be fully verified for every database. State is unknown/mixed. | Manual restoration required before anything else; do not start services. |
 | `STOPPED_PRESERVED` | Services stopped after a post-start failure. Database IS on the NEW schema — migration and validation already succeeded, and services were briefly started against this pairing before failing. | Always requires operator judgment; no automatic action is safe with services possibly having accepted live writes. |

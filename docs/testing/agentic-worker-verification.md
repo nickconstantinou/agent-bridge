@@ -79,14 +79,16 @@ Cover:
 
 - every role/mode resolves exactly one registered prompt key and contract version;
 - planning, red-test repair, execution-contract repair, review, operations, guidance, Code Worker, and Documentation Steward prompts remain separate;
-- fallback targets use the same prompt key/version, input/output schemas, and validator;
-- changing one prompt does not change sibling prompt content hashes or contracts;
-- database overrides can replace text only;
-- overrides cannot change role, mode, tools, permissions, budget, validator, repair count, or lifecycle authority;
-- unknown keys, incompatible versions, and missing required inputs fail safely;
-- required invalid overrides never fall through to a sibling role/mode prompt;
+- fallback targets use the same prompt key/version, input/output schemas, validator, and stable source-template hash;
+- changing one prompt does not change sibling prompt template hashes or contracts;
+- every canonical prompt declares its required render variables and missing inputs fail closed;
+- supplied context is bounded before rendering;
+- canonical role prompts ignore database prompt rows and always resolve `source: builtin`;
+- legacy database overrides remain available only to explicitly unmigrated compatibility handlers;
+- legacy override text cannot change role, mode, tools, permissions, budget, validator, repair count, or lifecycle authority;
+- unknown keys and incompatible legacy override inputs fail safely;
 - compatibility aliases remain explicit and degraded;
-- effective prompt key, version, source, and content hash are durable and audit-safe;
+- stable source-template hash and invocation-specific rendered-content hash are distinguished and audit-safe;
 - raw repository context and sensitive prompt inputs are not stored in metadata-only audit.
 
 Canonical contract: `docs/architecture/agentic-prompt-contracts.md`.
@@ -163,7 +165,7 @@ Cover:
 - logical-call budget is preserved across retries and restart;
 - completed phases are not rerun;
 - stale model probes are revalidated before new calls;
-- prompt contract/source/version remains bound to each durable logical call;
+- prompt contract, version, source-template hash, and rendered invocation hash remain bound to each durable logical call;
 - rollback to legacy routing preserves new records without interpreting incompatible jobs unsafely.
 
 ### Review and operations
@@ -189,6 +191,7 @@ Architecture Lint should enforce:
 - full planning and focused repair use different registered prompt keys;
 - prompt text cannot own or import tool, permission, budget, or lifecycle policy;
 - Code Worker and Documentation Steward prompts cannot be selected for Technical Lead modes;
+- canonical prompt loading cannot depend on the database prompt repository;
 - documentation-only handlers cannot import production mutation helpers;
 - role audit SQL remains in its owning repository;
 - no legacy scribe call is used as canonical planning without an explicit compatibility marker;
@@ -225,6 +228,7 @@ Before broad rollout, use a disposable workspace to demonstrate:
 9. restart between workflow phases without duplicate calls or prompt-contract drift;
 10. cancellation fencing late output;
 11. accurate non-independent review reporting when only one model exists;
-12. rollback to legacy routing without queue or state corruption.
+12. canonical prompt loading remains source-controlled even when a conflicting legacy database row exists;
+13. rollback to legacy routing without queue or state corruption.
 
 Production qualification is observational and separately approved. It does not occur as an implicit consequence of merging implementation code.

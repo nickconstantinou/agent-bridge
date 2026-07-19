@@ -1,57 +1,109 @@
 # 10 — Production Readiness Checklist
 
-Gate for declaring OSS v1.0. Checked per release; automated where possible.
+Gate for enabling role-based Engineering Worker orchestration. Checked per release and rollout; automated where possible.
 
 ## Architecture
-- [ ] All entry points consume `src/config.ts` (structural test green)
-- [ ] Provider additions touch only `src/providers/` (mock-provider test green)
-- [ ] Zero raw SQL outside repositories/db (arch-lint)
-- [ ] Event replay reproduces job state (property test)
-- [ ] Platform concepts absent from OSS types (boundary lint)
 
-## Security
-- [ ] One Telegram token per surface; startup duplicate detection
-- [ ] Secrets via *_FILE indirection, files mode 600; no tokens in repo or logs
-- [ ] Child env stripping (buildSafeChildEnv) covers all credential patterns, tested
-- [ ] Allowed-user enforcement on every inbound update path (existing) + tests
-- [ ] Execution mode "safe" default; "trusted" documented with warnings
-- [ ] Dependency audit clean (`npm audit` gate, better-sqlite3/tsx/dotenv only)
+- [ ] Exactly three configurable roles: Technical Lead, Code Worker, Documentation Steward
+- [ ] Scanner is a Code Worker mode; review and operations are Technical Lead modes
+- [ ] Agent Bridge owns transitions, permissions, budgets, approvals, and audit
+- [ ] Technical Lead uses the authoritative AdvisorService boundary
+- [ ] Provider/model capability and role resolution are registry-driven
+- [ ] Role, audit, and lifecycle SQL is confined to owning repositories
+- [ ] Companion and worker architecture boundaries remain green
+- [ ] `agentic-maintenance.yaml` references existing canonical documents
 
-## Reliability
-- [ ] Circuit breaker, session TTL, orphan cleanup, KillMode=control-group preserved (regression tests)
-- [ ] Job resume after restart mid-step (workflow cursor) demonstrated
-- [ ] Fallback chain deterministic under 429/exhaustion/model-missing (table tests)
-- [ ] Event write failure degrades gracefully (never blocks execution)
-- [ ] Worker never blocks on GitHub availability (sync is async)
+## Requirements and planning
 
-## Performance
-- [ ] Poll loops idle-cheap (no busy loops; getUpdates long-poll)
-- [ ] SQLite indices for hot paths (events by job, memories by kind+scope)
-- [ ] Large transcript rendering bounded (existing turn text limits) + budgeted memory recall
+- [ ] Feature, defect, and refactor inputs pass validation before planning
+- [ ] Apparently complete GitHub/local issues receive validation
+- [ ] Scan findings remain candidates until Technical Lead disposition
+- [ ] `requirements_ready` is durable and restart-safe
+- [ ] Product decisions pause for human input
+- [ ] Technical Lead plans trace acceptance criteria and produce bounded work packets
+- [ ] Structured output and bounded repair fail closed before persistence
+- [ ] Legacy scribe planning is explicit compatibility behaviour only
 
-## Observability
-- [ ] Structured logs with runId/jobId correlation
-- [ ] /status deep view per job (timeline from events)
-- [ ] Health bot: service liveness, queue depth, repair-rate, provider health probes
-- [ ] Heartbeat API serving version + service states
+## Role assignment
 
-## Recovery
-- [ ] Documented restore: single SQLite file backup/restore drill performed
-- [ ] Orphaned run/job cleanup verified after kill -9 drill
-- [ ] Provider auth expiry produces alert, not silent fallback
+- [ ] Platform/OSS persist explicit CLI and model per role
+- [ ] Automatic, recommended, and manual assignment work
+- [ ] Ordered fallbacks and configuration source are visible
+- [ ] One CLI can assign different models to different roles
+- [ ] One model preserves role/session/permission separation
+- [ ] Model diversity and independent-review degradation are accurate
+- [ ] Role test probes are non-mutating and freshness-aware
+
+## Security and permissions
+
+- [ ] Technical Lead has typed bounded read-only tools only
+- [ ] Code Worker scan/investigate cannot mutate
+- [ ] Red mode is test-only and green cannot modify committed red tests
+- [ ] Repair cannot escape the approved packet
+- [ ] Documentation author mode is restricted to manifest-approved paths
+- [ ] Capability tokens expire on completion, cancellation, timeout, and lease loss
+- [ ] Child environments strip credentials not required by the role mode
+- [ ] Status, probes, and audit contain no secrets or unrestricted prompt content
+
+## Reliability and lifecycle
+
+- [ ] Cancellation prevents new role calls and fences late output
+- [ ] Terminal states cannot be overwritten
+- [ ] Restart resumes from authoritative phase state
+- [ ] Completed role phases are not repeated
+- [ ] Lease loss/stale owner cannot dispatch or persist duplicate calls
+- [ ] Logical-call budgets survive retry and restart
+- [ ] Provider and model probes are revalidated when stale
+- [ ] Role routing rollback preserves new records and holds incompatible jobs safely
+
+## Code Worker
+
+- [ ] Disposable workspaces remain mandatory
+- [ ] Mechanical red/green commit separation remains active
+- [ ] Deterministic focused and broad verification precedes review
+- [ ] Scope expansion is rejected or returned for new planning
+- [ ] PR head-SHA, CI, and merge approval gates remain unchanged
 
 ## Documentation
-- [ ] Operator runbook (install, tokens, systemd, backup, recovery drills)
-- [ ] Contributor guide: adding a provider (adapter how-to), adding a workflow (declaration how-to)
-- [ ] ADRs current; roadmap statuses accurate
 
-## Upgrade path & compatibility
-- [ ] Additive-only migrations verified against a copy of production DB
-- [ ] `upgrade.sh` uses install@latest pattern (fixed) and restarts via safe-restart flow
-- [ ] Config env vars stable for one minor version after deprecation notice
+- [ ] Documentation impact is recorded for every planned change
+- [ ] Manifest triggers resolve required documents deterministically
+- [ ] Required documents are current before PR readiness
+- [ ] `no_documentation_change` requires rationale, trigger evaluation, and Technical Lead validation
+- [ ] README, AGENTS, worker guide, architecture, ADR, configuration, operations, testing, and maintenance documents are current
+- [ ] Documentation Steward cannot change production or test code
 
-## API stability (v1.0 freeze surface)
-- [ ] ProviderAdapter interface
-- [ ] WorkflowDefinition schema
-- [ ] Event type names/payload required fields
-- [ ] Bootstrap + Heartbeat API shapes
+## Operations
+
+- [ ] Effective role/status surface reports targets, models, permissions, fallbacks, source, and degradation
+- [ ] Safe enablement completed in a disposable workspace
+- [ ] Operator runbook covers enablement, degradation, cancellation, restart, incident, and rollback
+- [ ] Deployment/rollback plan identifies prerequisites, abort conditions, postconditions, and exact evidence
+- [ ] No production mutation occurs without separate explicit approval
+
+## Verification
+
+- [ ] Focused role, workflow, permission, lifecycle, migration, and platform tests pass
+- [ ] Full suite passes at exact head
+- [ ] Typecheck passes
+- [ ] Architecture Lint passes
+- [ ] Cleanup/static checks pass or only documented pre-existing findings remain
+- [ ] `git diff --check` passes
+- [ ] Lifecycle/concurrency-sensitive suites pass repeatedly and serially where required
+- [ ] Exact-head GitHub Actions checks pass
+- [ ] Disposable qualification covers single-CLI and single-model operation
+
+## Recovery
+
+- [ ] Database migration and rollback verified on representative existing worker databases
+- [ ] Role configuration can be disabled without deleting assignments or audit
+- [ ] Legacy routing is restored only through explicit validated configuration
+- [ ] Jobs using incompatible new states are held for human review
+- [ ] Queue, lease, and service health are verified after rollback
+- [ ] Protected backup and exact application SHA are recorded before production rollout
+
+## Human gates
+
+- [ ] Unresolved product decisions require human input
+- [ ] Merge remains explicitly approved
+- [ ] Destructive Git, service restart, deployment, secret/config/permission change, cap exception, and policy change remain explicitly approved

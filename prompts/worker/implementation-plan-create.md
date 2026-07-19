@@ -15,6 +15,9 @@ Return Markdown with exactly these sections:
 ## Problem Summary
 Detailed analysis of the defect, feature, or refactor. Reference existing behavior, file relationships, evidence, and why the current design or behavior needs modification.
 
+## Acceptance Criteria
+Give every criterion a stable requirement ID such as `AC-1`. Provide 5-8 concrete, binary criteria covering functional behaviour, error handling, safe defaults, performance where material, architectural constraints, compatibility, and applicable lifecycle/security/operations requirements.
+
 ## Target Files
 List concrete repo-relative file paths that will be created or modified. For each file, specify exact classes, functions, methods, interfaces, handlers, repositories, scripts, services, prompts, or tests to be modified or added.
 
@@ -22,28 +25,59 @@ List concrete repo-relative file paths that will be created or modified. For eac
 Explain the production path, ownership boundaries, invariants, compatibility requirements, permission constraints, lifecycle authority, and prohibited shortcuts. Include how to avoid test-only code in production and how the intended caller will use the intended abstraction.
 
 ## Test Plan
-Summarise the risk-based test strategy: behavioural, architecture, lifecycle, compatibility, security, operations, migration, or rollback classes that apply; characterization required before refactoring; focused and broad commands; and unchanged sibling behaviour.
+Summarise the risk-based strategy, characterization required before refactoring, production boundaries, applicable test classes, focused and broad commands, and unchanged sibling behaviour. The structured Red Tests and Red Test Coverage sections below are authoritative.
 
 ## Red Tests
-For every required red test specify:
-- stable test ID and mapped acceptance criterion;
-- product intent protected;
-- architectural boundary or invariant protected;
-- triggered lifecycle, compatibility, security, data, operations, migration, or rollback risk protected;
-- exact test class, file path, and test name;
-- production boundary under test;
-- fixture and authoritative initial state;
-- action through the real caller rather than a copied helper path;
-- expected observable result and authoritative oracle;
-- why the current code must fail;
-- exact failing assertion or expected failure evidence;
-- exact focused red command;
-- sibling behaviour that must remain green;
-- false-positive controls proving the failure is not syntax, fixture, import, timeout, baseline, or unrelated breakage.
+Provide a JSON array. Every object must use this exact shape and contain substantive repository-grounded values:
 
-Helper-only tests are insufficient when correctness depends on handler wiring, repository ownership, lifecycle state, permissions, child processes, Git, GitHub, platform desired/effective state, or deployed behaviour. Do not copy production parsing, ranking, transition, permission, reconciliation, or migration logic into the test oracle.
+```json
+[
+  {
+    "id": "RT-1",
+    "requirement_ids": ["AC-1"],
+    "intent": {
+      "product": ["observable product behaviour protected"],
+      "architecture": ["ownership or production boundary protected"],
+      "invariants": ["behaviour or safety rule that must remain true"],
+      "risks": ["triggered lifecycle, compatibility, security, data, operations, migration, or rollback risk"]
+    },
+    "test_classes": ["behavioural", "architecture", "lifecycle", "compatibility", "security", "operations"],
+    "characterization_required": false,
+    "test_file": "test/exact-file.test.ts",
+    "test_name": "exact test name",
+    "production_boundary": "real handler/repository/service/CLI/platform boundary",
+    "fixture_and_state": "authoritative initial state and fixtures",
+    "action_through_real_caller": "action through the actual production caller, not a copied helper path",
+    "expected_observable_result": "persisted state, emitted call, filesystem/Git result, status, API result, or user-visible behaviour",
+    "why_current_code_fails": "specific missing or incorrect current behaviour",
+    "expected_red_assertion": "exact assertion or expected failure evidence before implementation",
+    "focused_red_command": "copy-pasteable narrow command",
+    "sibling_behaviour_remaining_green": ["unchanged task/provider/mode/transport/public contract"],
+    "authoritative_oracle": "source of truth observed by the test",
+    "false_positive_controls": ["how syntax, fixture, import, timeout, baseline, and copied-algorithm failures are excluded"]
+  }
+]
+```
+
+Use only applicable test classes, but do not omit a class triggered by the issue or architecture. Helper-only tests are insufficient when correctness depends on handler wiring, repository ownership, lifecycle state, permissions, child processes, Git, GitHub, platform desired/effective state, or deployed behaviour. Do not copy production parsing, ranking, transition, permission, reconciliation, or migration logic into the oracle.
 
 ## Red Test Coverage
+Provide one JSON object using these exact keys:
+
+```json
+{
+  "acceptance_coverage": [
+    {"requirement_id":"AC-1", "red_test_ids":["RT-1"], "non_test_proof":null}
+  ],
+  "architecture_coverage": [
+    {"boundary_or_invariant":"", "red_test_ids":["RT-1"], "characterization_test_ids":[]}
+  ],
+  "triggered_risk_coverage": [
+    {"risk":"", "required_test_classes":["lifecycle"], "red_test_ids":["RT-1"]}
+  ]
+}
+```
+
 Map every acceptance criterion to one or more red tests or a justified deterministic non-test proof. Map every affected architectural boundary/invariant to acceptance, integration, structural, or Architecture Lint coverage. Map every triggered risk to the appropriate test class. Identify characterization and regression coverage for unchanged public contracts, task types, providers, modes, and transports.
 
 ## Implementation Phases
@@ -66,6 +100,7 @@ Provide a compact JSON object for the worker to pass to later execution phases i
   "target_files": ["repo-relative paths"],
   "test_files": ["repo-relative test paths"],
   "phase_order": ["red-test", "green-implementation", "verification"],
+  "red_test_ids": ["RT-1"],
   "red_test_command": "exact narrow command",
   "verification_command": "exact broad command",
   "risk_level": "low | medium | high",
@@ -75,9 +110,6 @@ Provide a compact JSON object for the worker to pass to later execution phases i
   "notes_for_green_pass": "smallest production change satisfying committed red tests and approved intent"
 }
 ```
-
-## Acceptance Criteria
-5-8 concrete, binary criteria covering functional behaviour, error handling, safe defaults, performance where material, architectural constraints, compatibility, and applicable lifecycle/security/operations requirements.
 
 ## Verification Commands
 Exact copy-pasteable focused, subsystem, full-suite, typecheck, Architecture Lint, cleanup/static, diff, migration/rollback, repeated/serial, and exact-head commands required by risk.

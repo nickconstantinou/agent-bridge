@@ -1,105 +1,180 @@
-# 01 — Current Architecture Review
+# 01 — Current Architecture
 
-Status: draft for review · Basis: repo at branch `docs/architecture-review-v1` (main @ cd431ff) · All claims traceable to file paths.
+Status: current architecture record · Validated against the active PR #160 branch on 19 July 2026 · Exact review head and checks are recorded in the pull request evidence.
+
+This document describes behaviour and ownership that exist in the Agent Bridge OSS repository. Target-state role orchestration is documented separately and is not represented here as active merely because its prompt or schema foundation exists.
 
 ## 1. System overview
 
-Agent Bridge OSS is a TypeScript/Node runtime (tsx, no build step) bridging messaging platforms (Telegram, Discord) to AI coding CLIs (Codex, Claude, Antigravity/Agy, Kimchi). Persistence is a single better-sqlite3 database. Three runtime capabilities exist today:
+Agent Bridge OSS is a TypeScript/Node runtime connecting Telegram and Discord surfaces to supported coding CLIs. The repository contains three main runtime capabilities:
 
-| Capability | Entry points | Core modules |
+| Capability | Entry points | Core owners |
 |---|---|---|
-| Companion layer | `src/index.ts` (per-CLI bots), `src/index-interactive.ts` (unified Telegram), `src/index-discord-interactive.ts` (Discord) | `engine.ts`, `cli.ts`, `interactiveBot.ts`, `workerFallback.ts` |
-| Worker bot | `src/index-worker.ts` | `workerBot.ts`, `jobExecutor.ts`, `jobExecutorLoop.ts`, `workCallbacks.ts`, `src/handlers/*` |
-| Health/ops | `src/index-health.ts` | `src/health/*` (scheduler, plugins, autoRemediate) |
+| Companion layer | `src/index.ts`, `src/index-interactive.ts`, `src/index-discord-interactive.ts` | `src/engine.ts`, `src/cli.ts`, `src/interactiveBot.ts`, `src/workerFallback.ts`, provider runtimes |
+| Engineering Worker | `src/index-worker.ts` | `src/workerBot.ts`, `src/jobExecutor.ts`, `src/jobExecutorLoop.ts`, `src/workCallbacks.ts`, `src/handlers/*` |
+| Health and operations | `src/index-health.ts` | `src/health/*` |
 
-A second, separate **appliance** deployment lives outside this repo at `/opt/agent-bridge` (`src/appliance/*`: control-plane-agent, telegram-bot, caddy, deploy, health-loop). It shares no process with the dev repo services and has independently caused a Telegram token collision (`TELEGRAM_BOT_TOKEN_WORKER` == Agy token). See Risk Register.
+The hosted control plane and appliance lifecycle live in the separate `agent-bridge-platform` repository. The OSS repository owns the bridge and worker runtime installed on an appliance; it does not own the platform database, API, UI, desired configuration, or fleet deployment control plane.
 
-## 2. Module inventory
+Each runtime opens an explicitly configured SQLite database through the appropriate database boundary. Production services may use separate database paths by service role; the architecture must not assume one physical database file for every process.
 
-### Companion / execution core
-- `src/engine.ts` (1,337 lines) — BridgeEngine: polling loop, update handling, command dispatch, execution orchestration, retry/fallback, memory sidecars, event emission. Largest module; owns too many concerns (see Gap Analysis).
-- `src/cli.ts` — generic invocation/result dispatch (`buildCliInvocation`, `parseCliResult`), fallback classification/model selection, and thin `runCli`/`runCliAsync` adapters over `cliSupervisor.runSupervisedProcess()`. Provider-specific builders/parsers live under `src/providers/*Runtime.ts`; Antigravity/Kimchi session/state helpers remain with their provider modules.
-- `src/providers/registry.ts` — provider capabilities, including the authoritative `toolFree` policy used by invocation, advisor, and compaction paths. Internal callers import provider/config/database/supervisor owners directly; `src/bridge.ts` retains a compatibility barrel for established consumers.
-- `src/providers/antigravityRuntime.ts` — Antigravity invocation/parsing, model/settings/session state, and its planner-stall watch. `src/providers/codexRuntime.ts`, `claudeRuntime.ts`, and `kimchiRuntime.ts` own the equivalent provider invocation/parsing boundaries.
-- `src/claudeSettings.ts` — the sole Claude settings foundation: `resolveClaudeSettings`, `buildClaudeSettingsJson`, `buildClaudeSettingsArg`, and `describeClaudeSettings`. The current default profile remains Issue #88-compatible; lean/custom profiles, `/context` presentation, and payload audit remain Issue #88 scope.
-- `src/promptWrapping.ts` — shared prompt-context wrapping used by provider runtimes; provider-specific wrappers remain private to their runtime modules.
-- `src/cliSupervisor.ts` — Issue #135 Phase 2: the single authoritative child-process lifecycle. Owns argument normalisation, workspace-lock wrapping, child env/advisor-secret scrubbing, the one process registry, generic hard/idle/process-watch timers, event emission, cancellation/termination, and close/error settlement. Provider-specific watches are supplied by the provider registry; the supervisor contains no provider names, flags, or output markers. Re-exported from `src/cli.ts` for existing callers.
-- `src/interactiveBot.ts` — CliKind type, per-chat CLI preference (SQLite), /cli switch keyboard, fallback dispatch helper.
-- `src/workerFallback.ts` — CLI-to-CLI fallback chain with conversation-context preamble handoff.
-- `src/commands.ts` — /models /effort /reset /stop /compact /context /usage /narration.
-- `src/effort.ts`, `src/timeouts.ts` — per-CLI effort flags and timeout tables.
-- `src/soul.ts` — SOUL.md persona context loading.
+## 2. Companion and provider execution
 
-### Messaging / rendering
-- `src/telegram.ts`, `src/discord.ts`, `src/discord-gateway.ts`, `src/platform.ts` — API clients + platform abstraction.
-- `src/markdownIR.ts` (548) — markdown → IR → HTML/entities; `src/nativeLayout.ts`, `src/render.ts`, `src/messageDelivery.ts` — routing of rendered output (rich_message → card fallback).
-- Worker bot still renders via legacy regex path, not the IR pipeline (known gap).
+### Core orchestration
 
-### Worker engine
-- `src/workerBot.ts` (757) — Telegram command surface for work items (/features /defects /import etc.).
-- `src/jobExecutor.ts` + `src/jobExecutorLoop.ts` — claim → execute → repair-enqueue loop over `work_jobs`; handler map injected from `src/index-worker.ts:216` (`handlers: {...}`).
-- `src/handlers/` — 10 typed handlers: featurePlan, implementationPlan, tddImplementation, defectScan, refactorScan, orchestratedTask, prLifecycle, prWatch, prRefresh, githubIssue.
-- `src/workspace.ts` — per-job disposable git clones (jobs never mutate the live checkout); origin re-pointed to real remote.
-- `src/prMergeGate.ts`, `src/githubIssueClosure.ts` — merge approval + issue auto-close on merge (added 3f32062).
-- `src/workerCliPolicy.ts`, `src/workerDispatch.ts` — which CLI/effort a job type uses.
-- `src/implementationPlanQuality.ts` — plan quality scoring gate.
-- `src/skills.ts` + `skills/` + `scripts/skill-manager.ts` — named prompt skill packs.
+- `src/engine.ts` owns messaging update handling, command dispatch, conversation execution, fallback coordination, memory/context integration, event emission, and response delivery for companion surfaces.
+- `src/cli.ts` provides provider-neutral invocation/result dispatch and thin adapters over the supervisor.
+- `src/cliSupervisor.ts` is the sole child-process lifecycle owner. It owns process registration, argument and environment preparation, workspace-lock wrapping, timeouts and watches, cancellation, termination, and settlement.
+- `src/providers/registry.ts` owns provider capabilities and policy metadata.
+- `src/providers/codexRuntime.ts`, `claudeRuntime.ts`, `antigravityRuntime.ts`, and `kimchiRuntime.ts` own provider-specific invocation and parsing.
+- `src/workerFallback.ts` owns cross-CLI companion fallback and conversation handoff.
+- `src/worktreeLock.ts` and the supervisor/workspace boundaries protect shared Git worktrees from concurrent CLI mutation.
 
-### Persistence
-- `src/db.ts` — BridgeDb compatibility façade: version-gates before WAL/any write, applies migrations, then performs non-schema runtime maintenance (session expiry, conversation-turn pruning). Callers continue using the public database API unchanged.
-- `src/db/schema.ts` — explicit SQLite schema boundary. `CURRENT_SCHEMA_VERSION` is `2`; migration 1 establishes the legacy-compatible baseline and migration 2 removes the empty legacy prompt-override table. Future versions fail closed, and `applyMigrationsUpTo()` applies numbered migrations transactionally, verifying `PRAGMA foreign_key_check` before commit.
-- `src/db/legacyBaselineMigration.ts` — migration 1: owns the legacy-compatible DDL and historical shape-detected repairs.
-- `src/db/dropLegacyPromptOverridesMigration.ts` — migration 2: removes the absent/empty legacy `prompts` table and fails closed if an unexpected row exists.
-- `src/repositories/` — 9 repository classes (session, lock, settings, runRepository, workQueue, memory, compaction, advisor, conversation). All connection-bound SQL owners with no independent transactions of their own, except `AdvisorRepository.reserveAdvisorCall()` and `LockRepository`, which wrap their own dedup/ownership check in a transaction exactly as the pre-extraction `BridgeDb` methods did. `BridgeDb` remains the compatibility façade — every extracted method keeps its original name, signature, and behavior; `pending_messages` queue SQL (tightly coupled to `LockRepository`'s ownership/lease semantics) is intentionally still owned directly by `BridgeDb` (Issue #135 Phase 4B; a Phase 4C candidate, not yet scoped).
-- `src/events/` — `types.ts` (BridgeEvent union: run.started, text.delta, run.completed, run.failed, run.cancelled), `store.ts` (EventStore persisting to `bridge_runs`/`bridge_events`), `reducer.ts`, `telegramAdapter.ts`.
-- `src/projectMemory.ts`, `src/contextCommand.ts`, `src/compactSummary.ts` — memory capture, retrieval, /compact, context command CLI. `/compact` is the single automatic durable-memory distillation path; the former post-turn extractor (`src/memoryExtractor.ts`, `BRIDGE_MEMORY_EXTRACTOR_ENABLED`) has been removed. `contextCommand.ts` deliberately queries the SQLite file directly (readonly, bypassing `BridgeDb`) for its conversation-turn/summary reads — a pre-existing, out-of-scope exception documented inline and allowlisted in `scripts/arch-lint.sh`.
+Provider identity does not grant lifecycle or mutation authority. Callers select a provider through configuration and policy; the supervisor remains provider-neutral.
 
-### Tables (from `src/db.ts` DDL)
-`bridge_state`, `settings`, `bridge_runs`, `bridge_events`, `work_items`, `work_jobs`, `approvals`, `github_links`, `feature_plans`, `work_item_plans`, `conversation_turns`, `pending_messages`, `conversation_summaries`, `project_memories`.
+### Messaging and rendering
 
-## 3. Runtime lifecycle
+- `src/telegram.ts`, `src/discord.ts`, `src/discord-gateway.ts`, and `src/platform.ts` own messaging API and platform boundaries.
+- `src/markdownIR.ts`, `src/nativeLayout.ts`, `src/render.ts`, and `src/messageDelivery.ts` own the primary structured rendering path.
+- Some worker-specific responses still use their existing formatting path; this does not create a second workflow or execution authority.
 
-### Companion bots (`index.ts`)
-1. dotenv (`BRIDGE_ENV_FILE`), config from env → one `BridgeEngine` per bot with a token.
-2. Engine polls getUpdates (offset persisted per kind in settings), authorizes, dispatches commands or executes CLI.
-3. Execution: `buildCliInvocation` → spawn → timeout/idle guards → `parseCliResult` → session persisted (`bridge_state.<kind>_session_id`) → render → deliver. Kimchi sessions resolved post-hoc from JSONL filenames (`resolveKimchiSessionId`, engine.ts:821).
-4. Failure: `isCapacityExhaustedError` → model fallback (`getNextFallbackModel`) → CLI-chain fallback (interactive only) → user notification. Consecutive-failure circuit breaker clears sessions.
+## 3. Engineering Worker
 
-### Interactive bot (`index-interactive.ts`)
-One token, four engines (codex/claude/antigravity/kimchi) constructed eagerly; per-chat preference in `bridge_state.interactive_cli_preference`; `WorkerFallbackChain` maintains cross-CLI conversation transcript for handoff preambles.
+### Active worker lifecycle
 
-### Worker (`index-worker.ts`)
-Command surface (workerBot) + job loop (jobExecutorLoop): claim pending `work_jobs` row → handler by `task_type` → status transitions (pending/running/succeeded/failed) with `max_attempts`, idempotency keys, repair-job enqueue for TDD failures (jobExecutor.ts:189). Hourly `pr_watch` self-enqueue (index-worker.ts:355). PR merge → auto-resolve work item + close GitHub issue.
+`src/index-worker.ts` constructs the current handler map and starts the existing command surface and executor loop.
 
-### Provider execution
-All CLIs run as child processes with `--print`-style headless flags; only stdout parsed; per-kind timeouts (30m hard / 20m idle); `KillMode=control-group` in systemd units prevents orphans; orphan pkill on startup.
+The active lifecycle is:
 
-## 4. State model
+```text
+work item or scheduled job
+→ durable `work_jobs` record
+→ claim/lease through the current repository and executor loop
+→ handler selected by existing `task_type`
+→ bounded CLI or Git/GitHub operation through injected owners
+→ durable result, repair job, approval state, PR lifecycle, or terminal status
+```
 
-| State | Location | Durable? | Recovery |
-|---|---|---|---|
-| CLI sessions per chat | `bridge_state.<kind>_session_id` (+created_at) | Yes | 7-day TTL clear at startup; /reset |
-| Polling offsets | `settings` `$polling:<bot>` | Yes | resume from offset+1 |
-| Work items / jobs / approvals / plans | `work_items`, `work_jobs`, `approvals`, `work_item_plans`, `feature_plans` | Yes | jobs re-claimed by loop; orphaned `running` rows handled by cleanupOrphanedRuns + restart notification |
-| Run history / events | `bridge_runs`, `bridge_events` (EventStore) | Yes (append) | not yet used for state derivation — audit only |
-| Conversation turns/summaries | `conversation_turns`, `conversation_summaries` | Yes | /compact rebuilds summary |
-| Project memory | `project_memories` | Yes | scoped retrieval (e8b1bf4) |
-| In-flight child processes | process table only | No | killed on stop; orphan cleanup on start |
-| Fallback-chain transcript | in-memory `WorkerFallbackChain` + turns table | Partial | preamble rebuilt from stored turns |
-| Kimchi session files | `~/.config/kimchi/harness/sessions/*.jsonl` (external) | External | newest-file scan; fragile under concurrency (see Risks) |
+Current owners include:
 
-## 5. Current abstractions (interfaces that exist)
+- `src/workerBot.ts` — Telegram work-item and job command surface;
+- `src/jobExecutor.ts` and `src/jobExecutorLoop.ts` — claim, execute, retry/repair enqueue, cancellation, and terminal fencing;
+- `src/workCallbacks.ts` — callback ownership and approval actions;
+- `src/workspace.ts` — disposable implementation workspaces;
+- `src/workerCliPolicy.ts` and `src/workerDispatch.ts` — current effective legacy CLI-chain policy and dispatch;
+- `src/prMergeGate.ts` and PR lifecycle handlers — exact PR state, human merge authority, and related work-item completion;
+- `src/handlers/featurePlan.ts`, `implementationPlan.ts`, `tddImplementation.ts`, `defectScan.ts`, `refactorScan.ts`, `orchestratedTask.ts`, `githubIssue.ts`, and PR handlers — existing task implementations.
 
-| Concern | Abstraction today | Quality |
-|---|---|---|
-| Provider | `BotKind` union + if/else branches in `cli.ts` (buildCliArgs/parseCliResult) | Implicit — no adapter interface; adding a CLI touches 9+ files (proven by kimchi integration) |
-| Storage | `BridgeDb` + partial `src/repositories/*` | Split incomplete |
-| Messaging | `src/platform.ts` (Telegram/Discord) | Reasonable seam |
-| Events | `BridgeEvent` union + `EventStore` | Exists, run-scoped only; worker jobs don't emit |
-| Worker handlers | handler map keyed by `task_type` (index-worker.ts:216) | Good seam; workflows still hard-coded per handler |
-| Workspaces | `src/workspace.ts` disposable clones | Good |
-| Memory | `projectMemory.ts` + repository | Working; single-store, no per-kind memory model |
-| Skills | `src/skills.ts` + skill packs | Exists; prompt-level only |
+Existing red/green TDD guards, disposable workspaces, queue/lease semantics, provider fallback, GitHub mutation helpers, and human merge gate remain authoritative.
 
-## 6. Test surface
-75 test files, 1,335 passing (vitest). Static guard against vitest-in-src exists as a worker acceptance pattern (`handlers/tddImplementation.ts:14 TEST_ONLY_SOURCE_PATTERN`). One TODO/FIXME in src. Typecheck clean.
+### Role-orchestration foundation delivered by PR #160
+
+PR #160 adds source-controlled role/mode prompt contracts, canonical lifecycle-skill composition, stronger implementation-plan validation, and schema migration 2. It does **not** activate role-based routing.
+
+The branch currently contains:
+
+- `src/agenticPromptContracts.ts` — versioned Technical Lead, Code Worker, and Documentation Steward prompt contracts, including pre-mutation decomposition review;
+- `src/lifecycleSkillGuidance.ts` — deterministic extraction, validation, composition, and identity of canonical skill guidance;
+- `src/implementationPlanQuality.ts` — comprehensive red-test, coverage, and target-path provenance gate;
+- `prompts/worker/roles/*` — separate role/mode prompts;
+- source-only compatibility prompts for current handlers;
+- schema migration 2 removing the absent or empty legacy prompt-override table.
+
+Until later Issue #159 slices are implemented and approved:
+
+- `src/workerCliPolicy.ts` remains the effective worker provider policy;
+- existing task types and handlers remain active;
+- no durable role assignment, capability resolver, permission profile, requirements lifecycle, Documentation Steward execution lane, or Technical Lead review phase is active;
+- prompt contracts describe and protect the target workflow but do not themselves create lifecycle state or authority.
+
+## 4. Persistence
+
+### Database boundary
+
+- `src/db.ts` is the `BridgeDb` compatibility façade. It checks schema compatibility before normal operation, constructs repository owners, delegates existing public methods, and performs bounded non-schema maintenance.
+- `src/db/schema.ts` owns schema versioning and the ordered migration registry. At the PR #160 foundation, `CURRENT_SCHEMA_VERSION` is `2`.
+- `src/db/legacyBaselineMigration.ts` owns migration 1 and its historical compatibility repairs.
+- `src/db/dropLegacyPromptOverridesMigration.ts` owns migration 2. It treats an absent prompt table as already retired, drops an empty table transactionally, and rejects unexpected rows without logging their content.
+- `openProductionDb()` remains strict: production services do not migrate automatically at startup.
+- Issue #135 and the guarded rollout helper own production database inventory, backup, migration, validation, restart sequencing, rollback, and sentinel evidence.
+
+### Repository ownership
+
+SQL is owned by focused classes under `src/repositories/`, with `BridgeDb` retaining its compatibility façade. Current repositories own sessions, locks, settings, runs/events, worker queues and work items, memory, compaction, advisor records, and conversation records.
+
+`pending_messages` remains the documented compatibility exception coupled to lock/lease ownership. New work must not add SQL to handlers, configuration, status, prompt loaders, AdvisorService, or GitHub helpers.
+
+### Durable state
+
+Durable state includes:
+
+- provider sessions and settings;
+- polling offsets;
+- work items, jobs, approvals, plans, and GitHub links;
+- run and event audit records;
+- conversation turns and summaries;
+- project memories;
+- pending-message/lock state.
+
+Events are an audit projection, not the authoritative worker lifecycle state. Work item/job records, leases, terminal fencing, and approvals remain authoritative.
+
+## 5. Memory and context
+
+- `src/projectMemory.ts` and its repository own durable project memory.
+- `/compact` and `src/compactSummary.ts` are the automatic durable-memory distillation path.
+- `src/contextCommand.ts` provides context inspection and retains its documented read-only database exception.
+- The removed post-turn memory extractor and its enablement flag are not part of the current architecture.
+
+## 6. Current authority boundaries
+
+| Concern | Current authoritative owner |
+|---|---|
+| Provider-specific invocation | `src/providers/*Runtime.ts` |
+| Child-process lifecycle | `src/cliSupervisor.ts` |
+| Shared worktree exclusion | `src/worktreeLock.ts` and workspace/supervisor integration |
+| Worker queue, work items, approvals, and GitHub links | current work repository behind `BridgeDb` |
+| Worker claim/lease/retry/cancellation | `src/jobExecutor.ts`, `src/jobExecutorLoop.ts`, repository state |
+| Current effective worker CLI policy | `src/workerCliPolicy.ts` and `src/workerDispatch.ts` |
+| Implementation planning validation | `src/implementationPlanQuality.ts` |
+| TDD red/green enforcement | `src/handlers/tddImplementation.ts` and current Git guards |
+| Advisor invocation, fallback, redaction, and audit | `src/advisorService.ts` and advisor owners |
+| Prompt and lifecycle-skill source | registered repository files and canonical skill loader |
+| Database schema | `src/db/schema.ts` and numbered migration modules |
+| GitHub issue/PR mutation | current GitHub handlers/helpers, never a model |
+| Merge | existing human approval and `src/prMergeGate.ts` |
+| Production migration/restart | Issue #135 guarded rollout path and human operator approval |
+
+## 7. Verification surface
+
+The repository uses Vitest, TypeScript typecheck, Architecture Lint, cleanup/static checks, rollout-helper qualification where applicable, and Git diff/exact-head CI evidence.
+
+Test totals and file counts are deliberately not duplicated here because they are volatile. Exact counts, commands, skipped tests, and current head are recorded in the reviewed PR or deployment evidence.
+
+Important test classes include:
+
+- provider runtime and fallback compatibility;
+- supervisor cancellation, timeout, and settlement;
+- worktree isolation;
+- worker queue, lease, callback, and handler lifecycle;
+- TDD red/green Git boundaries;
+- database migrations, strict production opening, repository ownership, and rollback;
+- AdvisorService budgets, fallback, evidence, redaction, and audit;
+- prompt contract, lifecycle-skill, plan-quality, and compatibility wiring;
+- PR lifecycle and human merge gating.
+
+## 8. Known current gaps and planned owners
+
+The following are not active current behaviour and remain owned by Issue #159 child slices:
+
+- durable role domain, assignment revisions, and dormant status;
+- model/capability discovery and deterministic role resolution;
+- mode-specific permission enforcement;
+- requirements validation and canonical issue revision lifecycle;
+- bounded Technical Lead evidence tools and role-native planning;
+- scan-candidate disposition and immutable execution packets;
+- Documentation Steward authoring/validation lane;
+- Technical Lead implementation/operations/readiness phases;
+- durable cross-phase audit, restart, compatibility, and rollout qualification;
+- platform desired/effective role allocation.
+
+These capabilities must extend the current owners rather than introduce a new workflow engine, queue, supervisor, state store, provider stack, GitHub mutation path, merge path, or platform configuration transport.

@@ -2,7 +2,7 @@
 
 ## Status
 
-Canonical target-state architecture for Engineering Worker prompts, structured outputs, validators, repair prompts, and database-backed overrides.
+Canonical target-state architecture for Engineering Worker prompts, structured outputs, validators, focused repairs, and legacy prompt-override retirement.
 
 ## Principle
 
@@ -19,16 +19,19 @@ Each prompt contract has:
 - a stable key;
 - a contract version;
 - one owning role and mode;
+- a source-controlled Markdown file;
 - a typed input schema;
 - a structured output schema;
 - an independent deterministic validator;
 - an evidence/tool grant selected outside the prompt;
 - a permission profile selected outside the prompt;
 - a bounded repair policy;
-- an audit-safe effective source and content hash;
-- compatibility aliases where an existing prompt key must remain usable during migration.
+- an audit-safe content hash;
+- explicit compatibility aliases where an existing prompt key remains usable during migration.
 
-Prompt text, output schema, validator, permission policy, and tool policy are separate artefacts. A database override may replace prompt text only. It cannot replace or weaken the schema, validator, role, mode, tools, permissions, budgets, or repair policy.
+Prompt text, output schema, validator, permission policy, and tool policy are separate artefacts. Canonical role prompts are source-controlled and cannot be replaced by mutable database text.
+
+The implementation registry is `src/agenticPromptContracts.ts`. Canonical prompt files are under `prompts/worker/roles/`.
 
 ## Canonical prompt registry
 
@@ -70,7 +73,7 @@ Prompt text, output schema, validator, permission policy, and tool policy are se
 
 ## Advisor-authored plan red-test contract
 
-Every Technical Lead implementation plan contains a structured `red_tests` collection. The coding agent executes this contract; it does not invent the test strategy after planning.
+Every Technical Lead implementation plan contains a structured `red_tests` collection. The Code Worker executes this contract; it does not invent the test strategy after planning.
 
 Each red-test specification contains:
 
@@ -111,7 +114,7 @@ type RedTestSpec = {
 The plan also contains a coverage matrix mapping:
 
 - every acceptance criterion to one or more red tests or a justified non-test proof;
-- every affected architectural boundary and invariant to a structural, integration, or Architecture Lint test;
+- every affected architectural boundary and invariant to a structural, integration, acceptance, or Architecture Lint test;
 - every triggered lifecycle, compatibility, security, data, operations, migration, or rollback risk to an appropriate test class;
 - unchanged sibling modes, task types, providers, transports, and public contracts to characterization or regression coverage.
 
@@ -132,7 +135,7 @@ The Technical Lead planning validator rejects a plan when:
 - the proposed red failure could be caused by syntax, fixture, timeout, import, or unrelated baseline failure rather than missing product behaviour;
 - changed behaviour is tested while relevant sibling behaviour is left unspecified.
 
-A valid plan may use existing tests when they already cover the required boundary. It must cite the exact test and explain why it is sufficient. New architectural intent should normally have an acceptance or Architecture Lint red test even when narrow unit coverage exists.
+A valid plan may cite an existing test when it already covers the required boundary. It must identify the exact file/test and explain why it is sufficient. New architectural intent should normally have an acceptance or Architecture Lint red test even when narrow unit coverage exists.
 
 ## Focused repair
 
@@ -140,47 +143,58 @@ Full-plan generation and plan repair remain separate prompts.
 
 1. Run `technical_lead:planning` once.
 2. Validate the complete plan, including red-test coverage and execution contract.
-3. When the plan is otherwise valid but only the red-test contract is incomplete, run `technical_lead:planning_repair:red_tests` once with the validation errors and immutable approved issue/plan context.
+3. When the plan is otherwise valid but only the red-test contract is incomplete, run `technical_lead:planning_repair:red_tests` once with typed errors and immutable approved context.
 4. When only the execution contract is incomplete, use `technical_lead:planning_repair:execution_contract`.
 5. Merge only the repaired section into the original plan.
 6. Revalidate the complete artefact before persistence.
 7. Fail closed when the bounded repair remains invalid.
 
-A focused repair cannot change requirements, scope, non-goals, architecture, work-packet boundaries, permissions, or human gates.
+A focused repair cannot change requirements, scope, non-goals, architecture, work-packet boundaries, permissions, operations policy, or human gates.
 
-## Prompt storage and overrides
+## Prompt storage decision
 
-Continue using the existing named prompt-template boundary and database-backed overrides rather than introducing a second prompt service.
+The SQLite `prompts` table is not a backup. The source-controlled Markdown prompt is already the fallback when no row exists. The table is a mutable runtime override channel.
 
-Prompt records must include or resolve:
+Mutable prompt overrides conflict with the role architecture because they can change consequential planning or execution instructions without:
 
-- key;
-- contract version;
-- effective source (`builtin`, `database_override`, or explicit compatibility alias);
-- content hash;
-- owning role/mode;
-- compatibility state;
-- timestamps.
+- a reviewed Git diff;
+- a prompt-contract version change;
+- exact-head CI;
+- deterministic semantic tests;
+- reproducible content across workspaces;
+- clear rollback to a known application SHA;
+- reliable audit of the prompt that generated a plan or mutation.
 
-An override is accepted only when:
+Canonical role prompts therefore use only source-controlled files. `AgenticPromptContract.allowDatabaseOverride` is always `false`, and `loadAgenticPrompt()` has no database-override input.
 
-- its exact key is registered;
-- its declared contract version is compatible;
-- all required placeholders/input fields can be supplied;
-- its output remains subject to the built-in structured schema and validator.
+The legacy table is retained temporarily only to avoid an unreviewed destructive schema change and to preserve existing legacy prompt paths until their rows are inventoried. No new role prompt, platform setting, or operator workflow may create a database prompt override.
 
-Unknown keys, incompatible versions, missing required placeholders, or invalid overrides fail closed for required role modes. They never fall through to a different role prompt. The status surface reports the effective prompt key, version, source, and hash without exposing raw sensitive prompt/context content.
+## Legacy override retirement
+
+Retirement is staged:
+
+1. Inventory existing rows by workspace and key without exposing prompt contents in logs.
+2. Identify whether any row is actually required or merely duplicates an older built-in prompt.
+3. Move approved custom behaviour into reviewed source-controlled prompt files and tests.
+4. Disable legacy override reads for each migrated handler and report any ignored row as deprecated configuration.
+5. Remove `BridgeDb.setPrompt()` and legacy override write instructions.
+6. Remove `BridgeDb.getPrompt()` after all callers are migrated.
+7. Drop the `prompts` table only through a separately approved guarded database migration with backup, rollback, and representative existing-database tests.
+
+Dropping the table inside this PR would be unsafe because the production database migration boundary is separately controlled and existing rows have not yet been inventoried. Retaining it temporarily does not make it authoritative or a backup.
 
 ## Compatibility
 
-Existing keys such as feature planning, defect/refactor scanning, TDD red/green, repair, and CI-fix prompts remain supported as explicit aliases while their corresponding phases still use the legacy path.
+Existing keys such as feature planning, defect/refactor scanning, TDD red/green, repair, and CI-fix prompts remain explicit compatibility aliases while their corresponding legacy handlers are migrated.
 
 Compatibility aliases:
 
 - cannot become canonical role prompts silently;
-- are reported as legacy/degraded;
+- are reported as legacy/degraded once role routing is authoritative;
 - preserve existing output validators and permissions;
-- are retired only after the replacement role prompt is qualified and repository overrides have been inventoried or migrated.
+- may read an existing database override only until that specific handler is migrated;
+- may not accept new override-management features;
+- are retired after the replacement role prompt is qualified and existing rows are inventoried or migrated.
 
 PR #157's focused execution-contract recovery pattern remains the model for section-specific repair. Issue #159 extends this pattern to comprehensive red-test repair rather than folding repair instructions into the full planning prompt.
 
@@ -188,12 +202,12 @@ PR #157's focused execution-contract recovery pattern remains the model for sect
 
 Implementation must prove:
 
-- every role/mode resolves one distinct registered prompt contract;
+- every role/mode resolves one distinct registered source-controlled prompt contract;
 - planning, review, operations, executor guidance, and documentation prompts cannot be substituted for one another;
-- changing one prompt does not alter sibling prompt output or permissions;
-- database overrides affect text only, not tools, permissions, validators, budgets, or role identity;
-- incompatible and malformed overrides fail safely;
-- fallback models receive the same prompt key, contract version, structured schema, and validator;
-- prompt source/version/hash survive restart and are included in audit metadata;
+- changing one prompt does not alter sibling prompt content or permissions;
+- canonical role prompts cannot consume database text;
+- fallback models receive the same prompt key, contract version, structured schema, validator, and content hash;
+- prompt key/version/hash survive restart and are included in audit metadata;
 - comprehensive red-test validation and focused repair work across supported Technical Lead targets;
-- legacy prompt paths remain unchanged while role routing is disabled.
+- legacy prompt rows are inventoried before reads or schema are removed;
+- legacy prompt paths remain unchanged until their explicit migration slice.

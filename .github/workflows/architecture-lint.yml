@@ -10,5 +10,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # scripts/migrationOwnershipLint.mjs (Phase 4C.2, issue #135) parses
+      # source with the TypeScript compiler API, so this job now needs
+      # node_modules — sqlOwnershipLint.mjs previously used only Node
+      # built-ins, which is why this step wasn't here before.
+      - run: npm ci
+
       - name: Run architecture lint guard
         run: bash scripts/arch-lint.sh src

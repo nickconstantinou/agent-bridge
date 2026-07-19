@@ -1216,7 +1216,31 @@ describe("interrupted-rollout sentinel (Phase 4C.4, issue #135)", () => {
       expect(output).not.toMatch(/sentinel cleared/i);
       expect(existsSync(sentinelPath(fixture)), "sentinel must remain in place when removal fails").toBe(true);
       const auditContent = readFileSync(join(fixture.logDir, "sentinel-clear.log"), "utf8");
-      expect(auditContent).toMatch(/action=clear_attempt/);
+      expect(auditContent).toMatch(/action=clear_authorized/);
+      expect(auditContent).not.toMatch(/action=clear_completed/);
+    });
+
+    it("reports the clear as successfully committed (exit 0, sentinel gone) even when the optional post-delete completion audit entry fails to write", () => {
+      // The sentinel unlink is the commit point, not the completion audit
+      // entry. A failure in that purely informational, best-effort append
+      // (e.g. disk full, unwritable log) must never turn an
+      // already-committed clear into an ambiguous nonzero result.
+      const fixture = useMinimalInventory(createFixture());
+      const failed = runRollout(fixture, "backup");
+      expect(failed.status).not.toBe(0);
+      const sentinelContent = readFileSync(sentinelPath(fixture), "utf8");
+      const recordedArtifactDir = /^artifact_dir=(.*)$/m.exec(sentinelContent)?.[1]!;
+
+      const clear = runSentinelClear(fixture, fixture.expectedCommit, recordedArtifactDir, {
+        AGENT_BRIDGE_ROLLOUT_TEST_FORCE_COMPLETION_AUDIT_FAILURE: "1",
+      });
+      const output = `${clear.stdout}\n${clear.stderr}`;
+      expect(clear.status, output).toBe(0);
+      expect(output).toMatch(/sentinel cleared/i);
+      expect(output).toMatch(/warning: failed to append the optional clear_completed audit entry/i);
+      expect(existsSync(sentinelPath(fixture)), "sentinel must be gone — the clear genuinely committed").toBe(false);
+      const auditContent = readFileSync(join(fixture.logDir, "sentinel-clear.log"), "utf8");
+      expect(auditContent).toMatch(/action=clear_authorized/);
       expect(auditContent).not.toMatch(/action=clear_completed/);
     });
   });

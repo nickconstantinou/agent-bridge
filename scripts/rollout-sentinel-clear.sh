@@ -129,21 +129,35 @@ else
 fi
 /usr/bin/chmod 0600 "$audit_log"
 
-# Record the attempt before touching the sentinel, but the "cleared"
-# completion line is only ever written after removal is verified — an
-# audit log must never claim success for a removal that didn't happen.
-printf '%s hostname=%s pid=%s action=clear_attempt expected_commit=%s artifact_dir=%s\n' \
+# This pre-delete entry is the authoritative record that removal was
+# reviewed and authorized for exactly this sentinel — it must be written
+# successfully (a required, fallible step) before the sentinel is touched.
+printf '%s hostname=%s pid=%s action=clear_authorized expected_commit=%s artifact_dir=%s\n' \
   "$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(/usr/bin/hostname)" "$$" "$sentinel_commit" "$sentinel_artifact_dir" >> "$audit_log"
 
+# Sentinel removal, verified by its subsequent absence, is the commit point
+# for this tool: the last required, fallible operation. Nothing after this
+# may turn an already-committed clear into an ambiguous nonzero result —
+# an operator must be able to trust that "sentinel gone" and "exit 0" agree.
 sentinel_removed=0
 if (( test_mode == 1 )) && [[ -n "${AGENT_BRIDGE_ROLLOUT_TEST_FORCE_SENTINEL_RM_FAILURE:-}" ]]; then
   : # test-only seam: simulate a removal failure without touching the file
 else
   /usr/bin/rm -f -- "$sentinel_path" && sentinel_removed=1
 fi
-(( sentinel_removed == 1 )) || die "failed to remove sentinel: $sentinel_path — audit shows an attempt only, sentinel may still be present, manual review required"
+(( sentinel_removed == 1 )) || die "failed to remove sentinel: $sentinel_path — audit shows an authorized attempt only, sentinel may still be present, manual review required"
 [[ ! -e "$sentinel_path" && ! -L "$sentinel_path" ]] || die "sentinel still present after removal attempt: $sentinel_path — manual review required"
 
-printf '%s hostname=%s pid=%s action=clear_completed expected_commit=%s artifact_dir=%s\n' \
-  "$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(/usr/bin/hostname)" "$$" "$sentinel_commit" "$sentinel_artifact_dir" >> "$audit_log"
 echo "rollout-sentinel-clear: sentinel cleared (expected_commit=$sentinel_commit artifact_dir=$sentinel_artifact_dir)"
+
+# Best-effort only from here on: the clear already committed above. A
+# failure appending this optional completion record must never change the
+# tool's exit status or make a completed clear look ambiguous.
+completion_audit_log="$audit_log"
+if (( test_mode == 1 )) && [[ -n "${AGENT_BRIDGE_ROLLOUT_TEST_FORCE_COMPLETION_AUDIT_FAILURE:-}" ]]; then
+  completion_audit_log="$log_dir/does-not-exist/sentinel-clear.log"
+fi
+printf '%s hostname=%s pid=%s action=clear_completed expected_commit=%s artifact_dir=%s\n' \
+  "$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" "$(/usr/bin/hostname)" "$$" "$sentinel_commit" "$sentinel_artifact_dir" >> "$completion_audit_log" 2>/dev/null \
+  || echo "rollout-sentinel-clear: warning: failed to append the optional clear_completed audit entry (sentinel was already removed and verified successfully)" >&2
+exit 0

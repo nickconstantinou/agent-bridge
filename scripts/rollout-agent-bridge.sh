@@ -394,6 +394,7 @@ remove_sentinel_if_removable() {
     return 1
   fi
   echo "rollout sentinel removed: $sentinel_path"
+  return 0
 }
 
 on_exit() {

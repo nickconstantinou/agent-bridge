@@ -20,6 +20,7 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 
 const helperPath = fileURLToPath(new URL("../scripts/rollout-agent-bridge.sh", import.meta.url));
+const sentinelClearPath = fileURLToPath(new URL("../scripts/rollout-sentinel-clear.sh", import.meta.url));
 const restoreHelperPath = fileURLToPath(new URL("../scripts/rollout-restore.py", import.meta.url));
 const migrationScript = fileURLToPath(new URL("../scripts/rollout-db.ts", import.meta.url));
 const sourceDir = fileURLToPath(new URL("../src", import.meta.url));
@@ -136,6 +137,12 @@ function writeFakeCommands(fixture: Fixture): void {
   const bin = join(fixture.root, "bin");
   mkdirSync(bin, { recursive: true });
   executable(join(bin, "rollout-restore"), `#!/usr/bin/env bash
+set -euo pipefail
+echo "rollout-restore:$*" >> "${fixture.actionLog}"
+if [ "\${FAKE_RESTORE_FAIL:-}" = 1 ]; then
+  echo "simulated descriptor-based rollback failure" >&2
+  exit 1
+fi
 exec sudo -n env AGENT_BRIDGE_RESTORE_TEST_MODE=1 "${restoreHelperPath}" "$@"
 `);
   executable(join(bin, "systemctl"), `#!/usr/bin/env bash
@@ -876,5 +883,217 @@ fi
     const restart = readFileSync(fileURLToPath(new URL("../scripts/restart-agent-bridge.sh", import.meta.url)), "utf8");
     expect(restart).toContain('systemctl restart "${units[@]}"');
     expect(restart).not.toContain("rollout-db");
+  });
+});
+
+describe("interrupted-rollout sentinel (Phase 4C.4, issue #135)", () => {
+  function sentinelPath(fixture: Fixture): string {
+    return join(fixture.logDir, ".rollout-in-progress");
+  }
+
+  function runSentinelClear(fixture: Fixture, expectedCommit: string, artifactDir: string, env: Record<string, string> = {}) {
+    return spawnSync("bash", [sentinelClearPath, "--expected-commit", expectedCommit, "--artifact-dir", artifactDir], {
+      encoding: "utf8",
+      env: { ...process.env, AGENT_BRIDGE_ROLLOUT_TEST_ROOT: fixture.root, ...env },
+    });
+  }
+
+  it("creates the sentinel immediately and removes it on a fully successful rollout", () => {
+    const fixture = useMinimalInventory(createFixture());
+    const result = runRollout(fixture);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(existsSync(sentinelPath(fixture)), "sentinel must be removed after a DONE outcome").toBe(false);
+  });
+
+  it("removes the sentinel after a pure precondition failure (bare re-invocation behaves identically to the first attempt)", () => {
+    const dirty = useMinimalInventory(createFixture());
+    writeFileSync(join(dirty.project, "untracked"), "dirty");
+    const result = runRollout(dirty);
+    expect(result.status).not.toBe(0);
+    expect(actions(dirty)).not.toContain("systemctl:stop");
+    expect(existsSync(sentinelPath(dirty)), "sentinel must be removed after a precondition failure — nothing was ever touched").toBe(false);
+  });
+
+  it("retains the sentinel and reports STOPPED_UNCHANGED when a failure occurs before any backup write completes", () => {
+    const fixture = useMinimalInventory(createFixture());
+    const before = fixture.dbPaths.map(sha256);
+    const result = runRollout(fixture, "backup");
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/STATE: STOPPED_UNCHANGED/);
+    expect(output).not.toMatch(/RESTORE_INCOMPLETE|FAILED_RESTORED/);
+    expect(fixture.dbPaths.map(sha256)).toEqual(before);
+    expect(existsSync(sentinelPath(fixture)), "sentinel must be retained — services are down and assert_service_active would reject a bare retry").toBe(true);
+  });
+
+  it("retains the sentinel and reports RESTORE_INCOMPLETE when the automatic restore itself fails", () => {
+    const fixture = useMinimalInventory(createFixture());
+    const result = spawnSync("bash", [helperPath, "--expected-commit", fixture.expectedCommit], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        AGENT_BRIDGE_ROLLOUT_TEST_ROOT: fixture.root,
+        FAKE_FAIL_PHASE: "migrate",
+        FAKE_CORRUPT_DB: fixture.dbPaths[0],
+        FAKE_RESTORE_FAIL: "1",
+      },
+    });
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/STATE: RESTORE_INCOMPLETE/);
+    expect(output).not.toMatch(/FAILED_RESTORED|STOPPED_UNCHANGED/);
+    expect(existsSync(sentinelPath(fixture)), "sentinel must be retained — the database state is unverified, not safely known").toBe(true);
+  });
+
+  it("removes the sentinel and reports FAILED_RESTORED when migration fails but the automatic restore succeeds and is verified", () => {
+    const fixture = useMinimalInventory(createFixture());
+    const result = runRollout(fixture, "migrate");
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/STATE: FAILED_RESTORED/);
+    expect(output).not.toMatch(/RESTORE_INCOMPLETE|STOPPED_UNCHANGED/);
+    expect(existsSync(sentinelPath(fixture)), "sentinel is removed once restoration is verified — but this only means 'safe to hand to the documented recovery flow,' not 'safe to bare-retry'").toBe(false);
+  });
+
+  it("retains the sentinel and reports STOPPED_PRESERVED after a post-start failure (database already on the new schema)", () => {
+    const fixture = useMinimalInventory(createFixture());
+    const result = runRollout(fixture, "start");
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/STATE: STOPPED_PRESERVED/);
+    expect(existsSync(sentinelPath(fixture)), "sentinel must be retained — always requires operator review, never an automatic retry").toBe(true);
+  });
+
+  it("blocks a second invocation while a sentinel from an interrupted run is present, citing its recorded evidence", () => {
+    const fixture = useMinimalInventory(createFixture());
+    const failed = runRollout(fixture, "backup");
+    expect(failed.status).not.toBe(0);
+    expect(existsSync(sentinelPath(fixture))).toBe(true);
+    const stopCountAfterFirstRun = actions(fixture).match(/systemctl:stop/g)?.length ?? 0;
+
+    const second = runRollout(fixture);
+    const output = `${second.stdout}\n${second.stderr}`;
+    expect(second.status).not.toBe(0);
+    expect(output).toMatch(/interrupted rollout sentinel already exists/i);
+    expect(output).toContain(fixture.expectedCommit);
+    // The second invocation must never have reached the stop phase — the
+    // sentinel check happens before any precondition check. So the stop
+    // count must be identical to what the first (failed) run alone produced.
+    expect(actions(fixture).match(/systemctl:stop/g)?.length).toBe(stopCountAfterFirstRun);
+  });
+
+  it("refuses to trust a sentinel that is a symlink, never following it", () => {
+    const fixture = useMinimalInventory(createFixture());
+    symlinkSync("/etc/passwd", sentinelPath(fixture));
+    const result = runRollout(fixture);
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/sentinel is a symlink/i);
+    expect(actions(fixture)).not.toContain("systemctl:stop");
+    expect(lstatSync(sentinelPath(fixture)).isSymbolicLink()).toBe(true);
+  });
+
+  it("refuses to trust a sentinel with unsafe permissions", () => {
+    const fixture = useMinimalInventory(createFixture());
+    writeFileSync(sentinelPath(fixture), "expected_commit=0\nartifact_dir=/tmp\n");
+    chmodSync(sentinelPath(fixture), 0o644);
+    const result = runRollout(fixture);
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/unsafe ownership or mode/i);
+    expect(actions(fixture)).not.toContain("systemctl:stop");
+  });
+
+  describe("rollout-sentinel-clear.sh", () => {
+    it("is executable", () => {
+      execFileSync("test", ["-x", sentinelClearPath]);
+    });
+
+    it("clears a valid sentinel whose recorded values match the operator-supplied confirmation", () => {
+      const fixture = useMinimalInventory(createFixture());
+      const failed = runRollout(fixture, "backup");
+      expect(failed.status).not.toBe(0);
+      const sentinelContent = readFileSync(sentinelPath(fixture), "utf8");
+      const recordedArtifactDir = /^artifact_dir=(.*)$/m.exec(sentinelContent)?.[1];
+      expect(recordedArtifactDir).toBeTruthy();
+
+      const clear = runSentinelClear(fixture, fixture.expectedCommit, recordedArtifactDir!);
+      expect(clear.status, `${clear.stdout}\n${clear.stderr}`).toBe(0);
+      expect(existsSync(sentinelPath(fixture))).toBe(false);
+      expect(readFileSync(join(fixture.logDir, "sentinel-clear.log"), "utf8")).toContain(fixture.expectedCommit);
+
+      // A fresh rollout can now proceed — precondition checks no longer see
+      // a sentinel in the way. Force the retry into a new wall-clock second
+      // so its artifact_dir (timestamp-derived) can't collide with the one
+      // the failed run already created on disk — an orthogonal, pre-existing
+      // timestamp-resolution property of artifact_dir naming, not something
+      // the sentinel is meant to guard against.
+      execFileSync("sleep", ["1"]);
+      writeFileSync(fixture.stateFile, `${units[0]}\n`); // restore active-unit baseline the failed run tore down
+      const retry = runRollout(fixture);
+      expect(retry.status, `${retry.stdout}\n${retry.stderr}`).toBe(0);
+    });
+
+    it("refuses when the recorded expected_commit does not match the operator-supplied value", () => {
+      const fixture = useMinimalInventory(createFixture());
+      const failed = runRollout(fixture, "backup");
+      expect(failed.status).not.toBe(0);
+      const sentinelContent = readFileSync(sentinelPath(fixture), "utf8");
+      const recordedArtifactDir = /^artifact_dir=(.*)$/m.exec(sentinelContent)?.[1]!;
+
+      const clear = runSentinelClear(fixture, "1".repeat(40), recordedArtifactDir);
+      expect(clear.status).not.toBe(0);
+      expect(clear.stderr).toMatch(/does not match the sentinel's recorded value/i);
+      expect(existsSync(sentinelPath(fixture)), "sentinel must remain untouched on a mismatch").toBe(true);
+    });
+
+    it("refuses when the recorded artifact_dir does not match the operator-supplied value", () => {
+      const fixture = useMinimalInventory(createFixture());
+      const failed = runRollout(fixture, "backup");
+      expect(failed.status).not.toBe(0);
+
+      const clear = runSentinelClear(fixture, fixture.expectedCommit, "/tmp/wrong-artifact-dir");
+      expect(clear.status).not.toBe(0);
+      expect(clear.stderr).toMatch(/does not match the sentinel's recorded value/i);
+      expect(existsSync(sentinelPath(fixture)), "sentinel must remain untouched on a mismatch").toBe(true);
+    });
+
+    it("is a no-op when no sentinel is present", () => {
+      const fixture = useMinimalInventory(createFixture());
+      const clear = runSentinelClear(fixture, "0".repeat(40), "/tmp/nonexistent");
+      expect(clear.status, `${clear.stdout}\n${clear.stderr}`).toBe(0);
+      expect(clear.stdout).toMatch(/nothing to clear/i);
+    });
+
+    it("refuses to acquire the lock — and leaves the sentinel completely untouched — while a rollout is actively running", async () => {
+      const fixture = useMinimalInventory(createFixture());
+      const failed = runRollout(fixture, "backup");
+      expect(failed.status).not.toBe(0);
+      const before = readFileSync(sentinelPath(fixture), "utf8");
+
+      // Restore the active-unit baseline so a second rollout can pass its
+      // own preconditions far enough to hold the lock for a while — but it
+      // will immediately hit the pre-existing sentinel and hang there only
+      // as long as it takes to fail; to hold the lock deliberately, acquire
+      // it directly instead of racing a real rollout invocation.
+      const holder: ChildProcess = spawn("bash", ["-c", `exec 9>"${fixture.lockFile}"; flock --exclusive 9; sleep 5`]);
+      try {
+        const deadline = Date.now() + 2_000;
+        let locked = false;
+        while (Date.now() < deadline) {
+          const probe = spawnSync("bash", ["-c", `exec 9>"${fixture.lockFile}"; flock --exclusive --nonblock 9 && flock --unlock 9`]);
+          if (probe.status !== 0) { locked = true; break; }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+        expect(locked, "lock holder never acquired the lock").toBe(true);
+
+        const sentinelContent = readFileSync(sentinelPath(fixture), "utf8");
+        const recordedArtifactDir = /^artifact_dir=(.*)$/m.exec(sentinelContent)?.[1]!;
+        const clear = runSentinelClear(fixture, fixture.expectedCommit, recordedArtifactDir);
+        expect(clear.status).not.toBe(0);
+        expect(clear.stderr).toMatch(/a rollout is currently active/i);
+      } finally {
+        holder.kill();
+      }
+      expect(readFileSync(sentinelPath(fixture), "utf8")).toBe(before);
+    });
   });
 });

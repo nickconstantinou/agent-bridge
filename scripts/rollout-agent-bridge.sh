@@ -66,7 +66,7 @@ else
   test_mode=0
 fi
 
-for command_path in "$systemctl_cmd" "$runuser_cmd" "$journalctl_cmd" "$cp_cmd" "$restore_cmd" /usr/bin/find /usr/bin/flock /usr/bin/git /usr/bin/sha256sum /usr/bin/tee /usr/bin/realpath /usr/bin/stat /usr/bin/id /usr/bin/mv /usr/bin/rm /usr/bin/cut /usr/bin/sleep /usr/bin/mkdir /usr/bin/chmod /usr/bin/dirname /usr/bin/date /usr/bin/mktemp; do
+for command_path in "$systemctl_cmd" "$runuser_cmd" "$journalctl_cmd" "$cp_cmd" "$restore_cmd" /usr/bin/find /usr/bin/flock /usr/bin/git /usr/bin/sha256sum /usr/bin/tee /usr/bin/realpath /usr/bin/stat /usr/bin/id /usr/bin/mv /usr/bin/rm /usr/bin/cut /usr/bin/sleep /usr/bin/mkdir /usr/bin/chmod /usr/bin/dirname /usr/bin/date /usr/bin/mktemp /usr/bin/ln /usr/bin/hostname /usr/bin/sed; do
   [[ -x "$command_path" ]] || die "required command is unavailable: $command_path"
 done
 [[ -f "$config_file" && ! -L "$config_file" ]] || die "missing fixed rollout config: $config_file"
@@ -193,6 +193,46 @@ exec 9>"$lock_file"
 
 timestamp="$(/usr/bin/date -u +%Y%m%dT%H%M%SZ)"
 artifact_dir="$log_dir/$timestamp-$expected_commit"
+
+# Interrupted-rollout sentinel (Phase 4C.4, issue #135). Checked and, if
+# absent, created here — immediately after the lock is acquired and before
+# any precondition check runs, including the artifact-directory-uniqueness
+# check just below — to close the check-then-act race an earlier draft had:
+# a second invocation observing "no sentinel" and only acquiring the lock
+# after a third invocation had already failed and left one behind. Lives
+# beneath the already-validated canonical, root-owned $log_dir rather than
+# a new directory.
+sentinel_path="$log_dir/.rollout-in-progress"
+sentinel_removable=0
+if [[ -e "$sentinel_path" || -L "$sentinel_path" ]]; then
+  # A sentinel that doesn't look exactly like the ones this helper writes is
+  # never trusted or silently overwritten — that's its own containment-
+  # uncertain failure, distinct from "a valid sentinel is present."
+  [[ ! -L "$sentinel_path" ]] || die "existing rollout sentinel is a symlink, refusing to trust it: $sentinel_path — manual review required"
+  [[ -f "$sentinel_path" ]] || die "existing rollout sentinel is not a regular file: $sentinel_path — manual review required"
+  sentinel_check_owner="$(/usr/bin/stat -c %u "$sentinel_path")"
+  sentinel_check_mode="$(/usr/bin/stat -c %a "$sentinel_path")"
+  [[ "$sentinel_check_owner" == "$secure_owner_uid" && "$sentinel_check_mode" == "600" ]] || die "existing rollout sentinel has unsafe ownership or mode: $sentinel_path — manual review required"
+  sentinel_prior_commit="$(/usr/bin/sed -n 's/^expected_commit=//p' "$sentinel_path")"
+  sentinel_prior_artifact_dir="$(/usr/bin/sed -n 's/^artifact_dir=//p' "$sentinel_path")"
+  die "an interrupted rollout sentinel already exists: $sentinel_path (expected_commit=${sentinel_prior_commit:-unknown} artifact_dir=${sentinel_prior_artifact_dir:-unknown}) — review that evidence, then clear it with the separate rollout-sentinel-clear tool before retrying"
+fi
+sentinel_tmp="$(/usr/bin/mktemp --tmpdir="$log_dir" .rollout-in-progress.XXXXXX)"
+{
+  printf 'expected_commit=%s\n' "$expected_commit"
+  printf 'artifact_dir=%s\n' "$artifact_dir"
+  printf 'created_at=%s\n' "$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
+  printf 'hostname=%s\n' "$(/usr/bin/hostname)"
+  printf 'pid=%s\n' "$$"
+} > "$sentinel_tmp"
+/usr/bin/chmod 0600 "$sentinel_tmp"
+# ln (hard link) is the atomic create-if-not-exists primitive here — it
+# fails if the target already exists rather than replacing it, the same
+# O_CREAT|O_EXCL semantics called for, without needing a separate syscall
+# wrapper.
+/usr/bin/ln -- "$sentinel_tmp" "$sentinel_path" || die "failed to atomically create rollout sentinel (unexpected concurrent writer?): $sentinel_path"
+/usr/bin/rm -f -- "$sentinel_tmp"
+
 [[ ! -e "$artifact_dir" ]] || die "rollout artifact directory already exists: $artifact_dir"
 /usr/bin/mkdir --mode=0700 -- "$artifact_dir"
 /usr/bin/chmod 0700 "$artifact_dir"
@@ -212,6 +252,7 @@ backup_set="$backup_dir/$timestamp-$expected_commit"
 start_attempted=0
 services_started=0
 stop_attempted=0
+backup_completed=0
 completed=0
 declare -a expected_backups=()
 
@@ -363,23 +404,82 @@ stop_and_verify_all_services() {
   echo "all selected services verified stopped"
 }
 
+# Removes the sentinel only when sentinel_removable=1 was explicitly set —
+# never inferred from $? (the script's own exit status stays nonzero on
+# every failure path, including a cleanly auto-restored one, so exit code
+# alone can never signal "safe to retry"). A no-op if the sentinel is
+# already gone or was never this invocation's to remove.
+remove_sentinel_if_removable() {
+  (( sentinel_removable == 1 )) || return 0
+  [[ -n "${sentinel_path:-}" && -f "$sentinel_path" && ! -L "$sentinel_path" ]] || return 0
+  /usr/bin/rm -f -- "$sentinel_path"
+  echo "rollout sentinel removed: $sentinel_path"
+}
+
 on_exit() {
   status=$?
-  if (( status == 0 && completed == 1 )); then return 0; fi
   set +e
+  if (( status == 0 && completed == 1 )); then
+    sentinel_removable=1
+    remove_sentinel_if_removable
+    return 0
+  fi
   echo "rollout failed status=$status start_attempted=$start_attempted services_started=$services_started; containing services"
   containment_verified=0
-  if (( stop_attempted == 1 )); then
-    if stop_and_verify_all_services; then containment_verified=1; else status=1; fi
-  fi
-  if (( start_attempted == 0 )) && [[ -s "$manifest" ]]; then
-    if (( containment_verified == 1 )); then
-      restore_backups || status=1
+  sentinel_removable=0
+  if (( stop_attempted == 0 )); then
+    # Pure precondition failure — services were never touched, containment
+    # was never even attempted. A bare re-invocation behaves identically to
+    # the first attempt.
+    sentinel_removable=1
+  else
+    if stop_and_verify_all_services; then
+      containment_verified=1
     else
-      echo "rollback skipped: stopped state could not be proven" >&2
+      status=1
+      echo "STATE: containment could not be re-proven — rollback skipped, stopped state is genuinely uncertain; sentinel retained" >&2
+    fi
+    if (( containment_verified == 1 )); then
+      if (( start_attempted == 1 )); then
+        # Services were already started against the new schema before
+        # failing — an automatic DB rollback here could race live writes,
+        # so this always requires operator judgment, never an automatic
+        # retry. Migrated databases and evidence are preserved as-is.
+        echo "STATE: STOPPED_PRESERVED — services stopped after a post-start failure; database is on the NEW schema; no automatic restore attempted; sentinel retained, operator review required" >&2
+      elif (( backup_completed == 1 )); then
+        # backup_completed is only set after backup_databases() returns
+        # successfully for the *whole* cohort — unlike a bare manifest
+        # existence/non-empty check, which would already be true the
+        # instant the header row is written, before any actual database has
+        # been copied. Without this distinction, a failure partway through
+        # backup_databases() itself would be misrouted into attempting
+        # (and correctly failing) a restore of zero actually-backed-up
+        # databases, mislabeling a STOPPED_UNCHANGED state as
+        # RESTORE_INCOMPLETE — same sentinel outcome (retained) either way,
+        # but the wrong operator-facing recovery instructions.
+        if restore_backups; then
+          # restore_backups() only returns success once every database's
+          # SHA-256 has been independently re-verified against the backup
+          # manifest — "restored" and "verified" are the same check here,
+          # not two separate steps that could disagree.
+          echo "STATE: FAILED_RESTORED — cohort restored and verified; sentinel will be removed, but this is 'safe to hand to the documented recovery flow,' not 'safe to bare-retry' — services remain stopped and code is still on the new commit" >&2
+          sentinel_removable=1
+        else
+          status=1
+          echo "STATE: RESTORE_INCOMPLETE — automatic restore failed or could not be fully verified for every database; manual restoration required; sentinel retained" >&2
+        fi
+      else
+        # Services are down and containment is fully proven, but no backup
+        # write has happened yet — database is untouched. Still not bare-
+        # retryable: rollout-agent-bridge.sh's own precondition check
+        # requires every unit to already be active before it will attempt
+        # to stop them.
+        echo "STATE: STOPPED_UNCHANGED — services stopped, database on the OLD schema and untouched, code still checked out at the NEW commit; sentinel retained, see docs/GUARDED-ROLLOUT.md recovery flow" >&2
+      fi
     fi
   fi
   if (( containment_verified == 1 )); then echo "services remain stopped; operator review required"; fi
+  remove_sentinel_if_removable
   exit "${status:-1}"
 }
 trap on_exit EXIT
@@ -435,6 +535,7 @@ run_db_tool inspect --evidence - "${db_args[@]}" > "$artifact_dir/stopped-eviden
 
 echo "backing up all databases"
 backup_databases
+backup_completed=1
 /usr/bin/sha256sum "$manifest" > "$artifact_dir/backup-manifest.sha256"
 
 echo "migrating databases using pre-staged commit $expected_commit"

@@ -6,28 +6,27 @@ Work item title:
 Execution contract:
 {execution_contract}
 
-Relevant plan excerpt, if provided:
+Approved plan excerpt, including Architectural Intent and Red Tests when available:
 {plan_text}
 
 Instructions:
-- Use the execution contract as the primary source of scope.
-- Leave committed tests unchanged.
+- Use the approved plan, committed red tests, and execution contract as the complete source of scope.
+- Leave committed tests unchanged. Do not weaken assertions, alter fixtures to bypass behaviour, or replace the authoritative oracle.
 - Edit only production/runtime files required by the approved contract.
-- Make the smallest change that satisfies the committed test coverage and work-item intent.
-- Do not perform unrelated cleanup or broad refactoring.
-- Run the narrow verification command first, then the broader suite where available.
-- Stage only production/runtime files.
+- Make the smallest coherent change that satisfies the committed red tests, product intent, architectural intent, invariants, compatibility, and applicable lifecycle/security/operations requirements.
+- Ensure the real production caller uses the intended abstraction or ownership boundary; unused classes, helpers, or parallel paths do not satisfy architectural acceptance.
+- Do not perform unrelated cleanup, broad refactoring, dependency changes, schema changes, operational actions, or scope expansion.
+- Never add test imports, test hooks, or test-only environment cleanup to production source.
+- Run the focused verification command first, then the required sibling and broader suite commands.
+- Stage only approved production/runtime files.
 - Do not create a commit.
 
-Architectural acceptance criteria:
-- The production path must use the intended abstraction or boundary, not merely add unused classes or helpers.
-- Test-only imports, hooks, and environment cleanup must not be added to production source.
-- If this is refactor work, verify the before/after ownership boundary changed in production code.
-
-Stop and report `NEEDS_HUMAN_REVIEW` if the required change exceeds the approved contract, changes test expectations, or crosses a risky boundary.
+Stop and report `NEEDS_HUMAN_REVIEW` when the required change exceeds the approved contract, changes test expectations, contradicts product intent, crosses a permission or ownership boundary, introduces migration/rollback implications not planned, or requires a human decision.
 
 Report:
 - Runtime files changed.
-- Commands run.
-- Verification result.
-- Any remaining blocker.
+- Red-test IDs satisfied.
+- Product and architectural intent satisfied.
+- Commands and results.
+- Sibling behaviour remaining green.
+- Residual risk or blocker.

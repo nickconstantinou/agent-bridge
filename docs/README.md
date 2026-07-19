@@ -2,7 +2,7 @@
 
 Status: canonical documentation index.
 
-Validated against: `main` at `4120575c4bae359a32f29a6bf901c63beda0fa65`.
+Validated against: `agent/role-based-worker-orchestration-docs` for the Issue #159 target-state documentation set.
 
 ## Authority order
 
@@ -11,93 +11,80 @@ When documents disagree, use this order:
 1. `docs/adr/` — accepted architectural decisions.
 2. `docs/architecture/` — current intended architecture.
 3. `docs/roadmap/` — approved implementation work.
-4. Operational guides — current operator procedures and runtime-specific guides.
-5. Implementation records — completed spikes or implementation notes that explain why code looks the way it does.
-6. `docs/research/` and root `*-research.md` files — research only unless promoted into a roadmap.
-7. `docs/archive/` — historical context only.
+4. Operational, configuration, and testing guides.
+5. Detailed implementation handoffs and completed implementation records.
+6. Research documents, unless promoted through an ADR and active roadmap.
+7. Archived documents.
 
-Coding agents must not implement from research or archive documents unless the idea has been promoted through an ADR and an active roadmap.
+Coding agents must not implement from research or archive documents unless the proposal has been promoted through an accepted ADR and active roadmap.
 
 ## Status taxonomy
 
-Use these labels when creating or updating docs:
-
 | Status | Meaning |
 |---|---|
-| `authoritative` | Current source of truth for architecture, decisions, or operations. |
+| `authoritative` | Current source of truth for architecture, decisions, configuration, testing, or operations. |
 | `active-roadmap` | Approved implementation work. |
-| `implemented-record` | Records completed work and verification; useful context, not a standing roadmap. |
-| `partially-implemented` | Some claims match code; remaining content is planned, deferred, or stale. |
-| `superseded-pointer` | Kept only to redirect readers to current docs. |
-| `research-only` | Evaluation material; not approved implementation work. |
+| `implemented-record` | Completed work and verification context. |
+| `partially-implemented` | Contains both current and planned material; revalidate before implementation. |
+| `superseded-pointer` | Redirects readers to current documents. |
+| `research-only` | Evaluation material, not approved implementation work. |
 | `archived` | Historical context only. |
-| `runtime-design` | Design doc for a runtime asset or behavior; check code before moving. |
+| `runtime-design` | Design for a runtime asset; check current code before changing it. |
 
-## Recommended front matter
+## Role-based Engineering Worker reading order
 
-New significant docs should start with a small status block:
+1. `docs/adr/ADR-005-role-based-agentic-orchestration.md` — accepted decision.
+2. `docs/architecture/engineering-worker.md` — worker boundary and invariants.
+3. `docs/architecture/agentic-worker-orchestration.md` — role, workflow, permission, and lifecycle architecture.
+4. `docs/agentic-maintenance.md` — feature, defect, and refactor requirements contracts.
+5. `docs/roadmap/issue-159-role-based-orchestration.md` — active implementation roadmap.
+6. `docs/implementation-plans/issue-159-role-based-orchestration.md` — detailed coding-agent handoff.
+7. `docs/configuration/agent-role-assignment.md` — CLI/model allocation and degraded operation.
+8. `docs/operations/agentic-worker-runbook.md` — enablement, recovery, and rollback.
+9. `docs/testing/agentic-worker-verification.md` — verification contract.
+10. `agentic-maintenance.yaml` — machine-readable document registry and triggers.
+11. `docs/WORKER-GUIDE.md` — user and operator guide.
 
-```yaml
----
-status: authoritative | active-roadmap | implemented-record | partially-implemented | superseded-pointer | research-only | archived | runtime-design
-type: architecture | adr | roadmap | operations | research | archive | implementation-record | runtime-design
-authority: canonical | advisory | historical | none
-implementation_status: implemented | partially-implemented | planned | deferred | rejected | superseded | not-applicable
-last_validated_against: <commit-sha>
----
-```
+## Canonical map
 
-## Current map
+| Path | Classification | Notes |
+|---|---|---|
+| `docs/adr/ADR-001-oss-product-split.md` | authoritative ADR | OSS product split. |
+| `docs/adr/ADR-002-shared-runtime.md` | authoritative ADR | Shared Runtime. |
+| `docs/adr/ADR-003-capability-registry.md` | authoritative ADR | Capability registry. |
+| `docs/adr/ADR-004-engineering-worker-boundary.md` | authoritative ADR | Software-engineering-only worker boundary. |
+| `docs/adr/ADR-005-role-based-agentic-orchestration.md` | authoritative ADR | Three role orchestration decision. |
+| `docs/architecture/overview.md` | authoritative architecture | Top-level architecture hierarchy. |
+| `docs/architecture/companion-runtime.md` | authoritative architecture | Companion Runtime boundary. |
+| `docs/architecture/engineering-worker.md` | authoritative architecture | Engineering Worker boundary and invariants. |
+| `docs/architecture/agentic-worker-orchestration.md` | authoritative architecture | Role-based worker architecture. |
+| `docs/architecture/shared-runtime.md` | authoritative architecture | Shared Runtime boundary. |
+| `docs/architecture/memory-and-handoff.md` | authoritative architecture | Memory and provider handoff. |
+| `docs/architecture/platform-boundary.md` | authoritative architecture | OSS/platform ownership. |
+| `docs/architecture/03-target-architecture.md` | target architecture | Advisory beneath canonical architecture docs. |
+| `docs/architecture/04-adrs.md` | ADR summary | Individual files under `docs/adr/` are authoritative. |
+| `docs/architecture/08-testing-strategy.md` | authoritative testing summary | Acceptance-first role-boundary testing. |
+| `docs/architecture/10-production-readiness.md` | authoritative readiness | Production qualification checklist. |
+| `docs/roadmap/epic-11-runtime-hardening.md` | active roadmap | Runtime hardening. |
+| `docs/roadmap/issue-69-compact-memory-handoff.md` | active roadmap | Memory and handoff implementation. |
+| `docs/roadmap/issue-159-role-based-orchestration.md` | active roadmap | Issue #159 implementation. |
+| `docs/implementation-plans/issue-159-role-based-orchestration.md` | detailed handoff | TDD slices, boundaries, rollout, verification, and execution contract. |
+| `docs/agentic-maintenance.md` | authoritative workflow | Requirements intake and completion contracts. |
+| `docs/configuration/agent-role-assignment.md` | authoritative configuration | Role CLI/model selection. |
+| `docs/operations/agentic-worker-runbook.md` | authoritative operations | Enablement, recovery, and rollback. |
+| `docs/testing/agentic-worker-verification.md` | authoritative testing | Detailed verification contract. |
+| `agentic-maintenance.yaml` | machine-readable policy | Documents, triggers, authoring paths, and readiness. |
+| `docs/WORKER-GUIDE.md` | authoritative operations | Worker user/operator guide. |
+| `docs/SAFE-RESTART.md` | authoritative operations | Safe restart procedure. |
 
-| Path | Classification | Authority | Notes |
-|---|---|---|---|
-| `docs/adr/ADR-001-oss-product-split.md` | authoritative | canonical | Accepted OSS product split. |
-| `docs/adr/ADR-002-shared-runtime.md` | authoritative | canonical | Accepted Shared Runtime decision. |
-| `docs/adr/ADR-003-capability-registry.md` | authoritative | canonical | Accepted minimal Epic 11 registry decision. |
-| `docs/adr/ADR-004-engineering-worker-boundary.md` | authoritative | canonical | Accepted software-engineering-only worker boundary. |
-| `docs/architecture/overview.md` | authoritative | canonical | Top-level architecture and documentation hierarchy. |
-| `docs/architecture/companion-runtime.md` | authoritative | canonical | Companion Runtime boundary. |
-| `docs/architecture/engineering-worker.md` | authoritative | canonical | Engineering Worker boundary. |
-| `docs/architecture/shared-runtime.md` | authoritative | canonical | Shared Runtime boundary, including the memory/handoff seam note for issue #69. |
-| `docs/architecture/memory-and-handoff.md` | authoritative | canonical | Compact-first memory, persistent memory promotion, and CLI handoff architecture for issue #69. Partially implemented — see status note in the doc. |
-| `docs/architecture/capability-registry.md` | active architecture | canonical for intended design | Scope controlled by Epic 11 roadmap. |
-| `docs/architecture/platform-boundary.md` | authoritative | canonical | OSS/platform ownership boundary. |
-| `docs/architecture/01-current-architecture.md` | implemented-record | advisory | Snapshot audit; useful evidence, not higher than newer ADRs. |
-| `docs/architecture/02-gap-analysis.md` | partially-implemented | advisory | Backlog/gap list; revalidate before building. |
-| `docs/architecture/03-target-architecture.md` | partially-implemented | advisory | Target architecture, not a rewrite instruction. |
-| `docs/roadmap/epic-11-runtime-hardening.md` | active-roadmap | canonical | Only approved Epic 11 implementation plan. |
-| `docs/roadmap/issue-69-compact-memory-handoff.md` | active-roadmap | canonical | TDD implementation plan for compact-first memory and one-time CLI handoff context, including current PR-by-PR status, file impact summary, and open follow-up questions. |
-| `docs/roadmap/issue-69-coding-agent-prompt.md` | active-roadmap | advisory | Ready-to-use implementation prompt; explicitly subordinate to the architecture and roadmap docs above. |
-| `docs/WORKER-GUIDE.md` | authoritative operations | canonical for worker use | Current worker operator guide. |
-| `docs/SAFE-RESTART.md` | authoritative operations | canonical for safe restart helper | Referenced by `AGENTS.md` restart policy. |
-| `docs/PRD.md` | partially-implemented product reference | advisory | Broad product/architecture reference; defer to ADRs and architecture docs on conflicts. |
-| `docs/soul.md` | runtime-design | advisory/canonical for SOUL.md behavior | Documents root `SOUL.md` runtime injection; the doc itself is not the default loaded file. |
-| `docs/agent-driven-memory-research.md` | implemented-record | advisory | Historical memory research and verification; current intended memory architecture is `docs/architecture/memory-and-handoff.md`. |
-| `docs/bridge-event-normalization-research.md` | implemented-record plus deferred research | advisory | Phases 1-5 completed; Phase 6 deferred. |
-| `docs/discord-compatibility-research.md` | implemented-record plus follow-up checklist | advisory | Discord baseline implemented; operational hardening remains. |
-| `docs/health-bolt-architecture.md` | implemented-record | advisory | Shared-engine health architecture implemented. |
-| `docs/health-monitor-rectification.md` | implemented-record/checklist | advisory | Rectification mostly complete; monitor follow-up remains. |
-| `docs/native-telegram-layout-spike.md` | partially-implemented / partially-superseded | advisory | Status should be refreshed: rich-message table path still exists opportunistically. |
-| `docs/prompt-optimization-loop-research.md` | implemented-record plus stale research notes | advisory | Referenced by `AGENTS.md`; earlier `src/agentMemory.ts` note is stale. |
-| `docs/antigravity-agent-view-spike.md` | research-only | none | Spike complete; no default background-mode implementation. |
-| `docs/claude-agent-view-spike.md` | research-only | none | Background mode rejected as default; optional future idea only. |
-| `docs/cursor-agent-spike-research.md` | rejected research | none | Not viable as backend. |
-| `docs/cursor-sdk-spike-research.md` | conditional research | none | Potential future backend only with API key and shim; not current roadmap. |
-| `docs/autonomous-agent-bridge-research.md` | superseded-pointer | none | Redirects to worker guide, active roadmap, research, and archive. |
-| `docs/oss-product-split-plan.md` | superseded-pointer | none | Redirects to Epic 11 roadmap, research, and archive. |
-| `docs/research/future-runtime-evolution.md` | research-only | none | Deferred ideas; promotion rules apply. |
-| `docs/archive/autonomous-agent-bridge-research-v1.md` | archived | none | Historical context only. |
-| `docs/archive/oss-product-split-plan-v1.md` | archived | none | Historical context only. |
+The existing research, archive, implementation-record, and superseded-pointer classifications remain subordinate to this authority order. Revalidate them before using them as implementation input.
 
 ## Runtime dependency notes
 
-- `docs/soul.md` is a design document. Runtime loading is handled by `src/soul.ts`, which defaults to `<project>/SOUL.md` or `AGENT_BRIDGE_SOUL_PATH`.
-- `docs/architecture/memory-and-handoff.md` is the current intended memory and provider-handoff architecture. Implementation work, current PR status, and open follow-up questions are tracked in `docs/roadmap/issue-69-compact-memory-handoff.md`.
-- The Shared Runtime memory/handoff seam for issue #69 is recorded in `docs/architecture/shared-runtime.md`'s "Memory and Handoff Seams" section, not a separate file.
-- `docs/prompt-optimization-loop-research.md` is referenced by `AGENTS.md` for optimizer methodology. It is not loaded by runtime services.
-- `docs/WORKER-GUIDE.md` and `docs/SAFE-RESTART.md` are operational docs. They are not loaded by services but are authoritative for operator behavior.
-- Superseded pointer files should stay until inbound references are cleaned up, then they can move fully into `docs/archive/`.
+- Worker role documents are not loaded implicitly unless implementation explicitly reads `agentic-maintenance.yaml` or selects them as bounded context.
+- `docs/WORKER-GUIDE.md` and `docs/SAFE-RESTART.md` are authoritative operator documents.
+- Superseded pointers remain until inbound references are cleaned up.
 
-## Reorg rule
+## Reorganisation rule
 
-Do not move or archive a document until `docs/DOCUMENTATION-AUDIT.md` classifies it and confirms whether code, tests, `AGENTS.md`, README, or systemd/operator flows still reference it.
+Do not move or archive a document until `docs/DOCUMENTATION-AUDIT.md` confirms whether code, tests, `AGENTS.md`, README, systemd, worker prompts, or operator flows still reference it.

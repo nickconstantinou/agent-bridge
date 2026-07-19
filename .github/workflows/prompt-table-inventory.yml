@@ -13,12 +13,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Inventory prompt table and override references
+      - name: Inventory prompt retirement and schema version references
         shell: bash
         run: |
           {
             echo '## prompt table, accessors, loader override API, callers, and documentation'
             grep -RInE --exclude-dir=node_modules --exclude-dir=.git 'getPrompt|setPrompt|dbTemplate|includeSupplementsForDbTemplate|CREATE TABLE( IF NOT EXISTS)? prompts|DROP TABLE( IF EXISTS)? prompts|FROM prompts|INTO prompts|prompt_text|database[- ]backed prompt override|database prompt override|DB override' src test prompts docs || true
+            echo
+            echo '## schema version assumptions'
+            grep -RInE --exclude-dir=node_modules --exclude-dir=.git 'CURRENT_SCHEMA_VERSION|user_version[^\n]*1|schema version 1|version 1 database|at 1\b|versioned baseline' src test scripts docs systemd || true
           } | tee prompt-table-inventory.txt
       - uses: actions/upload-artifact@v4
         with:

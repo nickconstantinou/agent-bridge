@@ -7,6 +7,7 @@ description: "Use for software development, refactoring, bug fixing, and behavio
 
 Use red-green-refactor as the default development loop for all software changes.
 
+<!-- BEGIN AGENT_BRIDGE_RUNTIME_GUIDANCE -->
 ## Loop
 
 1. Red: write or update a test that describes the desired behavior and fails for the right reason.
@@ -25,3 +26,4 @@ Do not make production behavior changes before the red step unless the codebase 
 ## Verification
 
 Run the focused test first, then the relevant broader suite. In the final note, report the red test, the green change, and any tests that could not be run.
+<!-- END AGENT_BRIDGE_RUNTIME_GUIDANCE -->

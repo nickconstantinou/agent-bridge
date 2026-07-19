@@ -9,8 +9,9 @@ Canonical verification requirements for role-based Engineering Worker orchestrat
 - Write boundary-level acceptance tests before implementation.
 - Preserve red-green-refactor with separate red and green commits for behaviour changes.
 - Test authoritative state and externally observable effects rather than model wording.
-- Treat permission, lifecycle, persistence, role resolution, prompts, structured output, and documentation triggers as risk boundaries.
+- Treat permission, lifecycle, persistence, role resolution, prompts, canonical skills, structured output, and documentation triggers as risk boundaries.
 - Require Technical Lead plans to define comprehensive red tests protecting product and architectural intent.
+- Keep reusable SDLC know-how authoritative in versioned repository skills rather than copied prompt passages.
 - Deterministic evidence overrides model claims.
 
 ## Acceptance suites
@@ -73,14 +74,19 @@ Cover:
 - malformed or unavailable required output fails closed;
 - no shell, file mutation, GitHub mutation, merge, deploy, secret, or service capability is reachable.
 
-### Prompt registry and source isolation
+### Prompt registry, lifecycle skills, and source isolation
 
 Cover:
 
 - every role/mode resolves exactly one registered prompt key and contract version;
 - planning, red-test repair, execution-contract repair, review, operations, guidance, Code Worker, and Documentation Steward prompts remain separate;
-- fallback targets use the same prompt key/version, input/output schemas, validator, and stable source-template hash;
+- every role/mode and compatibility prompt declares an ordered lifecycle-skill set explicitly;
+- each canonical skill has exactly one marked runtime-guidance block and a matching `skill.json` name/version;
+- requirements, risk-based testing, TDD, and release-readiness know-how comes from canonical skills rather than duplicated prompt supplements;
+- missing, duplicate, empty, oversized, malformed, or version-mismatched guidance fails closed;
+- fallback targets use the same prompt key/version, input/output schemas, validator, role-template hash, skill identities, skill-set hash, and composed-template hash;
 - changing one prompt does not change sibling prompt template hashes or contracts;
+- changing one skill changes only consuming prompts' skill-set, composed, and rendered hashes;
 - every canonical prompt declares its required render variables and missing inputs fail closed;
 - supplied context is bounded before rendering;
 - canonical and compatibility prompts resolve only from registered source-controlled files and report `source: builtin`;
@@ -89,7 +95,7 @@ Cover:
 - an unexpected populated table fails closed and preserves schema version 1 plus its rows for investigation;
 - unknown prompt keys and incompatible contract inputs fail safely;
 - compatibility aliases remain explicit and degraded;
-- stable source-template hash and invocation-specific rendered-content hash are distinguished and audit-safe;
+- role-template, lifecycle-skill-set, composed-template, and invocation-specific rendered hashes are distinguished and audit-safe;
 - raw repository context and sensitive prompt inputs are not stored in metadata-only audit.
 
 Canonical contract: `docs/architecture/agentic-prompt-contracts.md`.
@@ -166,7 +172,7 @@ Cover:
 - logical-call budget is preserved across retries and restart;
 - completed phases are not rerun;
 - stale model probes are revalidated before new calls;
-- prompt contract, version, source-template hash, and rendered invocation hash remain bound to each durable logical call;
+- prompt contract, version, role-template hash, lifecycle skill identities, skill-set hash, composed-template hash, and rendered invocation hash remain bound to each durable logical call;
 - rollback to legacy routing preserves new records without interpreting incompatible jobs unsafely.
 
 ### Review and operations
@@ -187,12 +193,14 @@ Architecture Lint should enforce:
 
 - role IDs and permission profiles are centrally owned;
 - one central prompt-contract registry owns role/mode prompt metadata;
+- one central lifecycle-skill registry owns extraction, manifest/version checks, budgets, and composition;
 - worker handlers do not invoke provider CLIs directly for role work;
 - Technical Lead calls route through the advisor boundary;
 - full planning and focused repair use different registered prompt keys;
-- prompt text cannot own or import tool, permission, budget, or lifecycle policy;
+- prompt and skill text cannot own or import tool, permission, budget, or lifecycle policy;
 - Code Worker and Documentation Steward prompts cannot be selected for Technical Lead modes;
 - canonical prompt loading cannot depend on the database prompt repository;
+- duplicated canonical lifecycle passages are not reintroduced as compatibility supplements;
 - documentation-only handlers cannot import production mutation helpers;
 - role audit SQL remains in its owning repository;
 - no legacy scribe call is used as canonical planning without an explicit compatibility marker;
@@ -203,7 +211,7 @@ Architecture Lint should enforce:
 The implementation plan must resolve exact repository commands. At minimum, final evidence includes:
 
 ```text
-focused role, prompt, plan-validation, and workflow tests
+focused lifecycle-skill, role-prompt, plan-validation, and workflow tests
 full test suite
 npm run typecheck
 bash scripts/arch-lint.sh src
@@ -218,7 +226,7 @@ Migration work additionally runs upgrade and rollback tests against representati
 
 Before broad rollout, use a disposable workspace to demonstrate:
 
-1. one authenticated CLI with per-role model and prompt selection;
+1. one authenticated CLI with per-role model, prompt, and lifecycle-skill selection;
 2. a feature request requiring one human clarification;
 3. a detailed imported issue passing validation without unnecessary questions;
 4. a rejected defect or refactor candidate;
@@ -226,10 +234,10 @@ Before broad rollout, use a disposable workspace to demonstrate:
 6. rejection and focused repair of a plan containing only generic test wording;
 7. a read-only scan followed by approved TDD implementation of the exact planned red tests;
 8. documentation-only mutation enforced;
-9. restart between workflow phases without duplicate calls or prompt-contract drift;
+9. restart between workflow phases without duplicate calls or prompt/skill-contract drift;
 10. cancellation fencing late output;
 11. accurate non-independent review reporting when only one model exists;
-12. canonical prompt loading remains source-controlled even when a conflicting legacy database row exists;
+12. provider fallback preserving prompt and lifecycle-skill identities;
 13. rollback to legacy routing without queue or state corruption.
 
 Production qualification is observational and separately approved. It does not occur as an implicit consequence of merging implementation code.

@@ -5,6 +5,7 @@ on:
     paths:
       - '.github/workflows/prompt-table-retirement-candidate.yml'
       - 'scripts/retirePromptOverridesCandidate.py'
+      - 'scripts/retirePromptOverridesDocsCandidate.py'
 
 permissions:
   contents: read
@@ -23,12 +24,16 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          python scripts/retirePromptOverridesCandidate.py 2>&1 | tee prompt-retirement-transform.log
+          {
+            python scripts/retirePromptOverridesCandidate.py
+            python scripts/retirePromptOverridesDocsCandidate.py
+          } 2>&1 | tee prompt-retirement-transform.log
       - name: Check retired references
         shell: bash
         run: |
           ! grep -RInE --exclude-dir=node_modules --exclude-dir=.git 'getPrompt|setPrompt|dbTemplate|includeSupplementsForDbTemplate|^[[:space:]]*dbKey:' src test prompts docs
           ! grep -n 'CREATE TABLE IF NOT EXISTS prompts' src/db/legacyBaselineMigration.ts
+          ! grep -RInEi --exclude-dir=node_modules --exclude-dir=.git 'remain(s)? (a |an )?temporary legacy|remain(s)? available only|retained temporarily|staged retirement|current handlers still call|deprecated legacy override channel' prompts docs
       - name: Run focused tests
         run: >-
           npx vitest run

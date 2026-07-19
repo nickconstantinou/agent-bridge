@@ -19,7 +19,21 @@ Detailed analysis of the defect, feature, or refactor. Reference existing behavi
 Give every criterion a stable requirement ID such as `AC-1`. Provide 5-8 concrete, binary criteria covering functional behaviour, error handling, safe defaults, performance where material, architectural constraints, compatibility, and applicable lifecycle/security/operations requirements.
 
 ## Target Files
-List concrete repo-relative file paths that will be created or modified. For each file, specify exact classes, functions, methods, interfaces, handlers, repositories, scripts, services, prompts, or tests to be modified or added.
+Provide a JSON array. Every referenced path must use this exact shape:
+
+```json
+[
+  {
+    "path": "src/exact-file.ts",
+    "classification": "existing_at_base | existing_in_dependency | proposed_new_production | proposed_new_test",
+    "owner": "current owning module or boundary",
+    "dependency_ref": null,
+    "rationale": "why this path changes or why a new file is required"
+  }
+]
+```
+
+For `existing_in_dependency`, name the dependency PR and exact reviewed ref. For a proposed production file, name the neighbouring owner it extends and why no existing file is sufficient. Any invalid or unclassified path blocks approval.
 
 ## Architectural Intent
 Explain the production path, ownership boundaries, invariants, compatibility requirements, permission constraints, lifecycle authority, and prohibited shortcuts. Include how to avoid test-only code in production and how the intended caller will use the intended abstraction.
@@ -123,4 +137,4 @@ Anything the worker must not decide autonomously. Do not silently choose product
 ## Out of Scope
 Explicit non-goals and work the implementation must not do.
 
-Do not implement code. Do not restate the issue without a concrete repository-grounded plan. A plan is invalid when product intent, architectural intent, triggered-risk coverage, the real caller boundary, authoritative oracle, expected red failure, or sibling behaviour is unspecified. Keep the Execution Contract compact so later worker phases do not need the full plan.
+Do not implement code. Do not restate the issue without a concrete repository-grounded plan. A plan is invalid when a target path is invalid or unclassified, product intent, architectural intent, triggered-risk coverage, the real caller boundary, authoritative oracle, expected red failure, or sibling behaviour is unspecified. Stale required documentation must be corrected in the same delivery before readiness rather than deferred. Keep the Execution Contract compact so later worker phases do not need the full plan.

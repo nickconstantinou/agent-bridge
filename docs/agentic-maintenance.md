@@ -2,25 +2,27 @@
 
 ## Status
 
-Canonical operating model. This document describes the implemented Engineering Worker workflow for feature, defect, and refactor changes.
+Canonical operating model. This document describes the Engineering Worker workflow for feature, defect, and refactor changes. Target-state phases remain dormant until their owning Issue #159 slices are implemented and qualified.
 
 ## Principles
 
-1. Agent Bridge orchestrates the workflow and owns authoritative state.
+1. Agent Bridge orchestrates the workflow and owns authoritative state and every GitHub mutation.
 2. Incoming requests, imported issues, and scan findings are inputs, not assumed-complete specifications.
 3. The Technical Lead gathers or validates requirements before planning.
-4. The Technical Lead designs the implementation and red-test strategy; the Code Worker executes bounded packets.
-5. Reusable requirements, test-strategy, TDD, and release-readiness know-how remains canonical in repository skills and is composed explicitly into each relevant prompt mode.
-6. The Code Worker performs bounded repository investigation and mutation under mode-specific permissions.
-7. The Documentation Steward keeps canonical documents aligned with final code and operations.
-8. Deterministic evidence outranks model claims.
-9. Humans retain product decisions, merge authority, destructive actions, deployments, and policy exceptions.
+4. A multi-issue decomposition is reviewed as one read-only bundle before any issue is created or updated.
+5. The Technical Lead designs the implementation and red-test strategy; the Code Worker executes bounded packets.
+6. Reusable requirements, test-strategy, TDD, and release-readiness know-how remains canonical in repository skills and is composed explicitly into each relevant prompt mode.
+7. The Code Worker performs bounded repository investigation and mutation under mode-specific permissions.
+8. Technical Lead implementation and applicable operations review occur after deterministic verification and before documentation authoring.
+9. The Documentation Steward keeps every required canonical document aligned with final exact-head code and operations; stale required documentation is never deferred while a delivery is declared ready.
+10. Deterministic evidence outranks model claims.
+11. Humans retain product decisions, material scope changes, merge authority, destructive actions, deployments, and policy exceptions.
 
 ## Roles
 
 ### Technical Lead
 
-The Technical Lead is the strongest available read-only reasoning path. It owns requirements discovery, issue authoring and validation, planning, comprehensive red-test design, task decomposition, bounded executor guidance, implementation review, operations assessment, and PR-readiness advice.
+The Technical Lead is the strongest available read-only reasoning path. It owns requirements discovery, issue authoring and validation, pre-mutation decomposition review, planning, comprehensive red-test design, task decomposition, bounded executor guidance, implementation review, operations assessment, and PR-readiness advice.
 
 It does not edit files, execute unrestricted commands, mutate GitHub, merge, deploy, or approve its own output.
 
@@ -32,7 +34,9 @@ A scan result is a candidate. The Code Worker cannot promote its own finding int
 
 ### Documentation Steward
 
-The Documentation Steward assesses documentation impact and updates approved documentation paths after implementation facts and evidence are available. It validates that current documents describe the final code, configuration, and operating procedure.
+The Documentation Steward assesses documentation impact and updates approved documentation paths only after deterministic verification and accepted Technical Lead review for the same exact code head. It validates that every required document describes the final code, configuration, and operating procedure.
+
+A stale, contradictory, missing, or materially misleading required document is a blocking defect. It must be corrected and revalidated in the same delivery. If correction requires material scope or authority change, the workflow holds for human approval; it does not defer the stale state and claim readiness.
 
 ## Common intake lifecycle
 
@@ -42,13 +46,29 @@ Raw input
 → gather repository and documentation evidence
 → identify facts, assumptions, conflicts, and unresolved decisions
 → obtain human decisions where required
-→ write canonical issue
+→ write canonical issue or proposed child-issue bundle
 → validate issue schema and evidence
+→ when multiple issues are proposed, run bundle-wide decomposition review
+→ Agent Bridge performs approved GitHub issue mutation
 → Technical Lead final validation
 → requirements_ready
 ```
 
 An apparently complete issue can pass without additional questions, but it never bypasses validation.
+
+## Multi-issue decomposition contract
+
+Before creating or updating multiple child issues:
+
+1. Assemble every proposed issue body without mutating GitHub.
+2. Capture one canonical invariant table and current repository/dependency evidence.
+3. Run `technical_lead:decomposition_review` over the complete bundle.
+4. Record implementation delivery order separately from runtime phase order.
+5. Audit current owners and caller paths, lifecycle/state authority, permissions, schema/SQL ownership, GitHub mutation authority, platform desired versus appliance effective authority, compatibility, repair invalidation, and prohibited duplicate abstractions.
+6. Repair every missing or conflicting invariant and rerun the review.
+7. Allow Agent Bridge issue mutation only after `ready_for_issue_mutation`.
+
+Locally valid individual issues do not compensate for a contradictory bundle.
 
 ## Feature issue contract
 
@@ -115,7 +135,7 @@ Defect and refactor scans produce candidate findings. The Technical Lead returns
 - `not_justified`;
 - `split_into_multiple_issues`.
 
-Only `validated_issue` proceeds to canonical issue authoring and planning.
+Only `validated_issue` proceeds directly to canonical issue authoring and planning. A split returns to the multi-issue decomposition contract before any child issue mutation.
 
 ## Planning contract
 
@@ -123,7 +143,7 @@ The Technical Lead creates the implementation plan only after `requirements_read
 
 - requirement-to-change traceability;
 - affected architecture and ownership boundaries;
-- target and test files based on current evidence;
+- a structured target-path inventory;
 - red-green-refactor phases;
 - comprehensive structured red-test specifications;
 - acceptance, architecture/invariant, and triggered-risk coverage matrices;
@@ -135,6 +155,15 @@ The Technical Lead creates the implementation plan only after `requirements_read
 - rollout, rollback, and migration requirements;
 - conditions that return to requirements or human decision;
 - a validated machine-readable execution contract.
+
+Every target path is classified as exactly one of:
+
+- `existing_at_base`;
+- `existing_in_dependency`;
+- `proposed_new_production`;
+- `proposed_new_test`.
+
+Every target record includes its current or proposed owner and rationale. Dependency-owned paths identify the dependency PR and exact reviewed ref. Proposed production files identify the neighbouring current owner and why no existing file is sufficient. Invalid or unclassified paths block persistence and approval.
 
 Each red-test specification identifies:
 
@@ -155,7 +184,9 @@ Generic instructions such as `write tests`, `add unit tests`, or `increase cover
 
 Every acceptance criterion maps to one or more red tests or a justified deterministic non-test proof. Every affected architecture boundary/invariant and triggered lifecycle, compatibility, security, operations, migration, or rollback risk maps to appropriate coverage.
 
-Plan structural validation and bounded repair remain fail-closed before persistence. Full planning, red-test repair, and execution-contract repair use separate prompt contracts. Focused repair may replace only the invalid section and the complete plan is revalidated.
+Plan structural validation and bounded repair remain fail-closed before persistence. Newly generated or repaired plans must use structured target-path provenance. Already-persisted pre-provenance plans retain a narrow compatibility validator for concrete target paths so existing approved work does not regress; all new model output uses the strict validator.
+
+Full planning, red-test repair, and execution-contract repair use separate prompt contracts. Focused repair may replace only the invalid section and the complete plan is revalidated.
 
 Canonical prompt and red-test contracts:
 
@@ -185,25 +216,49 @@ Each Code Worker packet contains one coherent objective, permitted files or boun
 
 The Code Worker implements the planned red tests and proves they fail for the specified reason before green implementation. It returns structured evidence rather than a readiness claim. Agent Bridge validates repository state and deterministic results before asking the Technical Lead for review.
 
-## Review and operations
+## Review, operations, documentation, and readiness
 
-The Technical Lead performs implementation review and operations review as separate modes under the same configurable role.
+The canonical order is:
 
-Implementation review checks issue satisfaction, scope, invariants, completion of the approved red-test contract, regression coverage, security, architecture, and unsupported claims.
+```text
+deterministic verification
+→ Technical Lead implementation review
+→ Technical Lead operations review when triggered
+→ Documentation Steward authoring
+→ Documentation Steward validation
+→ Technical Lead PR readiness
+→ exact-head CI
+→ human merge gate
+```
+
+Implementation review checks issue satisfaction, scope, invariants, completion of the approved red-test contract, regression coverage, security, architecture, documentation obligations, and unsupported claims. It does not consume completed documentation.
 
 Operations review activates for deployment, services, configuration, credentials, databases, migrations, queues, rollback, backup, or production verification. It defines prerequisites, steps, abort conditions, rollback, postconditions, and required runbook changes.
 
-A different model from the implementing Code Worker is preferred when available. Lack of model diversity is reported explicitly rather than treated as independent review.
+Documentation authoring and validation require accepted implementation and applicable operations review for the same `subject_head_sha`. PR readiness requires all required documents to be current or a validated `no_documentation_change` result with rationale and trigger evidence.
+
+A different model from the implementing Code Worker is preferred when available. The workflow records required independence and actual independence separately. Lack of model diversity is reported explicitly and blocks readiness when repository risk policy requires a stronger level.
+
+Every deterministic, review, operations, documentation, and readiness record identifies the exact subject head. Gate status distinguishes:
+
+- `passed`;
+- `failed`;
+- `not_run`;
+- `not_scheduled`;
+- `stale`;
+- `unknown`.
+
+Only authoritative `passed` evidence for the exact current head satisfies a required gate. A code-changing repair invalidates verification, implementation review, operations review, documentation, and readiness evidence for the previous head. The workflow restarts from deterministic verification.
 
 ## Documentation lifecycle
 
-During planning, the Documentation Steward produces a structured impact assessment. After implementation verification, it updates or creates required documents using the repository registry in `agentic-maintenance.yaml`.
+During planning, the Documentation Steward produces a structured impact assessment. After accepted review, it updates or creates every required document using the repository registry in `agentic-maintenance.yaml`.
 
 Required document classes include:
 
 - README and user entry points;
 - agent execution policy;
-- architecture and data flows;
+- current and target architecture and data flows;
 - prompt and lifecycle-skill contracts;
 - architecture decisions;
 - configuration reference;
@@ -212,7 +267,7 @@ Required document classes include:
 - this maintenance workflow;
 - machine-readable document triggers.
 
-PR readiness requires either current required documentation or a validated `no_documentation_change` result with rationale.
+A missing, stale, contradictory, or materially misleading required document is a release blocker. It is corrected and revalidated in the same delivery. A later issue, recommended follow-up, archive candidate, or owner assignment does not satisfy readiness.
 
 ## Completion evidence
 
@@ -220,6 +275,7 @@ A completed workflow records:
 
 - canonical issue version;
 - approved plan and execution contract;
+- classified target-path provenance;
 - approved red-test specifications and coverage matrices;
 - role target and model;
 - prompt key/version/source and role-template hash;
@@ -227,9 +283,10 @@ A completed workflow records:
 - composed-template and rendered invocation hashes used for each logical call;
 - permission profile used by each invocation;
 - red and green commit evidence;
-- focused and broad deterministic verification;
-- Technical Lead verdicts;
-- documentation impact and changed documents;
+- exact-head focused and broad deterministic verification;
+- required and actual Technical Lead review independence;
+- Technical Lead verdicts bound to the exact head;
+- documentation impact, changed documents, and validation;
 - operational qualification where applicable;
 - unresolved risk and human approvals;
 - retrospective result.

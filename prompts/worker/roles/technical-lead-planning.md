@@ -21,14 +21,17 @@ Return Markdown with exactly these sections:
 ## Problem Summary
 Trace the approved issue and evidence. Separate established facts from residual risk.
 
-## Requirement Traceability
-Give every acceptance criterion a stable requirement ID and map it to affected behaviour and verification.
+## Acceptance Criteria
+Give every approved acceptance criterion a stable requirement ID and map it to affected behaviour and verification. Do not invent or weaken criteria.
 
-## Target Files and Ownership Boundaries
-List concrete repository-relative files and the owning functions, classes, repositories, handlers, schemas, prompts, scripts, services, or platform surfaces. State boundaries that must not move or be bypassed.
+## Target Files
+List concrete repository-relative files and the owning functions, classes, repositories, handlers, schemas, prompts, scripts, services, or platform surfaces. State ownership boundaries that must not move or be bypassed.
 
 ## Architectural Intent
 Describe the production path, ownership model, invariants, compatibility rules, permission boundaries, lifecycle authority, and prohibited shortcuts.
+
+## Test Plan
+Summarise the risk-based strategy, required characterization, production boundaries, test classes, deterministic non-test proofs, and sibling behaviour that must remain green. The structured specifications below are authoritative.
 
 ## Red Tests
 Provide a JSON array of complete red-test specifications using this exact shape:

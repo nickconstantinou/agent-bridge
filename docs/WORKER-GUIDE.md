@@ -1,315 +1,213 @@
 # Engineering Worker — User and Operator Guide
 
-The worker turns feature requests, defect reports, refactor opportunities, imported GitHub issues, and repository scans into validated issues, implementation plans, tested draft pull requests, and current documentation.
+## Status
 
-Agent Bridge orchestrates the work. It assigns authenticated CLIs and models to three roles while retaining authoritative state, prompt and lifecycle-skill selection, permissions, deterministic gates, and human approvals.
+This guide distinguishes the **current worker behaviour** from the **Issue #159 target workflow**. PR #160 supplies prompt, lifecycle-skill, plan-validation, documentation-policy, and schema foundations; it does not activate role assignment or role-based routing.
 
-## The three roles
+## Current worker
 
-| Role | What it does |
+The current worker turns feature briefs, imported GitHub issues, defect/refactor scans, and approved work items into plans, bounded implementation jobs, draft pull requests, and merge-gated outcomes.
+
+Current owners remain:
+
+- `src/workerBot.ts` and `src/workCallbacks.ts` for Telegram work-item and approval surfaces;
+- `src/jobExecutor.ts` and `src/jobExecutorLoop.ts` for durable job execution;
+- current handlers under `src/handlers/`;
+- `src/workerCliPolicy.ts` and `src/workerDispatch.ts` for effective worker CLI policy;
+- `src/workspace.ts` for disposable implementation workspaces;
+- current GitHub/PR lifecycle helpers and `src/prMergeGate.ts` for issue, PR, and human merge authority.
+
+PR #160 strengthens the active implementation-plan and TDD prompt path but does not switch existing jobs to Technical Lead, Code Worker, or Documentation Steward routing.
+
+## Target three-role workflow
+
+Issue #159 introduces exactly three configurable roles:
+
+| Role | Target responsibility |
 |---|---|
-| Technical Lead | Gathers or validates requirements, writes canonical issues and plans, guides bounded retries, reviews implementation and operations, and advises PR readiness using read-only evidence |
-| Code Worker | Scans and investigates repositories read-only, then performs approved TDD implementation, repair, and verification in disposable workspaces |
-| Documentation Steward | Assesses documentation impact and updates or validates approved documentation paths after implementation evidence is available |
+| Technical Lead | Requirements and issue validation, bundle review, planning, bounded guidance, implementation/operations review, and PR-readiness advice using read-only evidence |
+| Code Worker | Read-only scanning/investigation and approved red, green, repair, and verification work in disposable workspaces |
+| Documentation Steward | Documentation impact, documentation-only authoring, and validation of every required canonical document |
 
-Scanner is a Code Worker mode. Independent review and operations are Technical Lead modes, not separate configurable roles.
+Scanner is a Code Worker mode. Review and operations are Technical Lead modes, not separate roles.
 
-## The invariant
-
-Nothing merges, deploys, changes secrets or permissions, or performs a destructive operation without the existing explicit human gate.
-
-Models, prompts, and skills do not own workflow state, role selection, validators, permissions, or approval. Agent Bridge owns those boundaries.
-
-## Workflow at a glance
+The target runtime order is:
 
 ```text
-Feature request, defect/refactor report, imported issue, or scan finding
+request, imported issue, or scan candidate
 → requirements discovery or validation
 → canonical issue
 → requirements_ready
-→ Technical Lead implementation plan and comprehensive red-test contract
-→ documentation impact
+→ Technical Lead implementation plan and red-test contract
 → approval when required
-→ Code Worker implements approved red tests and the green change
+→ Code Worker red/green/repair
 → deterministic verification
-→ Technical Lead implementation and operations review
-→ Documentation Steward updates and validation
-→ PR readiness
-→ draft PR and CI
-→ human merge approval
+→ Technical Lead implementation review
+→ Technical Lead operations review when triggered
+→ Documentation Steward authoring and validation
+→ Technical Lead PR readiness
+→ exact-head CI
+→ human merge gate
 ```
 
-A detailed issue can pass validation without extra questions, but it never bypasses validation. A scan finding is only a candidate until the Technical Lead accepts, rejects, combines, splits, or requests more evidence.
+A code-changing repair after verification invalidates verification, review, operations, documentation, and readiness evidence for the previous head. The workflow returns to deterministic verification.
 
-## Change paths
+## Multi-issue requests
 
-### Features
+When one request is split into multiple child issues, Agent Bridge first assembles all proposed issue bodies without mutating GitHub. The Technical Lead then runs a bundle-wide decomposition review that records:
 
-The worker establishes the user problem, desired outcome, use cases, required and failure behaviour, constraints, non-goals, acceptance criteria, compatibility, rollout, and documentation/operational impact before planning.
+- implementation delivery order;
+- runtime phase order;
+- one canonical invariant matrix;
+- current owners and caller paths;
+- lifecycle, permission, persistence, GitHub, and platform/appliance authority;
+- overlap, missing dependencies, and unresolved product decisions.
 
-### Defects
+Agent Bridge creates or updates issues only after `ready_for_issue_mutation`. A group of individually plausible issues is not accepted when the bundle contradicts itself.
 
-The worker records observed and expected behaviour, reproduction or authoritative evidence, severity and blast radius, facts versus hypotheses, regression-test requirements, and safe-resolution criteria.
+## Requirements and issue quality
 
-### Refactors
+A detailed issue may pass without additional questions, but it never bypasses validation. A scan finding remains a candidate until the Technical Lead validates, rejects, combines, splits, or requests evidence.
 
-The worker requires concrete maintainability or architectural evidence, behavioural invariants, measurable benefit, characterization strategy, and explicit non-goals. Cleanliness or consistency alone is not enough.
+Canonical feature, defect, and refactor contracts are defined in `docs/agentic-maintenance.md`.
 
-Full issue contracts: `docs/agentic-maintenance.md`.
+## Implementation plans
 
-## Commands
+The Technical Lead owns the implementation and test strategy. Generic instructions such as `write tests`, `add unit tests`, or `increase coverage` are invalid.
 
-Existing commands remain the user entry points:
+Each plan includes:
 
-| Command | What it does |
-|---|---|
-| `/review [repo]` | Queue a read-only Code Worker defect scan. Findings remain candidates. |
-| `/feature <brief>` | Start feature requirements intake. Bare `/feature` captures the next message. |
-| `/issues` | List candidate, requirements, approved, and held work items with available actions. |
-| `/issue <id>` | Show one work item, validation status, decisions, plan, and linked GitHub state. |
-| `/jobs` | List active, pending, blocked, and resumable jobs. |
-| `/job <id>` | Show phase, owner, lease, role target, prompt/skill contract, attempts, evidence, and errors. |
-| `/approvals` | Re-list pending human decisions, merge approvals, and policy exceptions. |
-| `/models` | Show models exposed by the active interactive CLI. |
-| `/chain` | Show legacy chain compatibility plus effective role targets. |
-| `/effort` | Show or change interactive effort; role jobs use role/model policy. |
-| `/cli` | Show or change the interactive CLI. |
+- stable acceptance-criterion IDs;
+- product and architecture intent;
+- current owners and real caller paths;
+- structured target-path provenance;
+- comprehensive red-test specifications;
+- acceptance, architecture, invariant, and triggered-risk coverage;
+- bounded red/green/repair/verify packets;
+- exact verification commands;
+- documentation obligations;
+- operations, migration, rollback, and human gates;
+- a compact execution contract.
 
-Role assignment may also be managed through the hosted platform or the OSS configuration/status surface.
+Every production and test path is classified as:
 
-## Typical feature session
+- `existing_at_base`;
+- `existing_in_dependency`;
+- `proposed_new_production`;
+- `proposed_new_test`.
 
-1. Send `/feature <brief>` or import a GitHub issue.
-2. The Technical Lead reads bounded repository and documentation evidence.
-3. If the issue is clear, it is validated without unnecessary questions. If a product decision is missing, the item pauses for your answer.
-4. The worker records a canonical issue and marks it `requirements_ready`.
-5. The Technical Lead creates a repository-grounded plan, bounded Code Worker packets, execution contract, risks, verification, documentation obligations, and comprehensive red-test specifications.
-6. The plan validator rejects generic instructions such as `write tests`; each red test identifies product and architectural intent, production boundary, fixture, real caller action, expected result, current failure, focused command, authoritative oracle, false-positive controls, and sibling behaviour remaining green.
-7. After required approval, the Code Worker creates a disposable workspace and implements the exact approved red-test packet before the green change.
-8. Deterministic verification runs before model review.
-9. The Technical Lead reviews requirement satisfaction, test-contract completion, and operational impact.
-10. The Documentation Steward updates required documents under a documentation-only path policy.
-11. A draft PR opens and the existing CI/head-SHA merge gate requests approval.
+Dependency paths name the dependency PR and exact reviewed ref. Proposed production files name the neighbouring current owner and why no existing file is sufficient. Invalid or unclassified paths block new-plan persistence and approval.
 
-## Typical scan session
+Already-persisted plans created before this provenance contract retain a narrow compatibility check for concrete paths. New and repaired model output must use the structured contract.
 
-1. Send `/review <repo>` or trigger an approved refactor scan.
-2. The Code Worker scans under read-only permissions.
-3. Candidate findings include evidence, affected boundaries, confidence, and required next evidence.
-4. The Technical Lead returns one disposition: validated issue, needs more evidence, needs a human decision, duplicate/superseded, not justified, or split.
-5. Only a validated canonical issue can proceed to planning and implementation.
+## Red and green execution
 
-## Role assignment
+The Code Worker receives the approved red-test and execution contract. It does not invent or weaken the strategy.
 
-Each role binds:
+- Red mode may implement the approved failing tests only.
+- The focused test must fail for the expected missing behaviour, not syntax, imports, fixtures, timeouts, or unrelated failures.
+- Green mode implements the smallest production change and may not modify committed red tests.
+- Repair remains inside the approved packet.
+- Verify runs approved commands and returns evidence without expanding scope.
 
-- authenticated CLI;
-- explicit model;
-- ordered fallbacks;
-- permission profile;
-- call/time budget;
-- prompt, lifecycle-skill, and structured-output contracts.
-
-Assignment modes:
-
-- **Automatic:** Agent Bridge selects suitable authenticated targets.
-- **Recommended:** Agent Bridge proposes assignments for approval.
-- **Manual:** the user selects every primary and fallback CLI/model.
-
-Detailed configuration: `docs/configuration/agent-role-assignment.md`.
-
-### One authenticated CLI
-
-One CLI is sufficient. Agent Bridge selects a model separately for the Technical Lead, Code Worker, and Documentation Steward when the CLI exposes multiple models.
-
-### One available model
-
-One model can serve every role using separate sessions, prompts, lifecycle-skill sets, validators, permissions, budgets, and audit. Status reports:
-
-```text
-Role separation: preserved
-Model diversity: unavailable
-Independent-model review: unavailable
-```
-
-Work continues unless repository policy requires model-independent review for the detected risk.
+Existing TDD Git guards, workspace isolation, queue/lease ownership, provider fallback, and human merge gate remain authoritative.
 
 ## Prompt and lifecycle-skill contracts
 
-Prompts are separate by role, mode, and repair purpose. The Technical Lead planning prompt is not reused for requirements, review, operations, code execution, or documentation. Focused red-test repair and execution-contract repair use distinct keys.
+Canonical prompts are separate by role, mode, and repair purpose. Agent Bridge selects the prompt and separately enforces role, tools, permissions, schemas, validators, budgets, lifecycle state, GitHub mutation, and human gates.
 
-Agent Bridge selects the prompt contract and separately enforces:
-
-- role and mode;
-- typed input/output schemas;
-- validator;
-- evidence/tool grants;
-- permission profile;
-- logical-call and repair budgets;
-- lifecycle ownership.
-
-Canonical role prompts are registered in `src/agenticPromptContracts.ts` and stored under `prompts/worker/roles/`.
-
-Reusable software-development lifecycle know-how is not copied into every prompt. It remains authoritative in four repository skills:
+Reusable engineering know-how remains authoritative in four repository skills:
 
 - `requirements-to-acceptance`;
 - `risk-based-test-strategy`;
 - `red-green-refactor-tdd`;
 - `release-readiness-review`.
 
-Each role/mode and compatibility prompt explicitly declares the skills it consumes. `src/lifecycleSkillGuidance.ts` validates each matching `skill.json`, extracts exactly one bounded runtime-guidance block from `SKILL.md`, and composes only the declared skills in deterministic order.
+Each consuming prompt declares its ordered skill set. `src/lifecycleSkillGuidance.ts` validates each manifest and the single marked runtime-guidance block, enforces budgets, and records skill identities. Provider fallback preserves the same prompt and skill contract.
 
-The split is deliberate:
+Prompts and skills resolve only from reviewed source files. Schema migration 2 retires the absent or empty legacy prompt table and rejects unexpected rows without data loss. Prompt rollback is application rollback to a reviewed SHA.
 
-- prompts own Agent Bridge-specific role, stage, evidence, output, and escalation instructions;
-- skills own reusable requirements, testing, TDD, and readiness know-how;
-- code owns permissions, tools, validators, state, budgets, approvals, merge, and deployment.
+## Exact-head evidence
 
-A skill change reaches all consuming prompts through one reviewed source. Missing markers, duplicate blocks, empty or oversized guidance, version mismatch, or duplicate skill injection fails closed.
+Verification, implementation review, operations review, documentation validation, PR readiness, and CI evidence identify one `subject_head_sha`.
 
-Each canonical invocation records:
+Required gate status is one of:
 
-- prompt key and version;
-- role-template hash;
-- ordered skill key/version/content hashes;
-- lifecycle skill-set hash;
-- composed-template hash;
-- rendered invocation hash.
+- `passed`;
+- `failed`;
+- `not_run`;
+- `not_scheduled`;
+- `stale`;
+- `unknown`.
 
-Fallback models receive the same prompt and skill identities; only the CLI/model target changes.
+Only authoritative `passed` evidence for the exact current head satisfies a required gate. A workflow must not describe `not_scheduled`, `not_run`, or stale evidence as green.
 
-### Source-only prompt storage
-
-The former SQLite prompt table was a mutable override channel, not a backup. PR #160 removes its read/write APIs and all handler reads. Canonical and compatibility prompts now resolve only from reviewed repository files.
-
-Schema migration 2 treats an absent table as retired, drops an empty table transactionally, and aborts without data loss if an unexpected row exists. On rejection, schema version 1 and the table contents remain intact for guarded investigation. Prompt rollback is application rollback to a reviewed SHA.
-
-No role prompt, compatibility handler, operator workflow, or platform setting may reintroduce mutable prompt text.
-
-Canonical prompt design: `docs/architecture/agentic-prompt-contracts.md`.
-
-## Permission behaviour
-
-### Technical Lead
-
-Read-only typed evidence tools. No file mutation, unrestricted shell, GitHub mutation, service control, merge, deploy, rollback, or approval.
-
-### Code Worker
-
-- scan/investigate: read-only;
-- red: test-only mutation implementing the approved red-test specification and expected failing assertion;
-- green: production mutation without changing committed red tests;
-- repair: bounded to the approved packet;
-- verify: approved commands and evidence without new changes.
-
-### Documentation Steward
-
-- impact/validate: read-only;
-- author/maintenance: paths allowed by `agentic-maintenance.yaml` only.
-
-Production or test-code changes requested by the Documentation Steward return to the Code Worker.
-
-## Configuration and status
-
-Role configuration is authoritative once persisted. Legacy `WORKER_CODE_CLI_CHAIN` and `WORKER_SCRIBE_CLI_CHAIN` remain migration/compatibility inputs only.
-
-The effective status shows:
-
-- requested and effective CLI/model per role;
-- fallbacks and configuration source;
-- authentication and model probe state;
-- prompt key/version/source and role-template hash;
-- lifecycle skill keys/versions/hashes and composed-template hash;
-- permission profile;
-- logical-call and timeout budgets;
-- model-diversity and review-independence state;
-- legacy compatibility state;
-- active workflow phase and owner.
-
-Status and probes are read-only. Reconciliation is a separate explicit action.
-
-## Failure and recovery
-
-- Structured issue, plan, red-test, review, and documentation output is validated before persistence.
-- A plan that says only `write tests` or omits product/architectural intent fails validation.
-- An otherwise valid plan with only an inadequate red-test contract may receive one focused red-test repair; execution-contract repair remains separate.
-- Required malformed output receives only the configured bounded repair and otherwise fails closed.
-- Missing or invalid lifecycle skill guidance fails before the model call rather than silently weakening the workflow.
-- Failed executor work remains bounded; no open-ended model loop is allowed.
-- Cancellation prevents new role calls and fences late output.
-- Lost leases and stale workers cannot persist or dispatch duplicate calls.
-- Restart resumes from authoritative durable phase state and preserves budgets, prompt identity, and lifecycle-skill identity.
-- Completed phases are not repeated.
-- Missing role capability produces an explicit blocked/degraded state.
-- Existing workspace cleanup, supervisor, head-SHA, CI, and merge protections remain active.
-
-Operations and rollback: `docs/operations/agentic-worker-runbook.md`.
+Required review independence and actual review independence are recorded separately. A fresh session using the same model is not independent merely because the context is new.
 
 ## Documentation readiness
 
-`agentic-maintenance.yaml` lists canonical documents and deterministic change triggers. A PR cannot become ready until required documents are current or a validated `no_documentation_change` result records rationale and trigger evaluation.
+`agentic-maintenance.yaml` lists canonical documents and deterministic change triggers.
+
+A PR cannot become ready until:
+
+- every triggered required document is current and validated against the exact final head; or
+- `no_documentation_change` is validated with rationale, trigger evidence, and Technical Lead confirmation.
+
+A missing, stale, contradictory, or materially misleading required document is a blocking defect. It must be corrected and revalidated in the same delivery. Creating a later issue, assigning an owner, or listing a follow-up does not satisfy readiness.
+
+When a required correction materially changes approved scope or authority, the workflow holds for human scope approval. It does not defer the stale state and claim readiness.
+
+## Human authority
+
+Nothing merges, deploys, restarts services, changes secrets or permissions, performs destructive operations, or waives policy without the existing explicit human gate.
+
+Models cannot grant themselves tools, mutate GitHub, change role, broaden scope, approve their own work, merge, deploy, or reinterpret missing evidence.
+
+## Current commands
+
+Use the existing worker commands and callbacks for current functionality. Commands or status fields described in target-state architecture are not available until their owning Issue #159 slice is implemented and qualified.
+
+Common current surfaces include:
+
+- `/review [repo]` for a read-only defect scan;
+- `/feature <brief>` for feature planning intake;
+- `/issues` and `/issue <id>` for work items;
+- `/jobs` and `/job <id>` for job state;
+- `/approvals` for pending decisions and merge controls;
+- existing interactive `/cli`, `/models`, `/effort`, and chain/status surfaces where configured.
+
+Consult the live command help and current code for the exact deployed surface. Target role assignment, desired/effective role status, and role-native lifecycle phases remain planned work until delivered by Slices 1–10.
 
 ## Troubleshooting
 
-### Work never reaches planning
+### A proposed issue bundle is blocked
 
-Inspect `/issue <id>` for missing facts, unresolved decisions, validation errors, or the `requirements_ready` state. A product decision requires human input; repository facts should be gathered by the Technical Lead.
+Inspect the decomposition-review invariant matrix. Resolve runtime-order versus implementation-order conflicts, duplicate ownership, missing lifecycle edges, unclassified paths, or unresolved product decisions before issue mutation.
 
-### Plan rejected for red-test quality
+### A plan is rejected
 
-Inspect typed validation errors. Every acceptance criterion and affected architectural/risk boundary must be covered. Focused red-test repair is allowed only when the rest of the plan is valid.
+Inspect typed validation errors. New plans require structured target provenance, comprehensive red tests, real caller coverage, authoritative oracles, and complete risk matrices.
 
-### Lifecycle skill fails to load
+### Lifecycle skill loading fails
 
-Check that the declared skill exists, its `skill.json` name/version matches the registry, and its `SKILL.md` contains exactly one non-empty `AGENT_BRIDGE_RUNTIME_GUIDANCE` block within budget. Do not bypass the check or paste emergency lifecycle text into the prompt.
+Confirm the declared skill exists, its `skill.json` name/version matches the registry, and `SKILL.md` contains exactly one non-empty runtime-guidance block within budget. Do not paste emergency lifecycle text into prompts.
 
-### Prompt-table migration reports an unexpected row
+### Prompt migration finds an unexpected row
 
-Do not restart services or bypass the migration. Schema migration 2 fails closed and preserves schema version 1 plus the table contents. Treat this as configuration drift: inspect it through the guarded database process without logging prompt text, resolve the discrepancy explicitly, then rerun the migration. Runtime code has no prompt-table reader or writer.
-
-### Scan produced no implementation job
-
-This is expected until the Technical Lead validates the finding.
-
-### Role unavailable
-
-Check effective role status, CLI authentication, model probe freshness, capability compatibility, fallbacks, and repository policy.
-
-### Review is marked non-independent
-
-Only one suitable target was available. Role separation remains active, but the same target reviewed in an isolated session. Add another suitable target when policy requires independence.
+Do not restart or bypass the migration. Migration 2 preserves schema version 1 and the table contents for guarded investigation. Runtime code has no prompt-table reader or writer.
 
 ### Documentation blocks readiness
 
-Inspect documentation impact and manifest trigger evaluation. Configure a fallback or update required documents through the documentation-only lane.
+Correct every required stale, contradictory, missing, or misleading document through the documentation-only lane. Do not create a follow-up issue as a substitute for correction.
 
-### Job stuck or restarted
+### Review is non-independent
 
-Use `/job <id>` to inspect authoritative owner, lease, role attempt, prompt/skill contract, and phase. Do not manually force status.
-
-### Lost approval controls
-
-Use `/approvals`; the approval remains pending while blocking evidence is unresolved.
-
-## What the worker will not do
-
-- assume a brief, imported issue, or scan finding is complete;
-- plan before validated requirements;
-- accept vague test instructions instead of a comprehensive red-test contract;
-- let a scan agent approve its own finding;
-- let prompts, skills, or models expand permissions or scope;
-- duplicate canonical lifecycle know-how across prompts;
-- load prompts or skills from mutable database text;
-- mutate live checkouts for implementation;
-- weaken red/green separation;
-- claim readiness over failed deterministic evidence;
-- present same-model review as independent;
-- bypass documentation obligations;
-- merge, deploy, or perform destructive operations without the required human gate.
+Role separation may remain intact, but repository risk policy can require a different CLI/model or different model. If the required level is unavailable, the workflow holds for human decision.
 
 ## Canonical references
 
-- Architecture: `docs/architecture/engineering-worker.md`
+- Current architecture: `docs/architecture/01-current-architecture.md`
+- Engineering Worker architecture: `docs/architecture/engineering-worker.md`
 - Role orchestration: `docs/architecture/agentic-worker-orchestration.md`
 - Prompt contracts: `docs/architecture/agentic-prompt-contracts.md`
 - Maintenance workflow: `docs/agentic-maintenance.md`

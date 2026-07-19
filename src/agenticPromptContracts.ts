@@ -252,7 +252,9 @@ export async function loadAgenticPrompt(
   reader: WorkerPromptReader,
 ): Promise<EffectiveAgenticPrompt> {
   const promptContract = getAgenticPromptContract(key);
-  const missingVariables = promptContract.requiredVariables.filter(name => !(name in variables));
+  const missingVariables = promptContract.requiredVariables.filter(
+    name => !(name in variables) || variables[name] === undefined || variables[name] === null,
+  );
   if (missingVariables.length > 0) {
     throw new Error(`Missing required variables for ${key}: ${missingVariables.join(", ")}`);
   }

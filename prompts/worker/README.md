@@ -11,7 +11,7 @@ This directory contains the version-controlled prompts used by the Agent Bridge 
 
 ## Authority boundary
 
-Prompts and skills guide model behaviour but never grant authority. Agent Bridge code owns role and mode selection, evidence, tools, permissions, budgets, validators, lifecycle state, persistence, approvals, merge, deployment, and destructive-operation gates.
+Prompts and skills guide model behaviour but never grant authority. Agent Bridge code owns role and mode selection, evidence, tools, permissions, budgets, validators, lifecycle state, persistence, GitHub mutation, approvals, merge, deployment, and destructive-operation gates.
 
 ## Resolution
 
@@ -47,9 +47,17 @@ Schema migration 2 removes the legacy `prompts` table. Migration succeeds only w
 
 `BridgeDb.getPrompt()`, `BridgeDb.setPrompt()`, loader database-template options, and handler override reads have been removed. Prompt rollback is performed by deploying a reviewed application SHA, not by mutable SQLite content.
 
-## Planning and TDD
+## Planning, decomposition, and TDD
 
-Technical Lead planning owns comprehensive red-test design. Plans map acceptance criteria, architecture boundaries, invariants, and triggered risks to concrete tests or deterministic proof. Code Worker red/green phases receive the approved execution contract rather than inventing or weakening test intent.
+Technical Lead planning owns comprehensive red-test design and classified target-path provenance. Plans map acceptance criteria, architecture boundaries, invariants, and triggered risks to concrete tests or deterministic proof. Invalid or unclassified target paths block plan approval. Code Worker red/green phases receive the approved execution contract rather than inventing or weakening test intent.
+
+When one request creates multiple issues, `technical_lead:decomposition_review` audits the complete proposed bundle before Agent Bridge mutates GitHub. It distinguishes implementation delivery order from runtime phase order and checks one canonical invariant matrix across all child issues.
+
+## Review and documentation order
+
+The canonical order is deterministic verification, Technical Lead implementation review, applicable operations review, Documentation Steward authoring/validation, Technical Lead PR readiness, exact-head CI, then the human merge gate.
+
+All later evidence is bound to one exact `subject_head_sha`. A code-changing repair invalidates verification, review, operations, documentation, and readiness evidence for the prior head. Missing, stale, contradictory, or misleading required documentation blocks readiness and must be corrected in the same delivery rather than deferred.
 
 ## Maintenance
 

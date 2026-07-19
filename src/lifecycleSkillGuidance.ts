@@ -2,7 +2,7 @@
  * PURPOSE: Extract and compose canonical SDLC guidance from repository skills.
  * INPUTS: Explicit lifecycle-skill keys and a source-controlled text reader.
  * OUTPUTS: Deterministic guidance blocks with version and content-hash identity.
- * NEIGHBORS: src/agenticPromptContracts.ts, src/workerPrompts.ts, skills/*/SKILL.md
+ * NEIGHBORS: src/agenticPromptContracts.ts, src/workerPrompts.ts, skills/<name>/SKILL.md
  */
 
 import { createHash } from "node:crypto";

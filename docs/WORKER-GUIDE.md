@@ -150,17 +150,42 @@ Agent Bridge selects the prompt contract and separately enforces:
 
 Canonical role prompts are registered in `src/agenticPromptContracts.ts` and stored as reviewed Markdown files under `prompts/worker/roles/`. Each contract has a version and effective content hash. Fallback models receive the same prompt contract; only the CLI/model target changes.
 
-Canonical role prompts do **not** support database overrides. The SQLite `prompts` table is not a backup: the source-controlled file is already the fallback. The table is a legacy mutable override channel and is being retired.
+Canonical role prompts do **not** support database overrides.
 
-Retirement is staged because existing rows have not yet been inventoried and dropping the table is a guarded database migration:
+### Why the SQLite prompt table is not a backup
+
+The source-controlled Markdown file is already the built-in fallback when no database row exists. A database row replaces that reviewed file at runtime, so it is an **override**, not a backup.
+
+That distinction matters because an override can change requirements, planning, tests, code-execution instructions, review, or operations without:
+
+- a reviewed Git diff;
+- contract versioning;
+- deterministic tests;
+- exact-head CI;
+- reproducible rollout across workspaces;
+- a known application-SHA rollback.
+
+The target architecture therefore removes database override capability for canonical role prompts.
+
+### Why the table is not dropped in this PR
+
+The existing table remains temporarily because:
+
+- current production rows have not been inventoried;
+- some legacy handlers still read those rows;
+- deleting a row or table could silently change existing workspace behaviour;
+- schema changes and production database mutations use the separately guarded migration process.
+
+Retirement is staged:
 
 1. inventory legacy rows by workspace and key without logging contents;
-2. move approved custom behaviour into source-controlled files and tests;
-3. disable reads handler by handler during role migration;
-4. remove legacy write/read methods after callers are gone;
-5. drop the table through a separately approved backup/rollback-qualified migration.
+2. give every non-empty row an explicit migrate, intentionally discard, or hold-for-human decision;
+3. move approved custom behaviour into reviewed prompt files and tests;
+4. disable reads handler by handler during role migration;
+5. remove legacy write/read methods after callers are gone;
+6. drop the table through a separately approved backup/rollback-qualified migration.
 
-No new role prompt or platform setting may create a database override. Existing legacy prompt keys remain compatibility aliases only while their handlers are migrated.
+No new role prompt, operator workflow, or platform setting may create a database override. Existing legacy prompt keys remain compatibility aliases only while their handlers are migrated.
 
 Canonical prompt design: `docs/architecture/agentic-prompt-contracts.md`.
 
@@ -235,7 +260,7 @@ Inspect typed validation errors. Every acceptance criterion and affected archite
 
 ### A legacy database prompt row exists
 
-Treat it as deprecated configuration, not a backup. Inventory its key and content hash, identify whether it contains required custom behaviour, and migrate that behaviour through a reviewed prompt-file change. Do not add another row or expose prompt contents in logs.
+Treat it as deprecated configuration, not a backup. Inventory its key and content hash, identify whether it contains required custom behaviour, and record migrate, discard, or hold. Do not add another row or expose prompt contents in logs.
 
 ### Scan produced no implementation job
 

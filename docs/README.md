@@ -9,10 +9,10 @@ Validated against: `agent/role-based-worker-orchestration-docs` for the Issue #1
 When documents disagree, use this order:
 
 1. `docs/adr/` — accepted architectural decisions.
-2. `docs/architecture/` — current intended architecture.
+2. `docs/architecture/` — current intended architecture, including prompt contracts.
 3. `docs/roadmap/` — approved implementation work.
 4. Operational guides — current operator procedures and runtime-specific guides.
-5. Implementation records and detailed handoffs — completed context or execution guidance subordinate to the accepted ADR, architecture, and active roadmap.
+5. Implementation records and detailed handoffs — execution guidance subordinate to the accepted ADR, architecture, and active roadmap.
 6. `docs/research/` and root `*-research.md` files — research only unless promoted into a roadmap.
 7. `docs/archive/` — historical context only.
 
@@ -24,7 +24,7 @@ Use these labels when creating or updating docs:
 
 | Status | Meaning |
 |---|---|
-| `authoritative` | Current source of truth for architecture, decisions, or operations. |
+| `authoritative` | Current source of truth for architecture, decisions, configuration, testing, or operations. |
 | `active-roadmap` | Approved implementation work. |
 | `implemented-record` | Records completed work and verification; useful context, not a standing roadmap. |
 | `partially-implemented` | Some claims match code; remaining content is planned, deferred, or stale. |
@@ -52,14 +52,16 @@ last_validated_against: <commit-sha-or-branch>
 1. `docs/adr/ADR-005-role-based-agentic-orchestration.md` — accepted decision.
 2. `docs/architecture/engineering-worker.md` — worker boundary and invariants.
 3. `docs/architecture/agentic-worker-orchestration.md` — role, workflow, permission, and lifecycle architecture.
-4. `docs/agentic-maintenance.md` — feature, defect, and refactor requirements contracts.
-5. `docs/roadmap/issue-159-role-based-orchestration.md` — active implementation roadmap.
-6. `docs/implementation-plans/issue-159-role-based-orchestration.md` — detailed coding-agent handoff.
-7. `docs/configuration/agent-role-assignment.md` — CLI/model allocation and degraded operation.
-8. `docs/operations/agentic-worker-runbook.md` — enablement, recovery, and rollback.
-9. `docs/testing/agentic-worker-verification.md` — verification contract.
-10. `agentic-maintenance.yaml` — machine-readable document registry and triggers.
-11. `docs/WORKER-GUIDE.md` — user and operator guide.
+4. `docs/architecture/agentic-prompt-contracts.md` — separate role/mode prompts, validators, overrides, focused repair, and advisor red-test contract.
+5. `docs/agentic-maintenance.md` — feature, defect, and refactor requirements/planning contracts.
+6. `docs/roadmap/issue-159-role-based-orchestration.md` — active implementation roadmap.
+7. `docs/implementation-plans/issue-159-role-based-orchestration.md` — epic coding-agent handoff and delivery slices.
+8. `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md` — normative prompt and comprehensive red-test addendum.
+9. `docs/configuration/agent-role-assignment.md` — CLI/model allocation and degraded operation.
+10. `docs/operations/agentic-worker-runbook.md` — enablement, recovery, and rollback.
+11. `docs/testing/agentic-worker-verification.md` — verification contract.
+12. `agentic-maintenance.yaml` — machine-readable document registry and triggers.
+13. `docs/WORKER-GUIDE.md` — user and operator guide.
 
 ## Current map
 
@@ -74,8 +76,9 @@ last_validated_against: <commit-sha-or-branch>
 | `docs/architecture/companion-runtime.md` | authoritative | canonical | Companion Runtime boundary. |
 | `docs/architecture/engineering-worker.md` | authoritative | canonical | Engineering Worker boundary and role orchestration invariants. |
 | `docs/architecture/agentic-worker-orchestration.md` | authoritative | canonical | Requirements, role assignment, permissions, workflow, review, operations, and documentation architecture. |
+| `docs/architecture/agentic-prompt-contracts.md` | authoritative | canonical | Role/mode prompt registry, versioning, overrides, validators, red-test planning, and focused repair. |
 | `docs/architecture/shared-runtime.md` | authoritative | canonical | Shared Runtime boundary, including the memory/handoff seam note for issue #69. |
-| `docs/architecture/memory-and-handoff.md` | authoritative | canonical | Compact-first memory, persistent memory promotion, and CLI handoff architecture for issue #69. Partially implemented — see status note in the doc. |
+| `docs/architecture/memory-and-handoff.md` | authoritative | canonical | Compact-first memory, persistent memory promotion, and CLI handoff architecture for issue #69. |
 | `docs/architecture/capability-registry.md` | active architecture | canonical for intended design | Scope controlled by Epic 11 roadmap. |
 | `docs/architecture/platform-boundary.md` | authoritative | canonical | OSS/platform ownership boundary. |
 | `docs/architecture/01-current-architecture.md` | implemented-record | advisory | Snapshot audit; useful evidence, not higher than newer ADRs. |
@@ -88,17 +91,18 @@ last_validated_against: <commit-sha-or-branch>
 | `docs/architecture/08-testing-strategy.md` | authoritative testing summary | canonical | Acceptance-first and role-boundary testing strategy. |
 | `docs/architecture/09-risk-register.md` | risk register | advisory | Revalidate risks during implementation and rollout. |
 | `docs/architecture/10-production-readiness.md` | authoritative readiness | canonical | Role orchestration production qualification gate. |
-| `docs/roadmap/epic-11-runtime-hardening.md` | active-roadmap | canonical | Only approved Epic 11 implementation plan. |
+| `docs/roadmap/epic-11-runtime-hardening.md` | active-roadmap | canonical | Earlier approved runtime-hardening roadmap. |
 | `docs/roadmap/issue-69-compact-memory-handoff.md` | active-roadmap | canonical | TDD implementation plan for compact-first memory and one-time CLI handoff context. |
 | `docs/roadmap/issue-69-coding-agent-prompt.md` | active-roadmap | advisory | Ready-to-use implementation prompt; subordinate to architecture and roadmap docs. |
 | `docs/roadmap/issue-159-role-based-orchestration.md` | active-roadmap | canonical | Approved implementation work for Issue #159. |
-| `docs/implementation-plans/issue-159-role-based-orchestration.md` | detailed implementation handoff | advisory | TDD slices, likely boundaries, migration, rollout, verification, and execution contract. |
-| `docs/agentic-maintenance.md` | authoritative workflow | canonical | Feature, defect, and refactor requirements and completion contracts. |
+| `docs/implementation-plans/issue-159-role-based-orchestration.md` | detailed implementation handoff | advisory under roadmap | Minimal-change delivery slices, red-test catalogue, migration, rollout, verification, and execution contract. |
+| `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md` | normative implementation addendum | advisory under roadmap | Prompt separation and comprehensive advisor-authored red-test requirements. |
+| `docs/agentic-maintenance.md` | authoritative workflow | canonical | Feature, defect, refactor, planning, prompt, and completion contracts. |
 | `docs/configuration/agent-role-assignment.md` | authoritative configuration | canonical | Role CLI/model allocation, fallbacks, and degraded operation. |
 | `docs/operations/agentic-worker-runbook.md` | authoritative operations | canonical | Role enablement, status, cancellation, recovery, and rollback. |
-| `docs/testing/agentic-worker-verification.md` | authoritative testing | canonical | Detailed role orchestration verification contract. |
-| `agentic-maintenance.yaml` | machine-readable policy | canonical | Canonical documents, triggers, authoring paths, readiness, and role modes. |
-| `docs/WORKER-GUIDE.md` | authoritative operations | canonical for worker use | Current role-based worker operator guide. |
+| `docs/testing/agentic-worker-verification.md` | authoritative testing | canonical | Detailed role, prompt, planning, lifecycle, and rollout verification contract. |
+| `agentic-maintenance.yaml` | machine-readable policy | canonical | Canonical documents, triggers, authoring paths, readiness, prompt changes, and role modes. |
+| `docs/WORKER-GUIDE.md` | authoritative operations | canonical for worker use | Current role-based worker operator guide, including prompt contracts and plan red-test quality. |
 | `docs/SAFE-RESTART.md` | authoritative operations | canonical for safe restart helper | Referenced by `AGENTS.md` restart policy. |
 | `docs/PRD.md` | partially-implemented product reference | advisory | Broad product/architecture reference; defer to ADRs and architecture docs on conflicts. |
 | `docs/soul.md` | runtime-design | advisory/canonical for SOUL.md behavior | Documents root `SOUL.md` runtime injection; the doc itself is not the default loaded file. |
@@ -123,7 +127,7 @@ last_validated_against: <commit-sha-or-branch>
 
 - `docs/soul.md` is a design document. Runtime loading is handled by `src/soul.ts`, which defaults to `<project>/SOUL.md` or `AGENT_BRIDGE_SOUL_PATH`.
 - `docs/architecture/memory-and-handoff.md` is the current intended memory and provider-handoff architecture. Implementation work is tracked in `docs/roadmap/issue-69-compact-memory-handoff.md`.
-- Worker role documents are not loaded implicitly unless implementation reads `agentic-maintenance.yaml` or a bounded context selector includes them.
+- Worker role and prompt documents are not loaded implicitly unless implementation reads `agentic-maintenance.yaml` or a bounded context selector includes them.
 - `docs/prompt-optimization-loop-research.md` is referenced by `AGENTS.md` for optimizer methodology. It is not loaded by runtime services.
 - `docs/WORKER-GUIDE.md` and `docs/SAFE-RESTART.md` are authoritative operator docs. They are not loaded by services.
 - Superseded pointer files should stay until inbound references are cleaned up, then they can move fully into `docs/archive/`.

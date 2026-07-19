@@ -1,11 +1,16 @@
 /**
- * PURPOSE: Validate implementation plans before work item approval.
+ * PURPOSE: Validate implementation plans before generation persistence or later work-item approval.
  * NEIGHBORS: src/handlers/implementationPlan.ts, src/workCallbacks.ts, src/approvalHtml.ts
  */
 
 export interface PlanValidationResult {
   valid: boolean;
   missing: string[];
+}
+
+export interface PlanValidationOptions {
+  /** Pre-provenance stored plans may retain concrete bullet paths; newly generated plans must set false. */
+  allowLegacyTargetFiles?: boolean;
 }
 
 const REQUIRED_SECTIONS = [
@@ -88,7 +93,7 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-function hasValidTargetFileClassification(sectionText: string): boolean {
+function hasStructuredTargetFileClassification(sectionText: string): boolean {
   const parsed = extractJsonValue(sectionText);
   if (!Array.isArray(parsed) || parsed.length === 0) return false;
 
@@ -109,7 +114,16 @@ function hasValidTargetFileClassification(sectionText: string): boolean {
   });
 }
 
-export function validateImplementationPlan(planText: string | null | undefined): PlanValidationResult {
+function hasLegacyConcreteTargetFiles(sectionText: string): boolean {
+  if (/invalid_or_unclassified/i.test(sectionText)) return false;
+  const paths = sectionText.match(/\b(?:src|test|scripts|docs)\/[^\s`),]+/gi) ?? [];
+  return paths.length > 0;
+}
+
+export function validateImplementationPlan(
+  planText: string | null | undefined,
+  options: PlanValidationOptions = { allowLegacyTargetFiles: true },
+): PlanValidationResult {
   const text = planText?.trim() ?? "";
   const missing: string[] = [];
   for (const section of REQUIRED_SECTIONS) {
@@ -118,9 +132,9 @@ export function validateImplementationPlan(planText: string | null | undefined):
   }
 
   const targetFiles = extractSection(text, "Target Files");
-  if (!hasValidTargetFileClassification(targetFiles)) {
-    missing.push("Target-file classification");
-  }
+  const targetFilesValid = hasStructuredTargetFileClassification(targetFiles)
+    || (options.allowLegacyTargetFiles === true && hasLegacyConcreteTargetFiles(targetFiles));
+  if (!targetFilesValid) missing.push("Target-file classification");
 
   const redTests = extractSection(text, "Red Tests");
   if (!containsAllFields(redTests, RED_TEST_FIELDS)) {
@@ -135,4 +149,11 @@ export function validateImplementationPlan(planText: string | null | undefined):
   if (!/\b(?:src|test|scripts|docs)\/[^\s`),]+/i.test(text)) missing.push("Concrete file paths");
   if (!/\b(?:npm|pnpm|yarn|vitest|pytest|tsc|cargo|go test)\b/i.test(text)) missing.push("Verification command");
   return { valid: missing.length === 0, missing };
+}
+
+/** New or repaired model output must always carry reproducible target-path provenance. */
+export function validateGeneratedImplementationPlan(
+  planText: string | null | undefined,
+): PlanValidationResult {
+  return validateImplementationPlan(planText, { allowLegacyTargetFiles: false });
 }

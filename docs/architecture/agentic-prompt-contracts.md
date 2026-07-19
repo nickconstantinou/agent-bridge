@@ -190,7 +190,7 @@ The table must not be removed until all of these postconditions are proven:
 - no production caller reads or writes prompt rows;
 - source-controlled replacements and compatibility tests are merged and deployed;
 - backup, rollback, and representative existing-database migration tests pass;
-- the guarded migration owner performs the table removal under separate approval.
+- the guarded migration owner performs the table removal under separate explicit approval.
 
 ## Compatibility
 

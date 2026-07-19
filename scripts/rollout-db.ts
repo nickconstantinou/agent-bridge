@@ -7,7 +7,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import { openDb } from "../src/db.js";
@@ -92,63 +92,66 @@ function parseArgs(argv: string[]): Options {
   return { mode, databases, evidencePath, resolvingUnits };
 }
 
-interface BootstrapTarget {
+interface BootstrapOptions {
   path: string;
   role: string;
-}
-
-interface BootstrapOptions {
-  targets: BootstrapTarget[];
   evidencePath: string | null;
 }
 
 /**
- * Bootstrap's own arg parser (Phase 4C.3, issue #135). Each target is a
- * strict `--db PATH --role NAME --confirm-new-role PATH` triplet, in that
- * exact order: an explicit expected role (one of the five canonical roles,
+ * Bootstrap's own arg parser (Phase 4C.3, issue #135): exactly one
+ * `--db PATH --role NAME --confirm-new-role PATH` triplet per invocation —
+ * deliberately not a loop over multiple targets. Sequential multi-target
+ * bootstrap can partially commit: an earlier target publishes successfully,
+ * a later one fails, and the invocation exits nonzero having already
+ * mutated disk state with no way to tell which targets succeeded from the
+ * exit code alone. One target per invocation makes success/failure an
+ * atomic, unambiguous outcome for the whole process; bootstrapping several
+ * new roles means separately-invoked, separately-confirmed runs, each with
+ * its own evidence.
+ *
+ * The role is an explicit expected role (one of the five canonical roles,
  * structurally validated here — the role/path *pair* allowlist itself lives
- * in the root-owned bootstrap config, outside this script) and an exact-
- * match confirmation that the missing file is expected, not a symptom of
- * misconfiguration or accidental deletion, mirroring --expected-commit's
- * exact-match discipline elsewhere in this tooling.
+ * in the root-owned bootstrap config, outside this script) and
+ * --confirm-new-role is an exact-match confirmation that the missing file
+ * is expected, not a symptom of misconfiguration or accidental deletion,
+ * mirroring --expected-commit's exact-match discipline elsewhere in this
+ * tooling.
  */
 function parseBootstrapArgs(argv: string[]): BootstrapOptions {
-  const targets: BootstrapTarget[] = [];
+  let path: string | null = null;
+  let role: string | null = null;
+  let confirm: string | null = null;
   let evidencePath: string | null = null;
-  let pendingPath: string | null = null;
-  let pendingRole: string | null = null;
   while (argv.length > 0) {
     const flag = argv.shift();
     const value = argv.shift();
     if (!value) throw new Error(`missing value for ${flag}`);
     if (flag === "--db") {
-      if (pendingPath) throw new Error(`--db ${pendingPath} is missing its --role/--confirm-new-role`);
-      pendingPath = value;
+      if (path) throw new Error("bootstrap accepts exactly one --db per invocation — invoke separately for each new role");
+      path = value;
     } else if (flag === "--role") {
-      if (!pendingPath) throw new Error("--role must immediately follow its --db");
-      if (pendingRole) throw new Error(`--db ${pendingPath} already has a --role`);
+      if (role) throw new Error("bootstrap accepts exactly one --role per invocation");
       if (!VALID_ROLES.has(value)) {
         throw new Error(`--role must be one of ${[...VALID_ROLES].join(", ")}, got: ${value}`);
       }
-      pendingRole = value;
+      role = value;
     } else if (flag === "--confirm-new-role") {
-      if (!pendingPath) throw new Error("--confirm-new-role must immediately follow its --db and --role");
-      if (!pendingRole) throw new Error(`--db ${pendingPath} is missing its --role before --confirm-new-role`);
-      if (value !== pendingPath) {
-        throw new Error(`--confirm-new-role must exactly match the immediately preceding --db path (expected "${pendingPath}", got "${value}")`);
-      }
-      targets.push({ path: pendingPath, role: pendingRole });
-      pendingPath = null;
-      pendingRole = null;
+      if (confirm) throw new Error("bootstrap accepts exactly one --confirm-new-role per invocation");
+      confirm = value;
     } else if (flag === "--evidence") {
       evidencePath = value;
     } else {
       throw new Error(`unknown argument: ${flag}`);
     }
   }
-  if (pendingPath) throw new Error(`--db ${pendingPath} is missing its --role/--confirm-new-role`);
-  if (targets.length === 0) throw new Error("at least one --db path is required");
-  return { targets, evidencePath };
+  if (!path) throw new Error("--db is required");
+  if (!role) throw new Error("--role is required");
+  if (!confirm) throw new Error("--confirm-new-role is required");
+  if (confirm !== path) {
+    throw new Error(`--confirm-new-role must exactly match --db (expected "${path}", got "${confirm}")`);
+  }
+  return { path, role, evidencePath };
 }
 
 function hashFile(path: string): string {
@@ -266,6 +269,59 @@ function removeSidecars(base: string): void {
 }
 
 /**
+ * Test-only fault-injection hooks, gated so they can never fire against a
+ * real production invocation just because a stray environment variable
+ * happens to be set: honored only when AGENT_BRIDGE_BOOTSTRAP_TEST_MODE=1
+ * is *also* explicitly set, and refused outright when running as root
+ * (mirroring the shell rollout tooling's own "test root is forbidden
+ * during root execution" rule) — bootstrap itself never runs as root in
+ * production (the shell wrapper always drops to the runtime user first),
+ * so this is defense in depth against a misconfigured or malicious
+ * root-context invocation, not a path this script expects to take.
+ */
+const BOOTSTRAP_TEST_MODE = process.env.AGENT_BRIDGE_BOOTSTRAP_TEST_MODE === "1";
+if (BOOTSTRAP_TEST_MODE && typeof process.getuid === "function" && process.getuid() === 0) {
+  throw new Error("AGENT_BRIDGE_BOOTSTRAP_TEST_MODE is forbidden when running as root");
+}
+function testHook(name: string): string | undefined {
+  return BOOTSTRAP_TEST_MODE ? process.env[name] : undefined;
+}
+
+/**
+ * Escapes a string for literal use inside a RegExp.
+ */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Best-effort recovery for debris left by a *previous* bootstrap attempt on
+ * this exact target that was interrupted in a way this process could never
+ * catch — SIGKILL or a machine reboot between the atomic link() publish and
+ * the temp name's unlink(), or any earlier failure whose own cleanup never
+ * ran. Only ever removes files matching this target's own randomly-named
+ * temp pattern (`.bootstrap-<32 hex chars>-<this target's basename>`, plus
+ * its -wal/-shm sidecars) in the target's own directory — never touches
+ * anything else. Safe to run unconditionally at the start of a new attempt
+ * because the caller (rollout-bootstrap.sh) holds the same exclusive
+ * rollout lock for the whole invocation, so no other legitimate process can
+ * be concurrently using a leftover temp name for this target.
+ */
+function cleanupStaleTempFiles(dir: string, path: string): void {
+  const pattern = new RegExp(`^\\.bootstrap-[0-9a-f]{32}-${escapeRegExp(basename(path))}(-wal|-shm)?$`);
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!pattern.test(entry)) continue;
+    try { rmSync(join(dir, entry), { force: true }); } catch { /* best-effort */ }
+  }
+}
+
+/**
  * Publishes with no-replace semantics: `link()` fails atomically with
  * EEXIST if anything now occupies `path`, including something that
  * appeared concurrently after every earlier check in this function ran —
@@ -287,6 +343,44 @@ function publishAtomic(tempPath: string, path: string): void {
 }
 
 /**
+ * Registers process-level cleanup for a graceful termination signal
+ * (SIGTERM/SIGINT) received mid-bootstrap. This can only ever help for
+ * *graceful* termination — SIGKILL and a machine power loss are, by
+ * definition, unobservable by any process and cannot be handled here at
+ * all; recovery from those specific cases is `cleanupStaleTempFiles()`'s
+ * job on the *next* invocation, not this one's. Removes its own listeners
+ * before re-raising so the process actually terminates with the expected
+ * signal semantics rather than hanging or exiting 0.
+ */
+const SIGNAL_EXIT_CODES: Record<string, number> = { SIGINT: 130, SIGTERM: 143 };
+
+async function withSignalCleanup<T>(tempPath: string, fn: () => Promise<T>): Promise<T> {
+  const handler = (signal: NodeJS.Signals) => {
+    try { rmSync(tempPath, { force: true }); } catch { /* best-effort */ }
+    removeSidecars(tempPath);
+    process.stderr.write(`rollout-db: bootstrap interrupted by ${signal}, cleaned up temp state\n`);
+    // Re-sending the signal to ourselves (process.kill(pid, signal)) after
+    // removing our own handler does not reliably terminate the process in
+    // the same tick — exiting explicitly with the conventional 128+N code
+    // is the standard, dependable pattern for "cleaned up, now die". Note
+    // this handler can only ever run at a genuine event-loop yield point
+    // (an `await`, timer, or I/O callback) — a tight synchronous operation
+    // (a long-running native call with no `await` in between) blocks Node
+    // from servicing the pending signal at all until it returns, same as
+    // any other Node.js signal handler.
+    process.exit(SIGNAL_EXIT_CODES[signal] ?? 1);
+  };
+  process.on("SIGTERM", handler);
+  process.on("SIGINT", handler);
+  try {
+    return await fn();
+  } finally {
+    process.off("SIGTERM", handler);
+    process.off("SIGINT", handler);
+  }
+}
+
+/**
  * Bootstrap a single genuinely-missing database (Phase 4C.3, issue #135):
  * reuses openDb()'s existing missing-file path unchanged — it already
  * creates the file and runs it through migration 1's real DDL, the same
@@ -298,42 +392,71 @@ function publishAtomic(tempPath: string, path: string): void {
  * *same* directory as the final target (so the eventual publish is same-
  * filesystem), validated (integrity, foreign keys, exact schema version),
  * then published with no-replace link()+unlink() semantics only after every
- * check passes. If anything fails — missing-file precondition, parent
- * validation, the migration itself, post-migration validation, or
- * publication racing a concurrently-created destination — the temp file
- * (and any -wal/-shm sidecars it produced) is removed and the final path is
- * left completely untouched, so a partial or interrupted bootstrap never
- * leaves debris at either path and never overwrites anything.
+ * check passes. If anything fails synchronously — missing-file
+ * precondition, parent validation, the migration itself, post-migration
+ * validation, or publication racing a concurrently-created destination —
+ * the temp file (and any -wal/-shm sidecars it produced) is removed and the
+ * final path is left completely untouched. A graceful termination signal
+ * (SIGTERM/SIGINT) mid-attempt is also cleaned up. SIGKILL or a machine
+ * reboot between the atomic link() publish and the temp name's unlink()
+ * cannot be observed or handled by this process at all — that specific,
+ * narrow window can leave a harmless extra hard link (same inode, same
+ * validated content as the published database, not a partial/corrupt file)
+ * at a stale temp name; `cleanupStaleTempFiles()` removes it opportunistically
+ * on the next bootstrap attempt against the same target, under the same
+ * exclusive rollout lock.
  */
-function bootstrapDatabase(path: string, role: string): DbEvidence {
+async function bootstrapDatabase(path: string, role: string): Promise<DbEvidence> {
   if (pathOccupied(path)) throw new Error(`database already exists, use migrate instead: ${path}`);
   const dir = dirname(path);
   validateParentDir(dir);
+  cleanupStaleTempFiles(dir, path);
   const tempPath = join(dir, `.bootstrap-${randomBytes(16).toString("hex")}-${basename(path)}`);
   const cleanupTemp = () => {
     try { rmSync(tempPath, { force: true }); } catch { /* best-effort */ }
     removeSidecars(tempPath);
   };
   try {
-    if (process.env.AGENT_BRIDGE_BOOTSTRAP_TEST_FORCE_MIGRATION_FAILURE === path) {
-      // Pre-creates a file at the exact temp path with a future, unsupported
-      // schema version, so openDb()'s own existing version-gate rejects it —
-      // a real migration-time failure, not a simulated one.
-      const raw = new Database(tempPath);
-      raw.exec("PRAGMA user_version = 99;");
-      raw.close();
-    }
-    openDb(tempPath, { serviceId: `rollout:bootstrap:${role}` }).close();
-    if (process.env.AGENT_BRIDGE_BOOTSTRAP_TEST_FORCE_INVALID_SCHEMA === path) {
-      const raw = new Database(tempPath);
-      raw.exec("PRAGMA user_version = 4242;");
-      raw.close();
-    }
-    validateBootstrapped(tempPath);
-    if (process.env.AGENT_BRIDGE_BOOTSTRAP_TEST_PRE_PUBLISH_OCCUPY === path) {
-      writeFileSync(path, "concurrently created by a different process\n");
-    }
-    publishAtomic(tempPath, path);
+    await withSignalCleanup(tempPath, async () => {
+      if (testHook("AGENT_BRIDGE_BOOTSTRAP_TEST_FORCE_MIGRATION_FAILURE") === path) {
+        // Pre-creates a file at the exact temp path with a future,
+        // unsupported schema version, so openDb()'s own existing
+        // version-gate rejects it — a real migration-time failure, not a
+        // simulated one.
+        const raw = new Database(tempPath);
+        raw.exec("PRAGMA user_version = 99;");
+        raw.close();
+      }
+      openDb(tempPath, { serviceId: `rollout:bootstrap:${role}` }).close();
+      const pauseFile = testHook("AGENT_BRIDGE_BOOTSTRAP_TEST_PAUSE_FILE");
+      if (pauseFile) {
+        // Test-only hook proving the SIGTERM/SIGINT cleanup path in
+        // withSignalCleanup() actually runs, not just that it typechecks:
+        // signals the test harness (by creating pauseFile) that the temp
+        // database now exists on disk, then awaits — via a real
+        // setTimeout-based async delay loop, a genuine event-loop yield
+        // point, unlike a synchronous blocking call, which would prevent
+        // Node from ever servicing the pending signal — until either a
+        // resume file appears or a bounded deadline passes, so a broken
+        // hook can't hang forever.
+        writeFileSync(pauseFile, "paused\n");
+        const resumeFile = `${pauseFile}.resume`;
+        const deadline = Date.now() + 5000;
+        while (!existsSync(resumeFile) && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      }
+      if (testHook("AGENT_BRIDGE_BOOTSTRAP_TEST_FORCE_INVALID_SCHEMA") === path) {
+        const raw = new Database(tempPath);
+        raw.exec("PRAGMA user_version = 4242;");
+        raw.close();
+      }
+      validateBootstrapped(tempPath);
+      if (testHook("AGENT_BRIDGE_BOOTSTRAP_TEST_PRE_PUBLISH_OCCUPY") === path) {
+        writeFileSync(path, "concurrently created by a different process\n");
+      }
+      publishAtomic(tempPath, path);
+    });
   } catch (err) {
     cleanupTemp();
     throw err;
@@ -358,8 +481,8 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (argv[0] === "bootstrap") {
     const options = parseBootstrapArgs(argv.slice(1));
-    const evidence = options.targets.map((target) => bootstrapDatabase(target.path, target.role));
-    writeEvidence(options.evidencePath, "bootstrap", evidence);
+    const evidence = await bootstrapDatabase(options.path, options.role);
+    writeEvidence(options.evidencePath, "bootstrap", [evidence]);
     return;
   }
   const options = parseArgs(argv);

@@ -53,16 +53,18 @@ if [[ -n "$test_root" ]]; then
   config_file="$test_root/etc/agent-bridge/rollout-bootstrap.conf"
   lock_file="$test_root/run/lock/agent-bridge-rollout.lock"
   runuser_cmd="$test_root/bin/runuser"
+  id_cmd="$test_root/bin/id"
   test_mode=1
 else
   (( EUID == 0 )) || die "must run as root"
   config_file="/etc/agent-bridge/rollout-bootstrap.conf"
   lock_file="/run/lock/agent-bridge-rollout.lock"
   runuser_cmd="/usr/sbin/runuser"
+  id_cmd="/usr/bin/id"
   test_mode=0
 fi
 
-for command_path in "$runuser_cmd" /usr/bin/flock /usr/bin/realpath /usr/bin/stat /usr/bin/mkdir /usr/bin/dirname; do
+for command_path in "$runuser_cmd" "$id_cmd" /usr/bin/flock /usr/bin/realpath /usr/bin/stat /usr/bin/mkdir /usr/bin/dirname; do
   [[ -x "$command_path" ]] || die "required command is unavailable: $command_path"
 done
 
@@ -116,9 +118,17 @@ if (( test_mode == 0 )); then /usr/bin/id -u "$runtime_user" >/dev/null || die "
 parent_dir="$(/usr/bin/dirname "$new_role_path")"
 [[ -d "$parent_dir" && ! -L "$parent_dir" ]] || die "new-role parent directory is missing or symlinked: $parent_dir"
 [[ "$(/usr/bin/realpath -e "$parent_dir")" == "$parent_dir" ]] || die "new-role parent directory is not canonical: $parent_dir"
-secure_owner_uid="$EUID"
-if (( test_mode == 0 )); then secure_owner_uid=0; fi
-[[ "$(/usr/bin/stat -c %u "$parent_dir")" == "$secure_owner_uid" ]] || die "new-role parent directory has unsafe ownership: $parent_dir"
+# The parent directory must be owned by the *runtime user*, not root: this
+# script drops to the runtime user (run_as_runtime, below) before the
+# database is ever created there, exactly like every other production
+# database directory (they're written day-to-day by the services running as
+# that same user). Requiring root ownership here would be self-contradictory
+# — root would pass this check but the runtime user actually doing the write
+# would then get a permission error, or worse, the check would only pass if
+# the directory were writable by both, widening its permissions unnecessarily.
+runtime_uid="$("$id_cmd" -u "$runtime_user")"
+[[ "$runtime_uid" =~ ^[0-9]+$ ]] || die "cannot resolve UID for runtime user: $runtime_user"
+[[ "$(/usr/bin/stat -c %u "$parent_dir")" == "$runtime_uid" ]] || die "new-role parent directory must be owned by the runtime user ($runtime_user): $parent_dir"
 parent_mode="$(/usr/bin/stat -c %a "$parent_dir")"
 (( (8#$parent_mode & 022) == 0 )) || die "new-role parent directory must not be group/world writable: $parent_dir"
 

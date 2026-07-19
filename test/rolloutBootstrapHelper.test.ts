@@ -70,6 +70,22 @@ if [ "\${1:-}" = -- ]; then shift; fi
 exec "$@"
 `);
 
+  // Fakes `id -u rollout-test` as the current process's real UID by default,
+  // so the "parent directory owned by the runtime user" check passes against
+  // fixture directories actually created (and therefore actually owned) by
+  // this test process — there is no way to chown a directory to an
+  // arbitrary different UID without root. FAKE_RUNTIME_UID lets a specific
+  // test override the resolved UID to something that deliberately does NOT
+  // match the real directory owner, to prove the mismatch is refused.
+  executable(join(bin, "id"), `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = -u ]; then
+  echo "\${FAKE_RUNTIME_UID:-${process.getuid ? process.getuid() : 0}}"
+  exit 0
+fi
+exit 1
+`);
+
   return { root, project, newRolePath, configFile, lockFile };
 }
 
@@ -173,6 +189,27 @@ describe("rollout-bootstrap.sh", () => {
     const res = runBootstrapHelper(fixture, "worker", fixture.newRolePath, fixture.newRolePath);
     expect(res.status).not.toBe(0);
     expect(res.stderr).toMatch(/writable/i);
+  });
+
+  it("refuses when the parent directory is not owned by the configured runtime user (production ownership contradiction regression)", () => {
+    // Regression: an earlier version of this script required the parent
+    // directory to be root-owned, then dropped to the runtime user to write
+    // there — a self-contradiction, since under real permissions the
+    // runtime user cannot write into a directory it doesn't own. The check
+    // now resolves the runtime user's actual UID (via the id command) and
+    // requires the directory to be owned by *that* UID. This test can't
+    // chown a real directory to an arbitrary UID without root, so instead it
+    // makes the resolved "runtime user" UID (via the fake `id` command)
+    // deliberately not match the fixture directory's real owner (the test
+    // process itself) — proving the mismatch is what's actually checked,
+    // not merely that some ownership value happens to be logged.
+    const fixture = createFixture();
+    const res = runBootstrapHelper(fixture, "worker", fixture.newRolePath, fixture.newRolePath, {
+      FAKE_RUNTIME_UID: "424242",
+    });
+    expect(res.status).not.toBe(0);
+    expect(res.stderr).toMatch(/must be owned by the runtime user/i);
+    expect(existsSync(fixture.newRolePath)).toBe(false);
   });
 
   it("refuses when the parent directory is missing", () => {

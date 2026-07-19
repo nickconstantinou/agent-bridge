@@ -1,0 +1,45 @@
+name: Prompt Contract Diagnostics
+
+on:
+  pull_request:
+    paths:
+      - 'src/agenticPromptContracts.ts'
+      - 'src/implementationPlanQuality.ts'
+      - 'prompts/worker/**'
+      - 'test/agenticPromptContracts.test.ts'
+      - 'test/implementationPlanHandler.test.ts'
+      - 'test/implementationPlanRedTestQuality.test.ts'
+      - '.github/workflows/prompt-contract-diagnostics.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Run focused prompt and plan tests
+        id: focused
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          npx vitest run \
+            test/agenticPromptContracts.test.ts \
+            test/implementationPlanRedTestQuality.test.ts \
+            test/implementationPlanHandler.test.ts \
+            --reporter=verbose 2>&1 | tee prompt-contract-diagnostics.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prompt-contract-diagnostics
+          path: prompt-contract-diagnostics.txt
+          if-no-files-found: error
+      - name: Propagate focused result
+        if: steps.focused.outcome != 'success'
+        run: exit 1

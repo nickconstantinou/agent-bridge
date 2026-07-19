@@ -90,3 +90,47 @@ sudo -n /usr/local/sbin/rollout-bootstrap-agent-bridge --role <shared|discord|he
 ```
 
 `--confirm-new-role` must exactly repeat `--new-role` — an explicit, per-invocation operator confirmation, the same exact-match discipline `--expected-commit` uses elsewhere in this tooling. `--role` must name one of the five canonical roles, and the exact `(role, path)` **pair** — not the path alone — must appear in the fixed `bootstrap_role` allowlist; the correct path under the wrong role is refused just like an unlisted path. The target must not already exist and must not be a symlink, even a dangling one (`-e`/`-L` are both checked — a plain existence check alone would miss a dangling symlink sitting at the target path), and must sit under a canonical, non-symlink parent directory with no group/world write bits. `rollout-bootstrap` acquires the **same** exclusive OS lock file as `rollout-agent-bridge`, so a bootstrap can never run concurrently with an active migrate rollout, even though the two are structurally separate tools and invocations.
+
+## Interrupted-rollout sentinel (Phase 4C.4, issue #135)
+
+`rollout-agent-bridge` writes a fixed, root-owned regular file, `$log_dir/.rollout-in-progress`, mode `0600`, immediately after acquiring the exclusive rollout lock and before any precondition check runs — including the artifact-directory-uniqueness check. Its purpose is a hard stop: if a rollout is interrupted mid-flight (the process killed, the machine rebooted), the *next* invocation must never silently proceed as if nothing happened. It refuses instead, citing the sentinel's own recorded `expected_commit` and `artifact_dir` as evidence for what needs manual review.
+
+Creation is atomic — a `mktemp`'d temp file in the same directory, `chmod 0600`, then a hard link (`ln`) from the temp name to the fixed sentinel path. `ln` fails if the destination already exists rather than replacing it, giving `O_CREAT|O_EXCL` create-if-absent semantics without a custom syscall wrapper. An existing sentinel that is a symlink, not a regular file, or has the wrong owner/mode is never trusted or silently overwritten — that is its own containment-uncertain failure, refused with instructions to inspect it manually and clear it with the separate `rollout-sentinel-clear` tool rather than retry.
+
+The sentinel is removed automatically in exactly three cases, gated by an internal `sentinel_removable` flag that is never inferred from the script's exit status (which stays nonzero on every failure path, including a cleanly auto-restored one):
+
+- The rollout completes successfully end to end.
+- A precondition fails strictly before any service stop is attempted — nothing was touched, so there is nothing to review.
+- The automatic post-failure restore (`FAILED_RESTORED`) both succeeds and is verified — every database's SHA-256 matches the pre-migration manifest. Sentinel removal here means only "safe to hand to the documented recovery flow below," never "safe to bare-retry": services remain stopped and the checked-out code is still the new commit.
+
+In every other failure shape the sentinel is retained and the failure is labeled with one of four states, so an operator can pick the correct recovery path without having to reconstruct what happened from logs alone:
+
+| State | Meaning | Recovery |
+|---|---|---|
+| `STOPPED_UNCHANGED` | Services stopped, containment re-proven, but the cohort backup did not complete and verify. The source databases are on the OLD schema, untouched — but `backup_completed=0` only means the *whole cohort* wasn't verified; a partial, unmanifested backup artifact may exist under the run's `backup_set` directory and must never be treated as a valid backup or used for restore. The checked-out code is still the NEW commit. | **Not** bare-retryable — services are stopped and `assert_service_active` rejects a re-invocation until they're active again. Review the sentinel's recorded evidence, discard any partial backup artifact, revert the working tree to the previous commit (old schema + new code is not a supported pairing), restart the previous services, confirm they're active, then start a fresh rollout. |
+| `FAILED_RESTORED` | A genuine restore attempt ran and every database verified against the manifest. | Not a bare-retry case — review why migration failed before starting services again. |
+| `RESTORE_INCOMPLETE` | The automatic restore itself failed, or could not be fully verified for every database. State is unknown/mixed. | Manual restoration required before anything else; do not start services. |
+| `STOPPED_PRESERVED` | Services stopped after a post-start failure. Database IS on the NEW schema — migration and validation already succeeded, and services were briefly started against this pairing before failing. | Always requires operator judgment; no automatic action is safe with services possibly having accepted live writes. |
+
+### Clearing a retained sentinel
+
+Clearing is never a bare `rm`. A separate, equally guarded tool, `rollout-sentinel-clear`, is the only sanctioned way to remove a retained sentinel:
+
+```bash
+sudo install -D -m 0750 -o root -g root scripts/rollout-sentinel-clear.sh /usr/local/sbin/rollout-sentinel-clear
+sudo visudo -f /etc/sudoers.d/agent-bridge-rollout-sentinel-clear
+```
+
+Sudoers content:
+
+```sudoers
+content-crawler ALL=(root) NOPASSWD: /usr/local/sbin/rollout-sentinel-clear
+```
+
+It reads the same `/etc/agent-bridge/rollout.conf` as `rollout-agent-bridge` (only `log_dir` is required from it) — no separate config file. Invocation:
+
+```bash
+sudo -n /usr/local/sbin/rollout-sentinel-clear --expected-commit <full-40-character-sha> --artifact-dir <absolute path>
+```
+
+It acquires the **same** exclusive rollout lock before touching anything — if a rollout is genuinely active, the clear tool refuses immediately (`a rollout is currently active — refusing to touch the sentinel while it may still be in use`) and leaves the sentinel completely untouched, rather than racing it. Once the lock is held, it re-validates the sentinel's ownership, mode, and non-symlink status, then cross-checks the operator-supplied `--expected-commit` and `--artifact-dir` against the values *recorded in the sentinel itself*. A mismatch on either field refuses and names the recorded value — proving the operator has actually reviewed the evidence for *this* sentinel, not a stale one left over from an unrelated earlier attempt. On success it appends an audit line to `$log_dir/sentinel-clear.log` before removing the sentinel.

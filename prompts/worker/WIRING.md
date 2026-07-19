@@ -30,6 +30,8 @@ Worker prompts and lifecycle skills are source-controlled only. The former SQLit
 
 `src/workerPrompts.ts` maps compatibility keys to the same lifecycle skills before appending any additional Agent Bridge-specific supplements. Compatibility prompts must not maintain a second TDD, requirements, risk, or readiness knowledge source.
 
+Lifecycle skills are mandatory. `includeSupplements: false` may suppress optional Agent Bridge-specific supplements for focused callers or tests, but it must never suppress the declared canonical lifecycle-skill set.
+
 ## Current handler map
 
 | Handler | Prompt key | Primary variables |

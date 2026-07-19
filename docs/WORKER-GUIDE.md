@@ -2,7 +2,7 @@
 
 ## Status
 
-This guide distinguishes the **current worker behaviour** from the **Issue #159 target workflow**. PR #160 supplies prompt, lifecycle-skill, plan-validation, documentation-policy, and schema foundations; it does not activate role assignment or role-based routing.
+This guide distinguishes the **current worker behaviour** from the **Issue #159 target workflow**. Slice 1 now implements desired role-assignment validation, schema-version-3 persistence, and truthful dormant status. It does not activate role routing or later role lifecycle behaviour.
 
 ## Current worker
 
@@ -10,18 +10,57 @@ The current worker turns feature briefs, imported GitHub issues, defect/refactor
 
 Current owners remain:
 
-- `src/workerBot.ts` and `src/workCallbacks.ts` for Telegram work-item and approval surfaces;
+- `src/workerBot.ts` and `src/workCallbacks.ts` for Telegram work-item, approval, and status surfaces;
 - `src/jobExecutor.ts` and `src/jobExecutorLoop.ts` for durable job execution;
 - current handlers under `src/handlers/`;
 - `src/workerCliPolicy.ts` and `src/workerDispatch.ts` for effective worker CLI policy;
 - `src/workspace.ts` for disposable implementation workspaces;
 - current GitHub/PR lifecycle helpers and `src/prMergeGate.ts` for issue, PR, and human merge authority.
 
-PR #160 strengthens the active implementation-plan and TDD prompt path but does not switch existing jobs to Technical Lead, Code Worker, or Documentation Steward routing.
+The prompt foundation strengthens current planning/TDD contracts. Slice 1 adds desired role persistence but does not switch existing jobs to Technical Lead, Code Worker, or Documentation Steward routing.
 
-## Target three-role workflow
+## Current dormant role assignments
 
-Issue #159 introduces exactly three configurable roles:
+Operators may configure one desired assignment for each public role using:
+
+- `WORKER_ROLE_ASSIGNMENTS_JSON`;
+- optional `WORKER_ROLE_ASSIGNMENT_SCOPE`.
+
+The exact JSON contract is documented in `docs/configuration/agent-role-assignment.md`. Configuration must contain explicit bounded CLI/model targets and cannot contain credentials, prompts, or repository content.
+
+A valid configuration is versioned in SQLite and reported as:
+
+```text
+Role assignments: configured_dormant
+Role routing: disabled
+```
+
+This is desired state only. It does not change which CLI handles a message or job.
+
+### `/chain` output
+
+With no desired role revision, `/chain` keeps its previous legacy-only response.
+
+With a desired revision, `/chain` additionally shows:
+
+- desired revision and configuration source;
+- desired primary and fallback targets for each role;
+- `Role routing: disabled`;
+- effective legacy interactive chain;
+- effective legacy code chain;
+- effective legacy scribe chain.
+
+The effective legacy chains remain authoritative. Desired role assignments are never labelled effective in Slice 1.
+
+### Database compatibility
+
+Slice 1 advances the worker database schema from version 2 to version 3. Production services do not migrate automatically. A production database must be upgraded through the guarded rollout helper before starting a schema-3 service. See `docs/operations/agentic-worker-runbook.md`.
+
+Removing the JSON configuration stops new desired revisions from being written; it does not delete existing revision history and is not an active-routing rollback because routing is already disabled.
+
+## Target three-role workflow — later slices
+
+Issue #159 defines exactly three configurable roles:
 
 | Role | Target responsibility |
 |---|---|
@@ -31,7 +70,7 @@ Issue #159 introduces exactly three configurable roles:
 
 Scanner is a Code Worker mode. Review and operations are Technical Lead modes, not separate roles.
 
-The target runtime order is:
+The later target runtime order is:
 
 ```text
 request, imported issue, or scan candidate
@@ -50,22 +89,15 @@ request, imported issue, or scan candidate
 → human merge gate
 ```
 
-A code-changing repair after verification invalidates verification, review, operations, documentation, and readiness evidence for the previous head. The workflow returns to deterministic verification.
+A code-changing repair after verification invalidates verification, review, operations, documentation, readiness, and exact-head CI evidence for the previous head.
 
-## Multi-issue requests
+## Multi-issue requests — later slices
 
-When one request is split into multiple child issues, Agent Bridge first assembles all proposed issue bodies without mutating GitHub. The Technical Lead then runs a bundle-wide decomposition review that records:
+When one request is split into multiple child issues, Agent Bridge first assembles all proposed issue bodies without mutating GitHub. The Technical Lead then runs a bundle-wide decomposition review that records implementation delivery order, runtime phase order, one canonical invariant matrix, owners/callers, lifecycle/permission/persistence/GitHub/Platform authority, overlap, dependencies, and unresolved product decisions.
 
-- implementation delivery order;
-- runtime phase order;
-- one canonical invariant matrix;
-- current owners and caller paths;
-- lifecycle, permission, persistence, GitHub, and platform/appliance authority;
-- overlap, missing dependencies, and unresolved product decisions.
+Agent Bridge creates or updates issues only after `ready_for_issue_mutation`.
 
-Agent Bridge creates or updates issues only after `ready_for_issue_mutation`. A group of individually plausible issues is not accepted when the bundle contradicts itself.
-
-## Requirements and issue quality
+## Requirements and issue quality — later slices
 
 A detailed issue may pass without additional questions, but it never bypasses validation. A scan finding remains a candidate until the Technical Lead validates, rejects, combines, splits, or requests evidence.
 
@@ -73,39 +105,18 @@ Canonical feature, defect, and refactor contracts are defined in `docs/agentic-m
 
 ## Implementation plans
 
-The Technical Lead owns the implementation and test strategy. Generic instructions such as `write tests`, `add unit tests`, or `increase coverage` are invalid.
+The Technical Lead target contract owns implementation and test strategy. Generic instructions such as `write tests`, `add unit tests`, or `increase coverage` are invalid.
 
-Each plan includes:
+Each plan includes stable acceptance IDs, product/architecture intent, current owners/callers, classified target paths, comprehensive red-test specifications, bounded work packets, exact verification, documentation obligations, operations/migration/rollback, human gates, and a compact execution contract.
 
-- stable acceptance-criterion IDs;
-- product and architecture intent;
-- current owners and real caller paths;
-- structured target-path provenance;
-- comprehensive red-test specifications;
-- acceptance, architecture, invariant, and triggered-risk coverage;
-- bounded red/green/repair/verify packets;
-- exact verification commands;
-- documentation obligations;
-- operations, migration, rollback, and human gates;
-- a compact execution contract.
-
-Every production and test path is classified as:
-
-- `existing_at_base`;
-- `existing_in_dependency`;
-- `proposed_new_production`;
-- `proposed_new_test`.
-
-Dependency paths name the dependency PR and exact reviewed ref. Proposed production files name the neighbouring current owner and why no existing file is sufficient. Invalid or unclassified paths block new-plan persistence and approval.
-
-Already-persisted plans created before this provenance contract retain a narrow compatibility check for concrete paths. New and repaired model output must use the structured contract.
+Every target is classified as `existing_at_base`, `existing_in_dependency`, `proposed_new_production`, or `proposed_new_test`. Invalid or unclassified paths block new-plan persistence and approval.
 
 ## Red and green execution
 
 The Code Worker receives the approved red-test and execution contract. It does not invent or weaken the strategy.
 
-- Red mode may implement the approved failing tests only.
-- The focused test must fail for the expected missing behaviour, not syntax, imports, fixtures, timeouts, or unrelated failures.
+- Red mode may implement approved failing tests only.
+- The focused test must fail for the intended missing behaviour, not syntax, imports, fixtures, timeouts, or unrelated failures.
 - Green mode implements the smallest production change and may not modify committed red tests.
 - Repair remains inside the approved packet.
 - Verify runs approved commands and returns evidence without expanding scope.
@@ -123,39 +134,19 @@ Reusable engineering know-how remains authoritative in four repository skills:
 - `red-green-refactor-tdd`;
 - `release-readiness-review`.
 
-Each consuming prompt declares its ordered skill set. `src/lifecycleSkillGuidance.ts` validates each manifest and the single marked runtime-guidance block, enforces budgets, and records skill identities. Provider fallback preserves the same prompt and skill contract.
-
-Prompts and skills resolve only from reviewed source files. Schema migration 2 retires the absent or empty legacy prompt table and rejects unexpected rows without data loss. Prompt rollback is application rollback to a reviewed SHA.
+Each consuming prompt declares its ordered skill set. Prompts and skills resolve only from reviewed source files. Schema migration 2 retires the legacy prompt table; schema migration 3 adds dormant role assignments without changing prompt resolution.
 
 ## Exact-head evidence
 
 Verification, implementation review, operations review, documentation validation, PR readiness, and CI evidence identify one `subject_head_sha`.
 
-Required gate status is one of:
-
-- `passed`;
-- `failed`;
-- `not_run`;
-- `not_scheduled`;
-- `stale`;
-- `unknown`.
-
-Only authoritative `passed` evidence for the exact current head satisfies a required gate. A workflow must not describe `not_scheduled`, `not_run`, or stale evidence as green.
+Required gate status is one of `passed`, `failed`, `not_run`, `not_scheduled`, `stale`, or `unknown`. Only authoritative `passed` evidence for the exact current head satisfies a required gate.
 
 Required review independence and actual review independence are recorded separately. A fresh session using the same model is not independent merely because the context is new.
 
 ## Documentation readiness
 
-`agentic-maintenance.yaml` lists canonical documents and deterministic change triggers.
-
-A PR cannot become ready until:
-
-- every triggered required document is current and validated against the exact final head; or
-- `no_documentation_change` is validated with rationale, trigger evidence, and Technical Lead confirmation.
-
-A missing, stale, contradictory, or materially misleading required document is a blocking defect. It must be corrected and revalidated in the same delivery. Creating a later issue, assigning an owner, or listing a follow-up does not satisfy readiness.
-
-When a required correction materially changes approved scope or authority, the workflow holds for human scope approval. It does not defer the stale state and claim readiness.
+`agentic-maintenance.yaml` lists canonical documents and deterministic change triggers. A missing, stale, contradictory, or materially misleading required document blocks readiness and must be corrected and revalidated in the same delivery. A later issue or follow-up does not satisfy readiness.
 
 ## Human authority
 
@@ -165,24 +156,35 @@ Models cannot grant themselves tools, mutate GitHub, change role, broaden scope,
 
 ## Current commands
 
-Use the existing worker commands and callbacks for current functionality. Commands or status fields described in target-state architecture are not available until their owning Issue #159 slice is implemented and qualified.
-
 Common current surfaces include:
 
-- `/review [repo]` for a read-only defect scan;
+- `/review [repo]` for a defect scan;
 - `/feature <brief>` for feature planning intake;
 - `/issues` and `/issue <id>` for work items;
 - `/jobs` and `/job <id>` for job state;
 - `/approvals` for pending decisions and merge controls;
-- existing interactive `/cli`, `/models`, `/effort`, and chain/status surfaces where configured.
+- `/chain` for effective legacy chains and, when configured, dormant desired role status;
+- existing interactive `/cli`, `/models`, and `/effort` surfaces where configured.
 
-Consult the live command help and current code for the exact deployed surface. Target role assignment, desired/effective role status, and role-native lifecycle phases remain planned work until delivered by Slices 1–10.
+Role-native lifecycle commands, capability probes, and active desired/effective reconciliation remain later-slice work.
 
 ## Troubleshooting
 
+### Role configuration is rejected
+
+Validate exact role IDs, duplicate/missing roles, target format, fallback count, and unknown/forbidden fields. Do not place tokens, API keys, prompts, or repository content in the JSON.
+
+### Database migration is required
+
+Do not start the production worker against schema version 2 and do not bypass `openProductionDb()`. Use the approved guarded rollout helper with the complete configured database inventory, backups, validation, and rollback evidence.
+
+### `/chain` shows `configured_dormant`
+
+This is expected. Confirm `Role routing: disabled` and verify the effective legacy chains match operator configuration.
+
 ### A proposed issue bundle is blocked
 
-Inspect the decomposition-review invariant matrix. Resolve runtime-order versus implementation-order conflicts, duplicate ownership, missing lifecycle edges, unclassified paths, or unresolved product decisions before issue mutation.
+Inspect the decomposition-review invariant matrix and resolve conflicts before issue mutation.
 
 ### A plan is rejected
 
@@ -194,11 +196,11 @@ Confirm the declared skill exists, its `skill.json` name/version matches the reg
 
 ### Prompt migration finds an unexpected row
 
-Do not restart or bypass the migration. Migration 2 preserves schema version 1 and the table contents for guarded investigation. Runtime code has no prompt-table reader or writer.
+Do not restart or bypass migration 2. It preserves schema version 1 and table contents for guarded investigation.
 
 ### Documentation blocks readiness
 
-Correct every required stale, contradictory, missing, or misleading document through the documentation-only lane. Do not create a follow-up issue as a substitute for correction.
+Correct every required stale, contradictory, missing, or misleading document through the documentation-only lane. Do not create a follow-up issue as a substitute.
 
 ### Review is non-independent
 
@@ -214,6 +216,7 @@ Role separation may remain intact, but repository risk policy can require a diff
 - Configuration: `docs/configuration/agent-role-assignment.md`
 - Operations: `docs/operations/agentic-worker-runbook.md`
 - Testing: `docs/testing/agentic-worker-verification.md`
+- Production readiness: `docs/architecture/10-production-readiness.md`
 - Decision: `docs/adr/ADR-005-role-based-agentic-orchestration.md`
 - Epic plan: `docs/implementation-plans/issue-159-role-based-orchestration.md`
 - Prompt/red-test addendum: `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md`

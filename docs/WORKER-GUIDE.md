@@ -2,7 +2,7 @@
 
 The worker turns feature requests, defect reports, refactor opportunities, imported GitHub issues, and repository scans into validated issues, implementation plans, tested draft pull requests, and current documentation.
 
-Agent Bridge orchestrates the work. It assigns authenticated CLIs and models to three roles while retaining authoritative state, prompt selection, permissions, deterministic gates, and human approvals.
+Agent Bridge orchestrates the work. It assigns authenticated CLIs and models to three roles while retaining authoritative state, prompt and lifecycle-skill selection, permissions, deterministic gates, and human approvals.
 
 ## The three roles
 
@@ -18,7 +18,7 @@ Scanner is a Code Worker mode. Independent review and operations are Technical L
 
 Nothing merges, deploys, changes secrets or permissions, or performs a destructive operation without the existing explicit human gate.
 
-Models do not own workflow state, role selection, prompts, validators, permissions, or approval. Agent Bridge owns those boundaries.
+Models, prompts, and skills do not own workflow state, role selection, validators, permissions, or approval. Agent Bridge owns those boundaries.
 
 ## Workflow at a glance
 
@@ -68,7 +68,7 @@ Existing commands remain the user entry points:
 | `/issues` | List candidate, requirements, approved, and held work items with available actions. |
 | `/issue <id>` | Show one work item, validation status, decisions, plan, and linked GitHub state. |
 | `/jobs` | List active, pending, blocked, and resumable jobs. |
-| `/job <id>` | Show phase, owner, lease, role target, prompt contract, attempts, evidence, and errors. |
+| `/job <id>` | Show phase, owner, lease, role target, prompt/skill contract, attempts, evidence, and errors. |
 | `/approvals` | Re-list pending human decisions, merge approvals, and policy exceptions. |
 | `/models` | Show models exposed by the active interactive CLI. |
 | `/chain` | Show legacy chain compatibility plus effective role targets. |
@@ -108,7 +108,7 @@ Each role binds:
 - ordered fallbacks;
 - permission profile;
 - call/time budget;
-- prompt and structured-output contracts.
+- prompt, lifecycle-skill, and structured-output contracts.
 
 Assignment modes:
 
@@ -124,7 +124,7 @@ One CLI is sufficient. Agent Bridge selects a model separately for the Technical
 
 ### One available model
 
-One model can serve every role using separate sessions, prompts, validators, permissions, budgets, and audit. Status reports:
+One model can serve every role using separate sessions, prompts, lifecycle-skill sets, validators, permissions, budgets, and audit. Status reports:
 
 ```text
 Role separation: preserved
@@ -134,7 +134,7 @@ Independent-model review: unavailable
 
 Work continues unless repository policy requires model-independent review for the detected risk.
 
-## Prompt contracts
+## Prompt and lifecycle-skill contracts
 
 Prompts are separate by role, mode, and repair purpose. The Technical Lead planning prompt is not reused for requirements, review, operations, code execution, or documentation. Focused red-test repair and execution-contract repair use distinct keys.
 
@@ -148,44 +148,43 @@ Agent Bridge selects the prompt contract and separately enforces:
 - logical-call and repair budgets;
 - lifecycle ownership.
 
-Canonical role prompts are registered in `src/agenticPromptContracts.ts` and stored as reviewed Markdown files under `prompts/worker/roles/`. Each contract has a version and effective content hash. Fallback models receive the same prompt contract; only the CLI/model target changes.
+Canonical role prompts are registered in `src/agenticPromptContracts.ts` and stored under `prompts/worker/roles/`.
 
-Canonical role prompts do **not** support database overrides.
+Reusable software-development lifecycle know-how is not copied into every prompt. It remains authoritative in four repository skills:
 
-### Why the SQLite prompt table is not a backup
+- `requirements-to-acceptance`;
+- `risk-based-test-strategy`;
+- `red-green-refactor-tdd`;
+- `release-readiness-review`.
 
-The source-controlled Markdown file is already the built-in fallback when no database row exists. A database row replaces that reviewed file at runtime, so it is an **override**, not a backup.
+Each role/mode and compatibility prompt explicitly declares the skills it consumes. `src/lifecycleSkillGuidance.ts` validates each matching `skill.json`, extracts exactly one bounded runtime-guidance block from `SKILL.md`, and composes only the declared skills in deterministic order.
 
-That distinction matters because an override can change requirements, planning, tests, code-execution instructions, review, or operations without:
+The split is deliberate:
 
-- a reviewed Git diff;
-- contract versioning;
-- deterministic tests;
-- exact-head CI;
-- reproducible rollout across workspaces;
-- a known application-SHA rollback.
+- prompts own Agent Bridge-specific role, stage, evidence, output, and escalation instructions;
+- skills own reusable requirements, testing, TDD, and readiness know-how;
+- code owns permissions, tools, validators, state, budgets, approvals, merge, and deployment.
 
-The target architecture therefore removes database override capability for canonical role prompts.
+A skill change reaches all consuming prompts through one reviewed source. Missing markers, duplicate blocks, empty or oversized guidance, version mismatch, or duplicate skill injection fails closed.
 
-### Why the table is not dropped in this PR
+Each canonical invocation records:
 
-The existing table remains temporarily because:
+- prompt key and version;
+- role-template hash;
+- ordered skill key/version/content hashes;
+- lifecycle skill-set hash;
+- composed-template hash;
+- rendered invocation hash.
 
-- current production rows have not been inventoried;
-- some legacy handlers still read those rows;
-- deleting a row or table could silently change existing workspace behaviour;
-- schema changes and production database mutations use the separately guarded migration process.
+Fallback models receive the same prompt and skill identities; only the CLI/model target changes.
 
-Retirement is staged:
+### Source-only prompt storage
 
-1. inventory legacy rows by workspace and key without logging contents;
-2. give every non-empty row an explicit migrate, intentionally discard, or hold-for-human decision;
-3. move approved custom behaviour into reviewed prompt files and tests;
-4. disable reads handler by handler during role migration;
-5. remove legacy write/read methods after callers are gone;
-6. drop the table through a separately approved backup/rollback-qualified migration.
+The former SQLite prompt table was a mutable override channel, not a backup. PR #160 removes its read/write APIs and all handler reads. Canonical and compatibility prompts now resolve only from reviewed repository files.
 
-No new role prompt, operator workflow, or platform setting may create a database override. Existing legacy prompt keys remain compatibility aliases only while their handlers are migrated.
+Schema migration 2 treats an absent table as retired, drops an empty table transactionally, and aborts without data loss if an unexpected row exists. On rejection, schema version 1 and the table contents remain intact for guarded investigation. Prompt rollback is application rollback to a reviewed SHA.
+
+No role prompt, compatibility handler, operator workflow, or platform setting may reintroduce mutable prompt text.
 
 Canonical prompt design: `docs/architecture/agentic-prompt-contracts.md`.
 
@@ -219,7 +218,8 @@ The effective status shows:
 - requested and effective CLI/model per role;
 - fallbacks and configuration source;
 - authentication and model probe state;
-- prompt key/version/source/hash;
+- prompt key/version/source and role-template hash;
+- lifecycle skill keys/versions/hashes and composed-template hash;
 - permission profile;
 - logical-call and timeout budgets;
 - model-diversity and review-independence state;
@@ -234,10 +234,11 @@ Status and probes are read-only. Reconciliation is a separate explicit action.
 - A plan that says only `write tests` or omits product/architectural intent fails validation.
 - An otherwise valid plan with only an inadequate red-test contract may receive one focused red-test repair; execution-contract repair remains separate.
 - Required malformed output receives only the configured bounded repair and otherwise fails closed.
+- Missing or invalid lifecycle skill guidance fails before the model call rather than silently weakening the workflow.
 - Failed executor work remains bounded; no open-ended model loop is allowed.
 - Cancellation prevents new role calls and fences late output.
 - Lost leases and stale workers cannot persist or dispatch duplicate calls.
-- Restart resumes from authoritative durable phase state and preserves budgets and prompt contract identity.
+- Restart resumes from authoritative durable phase state and preserves budgets, prompt identity, and lifecycle-skill identity.
 - Completed phases are not repeated.
 - Missing role capability produces an explicit blocked/degraded state.
 - Existing workspace cleanup, supervisor, head-SHA, CI, and merge protections remain active.
@@ -258,9 +259,13 @@ Inspect `/issue <id>` for missing facts, unresolved decisions, validation errors
 
 Inspect typed validation errors. Every acceptance criterion and affected architectural/risk boundary must be covered. Focused red-test repair is allowed only when the rest of the plan is valid.
 
+### Lifecycle skill fails to load
+
+Check that the declared skill exists, its `skill.json` name/version matches the registry, and its `SKILL.md` contains exactly one non-empty `AGENT_BRIDGE_RUNTIME_GUIDANCE` block within budget. Do not bypass the check or paste emergency lifecycle text into the prompt.
+
 ### Prompt-table migration reports an unexpected row
 
-Do not restart services or bypass the migration. Schema migration 2 fails closed and preserves schema version 1 plus the table contents. Since production rows are expected to be absent, treat this as configuration drift: inspect it through the guarded database process without logging prompt text, resolve the discrepancy explicitly, then rerun the migration. Runtime code has no prompt-table reader or writer.
+Do not restart services or bypass the migration. Schema migration 2 fails closed and preserves schema version 1 plus the table contents. Treat this as configuration drift: inspect it through the guarded database process without logging prompt text, resolve the discrepancy explicitly, then rerun the migration. Runtime code has no prompt-table reader or writer.
 
 ### Scan produced no implementation job
 
@@ -280,7 +285,7 @@ Inspect documentation impact and manifest trigger evaluation. Configure a fallba
 
 ### Job stuck or restarted
 
-Use `/job <id>` to inspect authoritative owner, lease, role attempt, prompt contract, and phase. Do not manually force status.
+Use `/job <id>` to inspect authoritative owner, lease, role attempt, prompt/skill contract, and phase. Do not manually force status.
 
 ### Lost approval controls
 
@@ -292,8 +297,9 @@ Use `/approvals`; the approval remains pending while blocking evidence is unreso
 - plan before validated requirements;
 - accept vague test instructions instead of a comprehensive red-test contract;
 - let a scan agent approve its own finding;
-- let prompts or models expand permissions or scope;
-- load canonical role prompts from mutable database text;
+- let prompts, skills, or models expand permissions or scope;
+- duplicate canonical lifecycle know-how across prompts;
+- load prompts or skills from mutable database text;
 - mutate live checkouts for implementation;
 - weaken red/green separation;
 - claim readiness over failed deterministic evidence;

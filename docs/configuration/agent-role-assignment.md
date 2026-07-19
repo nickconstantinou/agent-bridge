@@ -2,9 +2,9 @@
 
 ## Status
 
-Canonical configuration reference for Engineering Worker role allocation.
+Canonical target-state configuration reference for Engineering Worker role allocation. PR #160 defines the contracts; later Issue #159 slices implement persistence, resolution, and activation.
 
-## Roles
+## Roles and modes
 
 Agent Bridge exposes exactly three configurable workspace roles:
 
@@ -12,7 +12,38 @@ Agent Bridge exposes exactly three configurable workspace roles:
 - `code_worker`;
 - `documentation_steward`.
 
-Scanner, reviewer, operations, planning, repair, and verification behaviours are modes within these roles rather than additional role assignments.
+Modes are not separately configurable roles.
+
+Technical Lead modes:
+
+- `requirements`;
+- `issue_validation`;
+- `issue_authoring`;
+- `decomposition_review`;
+- `planning`;
+- `planning_repair`;
+- `executor_guidance`;
+- `implementation_review`;
+- `operations_review`;
+- `pr_readiness`.
+
+Code Worker modes:
+
+- `scan`;
+- `investigate`;
+- `red`;
+- `green`;
+- `repair`;
+- `verify`.
+
+Documentation Steward modes:
+
+- `impact`;
+- `author`;
+- `validate`;
+- `maintenance`.
+
+Scanner is a Code Worker mode. Reviewer, operations, planning, decomposition review, and readiness are Technical Lead modes.
 
 ## Assignment model
 
@@ -61,6 +92,7 @@ roles:
       impact: repository_read_only
       author: documentation_only
       validate: repository_read_only
+      maintenance: documentation_only
 ```
 
 The persisted schema stores explicit model IDs. A CLI name without a model is not a complete manual assignment.
@@ -128,22 +160,34 @@ When only one model is available, it may serve every role. The status surface re
 ```text
 Role separation: preserved
 Model diversity: unavailable
-Independent-model review: unavailable
+Actual review independence: non_independent
 Single-provider dependency: active
 ```
 
-Work proceeds unless repository policy requires model-independent review for the detected risk class.
+Work proceeds only when repository policy permits the actual independence level for the detected risk.
 
 ## Review target resolution
 
-Technical Lead review uses:
+Technical Lead review preference is:
 
 1. different CLI and model from the implementing Code Worker;
 2. different model on the same CLI;
 3. configured Technical Lead target in a fresh isolated session;
 4. same target, marked `non_independent`.
 
-The platform does not expose a fourth Reviewer role.
+A fresh session does not make same-model review independent. Every review records:
+
+- `required_independence`;
+- `actual_independence`;
+- whether the independence gate is satisfied.
+
+The workflow holds for human decision when policy requires a stronger level than is available. The platform does not expose a fourth Reviewer role.
+
+## Phase and exact-head stability
+
+An active logical call snapshots its role, mode, assignment revision, target, permission profile, prompt/skill identity, and subject revision where applicable.
+
+Verification, implementation review, operations review, documentation, and readiness bind to one exact `subject_head_sha`. A code-changing repair invalidates later evidence for the old head; target reassignment or fallback does not permit reuse of stale evidence.
 
 ## Degraded states
 
@@ -156,14 +200,16 @@ Role status includes:
 - model-probe freshness;
 - missing capabilities;
 - model-diversity state;
-- independent-review state;
+- required and actual review-independence state;
 - whether workspace policy permits execution.
 
 No fallback or degraded state is silent.
 
 ## Compatibility
 
-Legacy `WORKER_CODE_CLI_CHAIN` and `WORKER_SCRIBE_CLI_CHAIN` may be read during migration. Once role assignments are persisted, role configuration is authoritative. Legacy values are reported as compatibility input and do not silently override explicit role assignments.
+Legacy `WORKER_CODE_CLI_CHAIN` and `WORKER_SCRIBE_CLI_CHAIN` may be read during migration. Once role assignments are persisted and routing is explicitly activated, role configuration is authoritative. Legacy values remain visible compatibility inputs and do not silently override explicit role assignments.
+
+PR #160 itself does not activate role routing. Until the relevant slices are implemented, current legacy worker CLI policy remains effective.
 
 ## Platform requirements
 
@@ -174,7 +220,10 @@ The hosted platform provides:
 - automatic, recommended, and manual assignment controls;
 - primary and fallback selection;
 - per-role budget and timeout controls;
-- review-independence preference;
-- effective/degraded role status;
+- review-independence policy;
+- desired and exact applied revision status;
+- effective/degraded/rejected/pending role status;
 - a non-mutating role test action;
 - audit history without secrets or raw unrestricted prompts.
+
+Desired configuration is not represented as effective until the appliance reports the matching applied revision.

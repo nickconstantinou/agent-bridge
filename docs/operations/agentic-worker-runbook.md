@@ -2,15 +2,67 @@
 
 ## Status
 
-Canonical operating runbook for role-based Engineering Worker orchestration. Target-state procedures apply only after their owning Issue #159 slices are implemented and enabled.
+Canonical operating runbook for role-based Engineering Worker orchestration. Slice 1 supports dormant desired role configuration, schema-version-3 persistence, guarded migration, and truthful status. Target-state routing procedures apply only after their owning later Issue #159 slices are implemented and enabled.
 
 ## Scope
 
-This runbook covers role configuration, target validation, workflow observation, safe degradation, cancellation, restart recovery, exact-head evidence, documentation blocking, and rollback. It does not authorise issue mutation, merge, deployment, secret changes, service restart, or destructive operations without the existing human gates.
+This runbook covers current dormant role configuration and migration plus target-state role validation, workflow observation, safe degradation, cancellation, restart recovery, exact-head evidence, documentation blocking, and rollback. It does not authorise issue mutation, merge, deployment, secret changes, service restart, production database migration, or destructive operations without the existing human gates.
 
-## Preflight
+## Current Slice 1 operating boundary
 
-Before enabling role-based orchestration:
+Slice 1 is configuration and persistence only:
+
+- `WORKER_ROLE_ASSIGNMENTS_JSON` may contain one explicit desired assignment for each of `technical_lead`, `code_worker`, and `documentation_steward`;
+- `WORKER_ROLE_ASSIGNMENT_SCOPE` identifies the desired assignment scope;
+- valid configuration is persisted as an append-only revision and reported as `configured_dormant`;
+- `/chain` reports desired assignment revision/source and the effective legacy interactive, code, and scribe chains;
+- `Role routing: disabled` is mandatory;
+- the handler map and existing worker-chain dispatch remain authoritative.
+
+Do not treat a persisted role revision as an enablement switch. Do not infer that automatic/recommended/manual labels have active resolution semantics in Slice 1.
+
+### Current configuration preflight
+
+Before adding desired role configuration to an appliance or service defaults file:
+
+1. Validate the JSON against `docs/configuration/agent-role-assignment.md` in a non-production checkout.
+2. Confirm it contains exactly the three public roles and explicit CLI/model targets.
+3. Confirm no credential, token, prompt, repository content, or unrestricted payload is present.
+4. Confirm the intended scope is bounded and stable.
+5. Confirm the database inventory and backups are owned by the guarded rollout helper.
+6. Confirm every target database is at schema version 3 before starting a schema-3 service.
+7. Confirm the operator expects only dormant desired-state persistence, not role routing.
+
+Malformed or secret/content-bearing configuration fails closed before the worker opens its database.
+
+## Schema 2 → 3 guarded migration
+
+Schema version 3 adds only:
+
+- `role_assignment_revisions`;
+- `role_assignments`;
+- the supporting scope/revision index.
+
+The migration is additive and transactional. It validates exact table shape before advancing `user_version`. A malformed pre-existing lookalike table causes rollback to schema version 2.
+
+Production services use `openProductionDb()` and never migrate automatically. Upgrade production databases only through the existing Issue #135 guarded rollout path:
+
+1. Resolve the complete configured database inventory; do not infer one shared file.
+2. Stop/drain through the approved helper sequence.
+3. Capture protected backups and pre-migration metadata/hashes.
+4. Run rollout inspection. Exact schema 2 must report `migratable`, not `current`.
+5. Run the helper-owned migration using the exact approved application head.
+6. Validate schema version 3, both role tables, integrity, foreign keys, queue counts, hashes, and expected database ownership/mode.
+7. Start services only after validation succeeds.
+8. Complete smoke/readiness checks and retain rollback evidence.
+
+Rollback restores the protected pre-migration database snapshot and prior application version through the guarded helper. Do not attempt an in-place down migration or delete role tables manually.
+
+No production migration or restart is part of Issue #161 implementation review itself.
+
+## Target-state preflight — later slices
+
+Before enabling active role-based orchestration:
 
 1. Confirm the worker service and database are healthy.
 2. Confirm every configured CLI reports authenticated status through its authoritative provider probe.
@@ -22,7 +74,7 @@ Before enabling role-based orchestration:
 8. Confirm the full suite, typecheck, Architecture Lint, cleanup/static checks, `git diff --check`, and exact-head GitHub Actions pass.
 9. Record the exact application SHA, required review-independence level, backup prerequisites, and rollback path.
 
-## Issue-mutation preflight
+## Issue-mutation preflight — later slices
 
 For work that creates or updates multiple child issues:
 
@@ -35,24 +87,23 @@ For work that creates or updates multiple child issues:
 
 A partial mutation followed by later consistency review is an operational defect. Retry and remote/local interruption handling must remain idempotent.
 
-## Effective status
+## Current status
 
-Operators use the role status surface to inspect:
+In Slice 1, operators use `/chain` to inspect:
 
-- requested and effective CLI/model per role;
-- fallbacks and configuration source;
-- authentication and model-probe status;
-- role permission profile;
-- call and time budgets;
-- required and actual review independence;
-- model-diversity state;
-- legacy-chain compatibility state;
-- active workflow phase and authoritative owner;
-- exact subject head for current verification/review/documentation evidence.
+- desired role-assignment status (`configured_dormant`);
+- desired revision and configuration source;
+- desired primary and fallback CLI/model targets;
+- explicit `Role routing: disabled` state;
+- effective legacy interactive, code, and scribe chains.
 
-Status and probe operations are read-only. Reconciliation is a separate explicit mutation.
+When no desired revision exists, `/chain` retains its previous legacy-only output. Status does not expose secrets or raw unrestricted content.
 
-## Safe enablement
+## Target-state effective status — later slices
+
+Later role status adds requested and effective CLI/model, authentication/probe state, permission profiles, budgets, independence, active workflow phase, and exact-head evidence. Status and probe operations remain read-only. Reconciliation is a separate explicit mutation.
+
+## Target-state safe enablement — later slices
 
 1. Persist or approve role assignments.
 2. Run non-mutating role probes.
@@ -72,32 +123,30 @@ Status and probe operations are read-only. Reconciliation is a separate explicit
 
 ## Operational evidence
 
-A qualified workflow records:
+A qualified Slice 1 delivery records:
 
-- work item and job IDs;
-- canonical issue version and `requirements_ready` transition;
-- decomposition-review evidence and mutation verdict for multi-issue work;
-- classified target-path provenance;
-- role, mode, CLI, model, and permission profile for every logical call;
-- prompt and lifecycle-skill identities;
-- advisor/tool audit without secrets;
-- red and green commit SHAs;
-- deterministic verification output and timestamps;
-- exact `subject_head_sha` for verification, review, operations, documentation, readiness, and CI;
-- gate state as `passed`, `failed`, `not_run`, `not_scheduled`, `stale`, or `unknown`;
-- required and actual review independence;
-- documentation-impact result, corrected documents, and validation;
-- Technical Lead implementation, operations, and readiness verdicts;
-- human approvals;
-- retrospective result.
+- approved stacked base and exact final head;
+- schema version and migration owner;
+- representative schema-2 fixture qualification;
+- transactional failure/rollback evidence;
+- reopen persistence and idempotency evidence;
+- existing worker-data preservation and foreign-key evidence;
+- dormant status and unchanged handler-dispatch evidence;
+- red, green, repair, and documentation commits;
+- deterministic check state as `passed`, `failed`, `not_run`, `not_scheduled`, `stale`, or `unknown`;
+- implementation, operations, documentation, readiness, and independent-review outcomes;
+- actual review independence;
+- confirmation of zero production, service, database, queue, or Platform mutation.
+
+A later fully qualified workflow additionally records work-item/job IDs, canonical issue transitions, target provenance, per-call role/model/permission/prompt identities, cross-phase exact-head evidence, human approvals, and retrospective output.
 
 Only authoritative `passed` evidence for the exact current head satisfies a required gate.
 
-## Common degraded states
+## Common degraded states — later active routing
 
 ### Only one CLI authenticated
 
-Expected behaviour:
+Expected later behaviour:
 
 - Agent Bridge selects a model independently for each role;
 - role prompts, sessions, permissions, and budgets remain separate;
@@ -108,7 +157,7 @@ Action when blocked: authenticate another supported CLI or manually assign a ver
 
 ### Only one model available
 
-Expected behaviour:
+Expected later behaviour:
 
 - role and permission separation remains active;
 - Technical Lead review runs in a fresh isolated session;
@@ -119,11 +168,7 @@ A fresh session is not itself independent review.
 
 ### Technical Lead unavailable
 
-Requirements, decomposition review, planning, and review do not fall through silently to an arbitrary Code Worker. The workflow either:
-
-- uses an explicitly configured Technical Lead fallback;
-- uses an explicitly enabled legacy compatibility path where the phase permits it and reports degradation; or
-- pauses for operator action.
+Requirements, decomposition review, planning, and review do not fall through silently to an arbitrary Code Worker. The workflow either uses an explicitly configured fallback, uses an explicitly enabled compatibility path where permitted and reports degradation, or pauses for operator action.
 
 ### Documentation Steward unavailable
 
@@ -172,7 +217,7 @@ A deferred issue, owner assignment, archive suggestion, or roadmap entry does no
 
 When the required correction would materially change product, architecture, authority, or approved scope, hold for human scope approval. This is a blocking hold, not an accepted deferral.
 
-## Cancellation
+## Cancellation — later active routing
 
 Cancellation prevents new role calls and revokes owned in-flight capabilities. Terminal job state cannot be overwritten by late model output.
 
@@ -185,7 +230,7 @@ Verify after cancellation:
 - restart does not resume cancelled work;
 - no documentation or GitHub mutation occurs after cancellation.
 
-## Restart and lease recovery
+## Restart and lease recovery — later active routing
 
 On restart:
 
@@ -212,9 +257,13 @@ If a role receives or attempts an unauthorised capability:
 
 ## Rollback
 
-Role-orchestration rollback returns routing to the prior worker chain without deleting new durable records.
+### Slice 1 configuration rollback
 
-Rollback sequence:
+Because routing is already disabled, removing `WORKER_ROLE_ASSIGNMENTS_JSON` changes only whether a new desired revision is written at startup. Existing revisions remain durable and visible when queried by scope. Do not delete audit/history rows to “disable” routing.
+
+### Later active-routing rollback
+
+Active role-orchestration rollback returns routing to the prior worker chain without deleting durable records:
 
 1. Stop new intake or drain the worker safely.
 2. Capture exact application SHA, database backup, effective role configuration, and active job inventory.
@@ -227,16 +276,17 @@ Rollback sequence:
 
 ## Post-change verification
 
-For production or appliance rollout, verify:
+For a future production or appliance rollout of schema 3, verify:
 
 - exact deployed commit and artifact equality;
+- all configured databases report schema version 3 and both role tables;
 - service active state;
 - worker queue and lease health;
-- effective role assignments and configuration sources;
-- authentication probes without credential leakage;
-- no duplicate role calls after restart;
+- desired role assignments remain `configured_dormant`;
+- role routing remains disabled and legacy chains remain effective;
+- no credential leakage in status or logs;
+- no duplicate role revisions for identical configuration;
 - all canonical documents exist and are current;
-- sample read-only scan and role status;
 - rollback snapshot integrity;
 - exact-head evidence and required independence policy.
 

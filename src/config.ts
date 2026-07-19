@@ -4,10 +4,14 @@
  * index-interactive.ts, index-worker.ts, index-discord-interactive.ts) whose
  * drift shipped a live defect (stale kimchi model list). Epic 1, ADR-006.
  * INPUTS: process-env-shaped record.
- * OUTPUTS: BridgeConfig.bots map; token-uniqueness validation.
- * NEIGHBORS: src/index*.ts, src/types.ts
+ * OUTPUTS: BridgeConfig.bots map; bounded dormant role configuration; token-uniqueness validation.
+ * NEIGHBORS: src/index*.ts, src/types.ts, src/agentRoles.ts
  */
 
+import {
+  parseRoleAssignmentConfig,
+  type RoleAssignmentConfig,
+} from "./agentRoles.js";
 import type { BotConfig, BotKind, BridgeConfig } from "./types.js";
 
 export const KIMCHI_DEFAULT_MODELS = "kimi-k2.7,nemotron-3-ultra-fp4,minimax-m3,deepseek-v4-flash";
@@ -16,6 +20,20 @@ type Env = Record<string, string | undefined>;
 
 export function parseModelPreference(raw: string | undefined): string[] {
   return raw ? raw.split(",").map((s) => s.trim()).filter(Boolean) : [];
+}
+
+/**
+ * Parse explicit role policy as desired, dormant configuration. This boundary
+ * does not persist, resolve, or route roles; the worker entry point passes the
+ * validated record to BridgeDb and current handler policy remains unchanged.
+ */
+export function loadRoleAssignmentConfig(env: Env): RoleAssignmentConfig | null {
+  const raw = env.WORKER_ROLE_ASSIGNMENTS_JSON?.trim();
+  if (!raw) return null;
+  return parseRoleAssignmentConfig(raw, {
+    scopeKey: env.WORKER_ROLE_ASSIGNMENT_SCOPE,
+    source: "environment",
+  });
 }
 
 /**

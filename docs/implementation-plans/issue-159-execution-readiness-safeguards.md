@@ -4,7 +4,7 @@
 
 Normative process addendum for Issue #159 and every behavioural child slice.
 
-This addendum supplements the canonical role-orchestration implementation plan, prompt/red-test contract, operations runbook, verification contract, production-readiness checklist, and `agentic-maintenance.yaml`. Where older prose permits implementation to continue without executable red evidence, stacked exact-head CI, guarded issue mutation, trigger-bounded documentation, or the required independent-review lane, this addendum is authoritative.
+This addendum supplements the canonical role-orchestration implementation plan, prompt/red-test contract, operations runbook, verification contract, production-readiness checklist, and `agentic-maintenance.yaml`. Where older prose permits implementation to continue without executable red evidence, stacked exact-head CI, guarded issue mutation, trigger-bounded documentation, or the required Technical Lead review lane, this addendum is authoritative.
 
 It changes process safeguards only. It does not activate role routing, add product scope, authorize merge or deployment, or weaken any human gate.
 
@@ -18,7 +18,7 @@ Before any behavioural test or production mutation, Agent Bridge must prove:
 - locked dependencies can be installed;
 - required repository tools and commands are available;
 - the focused red command is executable;
-- the review-independence level required by risk has an available execution lane.
+- a read-only Technical Lead review lane is available for the final exact-head review.
 
 A connector-only or static-inspection environment may gather evidence and author a plan, but it may not progress into red, green, repair, verification, documentation completion or readiness for behavioural work.
 
@@ -54,20 +54,22 @@ When a foundation change moves a stacked base, every dependent slice must reconc
 
 `passed`, `failed`, `not_run`, `not_scheduled`, `stale` and `unknown` remain distinct. Only authoritative `passed` evidence for the exact current head satisfies a required gate.
 
-## 4. Independent-review availability
+## 4. Independent Technical Lead review
 
-The Technical Lead determines required independence from risk during planning.
+The final independent review is a Technical Lead responsibility performed through the read-only AdvisorService path.
 
-Before behavioural mutation, Agent Bridge verifies that the required review lane is available:
+Independence is established by role and authority separation:
 
-1. different CLI and model;
-2. different model on the same CLI;
-3. fresh isolated Technical Lead session when policy permits partial independence;
-4. same target recorded as non-independent only when the required level allows it.
+1. the reviewer acts in the `technical_lead` role;
+2. the reviewer did not author or modify the implementation under review;
+3. the review invocation has no mutation authority;
+4. the reviewer performs a fresh review of the exact checked `subject_head_sha`.
 
-A fresh session using the same model is not independent. When policy requires a stronger level than is available, implementation remains blocked rather than finishing with an unavailable final-review gate.
+The Technical Lead may use the same frontier model or CLI as the Code Worker or as earlier Technical Lead phases. Provider or model diversity remains useful metadata and may improve challenge quality, but it is not a blocking independence requirement. Prior read-only requirements, planning, decomposition, guidance, implementation-review, or operations advice does not disqualify the Technical Lead from performing the final review.
 
-The final review applies to the exact checked head. Any blocker correction invalidates the applicable downstream evidence and requires a fresh final review.
+The mutating Code Worker cannot review its own implementation. A fresh invocation is required after any head change or blocker repair, but the workflow does not require an endlessly new model or reviewer identity. The Technical Lead reports its role, target, lack of mutation authority, whether it changed the reviewed code, and the exact reviewed head.
+
+The final review applies to the exact checked head. Any blocker correction invalidates the applicable downstream evidence and requires a fresh Technical Lead review invocation.
 
 ## 5. Guarded GitHub issue mutation
 
@@ -113,10 +115,11 @@ deterministic verification
 → Documentation Steward authoring and validation
 → Technical Lead PR readiness
 → exact-head CI
+→ final exact-head Technical Lead review
 → human merge gate
 ```
 
-Code-changing repair invalidates verification, implementation review, operations review, documentation, readiness and exact-head CI for the previous head.
+Code-changing repair invalidates verification, implementation review, operations review, documentation, readiness, exact-head CI and final Technical Lead review for the previous head.
 
 Moving the stacked base or rewriting a red commit also invalidates evidence whose repository state or assumptions changed.
 
@@ -132,7 +135,7 @@ Moving the stacked base or rewriting a red commit also invalidates evidence whos
 - accepted implementation and operations review;
 - trigger-bounded current documentation, or a fully revalidated necessary broad rewrite;
 - verified GitHub issue-mutation integrity when issues were changed;
-- a completed final review meeting the required independence level;
+- a fresh exact-head read-only Technical Lead final review independent from the mutating Code Worker;
 - current and accurate PR/issue evidence;
 - a clean worktree and no unresolved blocker.
 

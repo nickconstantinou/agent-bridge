@@ -50,6 +50,7 @@ canonical_documents:
     - AGENTS.md
   maintenance:
     - docs/agentic-maintenance.md
+    - docs/implementation-plans/issue-159-execution-readiness-safeguards.md
   worker_user_guide:
     - docs/WORKER-GUIDE.md
   architecture:
@@ -58,8 +59,10 @@ canonical_documents:
     - docs/architecture/agentic-worker-orchestration.md
     - docs/architecture/agentic-prompt-contracts.md
     - docs/architecture/03-target-architecture.md
+    - docs/implementation-plans/issue-159-execution-readiness-safeguards.md
   prompt_contracts:
     - docs/architecture/agentic-prompt-contracts.md
+    - docs/implementation-plans/issue-159-execution-readiness-safeguards.md
   decisions:
     - docs/adr/ADR-005-role-based-agentic-orchestration.md
   roadmap:
@@ -68,11 +71,14 @@ canonical_documents:
     - docs/configuration/agent-role-assignment.md
   operations:
     - docs/operations/agentic-worker-runbook.md
+    - docs/implementation-plans/issue-159-execution-readiness-safeguards.md
   testing:
     - docs/testing/agentic-worker-verification.md
     - docs/architecture/08-testing-strategy.md
+    - docs/implementation-plans/issue-159-execution-readiness-safeguards.md
   production_readiness:
     - docs/architecture/10-production-readiness.md
+    - docs/implementation-plans/issue-159-execution-readiness-safeguards.md
   implementation_handoff:
     - docs/implementation-plans/issue-159-role-based-orchestration.md
     - docs/implementation-plans/issue-159-prompt-and-red-test-contract.md

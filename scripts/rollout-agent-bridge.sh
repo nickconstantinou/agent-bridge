@@ -613,8 +613,8 @@ stop_attempted=1
 stop_and_verify_all_services || die "CONTAINMENT INCOMPLETE during primary stop"
 
 git_check
-clear_stale_sqlite_sidecars
 run_db_tool inspect --evidence - "${db_args[@]}" > "$artifact_dir/stopped-evidence.json"
+clear_stale_sqlite_sidecars
 
 echo "backing up all databases"
 backup_databases

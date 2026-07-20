@@ -56,7 +56,7 @@ Production services use `openProductionDb()` and never migrate automatically. Up
 7. Start services only after validation succeeds.
 8. Complete smoke/readiness checks and retain rollback evidence.
 
-Rollback restores the protected pre-migration database snapshot and prior application version through the guarded helper. Do not attempt an in-place down migration or delete role tables manually.
+The guarded helper restores the protected pre-migration database snapshot when its pre-start rollback conditions hold. It does not change Git state or restore application code; restoring a prior reviewed application version is a separate, explicitly authorised operator action. Do not attempt an in-place down migration or delete role tables manually.
 
 No production migration or restart is part of Issue #161 implementation review itself.
 
@@ -119,7 +119,7 @@ Later role status adds requested and effective CLI/model, authentication/probe s
 11. Verify implementation and applicable operations review precede documentation.
 12. Verify all later evidence is bound to one exact head.
 13. Verify stale required documentation blocks readiness until corrected.
-14. Verify a read-only Technical Lead can review Code Worker output independently even when the same frontier model is reused.
+14. Verify the required genuinely independent read-only reviewer is available; a fresh session using the same model must not be reported as independent for this delivery.
 15. Verify the Code Worker cannot review its own mutation.
 16. Expand enablement only after evidence is recorded.
 

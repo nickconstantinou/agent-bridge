@@ -37,9 +37,9 @@ PR #160 delivers:
 - explicit ordered lifecycle-skill mappings for every role/mode and compatibility prompt;
 - fail-closed skill marker, manifest version, duplication, and budget validation;
 - role-template, lifecycle-skill-set, composed-template, and rendered-content identity tests;
-- exact-head review, operations, documentation, and readiness contracts;
+- exact-head review, operations, documentation, readiness, CI, and final Technical Lead review contracts;
 - explicit evidence states for passed, failed, not run, not scheduled, stale, and unknown checks;
-- required-versus-actual review-independence gates;
+- Technical Lead/Code Worker role-separation review independence, with model diversity recorded as optional metadata rather than a blocking requirement;
 - same-delivery correction of every stale, contradictory, missing, or materially misleading required document;
 - full revalidation of `docs/architecture/01-current-architecture.md`;
 - source-only prompt resolution for canonical and compatibility-key handlers;
@@ -61,8 +61,8 @@ Role routing, durable role assignment, requirements lifecycle, complete structur
 - explicit CLI/model/fallback assignment for each role;
 - source-controlled prompt key/version and role-template hash per role invocation;
 - source-controlled lifecycle skill key/version/content hashes and composed-template hash per role invocation;
-- exact-head verification, review, operations, documentation, readiness, and CI evidence;
-- single-CLI and single-model operation with degradation reporting;
+- exact-head verification, review, operations, documentation, readiness, CI, and final Technical Lead review evidence;
+- single-CLI and single-model operation with explicit model-diversity metadata and preserved role-separation review independence;
 - lifecycle, cancellation, restart, lease, audit, migration, rollback, and platform coordination;
 - completed removal of legacy database prompt overrides and their schema table.
 
@@ -118,10 +118,11 @@ deterministic verification
 → Documentation Steward authoring and validation
 → Technical Lead PR readiness
 → exact-head CI
+→ fresh exact-head Technical Lead final review
 → human merge gate
 ```
 
-A code-changing repair invalidates verification, review, operations, documentation, and readiness evidence for the previous head.
+The final review is independent from the Code Worker through role and authority separation. The same frontier model or CLI may be reused. A code-changing repair invalidates verification, review, operations, documentation, readiness, CI, and final-review evidence for the previous head.
 
 Each child issue must enumerate production-boundary red tests, product and architectural intent, expected current failure, authoritative oracle, focused red command, false-positive controls, sibling behaviour remaining green, migration/rollback impact, documentation triggers, classified target paths, and exact dependencies.
 
@@ -129,6 +130,7 @@ Each child issue must enumerate production-boundary red tests, product and archi
 
 - `docs/implementation-plans/issue-159-role-based-orchestration.md`
 - `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md`
+- `docs/implementation-plans/issue-159-execution-readiness-safeguards.md`
 
 These plans are normative for implementation and subordinate only to the accepted ADR, canonical architecture, Issue #159, and current repository evidence. Material discoveries must update the roadmap and plans rather than silently changing scope.
 
@@ -155,11 +157,11 @@ Human approval remains required for:
 - child-issue decomposition;
 - unresolved product decisions;
 - material canonical issue or delivery-scope changes;
-- role defaults and high-risk review policy;
+- role defaults and review authority policy;
 - merge;
 - production deployment/restart;
 - destructive, secret, permission, or policy changes.
 
 ## Completion
 
-Complete only when all linked OSS and platform slices are implemented and independently reviewed, all role phases use the canonical prompt and lifecycle-skill registries, existing worker flows remain compatible except for explicitly approved phase changes, comprehensive red tests and exact-head evidence pass, prompt/skill identities are durably auditable, legacy database prompt overrides remain absent, migration and rollback are qualified, every required document matches reality, and no unresolved blocker remains.
+Complete only when all linked OSS and platform slices are implemented and reviewed by the read-only Technical Lead independently from Code Worker mutation, all role phases use the canonical prompt and lifecycle-skill registries, existing worker flows remain compatible except for explicitly approved phase changes, comprehensive red tests and exact-head evidence pass, prompt/skill identities are durably auditable, legacy database prompt overrides remain absent, migration and rollback are qualified, every required document matches reality, and no unresolved blocker remains.

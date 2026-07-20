@@ -66,4 +66,23 @@ describe("schema 3 rollout qualification", () => {
     const validated = runRolloutDb("validate", path).databases[0];
     expect(validated).toMatchObject({ schemaVersion: 3, schema: "current" });
   });
+
+  it("rejects schema 3 when a role-assignment table has the wrong exact columns", () => {
+    const path = createVersion2Database();
+    runRolloutDb("migrate", path);
+
+    const raw = new Database(path);
+    raw.exec(`
+      DROP TABLE role_assignments;
+      CREATE TABLE role_assignments (
+        revision_id INTEGER NOT NULL,
+        role TEXT NOT NULL,
+        primary_cli TEXT NOT NULL,
+        PRIMARY KEY(revision_id, role)
+      );
+    `);
+    raw.close();
+
+    expect(() => runRolloutDb("validate", path)).toThrow(/unknown schema after migration/i);
+  });
 });

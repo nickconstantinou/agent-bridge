@@ -66,7 +66,12 @@ function assertExactColumns(
 function indexSignatures(raw: Database.Database, table: string): string[] {
   const indexes = raw.prepare(`PRAGMA index_list(${table})`).all() as Array<{ name: string; unique: number; origin: string }>;
   return indexes.map((index) => {
-    const columns = (raw.prepare(`PRAGMA index_info(${index.name})`).all() as Array<{ name: string }>).map((row) => row.name);
+    const columns = (raw.prepare(`PRAGMA index_xinfo(${index.name})`).all() as Array<{
+      name: string | null;
+      desc: number;
+      key: number;
+    }>).filter((row) => row.key === 1 && row.name !== null)
+      .map((row) => `${row.name}:${row.desc === 1 ? "desc" : "asc"}`);
     return `${index.unique}:${index.origin}:${columns.join(",")}`;
   }).sort();
 }
@@ -87,13 +92,17 @@ export function assertExactRoleAssignmentSchema(raw: Database.Database): void {
   assertExactColumns(raw, "role_assignment_revisions", REVISION_COLUMNS);
   assertExactColumns(raw, "role_assignments", ASSIGNMENT_COLUMNS);
   const revisionIndexes = indexSignatures(raw, "role_assignment_revisions");
-  const expectedRevisionIndexes = ["0:c:scope_key,revision", "1:u:scope_key,idempotency_key", "1:u:scope_key,revision"];
+  const expectedRevisionIndexes = [
+    "0:c:scope_key:asc,revision:desc",
+    "1:u:scope_key:asc,idempotency_key:asc",
+    "1:u:scope_key:asc,revision:asc",
+  ];
   if (revisionIndexes.length !== expectedRevisionIndexes.length
     || revisionIndexes.some((signature, index) => signature !== expectedRevisionIndexes[index])) {
     throw new Error(`unexpected role_assignment_revisions indexes: [${revisionIndexes.join(";")}]`);
   }
   const assignmentIndexes = indexSignatures(raw, "role_assignments");
-  if (assignmentIndexes.length !== 1 || assignmentIndexes[0] !== "1:pk:revision_id,role") {
+  if (assignmentIndexes.length !== 1 || assignmentIndexes[0] !== "1:pk:revision_id:asc,role:asc") {
     throw new Error(`unexpected role_assignments indexes: [${assignmentIndexes.join(";")}]`);
   }
   const foreignKeys = raw.prepare("PRAGMA foreign_key_list(role_assignments)").all() as Array<Record<string, unknown>>;

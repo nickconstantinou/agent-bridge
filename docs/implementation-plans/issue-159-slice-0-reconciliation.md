@@ -24,7 +24,7 @@ For owners, likely target files, dependencies and overlap decisions, this record
 | OSS repository | `nickconstantinou/agent-bridge` |
 | OSS `main` used by PR #160 | `1ce03d5e22ec44b3b23fef847b273f2bce08303c` |
 | PR #160 branch | `agent/role-based-worker-orchestration-docs` |
-| PR #160 exact head / stacked base | `db2ab80f6895bad76cdf46930790bfe70691408a` |
+| PR #160 exact head / stacked base | `e417efd5ac89cc7cebd750d5baa64b2d0173a85e` |
 | PR #160 state | open, draft, unmerged |
 | Platform repository | `nickconstantinou/agent-bridge-platform` |
 | Platform `main` used for reconciliation | `31d6b5e42b89eeb433e272816fd6bbb7aced2dce` |
@@ -33,7 +33,7 @@ For owners, likely target files, dependencies and overlap decisions, this record
 
 PR #160 is the runtime/schema/prompt/documentation-policy foundation. It supplies source-controlled role/mode prompts, canonical lifecycle-skill composition, the pre-mutation decomposition-review contract, comprehensive red-test and target-path provenance validation, source-only prompt resolution, schema version 2, guarded legacy prompt-table removal, and the current architecture/implementation-plan rewrite. Later slices extend those owners and must not recreate a prompt service, AdvisorService, worker execution stack, CI runner or migration authority.
 
-The move from the original Slice 0 base to `db2ab80f6895bad76cdf46930790bfe70691408a` comprised 36 commits, modified or added 34 paths and deleted none. Previously classified exact-base targets therefore remained present, and the classification was re-anchored to the new base.
+The move from the original Slice 0 base to `e417efd5ac89cc7cebd750d5baa64b2d0173a85e` comprised 213 commits and modified or added 82 paths. Previously classified exact-base targets therefore remained present, and the classification was re-anchored to the new base.
 
 ## Relevant work and non-overlap
 
@@ -120,7 +120,8 @@ deterministic verification
 → Technical Lead operations review when triggered
 → Documentation Steward authoring and validation or accepted no-change
 → Technical Lead PR-readiness advisory
-→ final exact-head checks
+→ final exact-head CI
+→ independent final review
 → human merge gate
 ```
 
@@ -130,8 +131,8 @@ Mandatory invariants:
 - Slice #168 owns activation of review-before-documentation, readiness, and final-check sequencing.
 - Documentation requires accepted implementation review and any required operations review for the same exact code head.
 - Readiness requires documentation validation or accepted no-change evidence for that head; it does not require final-check results.
-- Final exact-head checks start only after readiness and remain deterministic authority before the human merge gate.
-- A code-changing repair invalidates deterministic verification, implementation/operations review, documentation, readiness, and exact-head check/CI evidence for the previous head until the required phases rerun.
+- Final exact-head CI starts only after readiness and remains deterministic authority before independent final review and the human merge gate.
+- A code-changing repair invalidates deterministic verification, implementation/operations review, documentation, readiness, exact-head CI, and final-review evidence for the previous head until the required phases rerun.
 - Slice #169 qualifies the complete sequence across restart, retry, cancellation, lease loss, stale evidence, fallback, migration and rollback.
 
 The accepted ADR and canonical architecture are not changed to mirror slice numbering.
@@ -172,7 +173,7 @@ The classification input was every concrete implementation target path in the ow
 
 Immutable references:
 
-- OSS base: `db2ab80f6895bad76cdf46930790bfe70691408a`;
+- OSS base: `e417efd5ac89cc7cebd750d5baa64b2d0173a85e`;
 - dependency PR #152 head: `35c6a1a988e4cf197ca71cf2a653f103156e75e7`;
 - Platform base: `31d6b5e42b89eeb433e272816fd6bbb7aced2dce`.
 

@@ -41,9 +41,9 @@ Use the existing schema registry, numbered migration boundary, repository SQL ow
 
 - exact prior schema version 2 fixture creation through registered migrations 1 and 2;
 - transactional migration to schema version 3;
-- exact role-table shape and foreign keys;
+- exact role-table column order, declared types, nullability, primary keys, defaults, check constraints, unique/supporting indexes, and the cascading revision foreign key;
 - preservation of representative work items, jobs, approvals, GitHub links, advisor calls, and conversation turns;
-- zero `foreign_key_check` violations;
+- zero database-wide `foreign_key_check` violations on strict production open and guarded rollout validation;
 - close/reopen persistence;
 - current-revision lookup and ordered history;
 - identical retry returns the same revision without a duplicate row;
@@ -59,7 +59,7 @@ Cover:
 - the rollout inspector permits both role tables and no unrelated unknown table;
 - an exact schema-version-2 database with current legacy queue/lock shape is `migratable`, not `current`;
 - migration produces schema version 3 with both role tables;
-- validation reports `current` only for exact schema version 3 plus required queue, lock, and role-table shape;
+- validation reports `current` only for exact schema version 3 plus required queue and lock shape, exact role-table metadata/constraints/indexes/foreign key, and zero database-wide `foreign_key_check` violations;
 - queue counts, hashes, integrity, backup, and rollback behaviour remain owned by the existing guarded-helper tests.
 
 ### Dormant status and dispatch compatibility

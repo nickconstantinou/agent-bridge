@@ -22,7 +22,7 @@ Agent Bridge remains authoritative for requirements state, workflow transitions,
 
 ## Delivered prompt foundation — PR #160
 
-PR #160 at exact head `e417efd5ac89cc7cebd750d5baa64b2d0173a85e` delivers:
+PR #160 at exact head `c2cbc3413e268b9807b88e8b62a2cd7b3052b6e7` delivers:
 
 - a source-controlled canonical registry for 22 role/mode prompt contracts;
 - separate Technical Lead requirements, issue, decomposition-review, planning, focused repair, guidance, implementation review, operations review, and readiness prompts;
@@ -51,7 +51,7 @@ PR #160 remains the target-state authority for later role routing and orchestrat
 
 ## Slice 0 reconciliation — PR #170
 
-Slice 0 is documented by `docs/implementation-plans/issue-159-slice-0-reconciliation.md`. Its current exact head is `b54534af1dcacd8a4f228869df24d88bd65d5f8f`, stacked on PR #160. It records current owners, overlap decisions, concrete target-path classification, actual child issues, cross-repository ownership, human gates, and retrospective.
+Slice 0 is documented by `docs/implementation-plans/issue-159-slice-0-reconciliation.md`. Its current exact head is `f8ee5415c4bc5331a8331c923b7fa8d53601a8de`, stacked on PR #160. It records current owners, overlap decisions, concrete target-path classification, actual child issues, cross-repository ownership, human gates, and retrospective.
 
 Slice 0 creates documentation and issue metadata only. It does not itself merge, deploy, restart services, migrate production databases, mutate Platform runtime state, or activate any role behaviour.
 

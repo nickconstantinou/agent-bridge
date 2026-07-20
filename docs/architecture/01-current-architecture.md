@@ -99,7 +99,7 @@ Desired state and effective state are therefore distinct. The status surface exp
 - `src/db/schema.ts` owns schema versioning and the ordered migration registry. At Slice 1, `CURRENT_SCHEMA_VERSION` is `3`.
 - `src/db/legacyBaselineMigration.ts` owns migration 1 and its historical compatibility repairs.
 - `src/db/dropLegacyPromptOverridesMigration.ts` owns migration 2. It treats an absent prompt table as already retired, drops an empty table transactionally, and rejects unexpected rows without logging their content.
-- `src/db/roleAssignmentsMigration.ts` owns migration 3. It adds `role_assignment_revisions` and `role_assignments`, validates exact table shape inside the migration transaction, and fails closed without advancing `user_version` when a malformed lookalike exists.
+- `src/db/roleAssignmentsMigration.ts` owns migration 3. It adds `role_assignment_revisions` and `role_assignments`, validates exact columns, metadata, defaults, constraints, indexes, and the cascading foreign key inside the migration transaction, and fails closed without advancing `user_version` when a malformed lookalike exists. Strict production open and guarded rollout validation separately require a clean database-wide `foreign_key_check`.
 - `openProductionDb()` remains strict: production services do not migrate automatically at startup.
 - Issue #135 and the guarded rollout helper own production database inventory, backup, migration, validation, restart sequencing, rollback, and sentinel evidence.
 

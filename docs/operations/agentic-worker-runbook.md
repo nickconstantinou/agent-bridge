@@ -43,7 +43,7 @@ Schema version 3 adds only:
 - `role_assignments`;
 - the supporting scope/revision index.
 
-The migration is additive and transactional. It validates exact table shape before advancing `user_version`. A malformed pre-existing lookalike table causes rollback to schema version 2.
+The migration is additive and transactional. Before advancing `user_version`, it validates exact column order, declared types, nullability, primary keys, defaults, check constraints, unique/supporting indexes, and the cascading revision foreign key. A malformed pre-existing lookalike table causes rollback to schema version 2. Strict production open and guarded rollout validation additionally require zero database-wide `foreign_key_check` violations.
 
 Production services use `openProductionDb()` and never migrate automatically. Upgrade production databases only through the existing Issue #135 guarded rollout path:
 

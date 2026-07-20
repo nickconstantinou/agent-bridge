@@ -7,14 +7,18 @@ function read(path: string): string {
 }
 
 describe("worker process readiness safeguards", () => {
-  it("runs Test & Typecheck for stacked pull requests and supports manual dispatch", () => {
-    const workflow = read(".github/workflows/ci.yml");
+  it("runs exact-head checks for stacked pull requests and supports manual dispatch", () => {
+    const ci = read(".github/workflows/ci.yml");
+    const architectureLint = read(".github/workflows/architecture-lint.yml");
 
-    expect(workflow).toContain("pull_request:");
-    expect(workflow).toContain("workflow_dispatch:");
-    expect(workflow).not.toMatch(/pull_request:\s*\n\s+branches:\s*\[main\]/);
-    expect(workflow).toContain("npm test");
-    expect(workflow).toContain("npm run typecheck");
+    for (const workflow of [ci, architectureLint]) {
+      expect(workflow).toContain("pull_request:");
+      expect(workflow).toContain("workflow_dispatch:");
+      expect(workflow).not.toMatch(/pull_request:\s*\n\s+branches:\s*\[main\]/);
+    }
+    expect(ci).toContain("npm test");
+    expect(ci).toContain("npm run typecheck");
+    expect(architectureLint).toContain("bash scripts/arch-lint.sh src");
   });
 
   it("blocks behavioural work without an execution-capable isolated worktree", () => {

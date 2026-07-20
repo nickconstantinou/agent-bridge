@@ -16,7 +16,7 @@ The worker exposes exactly three configurable roles:
 
 | Role | Responsibilities | Authority |
 |---|---|---|
-| Technical Lead | Requirements discovery and validation, canonical issues, implementation plans, task decomposition, bounded guidance, implementation review, operations review, PR readiness | Bounded read-only evidence |
+| Technical Lead | Requirements discovery and validation, canonical issues, implementation plans, task decomposition, bounded guidance, implementation review, operations review, PR readiness, final exact-head review | Bounded read-only evidence |
 | Code Worker | Defect/refactor scans, investigation, TDD implementation, repair, deterministic verification | Mode-specific read-only or worktree mutation |
 | Documentation Steward | Documentation impact, documentation-only authoring, documentation validation and maintenance | Read-only or documentation-path-only mutation |
 
@@ -39,8 +39,9 @@ Raw request, imported issue, or scan finding
 → deterministic verification
 → Technical Lead implementation and operations review
 → Documentation Steward authoring and validation
-→ PR readiness
-→ draft PR and CI
+→ Technical Lead PR readiness
+→ exact-head CI
+→ fresh exact-head Technical Lead final review
 → human merge approval
 ```
 
@@ -148,26 +149,37 @@ The prior scribe chain may remain only as explicit compatibility fallback. It is
 Code Worker permissions depend on mode:
 
 - `scan` and `investigate`: read-only;
-- `red`: test-only mutation and demonstrated expected failure;
+- `red`: test-only mutation and empirically demonstrated expected failure;
 - `green`: production mutation without changing committed red tests;
 - `repair`: mutation bounded to the approved packet;
 - `verify`: approved commands and evidence without new scope.
 
 Implementation work remains in disposable clones/workspaces. Existing supervisor, TDD commit separation, workspace isolation, head-SHA verification, CI checks, and merge gate remain authoritative.
 
+## Review independence
+
+The final independent review is performed by the read-only Technical Lead through AdvisorService after exact-head CI.
+
+Independence is established by role and authority separation from the mutating Code Worker:
+
+- reviewer role is `technical_lead`;
+- the reviewer did not author or modify the implementation under review;
+- the review invocation has no mutation authority;
+- the review is a fresh invocation bound to the exact checked `subject_head_sha`.
+
+The same frontier model or CLI may be reused. Provider/model diversity is useful metadata but is not a readiness requirement. Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations review does not disqualify the reviewer. The Code Worker cannot review its own mutation. A head change requires a fresh Technical Lead review invocation.
+
 ## Documentation
 
 The Documentation Steward assesses impact during planning and updates documents after final implementation evidence exists. Author mode is restricted by `agentic-maintenance.yaml` to documentation paths.
 
-A PR is not ready until required documents are current or a validated `no_documentation_change` decision is recorded.
+A PR is not ready until required documents are current or a validated `no_documentation_change` decision is recorded. Documentation edits remain trigger-bounded; a broad rewrite requires complete revalidation.
 
 ## Role assignment
 
 A role assignment binds an authenticated CLI, explicit model, fallbacks, permissions, budgets, and output contracts. The platform supports automatic, recommended, and manual selection.
 
-With one authenticated CLI, Agent Bridge selects models independently for each role. With one model, role sessions and permissions remain separate while status reports model diversity and independent-model review as unavailable.
-
-Review preference is different CLI/model, then different model on the same CLI, then a fresh Technical Lead session, then the same target marked non-independent.
+With one authenticated CLI, Agent Bridge selects models independently for each role. With one model, role sessions and permissions remain separate. Status reports model diversity as unavailable while preserving `technical_lead_role_independent` review when the role/authority conditions are satisfied.
 
 Configuration reference: `docs/configuration/agent-role-assignment.md`.
 
@@ -188,6 +200,9 @@ Configuration reference: `docs/configuration/agent-role-assignment.md`.
 13. Required documentation is a readiness gate.
 14. Advisor evidence tools are Bridge-owned, read-only, bounded, and never grant mutation authority.
 15. A blocked worker attempt may receive at most one advisor-guided executor retry.
+16. Code Worker cannot review its own mutation.
+17. Model diversity is not required for Technical Lead review independence.
+18. Code-changing repair invalidates downstream exact-head evidence, including final Technical Lead review.
 
 ## Approval model
 
@@ -202,6 +217,6 @@ Human approval remains required for unresolved product decisions, merge, destruc
 - Role configuration: `docs/configuration/agent-role-assignment.md`
 - Operations and recovery: `docs/operations/agentic-worker-runbook.md`
 - Testing: `docs/testing/agentic-worker-verification.md`
-- ADR: `docs/decisions/ADR-009-role-based-agentic-orchestration.md`
+- ADR: `docs/adr/ADR-005-role-based-agentic-orchestration.md`
 - Machine-readable document registry: `agentic-maintenance.yaml`
 - Implementation handoff: `docs/implementation-plans/issue-159-role-based-orchestration.md`

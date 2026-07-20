@@ -2,13 +2,27 @@
 
 ## Status
 
-Canonical target-state architecture.
+Canonical target-state architecture with an explicit current implementation boundary. Slice 1 implements dormant desired role validation, persistence, and status; later Issue #159 slices own active role resolution, permissions, and routing.
 
 ## Purpose
 
 The Engineering Worker is the software-engineering work engine inside Agent Bridge OSS. It converts incomplete intent, imported issues, and repository findings into validated issues, approved plans, tested branches, current documentation, and pull requests while preserving explicit human approval for merges, deployments, policy exceptions, and destructive operations.
 
 It is not a general-purpose autonomous agent framework. Agent Bridge owns orchestration and authority; models operate within bounded roles.
+
+## Current implementation boundary
+
+The current worker retains its existing handler map, durable queue and lease lifecycle, CLI-chain policy, provider runtimes, supervisor, workspace, GitHub, and merge owners.
+
+Slice 1 adds:
+
+- the exact three public role IDs and canonical mode registry;
+- explicit bounded desired CLI/model assignments and ordered fallbacks;
+- versioned schema-3 persistence through the existing `BridgeDb` and repository boundary;
+- truthful `/chain` projection of `configured_dormant` desired state;
+- explicit reporting that role routing is disabled and legacy interactive, code, and scribe chains remain effective.
+
+No current handler reads desired role assignments to choose a CLI or model. Capability discovery/ranking, applied assignments, role-native prompt routing, permission profiles, requirements state, role lifecycle phases, independent-review target selection, and Platform transport remain later-slice target behaviour.
 
 ## Role model
 
@@ -24,7 +38,7 @@ Scanner is a Code Worker mode. Independent review and operations are Technical L
 
 Full role and workflow architecture: `docs/architecture/agentic-worker-orchestration.md`.
 
-## Core workflow
+## Core workflow — later slices
 
 ```text
 Raw request, imported issue, or scan finding
@@ -44,17 +58,18 @@ Raw request, imported issue, or scan finding
 → human merge approval
 ```
 
-A scan finding is a candidate, not approved work. An apparently complete issue still receives repository-grounded validation. No implementation plan is created before `requirements_ready`.
+A scan finding is a candidate, not approved work. An apparently complete issue still receives repository-grounded validation. No implementation plan is created before `requirements_ready` after that lifecycle activates.
 
 ## Agent Bridge authority
 
-Agent Bridge owns:
+Agent Bridge owns or will own at the relevant slice:
 
 - classification and workflow transitions;
 - canonical work and phase state;
 - leases, cancellation, restart recovery, and stale-owner fencing;
-- role assignment and provider/model fallback;
-- permission profiles and capability tokens;
+- desired role-assignment validation and revision persistence;
+- later role resolution and provider/model fallback;
+- later permission profiles and capability tokens;
 - context selection, redaction, freshness, and budgets;
 - structured-output validation and bounded repair;
 - deterministic tests and evidence;
@@ -65,7 +80,7 @@ Agent Bridge owns:
 
 Models cannot change role, grant themselves tools, expand scope, approve their own output, merge, deploy, or override deterministic or human gates.
 
-## Requirements and issue authority
+## Requirements and issue authority — later slices
 
 GitHub or local input is not assumed complete. The Technical Lead gathers repository facts through typed, allowlisted, bounded read-only tools and surfaces unresolved product decisions to a human.
 
@@ -73,7 +88,7 @@ The canonical issue is the durable unit of implementation work. It records curre
 
 Type-specific contracts are in `docs/agentic-maintenance.md`.
 
-## Planning
+## Planning — later slices
 
 The Technical Lead uses the existing authoritative advisor service to create the repository-grounded plan. Planning includes:
 
@@ -86,9 +101,9 @@ The Technical Lead uses the existing authoritative advisor service to create the
 - operations, migration, rollback, and escalation conditions;
 - a validated machine-readable execution contract.
 
-The prior scribe chain may remain only as explicit compatibility fallback. It is not the target source of canonical requirements or plans. Structural validation and bounded repair remain fail-closed before persistence.
+The prior scribe chain may remain only as explicit compatibility fallback after active role routing. It is not the target source of canonical requirements or plans. Structural validation and bounded repair remain fail-closed before persistence.
 
-## Execution
+## Execution — later slices
 
 Code Worker permissions depend on mode:
 
@@ -100,7 +115,7 @@ Code Worker permissions depend on mode:
 
 Implementation work remains in disposable clones/workspaces. Existing supervisor, TDD commit separation, workspace isolation, head-SHA verification, CI checks, and merge gate remain authoritative.
 
-## Documentation
+## Documentation — later lifecycle activation
 
 The Documentation Steward assesses impact during planning and updates documents after final implementation evidence exists. Author mode is restricted by `agentic-maintenance.yaml` to documentation paths.
 
@@ -108,11 +123,23 @@ A PR is not ready until required documents are current or a validated `no_docume
 
 ## Role assignment
 
-A role assignment binds an authenticated CLI, explicit model, fallbacks, permissions, budgets, and output contracts. The platform supports automatic, recommended, and manual selection.
+### Current Slice 1 desired state
+
+A desired assignment binds a role, persisted selection label, explicit bounded primary CLI/model, ordered fallbacks, source, scope, revision identity, and dormant status. It does not include or activate capability resolution, permission profiles, budgets, or applied/effective routing.
+
+The current status contract is:
+
+- desired assignments are `configured_dormant`;
+- role routing is disabled;
+- existing `WORKER_CLI_CHAIN`, `WORKER_CODE_CLI_CHAIN`, and `WORKER_SCRIBE_CLI_CHAIN` remain effective.
+
+### Later active target state
+
+An active role assignment additionally binds verified capability, permissions, budgets, and output contracts. The platform target supports automatic, recommended, and manual selection.
 
 With one authenticated CLI, Agent Bridge selects models independently for each role. With one model, role sessions and permissions remain separate while status reports model diversity and independent-model review as unavailable.
 
-Review preference is different CLI/model, then different model on the same CLI, then a fresh Technical Lead session, then the same target marked non-independent.
+Review preference is different CLI/model, then different model on the same CLI, then a fresh Technical Lead session, then the same target marked non-independent. A fresh same-model session is not itself independent.
 
 Configuration reference: `docs/configuration/agent-role-assignment.md`.
 
@@ -122,19 +149,20 @@ Configuration reference: `docs/configuration/agent-role-assignment.md`.
 2. Destructive operations, production deployment, secret/permission changes, and policy exceptions require explicit human approval.
 3. Implementation happens in disposable workspaces, not live checkouts.
 4. GitHub is a delivery and external intake surface, not the job-state store.
-5. SQLite repositories remain authoritative for work, job, phase, role, audit, and approval state.
-6. Incoming issues and scan findings are untrusted requirements inputs until validated.
-7. No plan before `requirements_ready`.
-8. Technical Lead remains read-only.
-9. Code Worker and Documentation Steward permissions are mode-specific and Bridge-enforced.
+5. SQLite repositories remain authoritative for work, job, phase, desired role, audit, and approval state.
+6. Incoming issues and scan findings are untrusted requirements inputs until validated after that lifecycle activates.
+7. No role-native plan before `requirements_ready` after that lifecycle activates.
+8. Technical Lead remains read-only after active role routing.
+9. Code Worker and Documentation Steward permissions are mode-specific and Bridge-enforced after their permission slice activates.
 10. Deterministic evidence wins over model claims.
 11. Terminal state cannot be overwritten by late output.
-12. Restart, retry, cancellation, or lease loss cannot duplicate logical role calls.
+12. Restart, retry, cancellation, or lease loss cannot duplicate logical role calls after that lifecycle activates.
 13. Required documentation is a readiness gate.
+14. Dormant desired role assignments cannot affect current handler or interactive dispatch.
 
 ## Approval model
 
-Routine in-policy operations may create work items, gather read-only evidence, author canonical issues, create plans, create branches, perform TDD, run verification, update approved documentation, push agent branches, and open or refresh draft PRs.
+Routine in-policy operations may create work items, gather read-only evidence, author canonical issues, create plans, create branches, perform TDD, run verification, update approved documentation, push agent branches, and open or refresh draft PRs where the owning lifecycle exists and policy permits it.
 
 Human approval remains required for unresolved product decisions, merge, destructive Git, force-push, branch deletion outside approved cleanup, service restart, production deploy, secret/config/permission changes, configured-cap exceptions, and policy changes.
 
@@ -145,6 +173,6 @@ Human approval remains required for unresolved product decisions, merge, destruc
 - Role configuration: `docs/configuration/agent-role-assignment.md`
 - Operations and recovery: `docs/operations/agentic-worker-runbook.md`
 - Testing: `docs/testing/agentic-worker-verification.md`
-- ADR: `docs/decisions/ADR-009-role-based-agentic-orchestration.md`
+- ADR: `docs/adr/ADR-005-role-based-agentic-orchestration.md`
 - Machine-readable document registry: `agentic-maintenance.yaml`
 - Implementation handoff: `docs/implementation-plans/issue-159-role-based-orchestration.md`

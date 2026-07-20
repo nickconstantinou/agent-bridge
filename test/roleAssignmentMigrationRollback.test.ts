@@ -3,10 +3,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { openDb } from "../src/db.js";
 import { applyLegacyCompatibleBaseline } from "../src/db/legacyBaselineMigration.js";
 import { dropLegacyPromptOverrides } from "../src/db/dropLegacyPromptOverridesMigration.js";
-import { applyMigrationsUpTo } from "../src/db/schema.js";
+import { applyMigrations, applyMigrationsUpTo } from "../src/db/schema.js";
 
 const roots: string[] = [];
 
@@ -37,10 +36,21 @@ describe("role assignment migration rollback", () => {
       INSERT INTO role_assignment_revisions (id, unexpected_column)
       VALUES (9, 'preserve-me');
     `);
-    raw.close();
 
-    expect(() => openDb(path, { serviceId: "role-migration-rollback-test" }))
-      .toThrow(/unexpected pre-existing role-assignment tables at schema version 2/i);
+    try {
+      expect(() => applyMigrations(raw))
+        .toThrow(/unexpected pre-existing role-assignment tables at schema version 2/i);
+      expect(raw.pragma("user_version", { simple: true })).toBe(2);
+      expect(raw.prepare("SELECT id, title FROM work_items WHERE id = 77").get())
+        .toEqual({ id: 77, title: "migration sentinel" });
+      expect(raw.prepare("SELECT id, unexpected_column FROM role_assignment_revisions").all())
+        .toEqual([{ id: 9, unexpected_column: "preserve-me" }]);
+      expect(raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'role_assignments'").get())
+        .toBeUndefined();
+      expect(raw.pragma("foreign_key_check")).toEqual([]);
+    } finally {
+      raw.close();
+    }
 
     const verify = new Database(path, { readonly: true });
     expect(verify.pragma("user_version", { simple: true })).toBe(2);

@@ -25,12 +25,11 @@ export const AGENT_ROLE_MODES = {
   documentation_steward: ["impact", "author", "validate", "maintenance"],
 } as const satisfies Record<AgentRoleId, readonly string[]>;
 
-export type AgentRoleMode = (typeof AGENT_ROLE_MODES)[AgentRoleId][number];
 export type RoleAssignmentSelection = "automatic" | "recommended" | "manual";
 export type RoleAssignmentSource = "environment" | "operator" | "platform";
 export type RoleAssignmentStatus = "configured_dormant";
 
-export interface RoleAssignmentTarget {
+interface RoleAssignmentTarget {
   cli: string;
   model: string;
 }

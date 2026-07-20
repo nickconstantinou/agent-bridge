@@ -2,13 +2,14 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
   abortCliProcessAndWait,
   runCli,
   runCliAsync,
   shutdownCliProcessesAndWait,
 } from "../src/cli.js";
+import { buildWorkspaceLockedInvocation } from "../src/workspaceLock.js";
 
 const CRITICAL_SECTION = String.raw`
 const fs = require("node:fs");
@@ -63,10 +64,41 @@ async function waitForFile(path: string, timeoutMs = 2_000): Promise<void> {
 
 describe("OS-backed workspace execution lock", () => {
   const roots: string[] = [];
+  const previousLockMode = process.env.BRIDGE_WORKSPACE_LOCK_MODE;
+
+  afterAll(() => {
+    if (previousLockMode === undefined) delete process.env.BRIDGE_WORKSPACE_LOCK_MODE;
+    else process.env.BRIDGE_WORKSPACE_LOCK_MODE = previousLockMode;
+  });
 
   afterEach(async () => {
+    delete process.env.BRIDGE_WORKSPACE_LOCK_MODE;
     await shutdownCliProcessesAndWait();
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it("disables the workspace lock explicitly for non-worker executions", () => {
+    const root = initRepository();
+    roots.push(root);
+    process.env.BRIDGE_WORKSPACE_LOCK_MODE = "off";
+
+    const invocation = buildWorkspaceLockedInvocation("node", ["-e", ""], root);
+
+    expect(invocation.command).toBe("node");
+    expect(invocation.args).toEqual(["-e", ""]);
+    expect(invocation.workspaceLock).toBeNull();
+  });
+
+  it("keeps workspace locking enabled by default for worker executions", () => {
+    const root = initRepository();
+    roots.push(root);
+    delete process.env.BRIDGE_WORKSPACE_LOCK_MODE;
+
+    const invocation = buildWorkspaceLockedInvocation("node", ["-e", ""], root);
+
+    expect(invocation.command).toMatch(/flock$/);
+    expect(invocation.args[0]).toBe("--exclusive");
+    expect(invocation.workspaceLock?.worktreeRoot).toBe(root);
   });
 
   it("serializes separate supervised runs in the same canonical worktree", async () => {

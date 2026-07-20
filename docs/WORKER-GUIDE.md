@@ -25,7 +25,7 @@ Issue #159 introduces exactly three configurable roles:
 
 | Role | Target responsibility |
 |---|---|
-| Technical Lead | Requirements and issue validation, bundle review, planning, bounded guidance, implementation/operations review, and PR-readiness advice using read-only evidence |
+| Technical Lead | Requirements and issue validation, bundle review, planning, bounded guidance, implementation/operations review, final exact-head review, and PR-readiness advice using read-only evidence |
 | Code Worker | Read-only scanning/investigation and approved red, green, repair, and verification work in disposable workspaces |
 | Documentation Steward | Documentation impact, documentation-only authoring, and validation of every required canonical document |
 
@@ -47,10 +47,11 @@ request, imported issue, or scan candidate
 → Documentation Steward authoring and validation
 → Technical Lead PR readiness
 → exact-head CI
+→ fresh exact-head Technical Lead final review
 → human merge gate
 ```
 
-A code-changing repair after verification invalidates verification, review, operations, documentation, and readiness evidence for the previous head. The workflow returns to deterministic verification.
+A code-changing repair after verification invalidates verification, review, operations, documentation, readiness, CI, and final-review evidence for the previous head. The workflow returns to deterministic verification.
 
 ## Multi-issue requests
 
@@ -129,7 +130,7 @@ Prompts and skills resolve only from reviewed source files. Schema migration 2 r
 
 ## Exact-head evidence
 
-Verification, implementation review, operations review, documentation validation, PR readiness, and CI evidence identify one `subject_head_sha`.
+Verification, implementation review, operations review, documentation validation, PR readiness, CI, and final Technical Lead review evidence identify one `subject_head_sha`.
 
 Required gate status is one of:
 
@@ -142,7 +143,7 @@ Required gate status is one of:
 
 Only authoritative `passed` evidence for the exact current head satisfies a required gate. A workflow must not describe `not_scheduled`, `not_run`, or stale evidence as green.
 
-Required review independence and actual review independence are recorded separately. A fresh session using the same model is not independent merely because the context is new.
+Review independence comes from role and authority separation. A fresh exact-head review by the read-only Technical Lead advisor is independent from Code Worker implementation when the Technical Lead did not author or modify the reviewed implementation and has no mutation authority in the review invocation. The same frontier model or CLI may be reused. Model diversity is recorded separately and is not a blocking requirement. The Code Worker cannot review its own mutation.
 
 ## Documentation readiness
 
@@ -200,9 +201,9 @@ Do not restart or bypass the migration. Migration 2 preserves schema version 1 a
 
 Correct every required stale, contradictory, missing, or misleading document through the documentation-only lane. Do not create a follow-up issue as a substitute for correction.
 
-### Review is non-independent
+### Review independence is unavailable
 
-Role separation may remain intact, but repository risk policy can require a different CLI/model or different model. If the required level is unavailable, the workflow holds for human decision.
+Confirm the final reviewer is the read-only Technical Lead, did not author or modify the implementation, has no mutation authority, and is reviewing the exact checked head in a fresh invocation. A second model or CLI is not required. If those role/authority conditions cannot be met, the workflow remains blocked.
 
 ## Canonical references
 
@@ -217,4 +218,5 @@ Role separation may remain intact, but repository risk policy can require a diff
 - Decision: `docs/adr/ADR-005-role-based-agentic-orchestration.md`
 - Epic plan: `docs/implementation-plans/issue-159-role-based-orchestration.md`
 - Prompt/red-test addendum: `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md`
+- Execution/readiness addendum: `docs/implementation-plans/issue-159-execution-readiness-safeguards.md`
 - Document registry: `agentic-maintenance.yaml`

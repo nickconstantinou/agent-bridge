@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadRoleAssignmentConfig } from "../src/config.js";
 import { openDb } from "../src/db.js";
+import { executeNextJob } from "../src/jobExecutor.js";
 import {
   handleWorkerCommand,
   type WorkerKeyboardMessageResult,
@@ -39,6 +40,12 @@ const legacyEnv = {
   WORKER_CODE_CLI_CHAIN: "codex,claude",
   WORKER_SCRIBE_CLI_CHAIN: "antigravity,claude,codex",
 } as NodeJS.ProcessEnv;
+
+type RouteFixture = {
+  owner: "scribe" | "code" | "github" | "git_github";
+  command: string;
+  chain: string[];
+};
 
 describe("dormant role assignment compatibility", () => {
   it("preserves the existing /chain response when no role assignment revision exists", async () => {
@@ -99,7 +106,8 @@ describe("dormant role assignment compatibility", () => {
     }
   });
 
-  it("ignores persisted role assignments for every existing handler while routing is disabled", () => {
+  it("ignores persisted role assignments for every existing handler while routing is disabled", async () => {
+    const db = openDb(":memory:");
     const config = roleConfig();
     const policyBefore = resolveWorkerCliPolicy(legacyEnv);
     const policyAfter = resolveWorkerCliPolicy({
@@ -109,28 +117,121 @@ describe("dormant role assignment compatibility", () => {
     });
     expect(policyAfter).toEqual(policyBefore);
 
+    const desiredRevision = db.createRoleAssignmentRevision(config);
     const source = readFileSync(new URL("../src/index-worker.ts", import.meta.url), "utf8");
     const handlerMapStart = source.indexOf("const jobExecutor = startJobExecutorLoop({");
     const handlerMapEnd = source.indexOf("  sendMessage:", handlerMapStart);
     expect(handlerMapStart).toBeGreaterThanOrEqual(0);
     expect(handlerMapEnd).toBeGreaterThan(handlerMapStart);
-    const handlerMap = source.slice(handlerMapStart, handlerMapEnd);
+    const productionHandlerMap = source.slice(handlerMapStart, handlerMapEnd);
 
-    expect(handlerMap).toContain("defect_scan: createDefectScanHandler");
-    expect(handlerMap).toContain("feature_plan: createFeaturePlanHandler");
-    expect(handlerMap).toContain("implementation_plan: createImplementationPlanHandler");
-    expect(handlerMap).toContain("tdd_implementation: createTddImplementationHandler");
-    expect(handlerMap).toContain("orchestrated_task: createOrchestratedTaskHandler");
-    expect(handlerMap).toContain("open_github_issue: createGithubIssueHandler");
-    expect(handlerMap).toContain("pr_lifecycle: createPrLifecycleHandler");
+    const expectedRoutes: Record<string, RouteFixture> = {
+      defect_scan: {
+        owner: "scribe",
+        command: policyBefore.scribeChain[0],
+        chain: policyBefore.scribeChain,
+      },
+      feature_plan: {
+        owner: "scribe",
+        command: policyBefore.scribeChain[0],
+        chain: policyBefore.scribeChain,
+      },
+      implementation_plan: {
+        owner: "scribe",
+        command: policyBefore.scribeChain[0],
+        chain: policyBefore.scribeChain,
+      },
+      tdd_implementation: {
+        owner: "code",
+        command: policyBefore.codeChain[0],
+        chain: policyBefore.codeChain,
+      },
+      orchestrated_task: {
+        owner: "code",
+        command: policyBefore.codeChain[0],
+        chain: policyBefore.codeChain,
+      },
+      open_github_issue: {
+        owner: "github",
+        command: "runWorkerCommand",
+        chain: [],
+      },
+      pr_lifecycle: {
+        owner: "git_github",
+        command: "runGit/runWorkerCommand",
+        chain: [],
+      },
+    };
 
-    expect(handlerMap).toMatch(/defect_scan:[\s\S]*?runCliWithFallback\([^\n]+scribeCliChain/);
-    expect(handlerMap).toMatch(/feature_plan:[\s\S]*?runCliWithFallback\([^\n]+scribeCliChain/);
-    expect(handlerMap).toMatch(/implementation_plan:[\s\S]*?runCliWithFallback\([^\n]+scribeCliChain/);
-    expect(handlerMap).toMatch(/tdd_implementation:[\s\S]*?runCliWithFallback\([^\n]+codeCliChain/);
-    expect(handlerMap).toMatch(/orchestrated_task:[\s\S]*?runCliWithFallback\([^\n]+codeCliChain/);
-    expect(handlerMap).toMatch(/open_github_issue:[\s\S]*?runWorkerCommand/);
-    expect(handlerMap).toMatch(/pr_lifecycle:[\s\S]*?runWorkerCommand/);
-    expect(handlerMap).not.toMatch(/roleAssignment|role_assignment|AgentRole|configured_dormant/);
+    expect(productionHandlerMap).toContain("defect_scan: createDefectScanHandler");
+    expect(productionHandlerMap).toContain("feature_plan: createFeaturePlanHandler");
+    expect(productionHandlerMap).toContain("implementation_plan: createImplementationPlanHandler");
+    expect(productionHandlerMap).toContain("tdd_implementation: createTddImplementationHandler");
+    expect(productionHandlerMap).toContain("orchestrated_task: createOrchestratedTaskHandler");
+    expect(productionHandlerMap).toContain("open_github_issue: createGithubIssueHandler");
+    expect(productionHandlerMap).toContain("pr_lifecycle: createPrLifecycleHandler");
+    expect(productionHandlerMap).toMatch(/defect_scan:[\s\S]*?runCliWithFallback\([^\n]+scribeCliChain/);
+    expect(productionHandlerMap).toMatch(/feature_plan:[\s\S]*?runCliWithFallback\([^\n]+scribeCliChain/);
+    expect(productionHandlerMap).toMatch(/implementation_plan:[\s\S]*?runCliWithFallback\([^\n]+scribeCliChain/);
+    expect(productionHandlerMap).toMatch(/tdd_implementation:[\s\S]*?runCliWithFallback\([^\n]+codeCliChain/);
+    expect(productionHandlerMap).toMatch(/orchestrated_task:[\s\S]*?runCliWithFallback\([^\n]+codeCliChain/);
+    expect(productionHandlerMap).toMatch(/open_github_issue:[\s\S]*?runWorkerCommand/);
+    expect(productionHandlerMap).toMatch(/pr_lifecycle:[\s\S]*?runWorkerCommand/);
+    expect(productionHandlerMap).not.toMatch(/roleAssignment|role_assignment|AgentRole|configured_dormant/);
+
+    const observations: Array<{ taskType: string; route: RouteFixture; marker: string }> = [];
+    const handlers = Object.fromEntries(
+      Object.entries(expectedRoutes).map(([taskType, route]) => [
+        taskType,
+        vi.fn(async (input: Record<string, unknown>) => {
+          const marker = String(input.marker);
+          observations.push({ taskType, route, marker });
+          return { taskType, route, marker };
+        }),
+      ]),
+    );
+
+    try {
+      for (const [taskType, route] of Object.entries(expectedRoutes)) {
+        const marker = `baseline:${taskType}`;
+        const job = db.createWorkJob({
+          task_type: taskType,
+          idempotency_key: `dormant-compatibility:${taskType}`,
+          input_json: { marker },
+          max_attempts: 1,
+        });
+
+        const execution = await executeNextJob({
+          db,
+          workerId: "dormant-compatibility-worker",
+          handlers,
+          targetJobId: job.id,
+          notify: vi.fn(),
+        });
+
+        expect(execution).toEqual({ jobId: job.id });
+        const completed = db.getWorkJob(job.id)!;
+        expect(completed.status).toBe("completed");
+        expect(JSON.parse(completed.result_json!)).toEqual({ taskType, route, marker });
+      }
+
+      expect(observations).toEqual(
+        Object.entries(expectedRoutes).map(([taskType, route]) => ({
+          taskType,
+          route,
+          marker: `baseline:${taskType}`,
+        })),
+      );
+      expect(db.listRoleAssignmentRevisions(config.scopeKey)).toEqual([desiredRevision]);
+      expect(db.raw.prepare("SELECT COUNT(*) AS count FROM role_assignment_revisions").get())
+        .toEqual({ count: 1 });
+      expect(db.raw.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'role_%' ORDER BY name").all())
+        .toEqual([
+          { name: "role_assignment_revisions" },
+          { name: "role_assignments" },
+        ]);
+    } finally {
+      db.close();
+    }
   });
 });

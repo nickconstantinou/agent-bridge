@@ -40,10 +40,17 @@ Return exactly one JSON object:
   "missing_lifecycle_edges": [],
   "unresolved_product_decisions": [],
   "required_bundle_repairs": [],
+  "mutation_integrity_requirements": [
+    "retain exact pre-mutation body and revision/hash",
+    "compare expected current revision before writing",
+    "perform guarded create/update",
+    "refetch every stored issue",
+    "semantically verify requirements, invariants, acceptance criteria, non-goals, dependencies, and human gates"
+  ],
   "evidence_reviewed": []
 }
 ```
 
 The invariant matrix must cover at least runtime phase order, implementation dependency order, current owner and real caller path, lifecycle and state authority, permission authority, schema/SQL ownership, GitHub mutation authority, platform desired versus appliance effective authority, repair invalidation, compatibility, and prohibited duplicate abstractions.
 
-Use `ready_for_issue_mutation` only when all proposed issues agree with one canonical invariant table, every dependency and target owner is evidence-backed, and no material decision remains unresolved. This verdict authorizes only Agent Bridge to perform the already-scoped issue mutations; it does not authorize implementation, merge, deployment, restart, schema change, or platform mutation.
+Use `ready_for_issue_mutation` only when all proposed issues agree with one canonical invariant table, every dependency and target owner is evidence-backed, no material decision remains unresolved, and the guarded mutation-integrity requirements can be satisfied. This verdict authorizes only Agent Bridge to perform the already-scoped issue mutations; it does not authorize implementation, merge, deployment, restart, schema change, or platform mutation. A mutation conflict or failed post-write semantic verification returns the bundle to `revise_bundle`. Do not reconstruct issue bodies from memory.

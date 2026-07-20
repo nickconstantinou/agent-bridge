@@ -60,7 +60,7 @@ roles:
       - cli: codex
         model: gpt-5.6-sol
     permission_profile: advisor_read_only
-    review_preference: different_from_executor
+    review_preference: separate_from_code_worker_role
     max_logical_calls: 4
     timeout_ms: 120000
 
@@ -105,7 +105,7 @@ Agent Bridge ranks authenticated targets using verified capability metadata and 
 
 ### Recommended
 
-Agent Bridge proposes assignments. The platform displays reasoning tier, coding/documentation suitability, structured-output support, permission compatibility, cost tier, fallback coverage, and review independence before the user accepts them.
+Agent Bridge proposes assignments. The platform displays reasoning tier, coding/documentation suitability, structured-output support, permission compatibility, cost tier, fallback coverage, role separation, and model-diversity metadata before the user accepts them.
 
 ### Manual
 
@@ -160,28 +160,36 @@ When only one model is available, it may serve every role. The status surface re
 ```text
 Role separation: preserved
 Model diversity: unavailable
-Actual review independence: non_independent
+Actual review independence: technical_lead_role_independent
 Single-provider dependency: active
 ```
 
-Work proceeds only when repository policy permits the actual independence level for the detected risk.
+The independent-review status is valid only when the final reviewer acts through the read-only Technical Lead advisor path, did not author or modify the reviewed implementation, has no mutation authority in the review invocation, and reviews the exact checked head in a fresh invocation. Model diversity is reported separately and does not block the workflow.
 
 ## Review target resolution
 
-Technical Lead review preference is:
+The configured Technical Lead advisor target owns implementation, operations, readiness, and final review reasoning. Review independence is established by role and authority separation from the mutating Code Worker.
 
-1. different CLI and model from the implementing Code Worker;
-2. different model on the same CLI;
-3. configured Technical Lead target in a fresh isolated session;
-4. same target, marked `non_independent`.
+Agent Bridge may prefer a different CLI or model when available as an additional challenge signal, but this is not required. The same frontier model and CLI may perform the review when:
 
-A fresh session does not make same-model review independent. Every review records:
+1. the reviewer role is `technical_lead`;
+2. the Technical Lead did not author or modify the implementation under review;
+3. the review invocation is read-only and has no mutation authority;
+4. the review is a fresh invocation bound to the exact `subject_head_sha`.
+
+Prior read-only Technical Lead requirements, planning, decomposition, guidance, or review work does not disqualify the reviewer. The mutating Code Worker cannot review its own implementation. A head change requires a fresh Technical Lead review invocation, not a different model.
+
+Every review records:
 
 - `required_independence`;
 - `actual_independence`;
+- reviewer role and target;
+- whether the reviewer authored or modified the reviewed implementation;
+- whether mutation authority was available;
+- whether the review was a fresh exact-head invocation;
 - whether the independence gate is satisfied.
 
-The workflow holds for human decision when policy requires a stronger level than is available. The platform does not expose a fourth Reviewer role.
+The platform does not expose a fourth Reviewer role.
 
 ## Phase and exact-head stability
 
@@ -200,7 +208,7 @@ Role status includes:
 - model-probe freshness;
 - missing capabilities;
 - model-diversity state;
-- required and actual review-independence state;
+- required and actual role-separation review state;
 - whether workspace policy permits execution.
 
 No fallback or degraded state is silent.
@@ -220,7 +228,7 @@ The hosted platform provides:
 - automatic, recommended, and manual assignment controls;
 - primary and fallback selection;
 - per-role budget and timeout controls;
-- review-independence policy;
+- role-separation review policy and model-diversity metadata;
 - desired and exact applied revision status;
 - effective/degraded/rejected/pending role status;
 - a non-mutating role test action;

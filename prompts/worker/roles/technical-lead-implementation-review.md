@@ -35,10 +35,19 @@ Return one JSON object:
   "documentation_obligations": [],
   "required_repairs": [{"objective":"", "boundary":[], "verification":[]}],
   "residual_risk": [],
-  "required_independence": "independent | partially_independent | non_independent",
-  "actual_independence": "independent | partially_independent | non_independent",
+  "required_independence": "technical_lead_role_independent | non_independent_allowed",
+  "actual_independence": "technical_lead_role_independent | non_independent",
+  "independence_basis": {
+    "reviewer_role": "technical_lead | code_worker | documentation_steward | unknown",
+    "implemented_or_modified_reviewed_code": false,
+    "mutation_authority_available": false,
+    "fresh_exact_head_review_invocation": false,
+    "same_cli_or_model_as_code_worker": false
+  },
   "independence_gate_satisfied": false
 }
 ```
 
-Return `ready_for_documentation` only when deterministic evidence is authoritative for `subject_head_sha`, the implementation satisfies the issue and plan, and the actual independence meets the required level. A code-changing repair invalidates this review and all later documentation and readiness evidence for the previous head. Do not merge, deploy, modify files, relax tests, or approve failed deterministic evidence.
+Independent review is based on role and authority separation, not provider or model diversity. A read-only Technical Lead advisor satisfies the independent-review role when it did not author or modify the implementation, has no mutation authority in the review invocation, and performs a fresh review of `subject_head_sha`. The same frontier model or CLI may be used. Prior Technical Lead requirements, planning, or advisory work does not disqualify the reviewer. The mutating Code Worker cannot review its own implementation.
+
+Return `ready_for_documentation` only when deterministic evidence is authoritative for `subject_head_sha`, the implementation satisfies the issue and plan, and the independence basis is satisfied. A code-changing repair invalidates this review and all later documentation and readiness evidence for the previous head. Do not merge, deploy, modify files, relax tests, or approve failed deterministic evidence.

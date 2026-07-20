@@ -3,7 +3,7 @@ status: active-roadmap
 type: roadmap
 authority: canonical
 implementation_status: partially-implemented
-last_validated_against: db2ab80f6895bad76cdf46930790bfe70691408a
+last_validated_against: e417efd5ac89cc7cebd750d5baa64b2d0173a85e
 ---
 
 # Issue #159 — Role-Based Agentic Orchestration
@@ -22,7 +22,7 @@ Agent Bridge remains authoritative for requirements state, workflow transitions,
 
 ## Delivered foundation — PR #160
 
-PR #160 at exact head `db2ab80f6895bad76cdf46930790bfe70691408a` delivers:
+PR #160 at exact head `e417efd5ac89cc7cebd750d5baa64b2d0173a85e` delivers:
 
 - a source-controlled canonical registry for 22 role/mode prompt contracts;
 - separate Technical Lead requirements, issue, decomposition-review, planning, focused repair, guidance, implementation review, operations review, and readiness prompts;
@@ -37,9 +37,9 @@ PR #160 at exact head `db2ab80f6895bad76cdf46930790bfe70691408a` delivers:
 - explicit ordered lifecycle-skill mappings for every role/mode and compatibility prompt;
 - fail-closed skill marker, manifest version, duplication, and budget validation;
 - role-template, lifecycle-skill-set, composed-template, and rendered-content identity tests;
-- exact-head review, operations, documentation, and readiness contracts;
+- exact-head review, operations, documentation, readiness, CI, and final Technical Lead review contracts;
 - explicit evidence states for passed, failed, not run, not scheduled, stale, and unknown checks;
-- required-versus-actual review-independence gates;
+- Technical Lead/Code Worker role-separation review independence, with model diversity recorded as optional metadata rather than a blocking requirement;
 - same-delivery correction of every stale, contradictory, missing, or materially misleading required document;
 - full revalidation of `docs/architecture/01-current-architecture.md`;
 - source-only prompt resolution for canonical and compatibility-key handlers;
@@ -67,8 +67,8 @@ Slice 0 creates documentation and issue metadata only. It does not authorize Sli
 - explicit CLI/model/fallback assignment for each role;
 - source-controlled prompt key/version and role-template hash per role invocation;
 - source-controlled lifecycle skill key/version/content hashes and composed-template hash per role invocation;
-- exact-head verification, review, operations, documentation, readiness, and CI evidence;
-- single-CLI and single-model operation with degradation reporting;
+- exact-head verification, review, operations, documentation, readiness, CI, and final Technical Lead review evidence;
+- single-CLI and single-model operation with explicit model-diversity metadata and preserved role-separation review independence;
 - lifecycle, cancellation, restart, lease, audit, migration, rollback, and platform coordination;
 - completed removal of legacy database prompt overrides and their schema table.
 
@@ -135,11 +135,12 @@ deterministic verification
 → Technical Lead operations review when triggered
 → Documentation Steward authoring and validation
 → Technical Lead PR readiness
-→ exact-head checks
+→ exact-head CI
+→ independent final review
 → human merge gate
 ```
 
-Slice #167 must not activate documentation execution. Slice #168 owns activation. Documentation requires accepted review and required operations evidence for the same exact code head. A code-changing repair invalidates verification, review, operations, documentation, readiness, and exact-head check/CI evidence for the previous head until the required phases rerun. Slice #169 qualifies the sequence across restart, retry, cancellation, lease loss, stale evidence, fallback, migration and rollback.
+Slice #167 must not activate documentation execution. Slice #168 owns activation. Documentation requires accepted review and required operations evidence for the same exact code head. The final review must satisfy the delivery's recorded independence policy. A code-changing repair invalidates verification, review, operations, documentation, readiness, exact-head CI, and final-review evidence for the previous head until the required phases rerun. Slice #169 qualifies the sequence across restart, retry, cancellation, lease loss, stale evidence, fallback, migration and rollback.
 
 Each child issue enumerates production-boundary red tests, product and architectural intent, expected current failure, authoritative oracle, focused red command, false-positive controls, sibling behaviour remaining green, migration/rollback impact, documentation triggers, classified target paths, and exact dependencies.
 
@@ -150,6 +151,7 @@ Do not start Slice 1 until this decomposition receives maintainer approval. Do n
 - `docs/implementation-plans/issue-159-role-based-orchestration.md`
 - `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md`
 - `docs/implementation-plans/issue-159-slice-0-reconciliation.md`
+- `docs/implementation-plans/issue-159-execution-readiness-safeguards.md`
 
 These plans are normative for implementation and subordinate only to the accepted ADR, canonical architecture, Issue #159, and current repository evidence. The Slice 0 reconciliation is authoritative for current owner modules, concrete likely target files, overlap decisions, actual issue numbers, sequencing and the cross-repository interface at the stated exact base.
 
@@ -176,7 +178,7 @@ Human approval remains required for:
 - child-issue decomposition and permission to begin Slice 1;
 - unresolved product decisions;
 - material canonical issue or delivery-scope changes;
-- role defaults and high-risk review policy;
+- role defaults and review authority policy;
 - merge;
 - production deployment/restart;
 - database/fleet migration;

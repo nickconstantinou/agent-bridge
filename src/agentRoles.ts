@@ -75,11 +75,12 @@ export class RoleAssignmentConfigError extends Error {
 }
 
 const ROLE_SET = new Set<string>(AGENT_ROLE_IDS);
+const CLI_SET = new Set<string>(["codex", "claude", "antigravity"]);
 const SELECTION_SET = new Set<string>(["automatic", "recommended", "manual"]);
 const ASSIGNMENT_FIELDS = new Set(["role", "selection", "primary", "fallbacks"]);
 const TARGET_FIELDS = new Set(["cli", "model"]);
 const FORBIDDEN_FIELD = /(?:^|[_-])(token|api[_-]?key|secret|password|credential|prompt|repository[_-]?content)(?:$|[_-])/i;
-const FORBIDDEN_VALUE = /^(?:gh[pousr]_|github_pat_|sk-[A-Za-z0-9]|xox[baprs]-|-----BEGIN [A-Z ]+PRIVATE KEY-----)/;
+const FORBIDDEN_VALUE = /(?:^(?:gh[pousr]_|github_pat_|sk-|xox[baprs]-|AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]+PRIVATE KEY-----)|(?:^|[-_.])(token|secret|password|credential|prompt|repository[-_]content)(?:$|[-_.])|^(?:src|test|docs|scripts)\/|(?:^|\/)package\.json$|\.(?:ts|tsx|js|jsx|json|md|ya?ml)$)/i;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 const MAX_IDENTIFIER_LENGTH = 128;
 const MAX_SCOPE_LENGTH = 160;
@@ -99,12 +100,12 @@ function validateFields(
     if (FORBIDDEN_FIELD.test(field)) {
       throw new RoleAssignmentConfigError(
         "forbidden_field",
-        `Forbidden role-assignment field at ${path}.${field}`,
+        `Forbidden role-assignment field at ${path}`,
       );
     }
     throw new RoleAssignmentConfigError(
       "unknown_field",
-      `Unknown role-assignment field at ${path}.${field}`,
+      `Unknown role-assignment field at ${path}`,
     );
   }
 }
@@ -135,8 +136,12 @@ function parseTarget(value: unknown, path: string): RoleAssignmentTarget {
     throw new RoleAssignmentConfigError("invalid_target", `Expected target object at ${path}`);
   }
   validateFields(value, TARGET_FIELDS, path);
+  const cli = parseBoundedIdentifier(value.cli, `${path}.cli`);
+  if (!CLI_SET.has(cli)) {
+    throw new RoleAssignmentConfigError("invalid_target", `Unknown role-assignment CLI at ${path}.cli`);
+  }
   return {
-    cli: parseBoundedIdentifier(value.cli, `${path}.cli`),
+    cli,
     model: parseBoundedIdentifier(value.model, `${path}.model`),
   };
 }
@@ -153,10 +158,9 @@ function parseAssignment(value: unknown, index: number): RoleAssignment {
   validateFields(value, ASSIGNMENT_FIELDS, path);
 
   if (typeof value.role !== "string" || !ROLE_SET.has(value.role)) {
-    const renderedRole = typeof value.role === "string" ? value.role : typeof value.role;
     throw new RoleAssignmentConfigError(
       "invalid_role",
-      `Invalid configurable role: ${renderedRole}`,
+      `Invalid configurable role at ${path}.role`,
     );
   }
   if (typeof value.selection !== "string" || !SELECTION_SET.has(value.selection)) {
@@ -253,8 +257,7 @@ export function parseRoleAssignmentConfig(
     }
     validateFields(value, ASSIGNMENT_FIELDS, path);
     if (typeof value.role !== "string" || !ROLE_SET.has(value.role)) {
-      const renderedRole = typeof value.role === "string" ? value.role : typeof value.role;
-      throw new RoleAssignmentConfigError("invalid_role", `Invalid configurable role: ${renderedRole}`);
+      throw new RoleAssignmentConfigError("invalid_role", `Invalid configurable role at ${path}.role`);
     }
     const role = value.role as AgentRoleId;
     if (seenRoles.has(role)) {

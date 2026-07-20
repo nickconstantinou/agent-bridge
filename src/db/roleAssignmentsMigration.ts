@@ -19,21 +19,61 @@ const ASSIGNMENT_COLUMNS = [
 ] as const;
 const ROLE_TABLES = ["role_assignment_revisions", "role_assignments"] as const;
 
+interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: string | null; pk: number }
+
 function assertExactColumns(
   raw: Database.Database,
   table: string,
   expected: readonly string[],
 ): void {
-  const actual = (raw.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>)
-    .map((column) => column.name);
-  if (actual.length !== expected.length || actual.some((column, index) => column !== expected[index])) {
-    throw new Error(`unexpected ${table} schema: [${actual.join(",")}]`);
+  const actual = raw.prepare(`PRAGMA table_info(${table})`).all() as ColumnInfo[];
+  if (actual.length !== expected.length || actual.some((column, index) => column.name !== expected[index])) {
+    throw new Error(`unexpected ${table} schema: [${actual.map((column) => column.name).join(",")}]`);
   }
+  const expectedMeta = table === "role_assignment_revisions"
+    ? [["INTEGER", 0, 1], ["TEXT", 1, 0], ["INTEGER", 1, 0], ["TEXT", 1, 0], ["TEXT", 1, 0], ["TEXT", 1, 0], ["TEXT", 1, 0]]
+    : [["INTEGER", 1, 1], ["TEXT", 1, 2], ["TEXT", 1, 0], ["TEXT", 1, 0], ["TEXT", 1, 0], ["TEXT", 1, 0]];
+  if (actual.some((column, index) => column.type.toUpperCase() !== expectedMeta[index][0]
+    || column.notnull !== expectedMeta[index][1] || column.pk !== expectedMeta[index][2])) {
+    throw new Error(`unexpected ${table} schema metadata`);
+  }
+  if (table === "role_assignments" && actual[5].dflt_value !== "'[]'") {
+    throw new Error("unexpected role_assignments fallback default");
+  }
+}
+
+function indexSignatures(raw: Database.Database, table: string): string[] {
+  const indexes = raw.prepare(`PRAGMA index_list(${table})`).all() as Array<{ name: string; unique: number; origin: string }>;
+  return indexes.map((index) => {
+    const columns = (raw.prepare(`PRAGMA index_info(${index.name})`).all() as Array<{ name: string }>).map((row) => row.name);
+    return `${index.unique}:${index.origin}:${columns.join(",")}`;
+  }).sort();
 }
 
 export function assertExactRoleAssignmentSchema(raw: Database.Database): void {
   assertExactColumns(raw, "role_assignment_revisions", REVISION_COLUMNS);
   assertExactColumns(raw, "role_assignments", ASSIGNMENT_COLUMNS);
+  const revisionIndexes = indexSignatures(raw, "role_assignment_revisions");
+  for (const required of ["0:c:scope_key,revision", "1:u:scope_key,idempotency_key", "1:u:scope_key,revision"]) {
+    if (!revisionIndexes.includes(required)) throw new Error(`unexpected role_assignment_revisions indexes: [${revisionIndexes.join(";")}]`);
+  }
+  const assignmentIndexes = indexSignatures(raw, "role_assignments");
+  if (!assignmentIndexes.includes("1:pk:revision_id,role")) {
+    throw new Error(`unexpected role_assignments indexes: [${assignmentIndexes.join(";")}]`);
+  }
+  const foreignKeys = raw.prepare("PRAGMA foreign_key_list(role_assignments)").all() as Array<Record<string, unknown>>;
+  if (foreignKeys.length !== 1 || foreignKeys[0].table !== "role_assignment_revisions"
+    || foreignKeys[0].from !== "revision_id" || foreignKeys[0].to !== "id"
+    || String(foreignKeys[0].on_delete).toUpperCase() !== "CASCADE") {
+    throw new Error("unexpected role_assignments foreign key");
+  }
+  const tableSql = (raw.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name IN (?, ?) ORDER BY name")
+    .all(...ROLE_TABLES) as Array<{ sql: string }>).map((row) => row.sql.toLowerCase().replace(/\s+/g, " ")).join(" ");
+  for (const required of ["configured_dormant", "technical_lead", "documentation_steward", "json_valid(fallbacks_json)"]) {
+    if (!tableSql.includes(required)) throw new Error(`unexpected role-assignment constraints: missing ${required}`);
+  }
+  const violations = raw.pragma("foreign_key_check") as unknown[];
+  if (violations.length > 0) throw new Error("role-assignment foreign key integrity check failed");
 }
 
 /**

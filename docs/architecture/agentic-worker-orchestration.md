@@ -52,7 +52,7 @@ Later active assignments additionally bind permission profiles, budgets/timeouts
 - `operations_review`: define exact-head rollout, rollback, migration, and operational evidence before documentation;
 - `pr_readiness`: produce the final advisory verdict after deterministic, review, operations, and documentation gates.
 
-The Technical Lead owns independent review and operations reasoning. Agent Bridge prefers a model different from the implementing Code Worker when available, but does not expose separate user-configurable reviewer or operations roles. Required and actual independence are recorded separately; the workflow holds when policy requires more independence than is available.
+The Technical Lead owns independent review and operations reasoning through the read-only AdvisorService path. Independence is based on separation from the mutating Code Worker: the Technical Lead did not author or modify the implementation, has no mutation authority in the review invocation, and performs a fresh review of the exact checked head. The same frontier model or CLI may be used. Provider/model diversity is useful metadata but is not a blocking requirement, and prior read-only Technical Lead planning or advice does not disqualify the reviewer.
 
 ### Code Worker modes
 
@@ -90,7 +90,9 @@ Raw request or imported feature issue
 → Technical Lead operations review when triggered
 → Documentation Steward authoring and validation
 → Technical Lead PR readiness
-→ exact-head CI and human merge gate
+→ exact-head CI
+→ fresh exact-head Technical Lead final review
+→ human merge gate
 ```
 
 ### Defect workflow
@@ -107,7 +109,9 @@ Code Worker read-only scan or reported defect
 → Technical Lead operations review when triggered
 → Documentation Steward authoring and validation when required
 → Technical Lead PR readiness
-→ exact-head CI and human merge gate
+→ exact-head CI
+→ fresh exact-head Technical Lead final review
+→ human merge gate
 ```
 
 A scan finding is never implementation-ready by itself.
@@ -126,7 +130,9 @@ Code Worker read-only refactor scan or maintainer request
 → Technical Lead operations review when triggered
 → Documentation Steward architecture and maintenance authoring and validation
 → Technical Lead PR readiness
-→ exact-head CI and human merge gate
+→ exact-head CI
+→ fresh exact-head Technical Lead final review
+→ human merge gate
 ```
 
 A refactor must have concrete evidence and measurable benefit. Consistency or cleanliness alone is insufficient.
@@ -206,14 +212,14 @@ After capability-resolution and routing slices activate:
 
 When only one CLI is authenticated, Agent Bridge still resolves a model separately for each role. When only one model is available, role separation, prompts, sessions, permissions, budgets, and audit remain distinct, while status reports that model diversity and independent-model review are unavailable.
 
-Review target preference is:
+The configured Technical Lead advisor target owns final review. Agent Bridge may prefer a different CLI or model when available as an extra challenge signal, but the independence gate requires only:
 
-1. a different CLI and model from the implementing worker;
-2. a different model on the same CLI;
-3. the Technical Lead model in a fresh isolated session;
-4. the same target, explicitly marked non-independent.
+1. Technical Lead reviewer role;
+2. no authorship or modification of the reviewed implementation;
+3. no mutation authority in the review invocation;
+4. a fresh review bound to the exact checked `subject_head_sha`.
 
-A fresh session does not by itself make a same-model review independent.
+Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations review does not disqualify the final reviewer. The Code Worker cannot review its own mutation. A head change requires a fresh Technical Lead invocation, not a different model or an endlessly new reviewer identity.
 
 ## Authority boundaries
 
@@ -235,7 +241,7 @@ Models cannot grant themselves tools, change role, expand scope, approve their o
 
 ## Exact-head evidence and repair invalidation
 
-Verification, implementation review, operations review, documentation authoring/validation, and PR readiness record the same `subject_head_sha`.
+Verification, implementation review, operations review, documentation authoring/validation, PR readiness, exact-head CI, and final Technical Lead review record the same `subject_head_sha`.
 
 Required gate states distinguish:
 
@@ -246,7 +252,7 @@ Required gate states distinguish:
 - `stale`;
 - `unknown`.
 
-Only authoritative `passed` evidence for the exact current head satisfies a required gate. A code-changing repair invalidates all verification, review, operations, documentation, readiness, and exact-head CI evidence for the previous head. The workflow returns to deterministic verification and proceeds through the canonical order again.
+Only authoritative `passed` evidence for the exact current head satisfies a required gate. A code-changing repair invalidates all verification, review, operations, documentation, readiness, CI, and final-review evidence for the previous head. The workflow returns to deterministic verification and proceeds through the canonical order again.
 
 ## Documentation contract
 
@@ -258,16 +264,23 @@ When the required documentation correction would materially change approved prod
 
 ## Degraded operation — later active routing
 
-A workspace remains usable with one authenticated CLI or model when each role capability and repository policy is satisfied. Effective status records role separation, selected target/fallback, model diversity, independent-model review availability, unavailable capabilities, and blocking policy.
+A workspace remains usable with one authenticated CLI or model. The effective status records:
 
-Degradation is explicit and audited; it is not silently presented as independent review.
+- role separation;
+- target and fallback selected for each role;
+- model diversity availability;
+- Technical Lead review-role availability;
+- unavailable role capabilities;
+- any repository policy that blocks degraded execution.
+
+Model diversity degradation is explicit and audited, but it is not presented as loss of review independence when the Technical Lead role and authority boundary remain intact.
 
 ## Non-goals
 
 - no unrestricted autonomous multi-agent conversation loop;
 - no direct provider-native tool grants outside Bridge policy;
 - no model-owned workflow state;
-- no requirement that every role use a different provider;
+- no requirement that every role use a different provider or model;
 - no automatic merge, production mutation, or destructive action;
 - no assumption that incoming issues or scan findings are complete;
 - no deferred stale required documentation while a delivery is represented as ready;

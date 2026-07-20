@@ -72,7 +72,8 @@ Before enabling active role-based orchestration:
 6. Confirm `agentic-maintenance.yaml` exists and every referenced canonical document exists and is current.
 7. Confirm focused decomposition, role-resolution, permission, lifecycle, migration, exact-head, and documentation-gate tests pass.
 8. Confirm the full suite, typecheck, Architecture Lint, cleanup/static checks, `git diff --check`, and exact-head GitHub Actions pass.
-9. Record the exact application SHA, required review-independence level, backup prerequisites, and rollback path.
+9. Confirm a read-only Technical Lead advisor lane is available for a fresh exact-head final review independent from the mutating Code Worker.
+10. Record the exact application SHA, reviewer role/authority basis, model-diversity state, backup prerequisites, and rollback path.
 
 ## Issue-mutation preflight — later slices
 
@@ -118,8 +119,9 @@ Later role status adds requested and effective CLI/model, authentication/probe s
 11. Verify implementation and applicable operations review precede documentation.
 12. Verify all later evidence is bound to one exact head.
 13. Verify stale required documentation blocks readiness until corrected.
-14. Verify review independence is reported accurately and required policy is enforced.
-15. Expand enablement only after evidence is recorded.
+14. Verify a read-only Technical Lead can review Code Worker output independently even when the same frontier model is reused.
+15. Verify the Code Worker cannot review its own mutation.
+16. Expand enablement only after evidence is recorded.
 
 ## Operational evidence
 
@@ -138,7 +140,29 @@ A qualified Slice 1 delivery records:
 - actual review independence;
 - confirmation of zero production, service, database, queue, or Platform mutation.
 
-A later fully qualified workflow additionally records work-item/job IDs, canonical issue transitions, target provenance, per-call role/model/permission/prompt identities, cross-phase exact-head evidence, human approvals, and retrospective output.
+A later fully qualified workflow additionally records:
+
+- work item and job IDs;
+- canonical issue version and `requirements_ready` transition;
+- decomposition-review evidence and mutation verdict for multi-issue work;
+- classified target-path provenance;
+- role, mode, CLI, model, and permission profile for every logical call;
+- prompt and lifecycle-skill identities;
+- advisor/tool audit without secrets;
+- red and green commit SHAs;
+- deterministic verification output and timestamps;
+- exact `subject_head_sha` for verification, review, operations, documentation, readiness, CI, and final review;
+- gate state as `passed`, `failed`, `not_run`, `not_scheduled`, `stale`, or `unknown`;
+- required and actual review-independence basis;
+- reviewer role and target;
+- whether the reviewer authored or modified the reviewed implementation;
+- whether mutation authority was available in the review invocation;
+- whether the review was a fresh exact-head invocation;
+- model-diversity state reported separately;
+- documentation-impact result, corrected documents, and validation;
+- Technical Lead implementation, operations, readiness, and final-review verdicts;
+- human approvals;
+- retrospective result.
 
 Only authoritative `passed` evidence for the exact current head satisfies a required gate.
 
@@ -151,20 +175,21 @@ Expected later behaviour:
 - Agent Bridge selects a model independently for each role;
 - role prompts, sessions, permissions, and budgets remain separate;
 - status reports the single-provider dependency;
-- work continues when each role capability is satisfied and independence policy permits it.
+- work continues when each role capability and the Technical Lead/Code Worker authority boundary are satisfied.
 
-Action when blocked: authenticate another supported CLI or manually assign a verified model exposed by the existing CLI.
+Action when blocked: authenticate another supported CLI only when a required role capability is unavailable. A second CLI is not required solely to create review independence.
 
 ### Only one model available
 
 Expected later behaviour:
 
 - role and permission separation remains active;
-- Technical Lead review runs in a fresh isolated session;
-- actual independence is recorded as non-independent when the same model is reused;
-- high-risk work pauses when repository policy requires stronger independence.
+- Technical Lead review runs through the read-only advisor path in a fresh exact-head invocation;
+- actual independence is recorded as `technical_lead_role_independent` when the Technical Lead did not author or modify the implementation and has no mutation authority;
+- model diversity is recorded as unavailable;
+- work does not pause merely because a second model is unavailable.
 
-A fresh session is not itself independent review.
+The same frontier model may serve Technical Lead and Code Worker roles. Role and authority separation, deterministic evidence, exact-head freshness, and the human merge gate remain the controls.
 
 ### Technical Lead unavailable
 
@@ -190,7 +215,8 @@ Any code-changing repair after deterministic verification invalidates, for the p
 - documentation authoring;
 - documentation validation;
 - PR readiness;
-- exact-head CI evidence.
+- exact-head CI evidence;
+- final Technical Lead review.
 
 After the repair:
 
@@ -198,7 +224,8 @@ After the repair:
 2. rerun deterministic verification;
 3. rerun implementation and applicable operations review;
 4. update and validate required documentation against the new head;
-5. rerun PR readiness and exact-head CI.
+5. rerun PR readiness and exact-head CI;
+6. perform a fresh exact-head read-only Technical Lead final review.
 
 Do not reuse earlier evidence merely because the repair was described as small.
 
@@ -211,7 +238,7 @@ When documentation validation reports a missing, stale, contradictory, or materi
 3. grant Documentation Steward authoring only for approved documentation paths;
 4. correct the document in the same delivery;
 5. rerun documentation validation for the exact current head;
-6. rerun readiness.
+6. rerun readiness, exact-head checks, and final Technical Lead review as required by the changed head.
 
 A deferred issue, owner assignment, archive suggestion, or roadmap entry does not clear the blocker.
 
@@ -288,7 +315,7 @@ For a future production or appliance rollout of schema 3, verify:
 - no duplicate role revisions for identical configuration;
 - all canonical documents exist and are current;
 - rollback snapshot integrity;
-- exact-head evidence and required independence policy.
+- exact-head evidence and Technical Lead role-separation review policy.
 
 ## Escalation conditions
 
@@ -300,7 +327,8 @@ Stop and request human action when:
 - a target path is invalid or unclassified;
 - a role target lacks enforceable permissions;
 - model or CLI authentication is ambiguous;
-- required review independence is unavailable;
+- no read-only Technical Lead review lane is available;
+- the proposed reviewer authored or modified the implementation or has mutation authority;
 - lifecycle ownership is stale or conflicting;
 - deterministic evidence conflicts with model output;
 - required documentation cannot be corrected within approved scope;

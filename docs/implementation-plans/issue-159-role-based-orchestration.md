@@ -4,17 +4,17 @@
 
 Approved epic implementation handoff for a sequence of independently reviewable child pull requests.
 
-This document is not an instruction to implement Issue #159 in one branch. Every behavioural slice requires its linked child issue, isolated workspace, characterization where needed, test-only red commit, separate green commit, exact-head verification, review, documentation completion, fresh final re-review, and human merge decision.
+This document is not an instruction to implement Issue #159 in one branch. Every behavioural slice requires its linked child issue, isolated workspace, characterization where needed, test-only red commit, separate green commit, exact-head verification, review, documentation completion, fresh final Technical Lead review, and human merge decision.
 
-The accepted ADR, canonical architecture, current repository evidence, prompt/skill contract, and human gates are normative. Do not weaken the architecture merely to fit current code.
+The accepted ADR, canonical architecture, current repository evidence, prompt/skill contract, execution-readiness safeguards, and human gates are normative. Do not weaken the architecture merely to fit current code.
 
-PR #160 supplies prompt, lifecycle-skill, plan-validation, documentation-policy, and schema foundations. It does not activate role assignment or role-based routing.
+PR #160 supplies prompt, lifecycle-skill, plan-validation, documentation-policy, execution-readiness, stacked-CI, and schema foundations. It does not activate role assignment or role-based routing.
 
 ## Objective
 
 Implement exactly three configurable Engineering Worker roles:
 
-- **Technical Lead** — requirements discovery and validation, canonical issue authoring, multi-issue decomposition review, implementation planning, bounded executor guidance, implementation review, operations review, and PR readiness;
+- **Technical Lead** — requirements discovery and validation, canonical issue authoring, multi-issue decomposition review, implementation planning, bounded executor guidance, implementation review, operations review, PR readiness, and fresh exact-head final review;
 - **Code Worker** — read-only defect/refactor scanning and investigation, mechanically separated red/green implementation, bounded repair, and verification;
 - **Documentation Steward** — documentation impact, documentation-only authoring, maintenance, and validation.
 
@@ -31,6 +31,7 @@ validated requirements
 → Documentation Steward authoring and validation
 → Technical Lead PR readiness
 → exact-head CI
+→ fresh exact-head Technical Lead final review
 → human merge gate
 ```
 
@@ -55,6 +56,7 @@ Agent Bridge remains authoritative for state, issue/PR mutation, prompts and ski
 - `docs/testing/agentic-worker-verification.md`;
 - `docs/architecture/10-production-readiness.md`;
 - `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md`;
+- `docs/implementation-plans/issue-159-execution-readiness-safeguards.md`;
 - Issues #100, #119, #132, #135, and #146;
 - PRs #152, #157, #158, and #160 as applicable.
 
@@ -71,22 +73,37 @@ Use the repository requirements, risk-testing, TDD, release-readiness, and Git s
 7. Classify every target production and test path from current evidence.
 8. Put the strongest available reasoning target on requirements, architecture, planning, risk, and review.
 9. Give the Code Worker immutable bounded packets, not broad ownership of the solution.
-10. Start behavioural change with a production-boundary red test that fails for the intended reason.
-11. Commit characterization, red tests, production implementation, repairs, and documentation separately as applicable.
-12. Run deterministic verification before Technical Lead implementation and operations review.
-13. Complete and validate all required documentation after accepted review and before readiness.
-14. Treat code-changing repair as invalidating all later evidence for the prior head.
-15. Perform independent review where policy requires it, fix blockers, rerun exact-head checks, and conduct a fresh final re-review.
-16. Verify authoritative postconditions rather than intended actions or model claims.
-17. Use disposable qualification before separately approved production rollout.
-18. Preserve human authority over product decisions, material scope, merge, deployment, destructive operations, secrets, permissions, and policy exceptions.
-19. End each non-trivial slice with a bounded defect-pattern retrospective.
+10. Do not begin behavioural mutation without an execution-capable isolated worktree and an available read-only Technical Lead review lane.
+11. Start behavioural change with a production-boundary red test and empirically prove the intended failure before green.
+12. Commit characterization, red tests, production implementation, repairs, and documentation separately as applicable.
+13. Run deterministic verification before Technical Lead implementation and operations review.
+14. Complete and validate all required documentation after accepted review and before readiness.
+15. Treat code-changing repair as invalidating all later evidence for the prior head.
+16. Run exact-head CI, then ask the read-only Technical Lead advisor for a fresh final review of that checked head.
+17. Fix blockers, rerun all invalidated phases, and conduct a fresh final Technical Lead review after every head change.
+18. Verify authoritative postconditions rather than intended actions or model claims.
+19. Use disposable qualification before separately approved production rollout.
+20. Preserve human authority over product decisions, material scope, merge, deployment, destructive operations, secrets, permissions, and policy exceptions.
+21. End each non-trivial slice with a bounded defect-pattern retrospective.
+
+## Review-independence rule
+
+Independent review is a Technical Lead responsibility through the read-only `AdvisorService` path.
+
+Independence is established when:
+
+- the reviewer role is `technical_lead`;
+- the reviewer did not author or modify the implementation under review;
+- the review invocation has no mutation authority;
+- the review is a fresh invocation bound to the exact checked `subject_head_sha`.
+
+The same frontier model or CLI may be used by Technical Lead and Code Worker roles. Provider/model diversity is preferred metadata, not a blocking requirement. Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations review does not disqualify the reviewer. The Code Worker cannot review its own mutation. A repair or head change requires a fresh Technical Lead review invocation, not an endlessly new model identity.
 
 ## Non-negotiable invariants
 
 1. Public roles are exactly `technical_lead`, `code_worker`, and `documentation_steward`.
 2. Scanner is a Code Worker mode; review, operations, decomposition, and readiness are Technical Lead modes.
-3. Role authority is independent of CLI/provider identity.
+3. Role authority is independent of CLI/provider/model identity.
 4. Technical Lead remains mutation-free through the existing `AdvisorService` boundary.
 5. Code Worker permissions are mode-specific and enforced at real Bridge mutation boundaries.
 6. Documentation Steward authoring is limited to manifest-approved documentation paths with deny precedence.
@@ -100,15 +117,16 @@ Use the repository requirements, risk-testing, TDD, release-readiness, and Git s
 14. Existing red/green separation, disposable workspaces, PR-head checks, CI, and merge approval remain intact.
 15. Implementation review occurs after deterministic verification and before documentation.
 16. Documentation validation occurs before PR readiness.
-17. A code-changing repair invalidates verification, review, operations, documentation, readiness, and CI evidence for the previous head.
-18. Every required gate is bound to one exact `subject_head_sha`.
-19. Required documentation that is missing, stale, contradictory, or misleading is fixed in the same delivery; it cannot be deferred while claiming readiness.
-20. Legacy chains remain explicit compatibility inputs, not silent authority.
-21. Desired platform state is not effective until the appliance reports the exact applied revision.
-22. Invalid desired configuration never destroys the last valid effective assignment.
-23. GitHub mutation is performed by Agent Bridge, never by a model.
-24. Prompt and lifecycle-skill text remains source-controlled; database prompt precedence does not return.
-25. No new direct SQL path, provider stack, process supervisor, workflow engine/state store, queue, GitHub mutation path, configuration transport, or merge path is introduced.
+17. Exact-head CI occurs before the fresh final Technical Lead review and human merge gate.
+18. A code-changing repair invalidates verification, review, operations, documentation, readiness, CI, and final-review evidence for the previous head.
+19. Every required gate is bound to one exact `subject_head_sha`.
+20. Required documentation that is missing, stale, contradictory, or misleading is fixed in the same delivery; it cannot be deferred while claiming readiness.
+21. Legacy chains remain explicit compatibility inputs, not silent authority.
+22. Desired platform state is not effective until the appliance reports the exact applied revision.
+23. Invalid desired configuration never destroys the last valid effective assignment.
+24. GitHub mutation is performed by Agent Bridge, never by a model.
+25. Prompt and lifecycle-skill text remains source-controlled; database prompt precedence does not return.
+26. No new direct SQL path, provider stack, process supervisor, workflow engine/state store, queue, GitHub mutation path, configuration transport, or merge path is introduced.
 
 ## Minimal-change strategy
 
@@ -143,7 +161,7 @@ Add only focused capabilities:
 - typed read-only evidence through AdvisorService;
 - validated Technical Lead plans and immutable execution packets;
 - dormant Documentation Steward policy/handler capability;
-- Technical Lead review/operations/readiness phases;
+- Technical Lead review/operations/readiness/final-review phases;
 - durable invocation identity and secret-safe audit where current records are insufficient;
 - platform desired/effective status through existing bootstrap/reconciliation and heartbeat.
 
@@ -158,6 +176,7 @@ When one request creates or updates multiple issues:
 5. Check current owners/callers, lifecycle/state authority, permissions, schema/SQL, GitHub mutation, platform/appliance authority, compatibility, repair invalidation, and duplicate abstractions.
 6. Repair all missing or conflicting invariants and rerun review.
 7. Permit Agent Bridge issue mutation only after `ready_for_issue_mutation`.
+8. Retain the exact pre-mutation body/revision, perform guarded mutation, refetch, and semantically validate the stored result.
 
 ## Plan and red-test protocol
 
@@ -192,17 +211,19 @@ For every red test, specify:
 - authoritative oracle;
 - false-positive controls.
 
-The red commit contains tests/fixtures only, except a mechanically required non-behavioural fixture. It must fail for the intended missing behaviour. Green implements the smallest production change and does not modify committed red tests.
+The red commit contains tests/fixtures only, except a mechanically required non-behavioural fixture. The focused red command must actually run and fail for the intended missing behaviour. Green is blocked by `not_run`, expected-only, setup, import, fixture, dependency, timeout, or unrelated failures. Green implements the smallest production change and does not modify committed red tests.
 
 ## Exact-head review and documentation protocol
 
-Every verification, implementation review, operations review, documentation author/validation, readiness, and CI record identifies one `subject_head_sha`.
+Every verification, implementation review, operations review, documentation author/validation, readiness, CI, and final-review record identifies one `subject_head_sha`.
 
 Required gate states are `passed`, `failed`, `not_run`, `not_scheduled`, `stale`, or `unknown`. Only authoritative `passed` evidence for the current head satisfies a required gate.
 
-Required and actual review independence are separate. Same-model fresh-session review is non-independent.
-
 After accepted implementation and applicable operations review, Documentation Steward corrects every triggered required document. A later issue, owner assignment, archive recommendation, or follow-up does not clear stale documentation. Material scope needed for correction produces a human-scope hold.
+
+Documentation changes remain trigger-bounded. A broad rewrite is allowed only when the whole document is demonstrably stale and the replacement is fully revalidated against current code, commands, configuration, service ownership, deployment, rollback, and recovery.
+
+After documentation validation and PR readiness, exact-head CI runs. The Technical Lead advisor then performs a fresh read-only final review using the same exact head and all deterministic, review, operations, documentation, PR, and CI evidence. A same-model review remains independent when the role/authority conditions above are satisfied.
 
 ## Delivery slices
 
@@ -212,9 +233,9 @@ The list below is implementation delivery order.
 
 Owner: parent #159 and stacked documentation work.
 
-Deliver exact owner map, complete read-only issue bundle, bundle-wide invariant review, child issues #161–#169, platform #134, cross-repository interface, classified paths, and no production mutation.
+Deliver exact owner map, complete read-only issue bundle, bundle-wide invariant review, child issues #161–#169, platform #134, cross-repository interface, classified paths, guarded issue mutation, and no production mutation.
 
-Proof: documentation/issue diff, path/link audit, exact-head checks, and independent review. Slice 1 remains human-gated.
+Proof: documentation/issue diff, path/link audit, exact-head checks, and Technical Lead review independent from any mutating Code Worker. Slice 1 remains human-gated.
 
 ### Slice 1 — role domain, persistence, dormant status (#161)
 
@@ -232,7 +253,7 @@ Required red boundaries:
 
 Extend provider metadata and add a pure resolver; do not route handlers yet.
 
-Required red boundaries include per-role model selection from one CLI, one-model degradation, ineligible target exclusion, stale-probe policy, deterministic ranking/ties, manual assignment safety, error-class fallback, malformed-output repair, and unchanged legacy fallback while disabled.
+Required red boundaries include per-role model selection from one CLI, one-model operation, role-separation review independence, ineligible target exclusion, stale-probe policy, deterministic ranking/ties, manual assignment safety, error-class fallback, malformed-output repair, and unchanged legacy fallback while disabled.
 
 ### Slice 3 — mode permission enforcement (#163)
 
@@ -244,7 +265,7 @@ Required red boundaries include Technical Lead mutation denial, read-only scans,
 
 Add intake phases around current work items, callbacks, repositories, and GitHub helpers; do not change implementation handlers.
 
-Required red boundaries include detailed-issue validation, durable clarification without plan creation, defect facts versus hypotheses, unjustified refactor rejection, candidate non-promotion, exact verdict states, idempotent Bridge-owned GitHub reconciliation, human approval for material rewrite, external edit revalidation, restart-safe questions, split lineage, and unchanged current issue/callback behaviour.
+Required red boundaries include detailed-issue validation, durable clarification without plan creation, defect facts versus hypotheses, unjustified refactor rejection, candidate non-promotion, exact verdict states, guarded idempotent Bridge-owned GitHub reconciliation, human approval for material rewrite, external edit revalidation, restart-safe questions, split lineage, and unchanged current issue/callback behaviour.
 
 Every split returns to the bundle-wide decomposition gate before child issue mutation.
 
@@ -264,7 +285,7 @@ Required red boundaries include read-only evidence-rich candidates, no direct im
 
 Add policy and handler capabilities within the existing implementation workspace, but keep runtime orchestration dormant until Slice 8.
 
-Required red boundaries include structured documentation impact, final-diff trigger evaluation, deterministic manifest classes, separate docs commit, allow/deny enforcement, missing/stale/contradictory document blocking, validated no-change rationale, code-defect return, restart without duplicate commits, and identical fallback permissions.
+Required red boundaries include structured documentation impact, final-diff trigger evaluation, deterministic manifest classes, separate docs commit, allow/deny enforcement, missing/stale/contradictory document blocking, trigger-bounded edits, broad-rewrite full revalidation, validated no-change rationale, code-defect return, restart without duplicate commits, and identical fallback permissions.
 
 ### Slice 8 — Technical Lead review, operations, and runtime composition (#168)
 
@@ -275,21 +296,23 @@ implementation review
 → operations review when triggered
 → Documentation Steward author/validate
 → PR readiness
+→ exact-head CI
+→ fresh Technical Lead final review
 ```
 
-Required red boundaries include verification prerequisites, failed deterministic gate rejection, exact independence preference, isolated reused target, visible non-independence, high-risk hold, operations triggers and complete operational contract, exact-head equality, code-repair invalidation, stale-document blocking, and preservation of human merge/deploy authority.
+Required red boundaries include verification prerequisites, failed deterministic gate rejection, Technical Lead/Code Worker role separation, same-model review acceptance, Code Worker self-review rejection, read-only reviewer authority, fresh exact-head invocation, operations triggers and complete operational contract, exact-head equality, code-repair invalidation, stale-document blocking, and preservation of human merge/deploy authority.
 
 ### Slice 9 — lifecycle, audit, compatibility, rollout qualification (#169)
 
 Extend current phase data, ownership fencing, and audit; do not replace outer job/queue semantics.
 
-Required red boundaries include restart after each phase, idempotency budgets, cancellation and lease fencing, assignment changes at phase boundaries, auth/permission revocation, additive migration preserving active data, disabled-routing compatibility, safe rollback holds, exact prompt/skill/head lineage, serial/repeated race coverage, and no duplicate queue/supervisor/state/SQL path.
+Required red boundaries include restart after each phase, idempotency budgets, cancellation and lease fencing, assignment changes at phase boundaries, auth/permission revocation, additive migration preserving active data, disabled-routing compatibility, safe rollback holds, exact prompt/skill/head/reviewer lineage, serial/repeated race coverage, and no duplicate queue/supervisor/state/SQL path.
 
 ### Slice 10 — platform desired/effective role allocation (platform #134)
 
 Platform owns desired role policy and revision; appliance owns auth, discovery, validation, effective resolution, degradation, last-known-valid state, and exact applied revision.
 
-Required red boundaries include exact role/config schema, monotonic revisions, bootstrap schema/revision, heartbeat desired-versus-applied truth, invalid-application preservation, offline last-known-valid operation, UI modes and degradation visibility, one-CLI/model usability, non-mutating tests, no raw credentials, fail-safe version incompatibility, and no desired-equals-effective claim before matching heartbeat.
+Required red boundaries include exact role/config schema, monotonic revisions, bootstrap schema/revision, heartbeat desired-versus-applied truth, invalid-application preservation, offline last-known-valid operation, UI modes and degradation visibility, one-CLI/model usability, role-separation review status, non-mutating tests, no raw credentials, fail-safe version incompatibility, and no desired-equals-effective claim before matching heartbeat.
 
 ## Cross-repository rollout
 
@@ -309,6 +332,7 @@ Rollback stops new desired revisions, disables role routing, retains records, us
 
 At minimum:
 
+- passed execution-capable worktree preflight;
 - captured focused red failure for the intended reason;
 - focused green command;
 - affected subsystem suite;
@@ -324,8 +348,9 @@ At minimum:
 - exact final head and exact-head GitHub Actions;
 - implementation and applicable operations review;
 - Documentation Steward validation;
-- final PR-readiness review;
-- actual independence level;
+- PR-readiness review;
+- fresh exact-head read-only Technical Lead final review;
+- reviewer role/target, mutation separation, implementation authorship, fresh invocation, and model-diversity metadata;
 - residual risk and retrospective.
 
 A check that was not run or not scheduled must be reported exactly that way. It cannot be described as green.
@@ -337,7 +362,7 @@ Human approval remains required for:
 - the Slice 0 decomposition and permission to begin Slice 1;
 - unresolved product decisions;
 - material issue or scope changes;
-- required independence policy exceptions;
+- review authority policy exceptions;
 - merge;
 - production database migration, deployment, or restart;
 - destructive operations;
@@ -346,4 +371,4 @@ Human approval remains required for:
 
 ## Completion
 
-Issue #159 completes only when all linked OSS/platform slices are implemented and independently reviewed to required policy; exact-head deterministic, review, operations, documentation, and CI evidence passes; every required document is current; prompt/skill identities are durable and secret-safe; migration and rollback are qualified; legacy prompt overrides remain absent; compatibility retirement is explicit; and no blocker remains.
+Issue #159 completes only when all linked OSS/platform slices are implemented and reviewed by the read-only Technical Lead independently from Code Worker mutation; exact-head deterministic, review, operations, documentation, readiness, CI, and final-review evidence passes; every required document is current; prompt/skill identities are durable and secret-safe; migration and rollback are qualified; legacy prompt overrides remain absent; compatibility retirement is explicit; and no blocker remains.

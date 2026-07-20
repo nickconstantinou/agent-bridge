@@ -15,22 +15,23 @@ Canonical operating model. This document describes the Engineering Worker workfl
 7. The Code Worker performs bounded repository investigation and mutation under mode-specific permissions.
 8. Technical Lead implementation and applicable operations review occur after deterministic verification and before documentation authoring.
 9. The Documentation Steward keeps every required canonical document aligned with final exact-head code and operations; stale required documentation is never deferred while a delivery is declared ready.
-10. Deterministic evidence outranks model claims.
-11. Humans retain product decisions, material scope changes, merge authority, destructive actions, deployments, and policy exceptions.
+10. Exact-head CI is followed by a fresh read-only Technical Lead final review independent from the mutating Code Worker.
+11. Deterministic evidence outranks model claims.
+12. Humans retain product decisions, material scope changes, merge authority, destructive actions, deployments, and policy exceptions.
 
 ## Roles
 
 ### Technical Lead
 
-The Technical Lead is the strongest available read-only reasoning path. It owns requirements discovery, issue authoring and validation, pre-mutation decomposition review, planning, comprehensive red-test design, task decomposition, bounded executor guidance, implementation review, operations assessment, and PR-readiness advice.
+The Technical Lead is the strongest available read-only reasoning path. It owns requirements discovery, issue authoring and validation, pre-mutation decomposition review, planning, comprehensive red-test design, task decomposition, bounded executor guidance, implementation review, operations assessment, PR-readiness advice, and fresh exact-head final review.
 
-It does not edit files, execute unrestricted commands, mutate GitHub, merge, deploy, or approve its own output.
+It does not edit files, execute unrestricted commands, mutate GitHub, merge, deploy, or approve its own output. Its review is independent from Code Worker mutation when it did not author or modify the reviewed implementation, has no mutation authority in the review invocation, and performs a fresh review of the exact checked head. The same frontier model or CLI may be reused.
 
 ### Code Worker
 
 The Code Worker performs repository scans, focused investigation, TDD implementation, repair, and verification. Agent Bridge selects a read-only or mutating permission profile for each mode.
 
-A scan result is a candidate. The Code Worker cannot promote its own finding into approved implementation work or independently redefine the approved test strategy.
+A scan result is a candidate. The Code Worker cannot promote its own finding into approved implementation work, independently redefine the approved test strategy, or review its own mutation.
 
 ### Documentation Steward
 
@@ -49,7 +50,8 @@ Raw input
 → write canonical issue or proposed child-issue bundle
 → validate issue schema and evidence
 → when multiple issues are proposed, run bundle-wide decomposition review
-→ Agent Bridge performs approved GitHub issue mutation
+→ Agent Bridge performs guarded approved GitHub issue mutation
+→ refetch and semantically verify the stored issue
 → Technical Lead final validation
 → requirements_ready
 ```
@@ -67,6 +69,7 @@ Before creating or updating multiple child issues:
 5. Audit current owners and caller paths, lifecycle/state authority, permissions, schema/SQL ownership, GitHub mutation authority, platform desired versus appliance effective authority, compatibility, repair invalidation, and prohibited duplicate abstractions.
 6. Repair every missing or conflicting invariant and rerun the review.
 7. Allow Agent Bridge issue mutation only after `ready_for_issue_mutation`.
+8. Retain the exact pre-mutation body/revision, compare the expected revision before writing, refetch the result, and semantically verify the approved content.
 
 Locally valid individual issues do not compensate for a contradictory bundle.
 
@@ -191,7 +194,8 @@ Full planning, red-test repair, and execution-contract repair use separate promp
 Canonical prompt and red-test contracts:
 
 - `docs/architecture/agentic-prompt-contracts.md`;
-- `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md`.
+- `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md`;
+- `docs/implementation-plans/issue-159-execution-readiness-safeguards.md`.
 
 ## Prompt and lifecycle-skill separation
 
@@ -214,7 +218,9 @@ Canonical and compatibility prompts are versioned source-controlled files and ne
 
 Each Code Worker packet contains one coherent objective, permitted files or boundaries, acceptance criteria, approved `RedTestSpec` records, non-goals, relevant evidence, exact verification, and escalation conditions.
 
-The Code Worker implements the planned red tests and proves they fail for the specified reason before green implementation. It returns structured evidence rather than a readiness claim. Agent Bridge validates repository state and deterministic results before asking the Technical Lead for review.
+No behavioural packet starts until Agent Bridge proves a clean isolated non-production worktree, installable locked dependencies, required repository tools, executable focused commands, exact topology, and an available read-only Technical Lead review lane.
+
+The Code Worker implements the planned red tests and proves they fail for the specified reason before green implementation. Authored-but-unexecuted tests, static review, or `not_run` evidence do not satisfy the red gate. It returns structured evidence rather than a readiness claim. Agent Bridge validates repository state and deterministic results before asking the Technical Lead for review.
 
 ## Review, operations, documentation, and readiness
 
@@ -228,6 +234,7 @@ deterministic verification
 → Documentation Steward validation
 → Technical Lead PR readiness
 → exact-head CI
+→ fresh exact-head Technical Lead final review
 → human merge gate
 ```
 
@@ -237,9 +244,18 @@ Operations review activates for deployment, services, configuration, credentials
 
 Documentation authoring and validation require accepted implementation and applicable operations review for the same `subject_head_sha`. PR readiness requires all required documents to be current or a validated `no_documentation_change` result with rationale and trigger evidence.
 
-A different model from the implementing Code Worker is preferred when available. The workflow records required independence and actual independence separately. Lack of model diversity is reported explicitly and blocks readiness when repository risk policy requires a stronger level.
+Exact-head CI follows readiness. The Technical Lead advisor then performs a fresh read-only final review of that exact checked head.
 
-Every deterministic, review, operations, documentation, and readiness record identifies the exact subject head. Gate status distinguishes:
+Review independence is based on role and authority separation:
+
+- reviewer role is `technical_lead`;
+- the reviewer did not author or modify the reviewed implementation;
+- no mutation authority is available in the review invocation;
+- the review is fresh and bound to the exact checked head.
+
+The same frontier model or CLI may be reused. Provider/model diversity is recorded separately and is not a blocking requirement. Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations work does not disqualify the reviewer. The Code Worker cannot review its own mutation. A head change requires a fresh Technical Lead invocation, not an endlessly new model identity.
+
+Every deterministic, review, operations, documentation, readiness, CI, and final-review record identifies the exact subject head. Gate status distinguishes:
 
 - `passed`;
 - `failed`;
@@ -248,7 +264,7 @@ Every deterministic, review, operations, documentation, and readiness record ide
 - `stale`;
 - `unknown`.
 
-Only authoritative `passed` evidence for the exact current head satisfies a required gate. A code-changing repair invalidates verification, implementation review, operations review, documentation, and readiness evidence for the previous head. The workflow restarts from deterministic verification.
+Only authoritative `passed` evidence for the exact current head satisfies a required gate. A code-changing repair invalidates verification, implementation review, operations review, documentation, readiness, CI, and final-review evidence for the previous head. The workflow restarts from deterministic verification.
 
 ## Documentation lifecycle
 
@@ -269,6 +285,8 @@ Required document classes include:
 
 A missing, stale, contradictory, or materially misleading required document is a release blocker. It is corrected and revalidated in the same delivery. A later issue, recommended follow-up, archive candidate, or owner assignment does not satisfy readiness.
 
+Documentation edits are trigger-bounded. A broad rewrite is permitted only when the whole document is demonstrably stale and the complete replacement is revalidated against current code, commands, configuration, service ownership, deployment, rollback, and recovery.
+
 ## Completion evidence
 
 A completed workflow records:
@@ -284,10 +302,11 @@ A completed workflow records:
 - permission profile used by each invocation;
 - red and green commit evidence;
 - exact-head focused and broad deterministic verification;
-- required and actual Technical Lead review independence;
-- Technical Lead verdicts bound to the exact head;
+- Technical Lead implementation and operations review evidence;
 - documentation impact, changed documents, and validation;
-- operational qualification where applicable;
+- PR-readiness and exact-head CI evidence;
+- final Technical Lead reviewer role/target, implementation-authorship status, mutation authority, fresh-invocation status, and exact-head verdict;
+- model-diversity metadata reported separately;
 - unresolved risk and human approvals;
 - retrospective result.
 

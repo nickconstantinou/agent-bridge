@@ -14,6 +14,8 @@ Approved constraints and decisions:
 
 Create a repository-grounded plan for bounded Code Worker execution. Do not plan before requirements are complete. Do not broaden scope, choose unresolved product behaviour, or rely on the executor to discover the test strategy.
 
+For behavioural work, the plan must begin with an execution-preflight packet. No test or production mutation may start until Agent Bridge proves a clean isolated non-production worktree, locked dependencies that can be installed, required repository tools, executable focused commands, and availability of the review independence level required by risk. An unavailable execution or review lane is a blocking preflight result, not work to defer after implementation.
+
 Generic directions such as `write tests`, `add tests`, `increase coverage`, or `write unit tests` are invalid. The plan must design comprehensive red tests that protect product intent, architectural intent, invariants, compatibility, and every triggered lifecycle, security, data, operations, migration, or rollback risk.
 
 Return Markdown with exactly these sections:
@@ -47,6 +49,8 @@ Describe the production path, ownership model, invariants, compatibility rules, 
 ## Test Plan
 Summarise the risk-based strategy, required characterization, production boundaries, test classes, deterministic non-test proofs, and sibling behaviour that must remain green. The structured specifications below are authoritative.
 
+For every behavioural packet, state how the red failure will be empirically observed before green begins. Test authorship, static review, an expected failure, or a command marked `not_run` is not red evidence. Historical red proof must use the exact committed red state in a disposable worktree when red and green are no longer the same head.
+
 ## Red Tests
 Provide a JSON array of complete red-test specifications using this exact shape:
 
@@ -74,7 +78,7 @@ Provide a JSON array of complete red-test specifications using this exact shape:
     "focused_red_command": "copy-pasteable narrow command",
     "sibling_behaviour_remaining_green": ["unchanged task/provider/mode/transport/public contract"],
     "authoritative_oracle": "source of truth observed by the test",
-    "false_positive_controls": ["how syntax, fixture, import, timeout, baseline, and copied-algorithm failures are excluded"]
+    "false_positive_controls": ["how syntax, fixture, import, dependency, timeout, baseline, and copied-algorithm failures are excluded"]
   }
 ]
 ```
@@ -101,10 +105,14 @@ Return these JSON arrays:
 Every acceptance criterion must map to a red test or a justified deterministic non-test proof. Every affected architectural boundary and invariant must map to structural, integration, acceptance, or Architecture Lint coverage. Every triggered risk must map to its required test class. Refactors must identify characterization coverage before structural change. Specify sibling behaviour that remains green.
 
 ## Implementation Phases
-Break work into small dependency-ordered red/green/repair/verify packets. Each packet must state objective, permitted files or boundary, linked requirements and red tests, non-goals, exact commands, expected evidence, escalation conditions, and separate test/implementation commit intent.
+The first phase for behavioural work is `execution-preflight`. It must state the isolated worktree, non-production proof, dependency installation, required tools, focused command availability, exact base/head topology, and required independent-review lane. A failed preflight stops before mutation.
+
+Then break work into small dependency-ordered red/green/repair/verify packets. Each packet must state objective, permitted files or boundary, linked requirements and red tests, non-goals, exact commands, expected evidence, escalation conditions, and separate test/implementation commit intent. Green packets require authoritative `red_confirmed` evidence from the committed red state; they cannot rely on static inspection or unexecuted tests.
 
 ## Documentation Obligations
 Identify every document to update or create, final-diff triggers to re-evaluate, and facts the Documentation Steward needs from implementation. A stale, contradictory, or missing required document is a release blocker and must be corrected in the same delivery before readiness. Do not defer stale documentation to a later issue. When the required correction would materially expand approved product or architecture scope, stop for human scope approval rather than claiming readiness.
+
+Documentation edits must be trigger-bounded. A broad rewrite requires explicit rationale and full-document revalidation against current code, commands, configuration, services, deployment, rollback, and recovery. Unrelated modernization, marketing, restructuring, or removal of still-current content is outside scope.
 
 ## Operations, Migration, and Rollback
 State prerequisites, compatibility, rollout order, abort conditions, rollback, authoritative postconditions, and human gates where applicable. Say `not applicable` with evidence when genuinely irrelevant.
@@ -114,25 +122,33 @@ Provide one compact JSON object under 1200 words:
 
 ```json
 {
+  "execution_preflight": {
+    "clean_isolated_worktree_required": true,
+    "non_production_checkout_required": true,
+    "locked_dependencies_required": true,
+    "required_tools": [],
+    "focused_commands": [],
+    "required_independence": "independent | partially_independent | non_independent"
+  },
   "target_files": ["repo-relative paths"],
   "test_files": ["repo-relative test paths"],
-  "phase_order": ["red-test", "green-implementation", "verification"],
+  "phase_order": ["execution-preflight", "red-test", "green-implementation", "verification"],
   "red_test_ids": ["RT-1"],
   "red_test_command": "exact narrow command",
   "verification_command": "exact broad command",
   "risk_level": "low | medium | high",
   "human_decision_required": false,
   "out_of_scope": ["explicit non-goals"],
-  "notes_for_red_pass": "execute the approved Red Tests contract without inventing strategy",
-  "notes_for_green_pass": "smallest production change satisfying committed red tests and issue intent"
+  "notes_for_red_pass": "execute and empirically confirm the approved Red Tests contract without inventing strategy",
+  "notes_for_green_pass": "start only from authoritative observed-red evidence; implement the smallest production change"
 }
 ```
 
 ## Verification Commands
-Give exact focused, subsystem, full-suite, typecheck, Architecture Lint, cleanup/static, diff, migration/rollback, repeated/serial, and exact-head CI commands required by risk.
+Give exact focused, subsystem, full-suite, typecheck, Architecture Lint, cleanup/static, diff, migration/rollback, repeated/serial, exact-head stacked-PR CI, and historical red-proof commands required by risk. Stacked pull requests must use the repository-supported all-base pull-request workflow or manual dispatch; an intentionally stacked base does not waive exact-head CI.
 
 ## Risks and Escalation
-List residual risks, conditions that return to requirements or human decision, and conditions under which the executor must stop rather than expand scope.
+List residual risks, conditions that return to requirements or human decision, and conditions under which the executor must stop rather than expand scope. Include unavailable execution capability, unavailable required independent review, unsafe GitHub issue mutation, broad unvalidated documentation changes, and missing stacked-PR CI as blocking conditions when applicable.
 
 ## Human Decisions Required
 List only unresolved consequential decisions. A plan requiring one cannot be dispatched until Agent Bridge records the answer.
@@ -140,4 +156,4 @@ List only unresolved consequential decisions. A plan requiring one cannot be dis
 ## Out of Scope
 Repeat explicit non-goals and prohibited refactors.
 
-Do not implement code. Do not claim files or tests exist unless cited by exact path and evidence. The complete plan must be rejected if any target path is invalid or unclassified, product, architecture, or triggered-risk test coverage is absent, required documentation remains stale, or the red failure could be caused by an unrelated test defect.
+Do not implement code. Do not claim files or tests exist unless cited by exact path and evidence. The complete plan must be rejected if any target path is invalid or unclassified, product, architecture, or triggered-risk test coverage is absent, required documentation remains stale, the execution preflight cannot run, the required independent-review lane is unavailable, or the red failure could be caused by an unrelated test defect.

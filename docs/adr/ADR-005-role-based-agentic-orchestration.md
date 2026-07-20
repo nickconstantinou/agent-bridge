@@ -32,7 +32,9 @@ Agent Bridge remains the authoritative orchestrator for workflow state, role res
 
 The Technical Lead uses the strongest configured read-only advisor path. No implementation plan is created until the canonical issue is `requirements_ready`.
 
-The platform binds each role to an authenticated CLI, explicit model, fallbacks, permission profiles, and budgets. One authenticated CLI may expose different models to different roles. One available model may serve every role through separate sessions and permissions, while model diversity and independent-model review are reported unavailable.
+The platform binds each role to an authenticated CLI, explicit model, fallbacks, permission profiles, and budgets. One authenticated CLI may expose different models to different roles. One available frontier model may serve every role through separate sessions and permissions.
+
+Review independence is defined by role and authority separation, not model identity. A Technical Lead review is independent from Code Worker implementation when the reviewer did not author or modify the reviewed implementation, has no mutation authority in the review invocation, and performs a fresh review of the exact checked head. Provider/model diversity is preferred metadata but is not required.
 
 ## Consequences
 
@@ -44,7 +46,7 @@ Positive:
 - cheaper coding models receive bounded work packets;
 - role authority is independent of provider identity;
 - documentation becomes a deterministic readiness obligation;
-- single-provider installations remain usable with explicit degradation.
+- single-provider and single-model installations remain usable without weakening the Technical Lead/Code Worker review boundary.
 
 Trade-offs:
 
@@ -57,7 +59,8 @@ Trade-offs:
 Risks and controls:
 
 - the Technical Lead must not become an autonomous authority: Agent Bridge owns every transition and permission;
-- same-model review may correlate errors: independence degradation is explicit and policy may block high-risk work;
+- same-model review may correlate reasoning errors: model diversity is reported and may be preferred, while deterministic evidence, a fresh exact-head review invocation, the read-only Technical Lead boundary, and the human merge gate remain authoritative controls;
+- the Code Worker must not self-review its own mutation: reviewer role, mutation history, invocation authority, and exact head are recorded;
 - requirements discovery may over-call models: calls are bounded, structured, durable, and driven by unresolved facts or decisions;
 - read-only evidence tools may escape their boundary: tools are typed, allowlisted, budgeted, audited, and Bridge-owned.
 
@@ -69,11 +72,11 @@ Rejected as the target architecture. It hardens output structure but does not so
 
 ### Expose separate scanner, reviewer, and operations roles
 
-Rejected. Scanner and Code Worker share repository capability under different modes. Reviewer and operations reasoning belong to the Technical Lead and can still prefer a different target.
+Rejected. Scanner and Code Worker share repository capability under different modes. Reviewer and operations reasoning belong to the Technical Lead.
 
-### Require a separate provider for every role
+### Require a separate provider or model for every role
 
-Rejected. It would make single-CLI workspaces unusable and confuses provider diversity with role isolation.
+Rejected. It would make single-CLI or single-model workspaces unusable and confuses provider/model diversity with role and authority isolation.
 
 ### Let the Technical Lead dispatch or mutate directly
 
@@ -89,5 +92,6 @@ Rejected. Agent Bridge must remain authoritative for state, permissions, transit
 - Coordinate typed read-only evidence with Issues #100 and #146.
 - Coordinate cancellation, restart, lease loss, and stale ownership with Issue #119.
 - Revise Issue #132's checkpoint-only assumptions rather than duplicating plan/review services.
+- Record reviewer role, exact target, mutation separation, fresh invocation, and exact reviewed head.
 - Use `agentic-maintenance.yaml` to enforce documentation triggers and authoring paths.
 - Follow `docs/roadmap/issue-159-role-based-orchestration.md`.

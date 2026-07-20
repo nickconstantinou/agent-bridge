@@ -143,7 +143,11 @@ The following remain mandatory before any later slice can enable role routing.
 - [ ] Capability/authentication probes are authoritative and freshness-aware
 - [ ] One CLI can assign different models to different roles
 - [ ] One model preserves role/session/prompt/skill/permission separation
-- [ ] Model diversity and independent-review degradation are accurate
+- [ ] Model-diversity state is accurate and separate from review independence
+- [ ] Technical Lead role-separation review remains available with one model
+- [ ] Role test probes are non-mutating and freshness-aware
+
+## Security and permissions
 - [ ] Technical Lead has typed bounded read-only tools only
 - [ ] Code Worker modes enforce read-only/test-only/bounded-mutation/verification-only permissions
 - [ ] Documentation author mode is restricted to manifest-approved paths
@@ -175,6 +179,79 @@ The following remain mandatory before any later slice can enable role routing.
 - [ ] Effective status reports targets, permissions, prompt/skill identities, source, and degradation
 - [ ] Safe enablement completes in a disposable workspace
 - [ ] Deployment/rollback identifies prerequisites, abort conditions, postconditions, and exact evidence
+- [ ] Red and green modes consume canonical TDD guidance rather than a copied supplement
+- [ ] Red mode also receives canonical risk-based testing guidance
+- [ ] Deterministic focused and broad verification precedes review
+- [ ] Scope expansion is rejected or returned for new planning
+- [ ] PR head-SHA, CI, and merge approval gates remain unchanged
+
+## Review and exact-head evidence
+
+- [ ] Implementation review runs only after deterministic verification
+- [ ] Implementation review occurs before Documentation Steward authoring
+- [ ] Operations review occurs before documentation when triggered
+- [ ] Review, operations, documentation, readiness, CI, and final review records carry the same current `subject_head_sha`
+- [ ] Required gate status distinguishes passed, failed, not run, not scheduled, stale, and unknown
+- [ ] Only authoritative passed evidence for the exact current head satisfies a required gate
+- [ ] `not_run`, `not_scheduled`, stale, unknown, failed, and moved-head evidence are never reported as green
+- [ ] Final review is performed by a read-only Technical Lead advisor
+- [ ] Reviewer role is separate from the mutating Code Worker
+- [ ] Reviewer did not author or modify the reviewed implementation
+- [ ] Review invocation has no mutation authority
+- [ ] Review is a fresh invocation against the exact checked head
+- [ ] Same CLI/model reuse is permitted and model diversity is non-blocking metadata
+- [ ] Prior read-only Technical Lead planning or advice does not disqualify the reviewer
+- [ ] Code Worker self-review is rejected
+- [ ] Any code-changing repair invalidates verification, review, operations, documentation, readiness, CI, and final-review evidence for the previous head
+
+## Documentation
+
+- [ ] Documentation impact is recorded for every planned change
+- [ ] Manifest triggers resolve required documents deterministically
+- [ ] Every required document is current and exact-head validated before PR readiness
+- [ ] Missing, stale, contradictory, or materially misleading required documentation blocks readiness
+- [ ] Required documentation is corrected and revalidated in the same delivery
+- [ ] A later issue, owner assignment, archive recommendation, or follow-up does not satisfy readiness
+- [ ] Material scope required for documentation correction produces a human-scope hold, not deferral
+- [ ] `no_documentation_change` requires rationale, trigger evaluation, and Technical Lead validation
+- [ ] Current architecture, README, AGENTS, worker guide, target architecture, ADR, configuration, operations, testing, and maintenance documents are current
+- [ ] Documentation Steward cannot change production or test code
+
+## Operations
+
+- [ ] Implementation and PR-readiness review consume canonical risk/readiness skill mappings
+- [ ] Operations review consumes canonical release-readiness guidance
+- [ ] Effective role/status reports targets, models, permissions, fallbacks, prompt/skill identities, source, role separation, and model-diversity metadata
+- [ ] Safe enablement completed in a disposable workspace
+- [ ] Operator runbook covers enablement, degradation, cancellation, restart, incident, and rollback
+- [ ] Deployment/rollback plan identifies prerequisites, abort conditions, postconditions, and exact evidence
+- [ ] No production mutation occurs without separate explicit approval
+
+## Verification
+
+- [ ] Every canonical skill has exactly one marked runtime block and matching manifest version
+- [ ] Every role/mode and compatibility prompt declares an explicit skill mapping
+- [ ] Skill drift changes only consuming composed/rendered identities
+- [ ] Compatibility and role-native prompts use the same canonical skill loader
+- [ ] Focused decomposition, prompt, skill, target-provenance, workflow, permission, exact-head, documentation, review-independence, lifecycle, migration, and platform tests pass
+- [ ] Full suite passes at exact head
+- [ ] Typecheck passes
+- [ ] Architecture Lint passes
+- [ ] Cleanup/static checks pass or only documented pre-existing findings remain
+- [ ] `git diff --check` passes
+- [ ] Lifecycle/concurrency-sensitive suites pass repeatedly and serially where required
+- [ ] Exact-head GitHub Actions checks pass
+- [ ] Disposable qualification covers single-CLI and single-model operation
+
+## Recovery
+
+- [ ] Database migration and rollback verified on representative existing worker databases
+- [ ] Prompt and lifecycle-skill rollback is reproducible through an exact reviewed application SHA
+- [ ] Role configuration can be disabled without deleting assignments or audit
+- [ ] Legacy routing is restored only through explicit validated configuration
+- [ ] Jobs using incompatible new states are held for human review
+- [ ] Queue, lease, and service health are verified after rollback
+- [ ] Protected backup and exact application SHA are recorded before production rollout
 
 ## Human gates
 

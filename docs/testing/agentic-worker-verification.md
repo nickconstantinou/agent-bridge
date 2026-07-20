@@ -9,7 +9,7 @@ Canonical verification requirements for role-based Engineering Worker orchestrat
 - Write boundary-level acceptance tests before implementation.
 - Preserve red-green-refactor with separate red and green commits for behaviour changes.
 - Test authoritative state and externally observable effects rather than model wording.
-- Treat issue mutation, permission, lifecycle, persistence, role resolution, prompts, canonical skills, structured output, exact-head evidence, and documentation triggers as risk boundaries.
+- Treat issue mutation, permission, lifecycle, persistence, role resolution, prompts, canonical skills, structured output, exact-head evidence, review-role separation, and documentation triggers as risk boundaries.
 - Require Technical Lead plans to define comprehensive red tests protecting product and architectural intent.
 - Keep reusable SDLC know-how authoritative in versioned repository skills rather than copied prompt passages.
 - Deterministic evidence overrides model claims.
@@ -113,10 +113,12 @@ Cover:
 
 - one CLI exposing multiple models assigns each role independently;
 - one model can serve every role with separate sessions, prompts, validators, and permission profiles;
-- model-diversity and independent-review flags are accurate;
-- repository policy can block high-risk work when independent review is required;
-- required and actual independence are recorded separately;
-- a fresh same-model session is not reported as independent.
+- model-diversity status is accurate and separate from review independence;
+- a read-only Technical Lead review is `technical_lead_role_independent` when the reviewer did not author or modify the implementation, has no mutation authority, and performs a fresh exact-head invocation;
+- the same frontier model or CLI may be reused without blocking review independence;
+- the mutating Code Worker cannot review its own implementation;
+- required and actual independence basis are recorded separately;
+- a head change requires a fresh Technical Lead review invocation.
 
 ### Requirements intake and multi-issue decomposition
 
@@ -256,11 +258,15 @@ Cover:
 - gate status distinguishes `passed`, `failed`, `not_run`, `not_scheduled`, `stale`, and `unknown`;
 - only authoritative `passed` evidence for the current head satisfies a required gate;
 - `not_scheduled` or `not_run` cannot be reported as green;
-- different-target review preference follows policy;
-- required and actual independence are recorded separately;
-- unavailable required independence holds for human decision;
+- final review is performed by the read-only Technical Lead advisor on the exact checked head;
+- independence is satisfied by Technical Lead/Code Worker role and mutation separation;
+- reviewer role, target, implementation authorship, mutation authority, and fresh-invocation state are recorded;
+- provider/model diversity is optional metadata and unavailable diversity does not block readiness;
+- prior read-only Technical Lead requirements, planning, or advice does not disqualify the reviewer;
+- the Code Worker cannot self-review its own mutation;
+- a head change or blocker repair requires a fresh Technical Lead review invocation;
 - model verdict cannot mark failed, missing, stale, or moved-head evidence ready;
-- a code-changing repair invalidates verification, review, operations, documentation, and exact-head CI evidence for the previous head.
+- a code-changing repair invalidates verification, review, operations, documentation, readiness, CI, and final-review evidence for the previous head.
 
 ### Documentation Steward and no-deferral policy
 
@@ -316,7 +322,7 @@ Architecture Lint should enforce or be supplemented by tests proving:
 Final evidence includes:
 
 ```text
-complete focused suite for the implemented slice
+complete focused suite for the implemented slice, plus focused lifecycle-skill, prompt, decomposition, plan-provenance, exact-head, review-independence, and documentation-gate tests
 full test suite
 npm run typecheck
 bash scripts/arch-lint.sh src
@@ -365,8 +371,9 @@ Before broad rollout, use a disposable workspace to demonstrate:
 11. stale required documentation blocking readiness until corrected;
 12. restart between phases without duplicate calls or prompt/skill drift;
 13. cancellation fencing late output;
-14. accurate non-independent review reporting;
-15. provider fallback preserving prompt and skill identities;
-16. rollback to legacy routing without queue or state corruption.
+14. same-frontier-model Technical Lead review recorded as role-independent from Code Worker mutation;
+15. rejection of Code Worker self-review;
+16. provider fallback preserving prompt and skill identities;
+17. rollback to legacy routing without queue or state corruption.
 
 Production qualification is observational and separately approved. It does not occur implicitly on merge.

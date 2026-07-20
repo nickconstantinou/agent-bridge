@@ -208,6 +208,7 @@ workflow_contract:
     - documentation_steward_validate
     - technical_lead_pr_readiness
     - exact_head_ci
+    - technical_lead_final_review
     - human_merge_gate
   code_change_invalidates:
     - deterministic_verification
@@ -217,6 +218,7 @@ workflow_contract:
     - documentation_validation
     - pr_readiness
     - exact_head_ci
+    - technical_lead_final_review
   exact_head_evidence_statuses:
     - passed
     - failed
@@ -275,6 +277,7 @@ readiness:
   block_on_failed_execution_preflight: true
   block_on_unobserved_required_red: true
   block_on_missing_stacked_pr_ci: true
+  block_on_missing_final_technical_lead_review: true
   block_on_failed_issue_mutation_integrity: true
   block_on_unrelated_or_unproven_documentation_rewrite: true
   block_on_missing_required_document: true

@@ -52,7 +52,7 @@ Later active assignments additionally bind permission profiles, budgets/timeouts
 - `operations_review`: define exact-head rollout, rollback, migration, and operational evidence before documentation;
 - `pr_readiness`: produce the final advisory verdict after deterministic, review, operations, and documentation gates.
 
-The Technical Lead owns independent review and operations reasoning through the read-only AdvisorService path. Independence is based on separation from the mutating Code Worker: the Technical Lead did not author or modify the implementation, has no mutation authority in the review invocation, and performs a fresh review of the exact checked head. The same frontier model or CLI may be used. Provider/model diversity is useful metadata but is not a blocking requirement, and prior read-only Technical Lead planning or advice does not disqualify the reviewer.
+The Technical Lead owns review and operations reasoning through the read-only AdvisorService path. Role and authority separation from the mutating Code Worker is mandatory: the reviewer did not author or modify the implementation, has no mutation authority, and performs a fresh review of the exact checked head. Issue #161's final gate additionally requires a genuinely independent frontier reviewer; a same-model fresh session is `non_independent`. Prior read-only Technical Lead planning or advice does not disqualify an otherwise independent reviewer.
 
 ### Code Worker modes
 

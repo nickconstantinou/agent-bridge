@@ -185,11 +185,11 @@ Expected later behaviour:
 
 - role and permission separation remains active;
 - Technical Lead review runs through the read-only advisor path in a fresh exact-head invocation;
-- actual independence is recorded as `technical_lead_role_independent` when the Technical Lead did not author or modify the implementation and has no mutation authority;
+- actual independence is recorded as `technical_lead_role_independent` only when the Technical Lead did not author or modify the implementation, has no mutation authority, and satisfies the delivery's independent-frontier requirement;
 - model diversity is recorded as unavailable;
 - work does not pause merely because a second model is unavailable.
 
-The same frontier model may serve Technical Lead and Code Worker roles. Role and authority separation, deterministic evidence, exact-head freshness, and the human merge gate remain the controls.
+The same frontier model may serve Technical Lead and Code Worker roles during target-state workflows, but role separation alone does not satisfy Issue #161's final gate. A same-model fresh review is recorded as `non_independent`; deterministic evidence, exact-head freshness, a genuinely independent frontier review, and the human merge gate remain required.
 
 ### Technical Lead unavailable
 

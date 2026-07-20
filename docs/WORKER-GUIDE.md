@@ -143,7 +143,7 @@ Verification, implementation review, operations review, documentation validation
 
 Required gate status is one of `passed`, `failed`, `not_run`, `not_scheduled`, `stale`, or `unknown`. Only authoritative `passed` evidence for the exact current head satisfies a required gate.
 
-Review independence comes from role and authority separation. A fresh exact-head review by the read-only Technical Lead advisor is independent from Code Worker implementation when the Technical Lead did not author or modify the reviewed implementation and has no mutation authority in the review invocation. The same frontier model or CLI may be reused. Model diversity is recorded separately and is not a blocking requirement. The Code Worker cannot review its own mutation.
+Role and authority separation is mandatory: the read-only Technical Lead reviewer must not author or modify the implementation and has no mutation authority in the exact-head review invocation. For Issue #161's final gate, a same-model fresh session is still `non_independent`; a genuinely independent frontier reviewer is required. The Code Worker cannot review its own mutation.
 
 ## Documentation readiness
 

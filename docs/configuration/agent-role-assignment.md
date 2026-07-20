@@ -234,24 +234,24 @@ When only one model is available, it may serve every role. The status surface re
 ```text
 Role separation: preserved
 Model diversity: unavailable
-Actual review independence: technical_lead_role_independent
+Actual review independence: non_independent
 Single-provider dependency: active
 ```
 
-The independent-review status is valid only when the final reviewer acts through the read-only Technical Lead advisor path, did not author or modify the reviewed implementation, has no mutation authority in the review invocation, and reviews the exact checked head in a fresh invocation. Model diversity is reported separately and does not block the workflow.
+Role separation remains preserved, but a single-model fresh session does not satisfy Issue #161's genuinely independent final-review gate. The workflow stays held for a different frontier reviewer or human decision.
 
 ## Review target resolution
 
 The configured Technical Lead advisor target owns implementation, operations, readiness, and final review reasoning. Review independence is established by role and authority separation from the mutating Code Worker.
 
-Agent Bridge may prefer a different CLI or model when available as an additional challenge signal, but this is not required. The same frontier model and CLI may perform the review when:
+The target-state role policy still requires all of the following review-authority controls:
 
 1. the reviewer role is `technical_lead`;
 2. the Technical Lead did not author or modify the implementation under review;
 3. the review invocation is read-only and has no mutation authority;
 4. the review is a fresh invocation bound to the exact `subject_head_sha`.
 
-Prior read-only Technical Lead requirements, planning, decomposition, guidance, or review work does not disqualify the reviewer. The mutating Code Worker cannot review its own implementation. A head change requires a fresh Technical Lead review invocation, not a different model.
+Prior read-only Technical Lead requirements, planning, decomposition, guidance, or review work does not disqualify the reviewer. The mutating Code Worker cannot review its own implementation. A head change requires a fresh Technical Lead review invocation. For Issue #161 delivery readiness, these controls are necessary but not sufficient: the final reviewer must also be genuinely independent, and a same-model fresh session is recorded as `non_independent`.
 
 Every review records:
 

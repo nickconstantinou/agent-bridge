@@ -127,7 +127,7 @@ Independence is established by role and authority separation from the mutating C
 - the review invocation has no mutation authority;
 - the review is a fresh invocation bound to the exact checked `subject_head_sha`.
 
-The same frontier model or CLI may be reused. Provider/model diversity is useful metadata but is not a readiness requirement. Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations review does not disqualify the reviewer. The Code Worker cannot review its own mutation. A head change requires a fresh Technical Lead review invocation.
+Role and authority separation is necessary but not sufficient for Issue #161's final gate. A same-model fresh session is recorded as `non_independent`; a genuinely independent frontier reviewer is required. Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations review does not disqualify an otherwise independent reviewer. The Code Worker cannot review its own mutation. A head change requires a fresh Technical Lead review invocation.
 
 ## Documentation — later lifecycle activation
 
@@ -151,7 +151,7 @@ The current status contract is:
 
 An active role assignment additionally binds verified capability, permissions, budgets, and output contracts. The platform target supports automatic, recommended, and manual selection.
 
-With one authenticated CLI, Agent Bridge selects models independently for each role. With one model, role sessions and permissions remain separate. Status reports model diversity as unavailable while preserving `technical_lead_role_independent` review when the role/authority conditions are satisfied.
+With one authenticated CLI, Agent Bridge selects models independently for each role. With one model, role sessions and permissions remain separate, but status reports model diversity as unavailable and actual review independence as `non_independent` for Issue #161's final gate.
 
 Configuration reference: `docs/configuration/agent-role-assignment.md`.
 

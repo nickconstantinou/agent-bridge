@@ -55,7 +55,7 @@ Structurally prove that every current handler remains wired to its existing scri
 
 Test automatic/recommended/manual semantics, capability rejection, non-mutating probes, per-role model selection from one CLI, one-model role separation, separate sessions and permission profiles, degradation reporting, and policy-required holds.
 
-Test independent Technical Lead review through role and authority separation. The same frontier model or CLI may be reused. Verify that the Technical Lead did not author or modify the implementation, has no mutation authority in the review invocation, and reviews the exact checked head in a fresh invocation. Reject Code Worker self-review.
+Test Technical Lead role and authority separation: the reviewer did not author or modify the implementation, has no mutation authority, and reviews the exact checked head in a fresh invocation. Reject Code Worker self-review. For Issue #161 readiness, also reject a same-model fresh session as `non_independent` and require a genuinely independent frontier reviewer.
 
 ### Requirements, issue contracts, and decomposition
 

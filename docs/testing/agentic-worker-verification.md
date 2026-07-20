@@ -114,8 +114,8 @@ Cover:
 - one CLI exposing multiple models assigns each role independently;
 - one model can serve every role with separate sessions, prompts, validators, and permission profiles;
 - model-diversity status is accurate and separate from review independence;
-- a read-only Technical Lead review is `technical_lead_role_independent` when the reviewer did not author or modify the implementation, has no mutation authority, and performs a fresh exact-head invocation;
-- the same frontier model or CLI may be reused without blocking review independence;
+- a read-only Technical Lead review is `technical_lead_role_independent` only when the reviewer did not author or modify the implementation, has no mutation authority, performs a fresh exact-head invocation, and satisfies the delivery's independent-frontier requirement;
+- role/authority separation remains required, but a same-model fresh session is `non_independent` for Issue #161's final gate;
 - the mutating Code Worker cannot review its own implementation;
 - required and actual independence basis are recorded separately;
 - a head change requires a fresh Technical Lead review invocation.
@@ -371,7 +371,7 @@ Before broad rollout, use a disposable workspace to demonstrate:
 11. stale required documentation blocking readiness until corrected;
 12. restart between phases without duplicate calls or prompt/skill drift;
 13. cancellation fencing late output;
-14. same-frontier-model Technical Lead review recorded as role-independent from Code Worker mutation;
+14. same-frontier-model fresh review recorded as `non_independent` for Issue #161 readiness;
 15. rejection of Code Worker self-review;
 16. provider fallback preserving prompt and skill identities;
 17. rollback to legacy routing without queue or state corruption.

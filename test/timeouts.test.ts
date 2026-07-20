@@ -59,7 +59,7 @@ describe("resolveTimeoutsForKind — env precedence", () => {
 
   it("per-CLI env var does not affect other kinds", () => {
     setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: "99000", CODEX_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("codex").cliIdleTimeoutMs).toBe(1_200_000);
+    expect(resolveTimeoutsForKind("codex").cliIdleTimeoutMs).toBe(0);
   });
 
   it("global CLI_TIMEOUT_MS applies to all kinds when no per-CLI override", () => {

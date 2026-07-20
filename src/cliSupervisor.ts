@@ -320,7 +320,8 @@ export async function runSupervisedProcess(
       resolve(val);
     };
 
-    const timer = setTimeout(() => {
+    // timeoutMs === 0 means the hard timeout is disabled (Issue #177 canonical default).
+    const timer: NodeJS.Timeout | null = timeoutMs === 0 ? null : setTimeout(() => {
       if (settled || pendingError) return;
       console.error(`[HARD TIMEOUT] CLI hard timeout after ${timeoutMs}ms - killing process\n${formatSpawnLog(command, args, cwd, options.chatId)}`);
       if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI hard timeout after ${timeoutMs}ms`, category: "timeout" }));
@@ -342,7 +343,8 @@ export async function runSupervisedProcess(
 
     let idleTimer: NodeJS.Timeout | null = null;
     const resetIdleTimer = () => {
-      if (idleTimeoutMs === null) return;
+      // null or 0 means the idle timeout is disabled (Issue #177 canonical default).
+      if (idleTimeoutMs === null || idleTimeoutMs === 0) return;
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         if (settled || pendingError) return;
@@ -371,7 +373,7 @@ export async function runSupervisedProcess(
     });
 
     child.on("close", (code, signal) => {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       if (processWatchTimer) clearInterval(processWatchTimer);
       if (idleTimer) clearTimeout(idleTimer);
       if (options.chatId != null) deregisterProcess(options.chatId, child);
@@ -405,7 +407,7 @@ export async function runSupervisedProcess(
     });
 
     child.on("error", (err) => {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       if (processWatchTimer) clearInterval(processWatchTimer);
       if (idleTimer) clearTimeout(idleTimer);
       if (options.chatId != null) deregisterProcess(options.chatId, child);

@@ -8,8 +8,18 @@ import { createImplementationPlanHandler } from "../src/handlers/implementationP
 import { createOrchestratedTaskHandler } from "../src/handlers/orchestratedTask.js";
 import { createPrLifecycleHandler } from "../src/handlers/prLifecycle.js";
 import { createTddImplementationHandler } from "../src/handlers/tddImplementation.js";
+import { validateGeneratedImplementationPlan } from "../src/implementationPlanQuality.js";
 import { executeNextJob, type JobHandler } from "../src/jobExecutor.js";
+import { extractExecutionContract } from "../src/workerPromptContracts.js";
+import { withExecutionContractMetadata } from "../src/workerPromptPlanMetadata.js";
 import { resolveWorkerCliPolicy } from "../src/workerCliPolicy.js";
+import { runCliWithFallback } from "../src/workerDispatch.js";
+
+const controlledCli = vi.hoisted(() => vi.fn());
+vi.mock("../src/cli.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/cli.js")>()),
+  runCli: controlledCli,
+}));
 
 const env = {
   WORKER_CLI_CHAIN: "antigravity,codex,claude",
@@ -92,58 +102,102 @@ async function executeDurably(db: ReturnType<typeof openDb>, taskType: string, h
 
 describe("dormant assignments with production handlers", () => {
   it("claims, runs, and completes all seven actual handler factories without role routing", async () => {
+    vi.stubEnv("CODEX_COMMAND", "codex-controlled");
+    vi.stubEnv("CLAUDE_COMMAND", "claude-controlled");
+    vi.stubEnv("ANTIGRAVITY_COMMAND", "agy-controlled");
     const db = openDb(":memory:");
     persistDormantAssignment(db);
     const policy = resolveWorkerCliPolicy(env);
     const bots = loadBotsConfig(env);
-    const cliCalls: Array<{ owner: string; command: string }> = [];
-    const gitCalls: string[][] = [];
-    const githubCalls: string[][] = [];
-    let tddDiff = 0;
-    const scribe = vi.fn(async (command: string) => { cliCalls.push({ owner: "scribe", command }); return "No defects found."; });
-    const planCli = vi.fn(async (command: string) => { cliCalls.push({ owner: "scribe", command }); return validPlan; });
-    const code = vi.fn(async (command: string) => { cliCalls.push({ owner: "code", command }); return "Done."; });
-    const runGit = vi.fn(async (args: string[]) => {
-      gitCalls.push(args);
-      if (args[0] === "diff" && args.includes("--cached")) return ++tddDiff === 1 ? "test/fix.test.ts\n" : "src/fix.ts\n";
+    const cliCalls: Array<{ taskType: string; command: string; cwd: string }> = [];
+    const gitCalls: Array<{ taskType: string; args: string[]; cwd: string | undefined }> = [];
+    const githubCalls: Array<{ taskType: string; binary: string; args: string[] }> = [];
+    const diffCounts = new Map<string, number>();
+    let activeTask = "";
+    controlledCli.mockImplementation(async (command: string, _args: string[], cwd: string) => {
+      cliCalls.push({ taskType: activeTask, command, cwd });
+      const scribeTask = ["defect_scan", "feature_plan", "implementation_plan"].includes(activeTask);
+      const terminalCommand = scribeTask ? "codex-controlled" : "claude-controlled";
+      if (command !== terminalCommand) throw new Error("MODEL_CAPACITY_EXHAUSTED");
+      if (activeTask === "defect_scan") return "No defects found.";
+      if (["feature_plan", "implementation_plan", "orchestrated_task"].includes(activeTask)) return validPlan;
+      return "Done.";
+    });
+    const routedCli = (taskType: string, chain: string[]) => async (command: string, args: string[], cwd?: string) => {
+      activeTask = taskType;
+      try {
+        return await runCliWithFallback(command, args, cwd ?? "/tmp/repo", chain);
+      } finally {
+        activeTask = "";
+      }
+    };
+    const runGit = (taskType: string) => vi.fn(async (args: string[], cwd?: string) => {
+      gitCalls.push({ taskType, args, cwd });
+      if (args[0] === "diff" && args.includes("--cached")) {
+        const count = (diffCounts.get(taskType) ?? 0) + 1;
+        diffCounts.set(taskType, count);
+        return count === 1 ? "test/fix.test.ts\n" : "src/fix.ts\n";
+      }
       if (args[0] === "rev-parse") return "abcdef1234567890\n";
       return "";
     });
-    const runGithub = vi.fn(async (_binary: string, args: string[]) => {
-      githubCalls.push(args);
+    const runGithub = (taskType: string) => vi.fn(async (binary: string, args: string[]) => {
+      githubCalls.push({ taskType, binary, args });
       if (args[0] === "issue" && args[1] === "create") return "https://github.com/owner/repo/issues/42";
       if (args[0] === "pr" && args[1] === "create") return "https://github.com/owner/repo/pull/7";
       return "";
     });
     const item = () => db.createWorkItem({ kind: "feature", source: "telegram", repository: "owner/repo", title: "Compatibility", body: "bounded", created_by: "worker" });
     try {
-      await executeDurably(db, "defect_scan", createDefectScanHandler({ runCli: scribe, command: bots.antigravity.command }), { repository: "owner/repo" });
+      const results: Record<string, Record<string, unknown>> = {};
+      results.defect_scan = await executeDurably(db, "defect_scan", createDefectScanHandler({ runCli: routedCli("defect_scan", policy.scribeChain), command: bots.antigravity.command }), { repository: "owner/repo" });
       const feature = db.createFeaturePlan({ chatId: "chat", userId: "user", brief: "Compatibility" });
-      await executeDurably(db, "feature_plan", createFeaturePlanHandler({ runCli: scribe, command: bots.antigravity.command }), { plan_id: feature.id, repository: "owner/repo" });
+      results.feature_plan = await executeDurably(db, "feature_plan", createFeaturePlanHandler({ runCli: routedCli("feature_plan", policy.scribeChain), command: bots.antigravity.command }), { plan_id: feature.id, repository: "owner/repo" });
       const planned = item();
-      await executeDurably(db, "implementation_plan", createImplementationPlanHandler({ runCli: planCli, command: bots.antigravity.command, runCommand: runGithub, resolveRepoPath: () => "/tmp/repo" }), { work_item_id: planned.id });
+      results.implementation_plan = await executeDurably(db, "implementation_plan", createImplementationPlanHandler({ runCli: routedCli("implementation_plan", policy.scribeChain), command: bots.antigravity.command, runCommand: runGithub("implementation_plan"), resolveRepoPath: () => "/tmp/repo" }), { work_item_id: planned.id });
       const tdd = item();
       const tests = vi.fn().mockResolvedValueOnce({ ok: false, output: "red" }).mockResolvedValue({ ok: true, output: "green" });
-      await executeDurably(db, "tdd_implementation", createTddImplementationHandler({ runCli: code, command: bots.codex.command, runGit, runTests: tests }), { work_item_id: tdd.id, repository_path: "/tmp/repo" });
-      tddDiff = 0;
+      results.tdd_implementation = await executeDurably(db, "tdd_implementation", createTddImplementationHandler({ runCli: routedCli("tdd_implementation", policy.codeChain), command: bots.codex.command, runGit: runGit("tdd_implementation"), runTests: tests }), { work_item_id: tdd.id, repository_path: "/tmp/repo" });
       const orchestrated = item();
-      await executeDurably(db, "orchestrated_task", createOrchestratedTaskHandler({ runCli: code, command: bots.codex.command, runGit, runTests: vi.fn().mockResolvedValue({ ok: true, output: "green" }) }), { work_item_id: orchestrated.id, repository_path: "/tmp/repo" });
+      results.orchestrated_task = await executeDurably(db, "orchestrated_task", createOrchestratedTaskHandler({ runCli: routedCli("orchestrated_task", policy.codeChain), command: bots.codex.command, commands: { codex: bots.codex.command, claude: bots.claude.command }, runGit: runGit("orchestrated_task"), runTests: vi.fn().mockResolvedValue({ ok: true, output: "green" }) }), { work_item_id: orchestrated.id, repository_path: "/tmp/repo" });
       const issue = item();
-      await executeDurably(db, "open_github_issue", createGithubIssueHandler({ runCommand: runGithub }), { work_item_id: issue.id, repository: "owner/repo" });
+      results.open_github_issue = await executeDurably(db, "open_github_issue", createGithubIssueHandler({ runCommand: runGithub("open_github_issue") }), { work_item_id: issue.id, repository: "owner/repo" });
       const pr = item();
-      await executeDurably(db, "pr_lifecycle", createPrLifecycleHandler({ runGit, runCommand: runGithub }), { work_item_id: pr.id, branch_name: `agent/work-${pr.id}`, repository: "owner/repo", repository_path: "/tmp/repo" });
+      results.pr_lifecycle = await executeDurably(db, "pr_lifecycle", createPrLifecycleHandler({ runGit: runGit("pr_lifecycle"), runCommand: runGithub("pr_lifecycle") }), { work_item_id: pr.id, branch_name: `agent/work-${pr.id}`, repository: "owner/repo", repository_path: "/tmp/repo" });
 
       expect(policy).toEqual({ interactiveChain: ["antigravity", "codex", "claude"], codeChain: ["codex", "claude"], scribeChain: ["antigravity", "claude", "codex"] });
       expect(bots.antigravity.modelPreference).toEqual(["gemini-primary", "gemini-fallback"]);
       expect(bots.codex.modelPreference).toEqual(["gpt-primary", "gpt-fallback"]);
-      expect(cliCalls.filter((call) => call.owner === "scribe").every((call) => call.command === "agy-controlled")).toBe(true);
-      expect(cliCalls.filter((call) => call.owner === "code").every((call) => call.command === "codex-controlled")).toBe(true);
-      expect(gitCalls.some((args) => args[0] === "push")).toBe(true);
-      expect(githubCalls.some((args) => args[0] === "issue" && args[1] === "create")).toBe(true);
-      expect(githubCalls.some((args) => args[0] === "pr" && args[1] === "create")).toBe(true);
+      expect(bots.claude.modelPreference).toEqual(["claude-primary", "claude-fallback"]);
+      const commandsFor = (taskType: string) => cliCalls.filter((call) => call.taskType === taskType).map((call) => call.command);
+      expect(commandsFor("defect_scan")).toEqual(["agy-controlled", "claude-controlled", "codex-controlled"]);
+      expect(commandsFor("feature_plan")).toEqual(["agy-controlled", "claude-controlled", "codex-controlled"]);
+      expect(commandsFor("implementation_plan")).toEqual(["agy-controlled", "claude-controlled", "codex-controlled"]);
+      expect(commandsFor("tdd_implementation")).toEqual(["codex-controlled", "claude-controlled", "codex-controlled", "claude-controlled"]);
+      expect(commandsFor("orchestrated_task")).toEqual(["codex-controlled", "claude-controlled", "codex-controlled", "claude-controlled"]);
+      expect(cliCalls.every((call) => call.cwd === "/tmp/repo")).toBe(true);
+
+      const quality = validateGeneratedImplementationPlan(validPlan);
+      const contract = extractExecutionContract(validPlan);
+      if (!contract.ok) throw new Error(contract.error);
+      expect(results.defect_scan).toEqual({ summary: "No defects found.", rawOutput: "No defects found.", findings: [], work_item_ids: [] });
+      expect(results.feature_plan).toEqual({ summary: "Feature plan ready: **Compatibility**\n\nUse /issues to review and approve.", planText: validPlan, work_item_id: expect.any(Number), work_item_ids: [expect.any(Number)] });
+      expect(results.implementation_plan).toEqual({ summary: `Implementation plan ready for work item #${planned.id}. Review the approval pack before approving.`, work_item_id: planned.id, work_item_ids: [planned.id], plan_quality: withExecutionContractMetadata(quality, contract.contract) });
+      expect(results.tdd_implementation).toEqual({ summary: `TDD implementation complete on **agent/work-${tdd.id}**`, branchName: `agent/work-${tdd.id}`, verifyOutput: "green" });
+      expect(results.orchestrated_task).toEqual({ summary: `Orchestrated task complete for **agent/work-${orchestrated.id}**\n\ngreen`, branchName: `agent/work-${orchestrated.id}`, verifyOutput: "green" });
+      expect(results.open_github_issue).toEqual({ summary: "GitHub issue created: https://github.com/owner/repo/issues/42", issueUrl: "https://github.com/owner/repo/issues/42" });
+      expect(results.pr_lifecycle).toEqual({ summary: "Draft PR opened: https://github.com/owner/repo/pull/7\n\nCI watch queued; merge approval will be created after GitHub checks pass.", prUrl: "https://github.com/owner/repo/pull/7", work_item_id: pr.id, work_item_ids: [pr.id] });
+
+      expect(gitCalls.filter((call) => call.taskType === "pr_lifecycle").some((call) => call.args.join(" ") === `push --set-upstream origin agent/work-${pr.id}` && call.cwd === "/tmp/repo")).toBe(true);
+      expect(gitCalls.filter((call) => call.taskType === "pr_lifecycle").some((call) => call.args.join(" ") === "rev-parse HEAD" && call.cwd === "/tmp/repo")).toBe(true);
+      expect(githubCalls.filter((call) => call.taskType === "open_github_issue").every((call) => call.binary === "gh" && call.args.includes("--repo") && call.args.includes("owner/repo"))).toBe(true);
+      expect(githubCalls.filter((call) => call.taskType === "pr_lifecycle").every((call) => call.binary === "gh" && call.args.includes("--repo") && call.args.includes("owner/repo"))).toBe(true);
+      expect(githubCalls.some((call) => call.taskType === "open_github_issue" && call.args[0] === "issue" && call.args[1] === "create")).toBe(true);
+      expect(githubCalls.some((call) => call.taskType === "pr_lifecycle" && call.args[0] === "pr" && call.args[1] === "create" && call.args.includes("--draft") && call.args.includes(`agent/work-${pr.id}`))).toBe(true);
       expect(db.listRoleAssignmentRevisions("workspace:agent-bridge")).toHaveLength(1);
     } finally {
       db.close();
+      vi.unstubAllEnvs();
     }
   });
 });

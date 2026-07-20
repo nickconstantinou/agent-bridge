@@ -105,6 +105,42 @@ describe("schema 3 rollout qualification", () => {
     expect(() => runRolloutDb("validate", path)).toThrow(/unknown schema after migration/i);
   });
 
+  it("rejects schema 3 when an unexpected surplus role-assignment index exists", () => {
+    const path = createVersion2Database();
+    runRolloutDb("migrate", path);
+    const raw = new Database(path);
+    raw.exec("CREATE INDEX unexpected_extra_role_index ON role_assignments(primary_cli);");
+    raw.close();
+
+    expect(() => openProductionDb(path, { serviceId: "test:surplus-role-index" }))
+      .toThrow(/unexpected role_assignments indexes/i);
+    expect(() => runRolloutDb("validate", path)).toThrow(/unknown schema after migration/i);
+  });
+
+  it("rejects schema 3 when same-metadata role constraints omit code_worker", () => {
+    const path = createVersion2Database();
+    runRolloutDb("migrate", path);
+    const raw = new Database(path);
+    raw.exec(`
+      DROP TABLE role_assignments;
+      CREATE TABLE role_assignments (
+        revision_id      INTEGER NOT NULL,
+        role             TEXT NOT NULL CHECK (role IN ('technical_lead', 'documentation_steward')),
+        selection_mode   TEXT NOT NULL CHECK (selection_mode IN ('automatic', 'recommended', 'manual')),
+        primary_cli      TEXT NOT NULL,
+        primary_model    TEXT NOT NULL,
+        fallbacks_json   TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(fallbacks_json)),
+        PRIMARY KEY(revision_id, role),
+        FOREIGN KEY(revision_id) REFERENCES role_assignment_revisions(id) ON DELETE CASCADE
+      );
+    `);
+    raw.close();
+
+    expect(() => openProductionDb(path, { serviceId: "test:altered-role-constraint" }))
+      .toThrow(/unexpected role_assignments constraints/i);
+    expect(() => runRolloutDb("validate", path)).toThrow(/unknown schema after migration/i);
+  });
+
   it("rejects an exact schema with a pre-existing foreign-key violation", () => {
     const path = createVersion2Database();
     runRolloutDb("migrate", path);

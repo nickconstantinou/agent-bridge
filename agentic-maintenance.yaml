@@ -191,7 +191,7 @@ workflow_contract:
     - required_repository_tools_available
     - focused_commands_executable
     - exact_base_and_head_resolved
-    - required_independent_review_lane_available
+    - technical_lead_review_lane_available
   behavioural_mutation_blocked_when_execution_preflight_fails: true
   observed_red_requires:
     - focused_red_command_executed
@@ -286,15 +286,23 @@ readiness:
   block_on_non_current_head_evidence: true
 
 independence:
-  preference_order:
-    - different_cli_and_model
-    - different_model_same_cli
-    - fresh_session_technical_lead
-    - same_target_non_independent
-  report_degradation: true
-  record_required_and_actual_levels: true
+  basis:
+    - reviewer_role_is_technical_lead
+    - reviewer_did_not_author_or_modify_reviewed_implementation
+    - reviewer_has_no_mutation_authority
+    - fresh_exact_head_review_invocation
+  technical_lead_advisor_review_satisfies_independence: true
+  prior_read_only_requirements_planning_or_advice_disqualifies: false
+  code_worker_can_review_own_implementation: false
+  same_cli_and_model_allowed: true
+  provider_model_diversity_preferred: true
+  provider_model_diversity_required: false
+  fresh_review_required_after_head_change: true
+  record_reviewer_role_and_target: true
+  record_required_and_actual_basis: true
   preflight_required_lane_before_behavioural_mutation: true
-  block_when_required_level_unavailable: true
+  block_when_role_separation_unavailable: true
+  block_when_model_diversity_unavailable: false
 
 human_gates:
   - unresolved_product_decision

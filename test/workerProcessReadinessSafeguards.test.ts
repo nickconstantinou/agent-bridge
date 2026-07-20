@@ -107,6 +107,25 @@ describe("worker process readiness safeguards", () => {
     expect(safeguards).toMatch(/does not require an endlessly new model/i);
   });
 
+  it("places the fresh Technical Lead final review after exact-head CI", () => {
+    const manifest = read("agentic-maintenance.yaml");
+    const architecture = read("docs/architecture/agentic-worker-orchestration.md");
+    const promptContract = read("docs/architecture/agentic-prompt-contracts.md");
+
+    expect(manifest).toMatch(
+      /technical_lead_pr_readiness\s*\n\s*- exact_head_ci\s*\n\s*- technical_lead_final_review\s*\n\s*- human_merge_gate/,
+    );
+    expect(manifest).toContain("block_on_missing_final_technical_lead_review: true");
+    expect(manifest).toMatch(
+      /code_change_invalidates:[\s\S]*technical_lead_final_review/,
+    );
+    expect(architecture).toMatch(
+      /exact-head CI\s*\n→ fresh exact-head Technical Lead final review\s*\n→ human merge gate/,
+    );
+    expect(promptContract).toContain("does not create a fourth role");
+    expect(promptContract).toContain("technical_lead_final_review");
+  });
+
   it("makes every new safeguard a blocking readiness input", () => {
     const readiness = read("prompts/worker/roles/technical-lead-pr-readiness.md");
     const manifest = read("agentic-maintenance.yaml");

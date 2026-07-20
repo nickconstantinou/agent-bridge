@@ -76,6 +76,7 @@ canonical_documents:
   implementation_handoff:
     - docs/implementation-plans/issue-159-role-based-orchestration.md
     - docs/implementation-plans/issue-159-prompt-and-red-test-contract.md
+    - docs/implementation-plans/issue-159-execution-readiness-safeguards.md
 
 documentation_paths:
   allow:
@@ -108,6 +109,7 @@ change_triggers:
       - prompt_contracts
       - roadmap
       - testing
+      - implementation_handoff
   prompt_or_output_contract:
     required:
       - prompt_contracts
@@ -116,6 +118,7 @@ change_triggers:
       - roadmap
       - testing
       - production_readiness
+      - implementation_handoff
   implementation_plan_schema:
     required:
       - prompt_contracts
@@ -123,6 +126,7 @@ change_triggers:
       - roadmap
       - testing
       - production_readiness
+      - implementation_handoff
   provider_or_model_selection:
     required:
       - configuration
@@ -143,6 +147,7 @@ change_triggers:
       - operations
       - testing
       - production_readiness
+      - implementation_handoff
   database_schema_or_migration:
     required:
       - architecture
@@ -165,6 +170,7 @@ change_triggers:
       - architecture
       - testing
       - production_readiness
+      - implementation_handoff
 
 workflow_contract:
   multi_issue_mutation_requires:
@@ -172,6 +178,22 @@ workflow_contract:
     - technical_lead_decomposition_review
     - canonical_invariant_matrix
     - ready_for_issue_mutation
+  execution_preflight_requires:
+    - clean_isolated_worktree
+    - non_production_checkout
+    - locked_dependencies_installable
+    - required_repository_tools_available
+    - focused_commands_executable
+    - exact_base_and_head_resolved
+    - required_independent_review_lane_available
+  behavioural_mutation_blocked_when_execution_preflight_fails: true
+  observed_red_requires:
+    - focused_red_command_executed
+    - expected_failure_confirmed
+    - false_positive_controls_satisfied
+    - no_unrelated_failure
+    - required_sibling_characterization_green
+  green_blocked_without_observed_red: true
   canonical_runtime_order:
     - deterministic_verification
     - technical_lead_implementation_review
@@ -188,6 +210,7 @@ workflow_contract:
     - documentation_authoring
     - documentation_validation
     - pr_readiness
+    - exact_head_ci
   exact_head_evidence_statuses:
     - passed
     - failed
@@ -196,6 +219,46 @@ workflow_contract:
     - stale
     - unknown
 
+stacked_pr_ci:
+  pull_request_all_base_branches: true
+  workflow_dispatch_supported: true
+  exact_head_test_and_typecheck_required: true
+  exact_head_architecture_lint_required: true
+  intentionally_stacked_is_not_a_waiver: true
+
+issue_mutation_integrity:
+  required:
+    - retain_exact_pre_mutation_body
+    - retain_expected_revision_or_hash
+    - compare_expected_current_revision_before_write
+    - guarded_create_or_update
+    - refetch_stored_result
+    - semantic_post_write_validation
+  semantic_validation_preserves:
+    - validated_requirements
+    - invariants
+    - acceptance_criteria
+    - evidence
+    - non_goals
+    - dependencies
+    - human_gates
+  conflict_or_failed_validation_blocks_workflow: true
+  reconstruct_from_memory_on_failure: false
+
+documentation_scope:
+  trigger_bounded_changes_preferred: true
+  broad_rewrite_requires_full_document_revalidation: true
+  full_document_revalidation_requires:
+    - current_code
+    - commands
+    - configuration
+    - service_ownership
+    - deployment
+    - rollback
+    - recovery
+  unrelated_or_unproven_rewrite_blocks_readiness: true
+  stale_required_document_must_be_corrected_same_delivery: true
+
 readiness:
   require_documentation_impact: true
   allow_no_documentation_change: true
@@ -203,6 +266,11 @@ readiness:
     - rationale
     - technical_lead_validation
     - manifest_trigger_evaluation
+  block_on_failed_execution_preflight: true
+  block_on_unobserved_required_red: true
+  block_on_missing_stacked_pr_ci: true
+  block_on_failed_issue_mutation_integrity: true
+  block_on_unrelated_or_unproven_documentation_rewrite: true
   block_on_missing_required_document: true
   block_on_stale_required_document: true
   block_on_contradictory_required_document: true
@@ -219,6 +287,7 @@ independence:
     - same_target_non_independent
   report_degradation: true
   record_required_and_actual_levels: true
+  preflight_required_lane_before_behavioural_mutation: true
   block_when_required_level_unavailable: true
 
 human_gates:

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import { loadRoleAssignmentConfig } from "../src/config.js";
 import { openDb } from "../src/db.js";
-import { executeNextJob } from "../src/jobExecutor.js";
+import { executeNextJob, type JobHandler } from "../src/jobExecutor.js";
 import {
   handleWorkerCommand,
   type WorkerKeyboardMessageResult,
@@ -180,13 +180,13 @@ describe("dormant role assignment compatibility", () => {
     expect(productionHandlerMap).not.toMatch(/roleAssignment|role_assignment|AgentRole|configured_dormant/);
 
     const observations: Array<{ taskType: string; route: RouteFixture; marker: string }> = [];
-    const handlers = Object.fromEntries(
+    const handlers: Partial<Record<string, JobHandler>> = Object.fromEntries(
       Object.entries(expectedRoutes).map(([taskType, route]) => [
         taskType,
         vi.fn(async (input: Record<string, unknown>) => {
           const marker = String(input.marker);
           observations.push({ taskType, route, marker });
-          return { taskType, route, marker };
+          return { summary: marker, taskType, route, marker };
         }),
       ]),
     );
@@ -209,10 +209,11 @@ describe("dormant role assignment compatibility", () => {
           notify: vi.fn(),
         });
 
-        expect(execution).toEqual({ jobId: job.id });
+        expect(execution?.jobId).toBe(job.id);
+        expect(execution?.handlerResult).toEqual({ summary: marker, taskType, route, marker });
         const completed = db.getWorkJob(job.id)!;
         expect(completed.status).toBe("completed");
-        expect(JSON.parse(completed.result_json!)).toEqual({ taskType, route, marker });
+        expect(JSON.parse(completed.result_json!)).toEqual({ summary: marker, taskType, route, marker });
       }
 
       expect(observations).toEqual(

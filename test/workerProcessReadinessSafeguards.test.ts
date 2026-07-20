@@ -75,6 +75,38 @@ describe("worker process readiness safeguards", () => {
     expect(validate).toContain("unrelated_or_unproven");
   });
 
+  it("defines independent review by Technical Lead and Code Worker separation", () => {
+    const implementationReview = read(
+      "prompts/worker/roles/technical-lead-implementation-review.md",
+    );
+    const readiness = read("prompts/worker/roles/technical-lead-pr-readiness.md");
+    const manifest = read("agentic-maintenance.yaml");
+    const safeguards = read(
+      "docs/implementation-plans/issue-159-execution-readiness-safeguards.md",
+    );
+
+    for (const requirement of [
+      "reviewer_role_is_technical_lead",
+      "technical_lead_advisor_review_satisfies_independence: true",
+      "code_worker_can_review_own_implementation: false",
+      "same_cli_and_model_allowed: true",
+      "provider_model_diversity_required: false",
+      "block_when_model_diversity_unavailable: false",
+    ]) {
+      expect(manifest, requirement).toContain(requirement);
+    }
+
+    expect(`${implementationReview}\n${readiness}`).toMatch(
+      /same frontier model or CLI|same frontier model|same CLI or model/i,
+    );
+    expect(`${implementationReview}\n${readiness}`).toMatch(
+      /did not author or modify the implementation|did not author or modify the reviewed implementation/i,
+    );
+    expect(safeguards).toContain("Independent Technical Lead review");
+    expect(safeguards).toMatch(/role and authority separation/i);
+    expect(safeguards).toMatch(/does not require an endlessly new model/i);
+  });
+
   it("makes every new safeguard a blocking readiness input", () => {
     const readiness = read("prompts/worker/roles/technical-lead-pr-readiness.md");
     const manifest = read("agentic-maintenance.yaml");

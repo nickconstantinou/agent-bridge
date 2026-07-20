@@ -50,8 +50,15 @@ Return one JSON object:
   ],
   "documentation_status": "complete | stale_or_incomplete | not_applicable_validated",
   "operations_status": "qualified | incomplete | not_applicable",
-  "required_independence": "independent | partially_independent | non_independent",
-  "actual_independence": "independent | partially_independent | non_independent",
+  "required_independence": "technical_lead_role_independent | non_independent_allowed",
+  "actual_independence": "technical_lead_role_independent | non_independent",
+  "independence_basis": {
+    "reviewer_role": "technical_lead | code_worker | documentation_steward | unknown",
+    "implemented_or_modified_reviewed_code": false,
+    "mutation_authority_available": false,
+    "fresh_exact_head_review_invocation": false,
+    "same_cli_or_model_as_code_worker": false
+  },
   "independence_gate_satisfied": false,
   "blocking_findings": [],
   "residual_risk": [],
@@ -66,4 +73,6 @@ For behavioural work, readiness also requires a passed execution preflight and e
 
 Stale, contradictory, or missing required documentation is a blocker and cannot be deferred while returning `ready_for_human_review`. Documentation edits must be trigger-bounded; a broad rewrite is acceptable only after full-document revalidation against current code and authoritative operational evidence. Unrelated or unproven rewriting blocks readiness.
 
-When a delivery updates an existing GitHub issue, readiness requires evidence that Agent Bridge retained the pre-mutation body/revision, performed a guarded update, refetched the result, and semantically verified the approved requirements, invariants, acceptance criteria, tests, non-goals, and human gates. Actual review independence must meet the required level, and the required independent-review lane must have been proven available before implementation or recorded as a blocking preflight failure. Do not present same-target or same-model review as independent. Do not merge, deploy, restart, change configuration, or waive policy.
+When a delivery updates an existing GitHub issue, readiness requires evidence that Agent Bridge retained the pre-mutation body/revision, performed a guarded update, refetched the result, and semantically verified the approved requirements, invariants, acceptance criteria, tests, non-goals, and human gates.
+
+Independent review is satisfied by role and authority separation: a read-only Technical Lead advisor performs a fresh review of the exact checked head and did not author or modify the implementation under review. The Technical Lead may use the same frontier model or CLI as another role; provider or model diversity is preferred metadata, not a blocking requirement. Prior read-only Technical Lead requirements, planning, or advisory work does not disqualify the reviewer. The Code Worker that mutated the reviewed implementation cannot review its own work. After any head change or blocker repair, rerun a fresh Technical Lead review invocation. Do not merge, deploy, restart, change configuration, or waive policy.

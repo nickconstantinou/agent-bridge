@@ -24,7 +24,7 @@ For owners, likely target files, dependencies and overlap decisions, this record
 | OSS repository | `nickconstantinou/agent-bridge` |
 | OSS `main` used by PR #160 | `1ce03d5e22ec44b3b23fef847b273f2bce08303c` |
 | PR #160 branch | `agent/role-based-worker-orchestration-docs` |
-| PR #160 exact head / stacked base | `c2cbc3413e268b9807b88e8b62a2cd7b3052b6e7` |
+| PR #160 exact head / stacked base | `4cfd960` |
 | PR #160 state | open, draft, unmerged |
 | Platform repository | `nickconstantinou/agent-bridge-platform` |
 | Platform `main` used for reconciliation | `31d6b5e42b89eeb433e272816fd6bbb7aced2dce` |
@@ -33,7 +33,7 @@ For owners, likely target files, dependencies and overlap decisions, this record
 
 PR #160 is the runtime/schema/prompt/documentation-policy foundation. It supplies source-controlled role/mode prompts, canonical lifecycle-skill composition, the pre-mutation decomposition-review contract, comprehensive red-test and target-path provenance validation, source-only prompt resolution, schema version 2, guarded legacy prompt-table removal, and the current architecture/implementation-plan rewrite. Later slices extend those owners and must not recreate a prompt service, AdvisorService, worker execution stack, CI runner or migration authority.
 
-The move from the original Slice 0 base to `c2cbc3413e268b9807b88e8b62a2cd7b3052b6e7` comprised 219 commits and modified or added 82 paths. Previously classified exact-base targets therefore remained present, and the classification was re-anchored to the new base.
+The move from the original Slice 0 base to `4cfd960` comprised 311 commits and modified or added 82 paths. Previously classified exact-base targets therefore remained present, and the classification was re-anchored to the new base.
 
 ## Relevant work and non-overlap
 
@@ -173,7 +173,7 @@ The classification input was every concrete implementation target path in the ow
 
 Immutable references:
 
-- OSS base: `c2cbc3413e268b9807b88e8b62a2cd7b3052b6e7`;
+- OSS base: `4cfd960`;
 - dependency PR #152 head: `35c6a1a988e4cf197ca71cf2a653f103156e75e7`;
 - Platform base: `31d6b5e42b89eeb433e272816fd6bbb7aced2dce`.
 

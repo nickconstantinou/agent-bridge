@@ -114,7 +114,7 @@ Cover:
 - one CLI exposing multiple models assigns each role independently;
 - one model can serve every role with separate sessions, prompts, validators, and permission profiles;
 - model-diversity status is accurate and contributes to the Issue #161 review-independence classification;
-- a read-only Technical Lead review is `technical_lead_role_independent` only when the reviewer did not author or modify the implementation, has no mutation authority, performs a fresh exact-head invocation, and satisfies the delivery's independent-frontier requirement;
+- the role/authority boundary is `technical_lead_role_independent` when the reviewer did not author or modify the implementation, has no mutation authority, and performs a fresh exact-head invocation;
 - role/authority separation remains required, but a same-model fresh session is `non_independent` for Issue #161's final gate;
 - the mutating Code Worker cannot review its own implementation;
 - required and actual independence basis are recorded separately;

@@ -219,7 +219,7 @@ Fallback preserves required capability before optimising cost.
 
 ## Single-CLI and single-model target state — later slices
 
-When only one CLI is authenticated, later resolution chooses a model separately for each role. When only one model is available, it may serve every role, but actual review independence remains `non_independent` and policy may hold the workflow for human decision.
+When only one CLI is authenticated, later resolution chooses a model separately for each role. When only one model is available, it may serve every role and preserve the target-state role/authority boundary, but Issue #161 classifies actual delivery independence as `non_independent` and holds the workflow for a genuinely independent frontier reviewer or human decision.
 
 - Technical Lead: strongest suitable reasoning model;
 - Code Worker: strongest cost-effective coding model;

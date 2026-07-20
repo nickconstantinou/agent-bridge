@@ -72,8 +72,11 @@ export function assertExactRoleAssignmentSchema(raw: Database.Database): void {
   for (const required of ["configured_dormant", "technical_lead", "documentation_steward", "json_valid(fallbacks_json)"]) {
     if (!tableSql.includes(required)) throw new Error(`unexpected role-assignment constraints: missing ${required}`);
   }
+}
+
+export function assertDatabaseForeignKeyIntegrity(raw: Database.Database): void {
   const violations = raw.pragma("foreign_key_check") as unknown[];
-  if (violations.length > 0) throw new Error("role-assignment foreign key integrity check failed");
+  if (violations.length > 0) throw new Error("database foreign key integrity check failed");
 }
 
 /**

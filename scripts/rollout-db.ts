@@ -12,7 +12,7 @@ import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { openDb } from "../src/db.js";
 import { CURRENT_SCHEMA_VERSION } from "../src/db/schema.js";
-import { assertExactRoleAssignmentSchema } from "../src/db/roleAssignmentsMigration.js";
+import { assertDatabaseForeignKeyIntegrity, assertExactRoleAssignmentSchema } from "../src/db/roleAssignmentsMigration.js";
 
 type Mode = "inspect" | "migrate" | "validate";
 
@@ -117,6 +117,7 @@ function inspectDatabase(path: string, requireCurrent: boolean): DbEvidence {
     if (userVersion === CURRENT_SCHEMA_VERSION) {
       try {
         assertExactRoleAssignmentSchema(db);
+        assertDatabaseForeignKeyIntegrity(db);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         const phase = requireCurrent ? " after migration" : "";

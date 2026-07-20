@@ -31,6 +31,12 @@ Return one JSON object:
   "verdict": "ready_for_human_review | not_ready | held_for_human_decision",
   "subject_head_sha": "",
   "issue_satisfaction": "complete | incomplete | unproven",
+  "execution_preflight_status": "passed | failed | not_run | stale | unknown",
+  "observed_red_status": "passed | failed | not_run | stale | not_applicable_validated",
+  "stacked_ci_status": "passed | failed | not_run | not_scheduled | stale | unknown",
+  "issue_mutation_integrity": "verified | failed | not_applicable | unknown",
+  "documentation_scope_status": "trigger_bounded | broad_rewrite_fully_revalidated | unrelated_or_unproven",
+  "independent_review_lane_status": "available_and_completed | unavailable | incomplete | not_required_validated",
   "deterministic_gates": [
     {
       "name":"",
@@ -56,4 +62,8 @@ Return one JSON object:
 
 Every accepted verification, review, operations, documentation, and PR/CI record must identify the same `subject_head_sha`. Only an authoritative `passed` result for that exact head satisfies a required deterministic gate. `not_run`, `not_scheduled`, `stale`, `unknown`, failed, moved-head, incomplete, or missing evidence cannot be described as green.
 
-Stale, contradictory, or missing required documentation is a blocker and cannot be deferred while returning `ready_for_human_review`. The required documentation must be corrected and revalidated in the same delivery, or the verdict remains `not_ready` or `held_for_human_decision` when scope approval is required. Actual review independence must meet the required level. Do not present same-target or same-model review as independent. Do not merge, deploy, restart, change configuration, or waive policy.
+For behavioural work, readiness also requires a passed execution preflight and empirically observed intended red failure before green implementation. Static review or committed-but-unexecuted red tests are unproven. Stacked pull requests require exact-head Test & Typecheck and Architecture Lint through the repository's supported all-base PR or manual-dispatch CI path; intentionally stacked is not a waiver.
+
+Stale, contradictory, or missing required documentation is a blocker and cannot be deferred while returning `ready_for_human_review`. Documentation edits must be trigger-bounded; a broad rewrite is acceptable only after full-document revalidation against current code and authoritative operational evidence. Unrelated or unproven rewriting blocks readiness.
+
+When a delivery updates an existing GitHub issue, readiness requires evidence that Agent Bridge retained the pre-mutation body/revision, performed a guarded update, refetched the result, and semantically verified the approved requirements, invariants, acceptance criteria, tests, non-goals, and human gates. Actual review independence must meet the required level, and the required independent-review lane must have been proven available before implementation or recorded as a blocking preflight failure. Do not present same-target or same-model review as independent. Do not merge, deploy, restart, change configuration, or waive policy.

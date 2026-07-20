@@ -43,7 +43,8 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 - [ ] Ordered fallbacks and configuration source are visible
 - [ ] One CLI can assign different models to different roles
 - [ ] One model preserves role/session/prompt/skill/permission separation
-- [ ] Model diversity and independent-review degradation are accurate
+- [ ] Model-diversity state is accurate and separate from review independence
+- [ ] Technical Lead role-separation review remains available with one model
 - [ ] Role test probes are non-mutating and freshness-aware
 
 ## Security and permissions
@@ -87,14 +88,19 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 - [ ] Implementation review runs only after deterministic verification
 - [ ] Implementation review occurs before Documentation Steward authoring
 - [ ] Operations review occurs before documentation when triggered
-- [ ] Review, operations, documentation, readiness, and CI records carry the same current `subject_head_sha`
+- [ ] Review, operations, documentation, readiness, CI, and final review records carry the same current `subject_head_sha`
 - [ ] Required gate status distinguishes passed, failed, not run, not scheduled, stale, and unknown
 - [ ] Only authoritative passed evidence for the exact current head satisfies a required gate
 - [ ] `not_run`, `not_scheduled`, stale, unknown, failed, and moved-head evidence are never reported as green
-- [ ] Required and actual review-independence levels are recorded separately
-- [ ] Same-model fresh-session review is not reported as independent
-- [ ] Required unavailable independence holds for human decision
-- [ ] Any code-changing repair invalidates verification, review, operations, documentation, and readiness evidence for the previous head
+- [ ] Final review is performed by a read-only Technical Lead advisor
+- [ ] Reviewer role is separate from the mutating Code Worker
+- [ ] Reviewer did not author or modify the reviewed implementation
+- [ ] Review invocation has no mutation authority
+- [ ] Review is a fresh invocation against the exact checked head
+- [ ] Same CLI/model reuse is permitted and model diversity is non-blocking metadata
+- [ ] Prior read-only Technical Lead planning or advice does not disqualify the reviewer
+- [ ] Code Worker self-review is rejected
+- [ ] Any code-changing repair invalidates verification, review, operations, documentation, readiness, CI, and final-review evidence for the previous head
 
 ## Documentation
 
@@ -113,7 +119,7 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 
 - [ ] Implementation and PR-readiness review consume canonical risk/readiness skill mappings
 - [ ] Operations review consumes canonical release-readiness guidance
-- [ ] Effective role/status reports targets, models, permissions, fallbacks, prompt/skill identities, source, and degradation
+- [ ] Effective role/status reports targets, models, permissions, fallbacks, prompt/skill identities, source, role separation, and model-diversity metadata
 - [ ] Safe enablement completed in a disposable workspace
 - [ ] Operator runbook covers enablement, degradation, cancellation, restart, incident, and rollback
 - [ ] Deployment/rollback plan identifies prerequisites, abort conditions, postconditions, and exact evidence
@@ -125,7 +131,7 @@ Gate for enabling role-based Engineering Worker orchestration. Checked per relea
 - [ ] Every role/mode and compatibility prompt declares an explicit skill mapping
 - [ ] Skill drift changes only consuming composed/rendered identities
 - [ ] Compatibility and role-native prompts use the same canonical skill loader
-- [ ] Focused decomposition, prompt, skill, target-provenance, workflow, permission, exact-head, documentation, lifecycle, migration, and platform tests pass
+- [ ] Focused decomposition, prompt, skill, target-provenance, workflow, permission, exact-head, documentation, review-independence, lifecycle, migration, and platform tests pass
 - [ ] Full suite passes at exact head
 - [ ] Typecheck passes
 - [ ] Architecture Lint passes

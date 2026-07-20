@@ -39,7 +39,7 @@ PR #160 at exact head `c2cbc3413e268b9807b88e8b62a2cd7b3052b6e7` delivers:
 - role-template, lifecycle-skill-set, composed-template, and rendered-content identity tests;
 - exact-head review, operations, documentation, readiness, CI, and final Technical Lead review contracts;
 - explicit evidence states for passed, failed, not run, not scheduled, stale, and unknown checks;
-- Technical Lead/Code Worker role-separation review independence, with model diversity recorded as optional metadata rather than a blocking requirement;
+- Technical Lead/Code Worker role and authority separation, with Issue #161 additionally requiring a genuinely independent frontier reviewer;
 - same-delivery correction of every stale, contradictory, missing, or materially misleading required document;
 - full revalidation of `docs/architecture/01-current-architecture.md`;
 - source-only prompt resolution for canonical and compatibility-key handlers;
@@ -99,7 +99,7 @@ Role routing, capability resolution, requirements lifecycle, complete structured
 - source-controlled prompt key/version and role-template hash per role invocation;
 - source-controlled lifecycle skill key/version/content hashes and composed-template hash per role invocation;
 - exact-head verification, review, operations, documentation, readiness, CI, and final Technical Lead review evidence;
-- single-CLI and single-model operation with explicit model-diversity metadata and preserved role-separation review independence;
+- single-CLI and single-model operation with explicit model-diversity metadata, while Issue #161's independent final-review gate remains held without a different frontier reviewer;
 - lifecycle, cancellation, restart, lease, audit, migration, rollback, and platform coordination;
 - completed removal of legacy database prompt overrides and their schema table.
 

@@ -25,7 +25,7 @@ Canonical operating model. This document describes the Engineering Worker workfl
 
 The Technical Lead is the strongest available read-only reasoning path. It owns requirements discovery, issue authoring and validation, pre-mutation decomposition review, planning, comprehensive red-test design, task decomposition, bounded executor guidance, implementation review, operations assessment, PR-readiness advice, and fresh exact-head final review.
 
-It does not edit files, execute unrestricted commands, mutate GitHub, merge, deploy, or approve its own output. Its review is independent from Code Worker mutation when it did not author or modify the reviewed implementation, has no mutation authority in the review invocation, and performs a fresh review of the exact checked head. The same frontier model or CLI may be reused.
+It does not edit files, execute unrestricted commands, mutate GitHub, merge, deploy, or approve its own output. Role and authority separation requires that it did not author or modify the reviewed implementation, has no mutation authority in the review invocation, and performs a fresh review of the exact checked head. Issue #161 applies a stricter delivery gate: a same-model fresh session is `non_independent` and a genuinely independent frontier reviewer is required.
 
 ### Code Worker
 
@@ -253,7 +253,7 @@ Review independence is based on role and authority separation:
 - no mutation authority is available in the review invocation;
 - the review is fresh and bound to the exact checked head.
 
-The same frontier model or CLI may be reused. Provider/model diversity is recorded separately and is not a blocking requirement. Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations work does not disqualify the reviewer. The Code Worker cannot review its own mutation. A head change requires a fresh Technical Lead invocation, not an endlessly new model identity.
+Issue #161 additionally requires a genuinely independent frontier reviewer; a same-model fresh session is `non_independent`. Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations work does not disqualify an otherwise independent reviewer. The Code Worker cannot review its own mutation. A head change requires a fresh Technical Lead invocation.
 
 Every deterministic, review, operations, documentation, readiness, CI, and final-review record identifies the exact subject head. Gate status distinguishes:
 

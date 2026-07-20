@@ -199,7 +199,7 @@ The following remain mandatory before any later slice can enable role routing.
 - [ ] Reviewer did not author or modify the reviewed implementation
 - [ ] Review invocation has no mutation authority
 - [ ] Review is a fresh invocation against the exact checked head
-- [ ] Same CLI/model reuse is permitted and model diversity is non-blocking metadata
+- [ ] Same-model fresh sessions are `non_independent` for Issue #161; a genuinely independent frontier reviewer is required
 - [ ] Prior read-only Technical Lead planning or advice does not disqualify the reviewer
 - [ ] Code Worker self-review is rejected
 - [ ] Any code-changing repair invalidates verification, review, operations, documentation, readiness, CI, and final-review evidence for the previous head

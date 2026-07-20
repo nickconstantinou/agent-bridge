@@ -165,7 +165,7 @@ The independence basis is:
 - the review invocation has no mutation authority;
 - the invocation is fresh and bound to the exact checked `subject_head_sha`.
 
-The same frontier model or CLI may be reused. Provider/model diversity is preferred metadata, not a blocking requirement. Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations review does not disqualify the final reviewer. The Code Worker cannot review its own mutation. A head change requires a fresh invocation, not an endlessly new model identity.
+Issue #161 adds an independent-frontier requirement to these role/authority controls: a same-model fresh session is `non_independent`. Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations review does not disqualify an otherwise independent final reviewer. The Code Worker cannot review its own mutation. A head change requires a fresh invocation.
 
 ## Review, documentation, and readiness order
 
@@ -232,7 +232,7 @@ Implementation must prove:
 - observed intended red failure precedes green;
 - implementation review precedes documentation;
 - exact-head CI precedes fresh final Technical Lead review;
-- same-model Technical Lead review satisfies independence through role/authority separation;
+- same-model Technical Lead review is `non_independent` for Issue #161 even when role/authority separation is preserved;
 - Code Worker self-review is rejected;
 - stale required documentation blocks readiness and cannot be deferred;
 - canonical prompts cannot consume database text;

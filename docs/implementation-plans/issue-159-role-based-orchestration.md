@@ -97,7 +97,7 @@ Independence is established when:
 - the review invocation has no mutation authority;
 - the review is a fresh invocation bound to the exact checked `subject_head_sha`.
 
-The same frontier model or CLI may be used by Technical Lead and Code Worker roles. Provider/model diversity is preferred metadata, not a blocking requirement. Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations review does not disqualify the reviewer. The Code Worker cannot review its own mutation. A repair or head change requires a fresh Technical Lead review invocation, not an endlessly new model identity.
+Issue #161 applies a stricter independent-frontier gate to these role/authority controls: a same-model fresh session is `non_independent`. Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations review does not disqualify an otherwise independent reviewer. The Code Worker cannot review its own mutation. A repair or head change requires a fresh Technical Lead review invocation.
 
 ## Non-negotiable invariants
 
@@ -223,7 +223,7 @@ After accepted implementation and applicable operations review, Documentation St
 
 Documentation changes remain trigger-bounded. A broad rewrite is allowed only when the whole document is demonstrably stale and the replacement is fully revalidated against current code, commands, configuration, service ownership, deployment, rollback, and recovery.
 
-After documentation validation and PR readiness, exact-head CI runs. The Technical Lead advisor then performs a fresh read-only final review using the same exact head and all deterministic, review, operations, documentation, PR, and CI evidence. A same-model review remains independent when the role/authority conditions above are satisfied.
+After documentation validation and PR readiness, exact-head CI runs. The Technical Lead advisor then performs a fresh read-only final review using the same exact head and all deterministic, review, operations, documentation, PR, and CI evidence. For Issue #161, a same-model fresh session is `non_independent`; a genuinely independent frontier reviewer is required.
 
 ## Delivery slices
 
@@ -300,7 +300,7 @@ implementation review
 → fresh Technical Lead final review
 ```
 
-Required red boundaries include verification prerequisites, failed deterministic gate rejection, Technical Lead/Code Worker role separation, same-model review acceptance, Code Worker self-review rejection, read-only reviewer authority, fresh exact-head invocation, operations triggers and complete operational contract, exact-head equality, code-repair invalidation, stale-document blocking, and preservation of human merge/deploy authority.
+Required red boundaries include verification prerequisites, failed deterministic gate rejection, Technical Lead/Code Worker role separation, same-model review classified as `non_independent` for Issue #161, Code Worker self-review rejection, read-only reviewer authority, fresh exact-head invocation, operations triggers and complete operational contract, exact-head equality, code-repair invalidation, stale-document blocking, and preservation of human merge/deploy authority.
 
 ### Slice 9 — lifecycle, audit, compatibility, rollout qualification (#169)
 

@@ -82,7 +82,7 @@ A role binds an authenticated CLI, explicit model, fallbacks, permissions, budge
 
 A single authenticated CLI can provide different models to each role. A single model can provide every role with isolated sessions and permissions. Model diversity is reported as unavailable, but Technical Lead review remains independent from Code Worker mutation when the Technical Lead did not author or modify the implementation, has no mutation authority, and performs a fresh exact-head review invocation.
 
-The same frontier model or CLI may be reused. Model diversity is optional metadata and not a blocking gate. The Code Worker cannot review its own mutation.
+The later target state may reuse the same frontier model or CLI, but Issue #161's delivery gate is stricter: same-model freshness is `non_independent` and a genuinely independent frontier reviewer is required. The Code Worker cannot review its own mutation.
 
 ## Layer diagram
 

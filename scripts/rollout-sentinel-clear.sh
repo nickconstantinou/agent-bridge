@@ -50,7 +50,7 @@ else
   test_mode=0
 fi
 
-for command_path in /usr/bin/flock /usr/bin/realpath /usr/bin/stat /usr/bin/mkdir /usr/bin/rm /usr/bin/date /usr/bin/hostname /usr/bin/sed /usr/bin/chmod /usr/bin/dirname /usr/bin/ln /usr/bin/mktemp; do
+for command_path in /usr/bin/flock /usr/bin/realpath /usr/bin/stat /usr/bin/mkdir /usr/bin/rm /usr/bin/date /usr/bin/hostname /usr/bin/sed /usr/bin/chmod /usr/bin/dirname /usr/bin/ln /usr/bin/mktemp /usr/bin/sleep; do
   [[ -x "$command_path" ]] || die "required command is unavailable: $command_path"
 done
 [[ -f "$config_file" && ! -L "$config_file" ]] || die "missing fixed rollout config: $config_file"
@@ -92,6 +92,15 @@ exec 9>"$lock_file"
 # rollout. If the lock is held elsewhere, abort here — before the sentinel
 # has been read, inspected, or touched in any way.
 /usr/bin/flock --exclusive --nonblock 9 || die "a rollout is currently active — refusing to touch the sentinel while it may still be in use"
+
+# Test-only seam (Phase 4C.5, issue #135): holds the lock for a fixed
+# window right after acquiring it, so a UAT test can deterministically
+# prove a second, genuinely concurrent clear attempt is refused rather
+# than racing an uncontrollable real-world timing window.
+if (( test_mode == 1 )) && [[ -n "${AGENT_BRIDGE_ROLLOUT_TEST_HOLD_LOCK_MS:-}" ]]; then
+  hold_ms="$AGENT_BRIDGE_ROLLOUT_TEST_HOLD_LOCK_MS"
+  /usr/bin/sleep "$(printf '%d.%03d' "$((hold_ms / 1000))" "$((hold_ms % 1000))")"
+fi
 
 if [[ ! -e "$sentinel_path" && ! -L "$sentinel_path" ]]; then
   echo "rollout-sentinel-clear: no sentinel present at $sentinel_path — nothing to clear"

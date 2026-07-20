@@ -113,7 +113,7 @@ Cover:
 
 - one CLI exposing multiple models assigns each role independently;
 - one model can serve every role with separate sessions, prompts, validators, and permission profiles;
-- model-diversity status is accurate and separate from review independence;
+- model-diversity status is accurate and contributes to the Issue #161 review-independence classification;
 - a read-only Technical Lead review is `technical_lead_role_independent` only when the reviewer did not author or modify the implementation, has no mutation authority, performs a fresh exact-head invocation, and satisfies the delivery's independent-frontier requirement;
 - role/authority separation remains required, but a same-model fresh session is `non_independent` for Issue #161's final gate;
 - the mutating Code Worker cannot review its own implementation;
@@ -259,9 +259,9 @@ Cover:
 - only authoritative `passed` evidence for the current head satisfies a required gate;
 - `not_scheduled` or `not_run` cannot be reported as green;
 - final review is performed by the read-only Technical Lead advisor on the exact checked head;
-- independence is satisfied by Technical Lead/Code Worker role and mutation separation;
+- Technical Lead/Code Worker role and mutation separation is mandatory but not sufficient for Issue #161 independence;
 - reviewer role, target, implementation authorship, mutation authority, and fresh-invocation state are recorded;
-- provider/model diversity is optional metadata and unavailable diversity does not block readiness;
+- unavailable model diversity blocks Issue #161's genuinely independent final-review gate;
 - prior read-only Technical Lead requirements, planning, or advice does not disqualify the reviewer;
 - the Code Worker cannot self-review its own mutation;
 - a head change or blocker repair requires a fresh Technical Lead review invocation;

@@ -212,14 +212,14 @@ After capability-resolution and routing slices activate:
 
 When only one CLI is authenticated, Agent Bridge still resolves a model separately for each role. When only one model is available, role separation, prompts, sessions, permissions, budgets, and audit remain distinct, while status reports that model diversity and independent-model review are unavailable.
 
-The configured Technical Lead advisor target owns final review. Agent Bridge may prefer a different CLI or model when available as an extra challenge signal, but the independence gate requires only:
+The configured Technical Lead advisor target owns final review. Role and authority separation requires:
 
 1. Technical Lead reviewer role;
 2. no authorship or modification of the reviewed implementation;
 3. no mutation authority in the review invocation;
 4. a fresh review bound to the exact checked `subject_head_sha`.
 
-Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations review does not disqualify the final reviewer. The Code Worker cannot review its own mutation. A head change requires a fresh Technical Lead invocation, not a different model or an endlessly new reviewer identity.
+Issue #161 additionally requires a genuinely independent frontier reviewer; a same-model fresh session remains `non_independent`. Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations review does not disqualify an otherwise independent final reviewer. The Code Worker cannot review its own mutation. A head change requires a fresh Technical Lead invocation.
 
 ## Authority boundaries
 
@@ -273,7 +273,7 @@ A workspace remains usable with one authenticated CLI or model. The effective st
 - unavailable role capabilities;
 - any repository policy that blocks degraded execution.
 
-Model diversity degradation is explicit and audited, but it is not presented as loss of review independence when the Technical Lead role and authority boundary remain intact.
+Model diversity degradation is explicit and audited. For Issue #161, unavailable diversity means the independent final-review gate remains unsatisfied even when the Technical Lead role and authority boundary remain intact.
 
 ## Non-goals
 

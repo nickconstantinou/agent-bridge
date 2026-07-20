@@ -81,7 +81,7 @@ Test read-only scan/investigate, test-only red, production-only green, bounded r
 
 Test deterministic verification before implementation review; implementation and applicable operations review before documentation; documentation before PR readiness; exact-head CI before final Technical Lead review; exact `subject_head_sha` equality across all later evidence; explicit `passed`, `failed`, `not_run`, `not_scheduled`, `stale`, and `unknown` states; and rejection of any non-passed required evidence.
 
-Test the final-review independence basis: Technical Lead reviewer role, no authorship or modification of reviewed implementation, no mutation authority, and a fresh exact-head invocation. Provider/model diversity is optional metadata and unavailable diversity must not block readiness. Prior read-only Technical Lead requirements, planning, or advice does not disqualify the reviewer.
+Test the final-review independence basis: Technical Lead reviewer role, no authorship or modification of reviewed implementation, no mutation authority, a fresh exact-head invocation, and the delivery's independent-frontier requirement. For Issue #161, unavailable model diversity blocks the independent final-review gate. Prior read-only Technical Lead requirements, planning, or advice does not disqualify an otherwise independent reviewer.
 
 Test that code-changing repair invalidates verification, implementation review, operations review, documentation, readiness, CI, and final Technical Lead review evidence for the old head.
 
@@ -136,6 +136,6 @@ For Slice 1, a future separately approved production qualification demonstrates 
 
 Later active-routing qualification demonstrates per-role capability/model selection, degraded operation, requirements/decomposition, planning/TDD, review/documentation, restart/cancellation, independence reporting, and rollback to legacy routing.
 
-That later qualification includes same-frontier-model Technical Lead review accepted through role/authority separation, Code Worker self-review rejection, and rollback to legacy routing without queue or state corruption.
+That later qualification includes same-frontier-model Technical Lead review classified as `non_independent` for Issue #161, Code Worker self-review rejection, genuinely independent frontier review, and rollback to legacy routing without queue or state corruption.
 
 Production rollout is separately approved and is not implied by passing disposable qualification.

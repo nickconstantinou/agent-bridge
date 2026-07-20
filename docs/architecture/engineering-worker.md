@@ -167,7 +167,7 @@ Configuration reference: `docs/configuration/agent-role-assignment.md`.
 8. Technical Lead remains read-only after active role routing.
 9. Code Worker and Documentation Steward permissions are mode-specific and Bridge-enforced after their permission slice activates.
 10. Code Worker cannot review its own mutation.
-11. Model diversity is not required for Technical Lead review independence.
+11. Issue #161 requires a genuinely independent frontier reviewer; same-model freshness alone is insufficient.
 12. Deterministic evidence wins over model claims.
 13. Terminal state cannot be overwritten by late output.
 14. Restart, retry, cancellation, or lease loss cannot duplicate logical role calls after that lifecycle activates.

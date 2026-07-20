@@ -10,6 +10,9 @@ Committed red-test evidence:
 {red_evidence}
 
 Rules:
+- Green implementation must not start from test authorship, static inspection, an expected failure, or a red command marked `not_run`.
+- Require authoritative observed-red evidence from a clean isolated non-production worktree: `status: red_confirmed`, an actually executed focused command with the intended non-zero result, `expected_failure_confirmed: true`, passed false-positive controls, no unrelated failures, and required sibling characterization still green.
+- If any observed-red prerequisite is missing, failed, stale, unknown, or belongs to a different head/commit, return `blocked` before modifying production files.
 - Leave committed red tests unchanged.
 - Modify only approved production/runtime files or ownership boundaries.
 - Preserve product behaviour, architectural intent, invariants, compatibility, permission limits, and sibling behaviour recorded by the plan.
@@ -24,6 +27,14 @@ Return one JSON object:
 ```json
 {
   "status": "green | needs_guidance | blocked",
+  "observed_red_gate": {
+    "red_status": "red_confirmed | absent | failed | stale | unknown",
+    "expected_failure_confirmed": false,
+    "focused_command_executed": false,
+    "false_positive_controls_satisfied": false,
+    "sibling_characterization_green": false,
+    "evidence_ids": []
+  },
   "production_files_changed": [],
   "requirements_satisfied": [],
   "architecture_boundaries_satisfied": [],
@@ -34,4 +45,4 @@ Return one JSON object:
 }
 ```
 
-Do not create a commit; Agent Bridge owns staging and commit policy.
+Return `green` only when every observed-red gate field is satisfied and the implementation is proven through the approved production boundary. Do not create a commit; Agent Bridge owns staging and commit policy.

@@ -246,17 +246,27 @@ export function parseRoleAssignmentConfig(
     throw new RoleAssignmentConfigError("invalid_shape", "Role assignments must be a JSON array");
   }
 
-  const assignments = decoded.map(parseAssignment);
   const seenRoles = new Set<AgentRoleId>();
-  for (const assignment of assignments) {
-    if (seenRoles.has(assignment.role)) {
+  for (const [index, value] of decoded.entries()) {
+    const path = `assignments[${index}]`;
+    if (!isRecord(value)) {
+      throw new RoleAssignmentConfigError("invalid_shape", `Expected assignment object at ${path}`);
+    }
+    validateFields(value, ASSIGNMENT_FIELDS, path);
+    if (typeof value.role !== "string" || !ROLE_SET.has(value.role)) {
+      const renderedRole = typeof value.role === "string" ? value.role : typeof value.role;
+      throw new RoleAssignmentConfigError("invalid_role", `Invalid configurable role: ${renderedRole}`);
+    }
+    const role = value.role as AgentRoleId;
+    if (seenRoles.has(role)) {
       throw new RoleAssignmentConfigError(
         "duplicate_role",
-        `Duplicate role assignment: ${assignment.role}`,
+        `Duplicate role assignment: ${role}`,
       );
     }
-    seenRoles.add(assignment.role);
+    seenRoles.add(role);
   }
+  const assignments = decoded.map(parseAssignment);
   for (const role of AGENT_ROLE_IDS) {
     if (!seenRoles.has(role)) {
       throw new RoleAssignmentConfigError("missing_role", `Missing role assignment: ${role}`);

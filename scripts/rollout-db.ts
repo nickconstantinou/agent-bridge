@@ -12,6 +12,7 @@ import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { openDb } from "../src/db.js";
 import { CURRENT_SCHEMA_VERSION } from "../src/db/schema.js";
+import { assertExactRoleAssignmentSchema } from "../src/db/roleAssignmentsMigration.js";
 
 type Mode = "inspect" | "migrate" | "validate";
 
@@ -112,7 +113,17 @@ function inspectDatabase(path: string, requireCurrent: boolean): DbEvidence {
     const lockColumns = tables.includes("execution_locks") ? columnNames(db, "execution_locks") : [];
     const currentPending = sameSet(pendingColumns, CURRENT_PENDING_COLUMNS);
     const currentLocks = sameSet(lockColumns, CURRENT_LOCK_COLUMNS);
-    const currentRoleTables = CURRENT_ROLE_TABLES.every((table) => tables.includes(table));
+    let currentRoleTables = CURRENT_ROLE_TABLES.every((table) => tables.includes(table));
+    if (userVersion === CURRENT_SCHEMA_VERSION) {
+      try {
+        assertExactRoleAssignmentSchema(db);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const phase = requireCurrent ? " after migration" : "";
+        throw new Error(`unknown schema${phase} for ${path}: ${detail}`);
+      }
+      currentRoleTables = true;
+    }
     const schema = userVersion === 0
       ? "legacy"
       : userVersion === CURRENT_SCHEMA_VERSION && currentPending && currentLocks && currentRoleTables

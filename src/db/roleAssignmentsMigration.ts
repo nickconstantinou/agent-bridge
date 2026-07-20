@@ -31,6 +31,11 @@ function assertExactColumns(
   }
 }
 
+export function assertExactRoleAssignmentSchema(raw: Database.Database): void {
+  assertExactColumns(raw, "role_assignment_revisions", REVISION_COLUMNS);
+  assertExactColumns(raw, "role_assignments", ASSIGNMENT_COLUMNS);
+}
+
 /**
  * Schema version 3: additive, dormant Engineering Worker role assignments.
  *
@@ -83,6 +88,5 @@ export function applyRoleAssignmentsMigration(raw: Database.Database): void {
   // The assertions execute inside the migration transaction. A defect in the
   // migration DDL leaves user_version and every migration-created object
   // unchanged rather than blessing an incomplete current schema.
-  assertExactColumns(raw, "role_assignment_revisions", REVISION_COLUMNS);
-  assertExactColumns(raw, "role_assignments", ASSIGNMENT_COLUMNS);
+  assertExactRoleAssignmentSchema(raw);
 }

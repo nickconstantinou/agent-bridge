@@ -32,6 +32,7 @@ export type { RoleAssignmentRevisionRecord } from "./repositories/roleAssignment
 import { ConversationRepository, DEFAULT_CONTEXT_MAX_CHARS } from "./repositories/conversationRepository.js";
 export { DEFAULT_CONTEXT_MAX_CHARS, DEFAULT_CONTEXT_RECENT_TURN_LIMIT } from "./repositories/conversationRepository.js";
 import { applyMigrations, CURRENT_SCHEMA_VERSION, MigrationRequiredError, UnsupportedSchemaVersionError } from "./db/schema.js";
+import { assertExactRoleAssignmentSchema } from "./db/roleAssignmentsMigration.js";
 
 // Sentinel row keys stored in bridge_state for non-chat state
 const pollingKey = (bot: string) => `$polling:${bot}`;
@@ -213,6 +214,12 @@ export function openProductionDb(dbPath: string, options: OpenDbOptions = {}): B
   if (schemaVersion !== CURRENT_SCHEMA_VERSION) {
     raw.close();
     throw new MigrationRequiredError(schemaVersion);
+  }
+  try {
+    assertExactRoleAssignmentSchema(raw);
+  } catch (error) {
+    raw.close();
+    throw error;
   }
   return finishOpen(raw, options);
 }

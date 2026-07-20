@@ -665,6 +665,18 @@ Each service has its own SQLite database by default (`DB_PATH`, WAL mode). The
 main bridge database stores chat sessions and polling state; the worker database
 also stores `work_items`, `work_jobs`, `approvals`, and `github_links`.
 
+### Guarded production rollout
+
+Schema changes must use the root-owned helper documented in
+[`docs/GUARDED-ROLLOUT.md`](docs/GUARDED-ROLLOUT.md). The helper can begin with
+the service cohort either running or already stopped, but it always proves
+containment before backup and migration. After the post-stop inspection it
+removes only stale regular sidecars with a zero-byte WAL; a non-empty WAL or
+uncertain sidecar remains a hard failure. It then takes byte-exact backups,
+migrates the whole cohort, starts all selected services together, and performs
+startup and database validation. Never migrate an individual service database
+or bypass this sequence.
+
 | Row key | Value | Purpose |
 |---------|-------|---------|
 | `<chatId>` | — | Per-chat row; holds session IDs and execution lock |

@@ -4,7 +4,7 @@ Status: guarded deployment contract for Issue #131. This document does not autho
 
 ## Required sequence
 
-Use the separately installed root-owned helper documented in [GUARDED-ROLLOUT.md](GUARDED-ROLLOUT.md). It enforces the strict **preflight → stop-all → verify stopped → backup → migrate → validate → start-all → smoke** sequence. Confirm every old service process has exited before migration and do not allow old/new binary overlap. Starting one provider at a time is not safe because all surfaces share the SQLite schema.
+Use the separately installed root-owned helper documented in [GUARDED-ROLLOUT.md](GUARDED-ROLLOUT.md). It enforces the strict **preflight → stop-all → verify stopped → post-stop inspect/sidecar cleanup → backup → migrate → validate → start-all → smoke** sequence. The cohort may already be stopped when the helper starts, but every process must still be proven gone before migration and old/new binary overlap is never allowed. Starting one provider at a time is not safe because all surfaces share the SQLite schema.
 
 Before stopping services, record the **legacy queue count** reported by migration diagnostics. Require an **explicit discard decision** from the operator; quarantined rows must never drain automatically. Preserve a database backup and rollback binary before schema migration.
 

@@ -7,6 +7,7 @@ import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { applyLegacyCompatibleBaseline } from "../src/db/legacyBaselineMigration.js";
 import { dropLegacyPromptOverrides } from "../src/db/dropLegacyPromptOverridesMigration.js";
+import { openProductionDb } from "../src/db.js";
 import { applyMigrationsUpTo } from "../src/db/schema.js";
 
 const migrationScript = fileURLToPath(new URL("../scripts/rollout-db.ts", import.meta.url));
@@ -84,5 +85,40 @@ describe("schema 3 rollout qualification", () => {
     raw.close();
 
     expect(() => runRolloutDb("validate", path)).toThrow(/unknown schema after migration/i);
+  });
+
+  it("rejects schema 3 with the right column names but missing constraints, foreign key, and indexes", () => {
+    const path = createVersion2Database();
+    runRolloutDb("migrate", path);
+    const raw = new Database(path);
+    raw.exec(`
+      DROP TABLE role_assignments;
+      CREATE TABLE role_assignments (
+        revision_id TEXT, role TEXT, selection_mode TEXT,
+        primary_cli TEXT, primary_model TEXT, fallbacks_json TEXT
+      );
+    `);
+    raw.close();
+
+    expect(() => openProductionDb(path, { serviceId: "test:malformed-current" }))
+      .toThrow(/unexpected role_assignments schema/i);
+    expect(() => runRolloutDb("validate", path)).toThrow(/unknown schema after migration/i);
+  });
+
+  it("rejects an exact schema with a pre-existing foreign-key violation", () => {
+    const path = createVersion2Database();
+    runRolloutDb("migrate", path);
+    const raw = new Database(path);
+    raw.pragma("foreign_keys = OFF");
+    raw.prepare(`
+      INSERT INTO role_assignments
+        (revision_id, role, selection_mode, primary_cli, primary_model, fallbacks_json)
+      VALUES (999, 'technical_lead', 'manual', 'claude', 'safe-model', '[]')
+    `).run();
+    raw.close();
+
+    expect(() => openProductionDb(path, { serviceId: "test:orphan-current" }))
+      .toThrow(/foreign key/i);
+    expect(() => runRolloutDb("validate", path)).toThrow(/foreign key/i);
   });
 });

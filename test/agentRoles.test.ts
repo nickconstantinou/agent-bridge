@@ -133,6 +133,31 @@ describe("role assignment configuration", () => {
     expect(error.message).not.toContain(value);
   });
 
+  it.each([
+    ["unknown CLI", { primary: { cli: "unknown-provider", model: "safe-model" } }],
+    ["AWS credential", { primary: { cli: "claude", model: "AKIAIOSFODNN7EXAMPLE" } }],
+    ["prompt content", { primary: { cli: "claude", model: "system-prompt" } }],
+    ["repository content", { primary: { cli: "claude", model: "repository-content" } }],
+    ["repository path", { primary: { cli: "claude", model: "src/config.ts" } }],
+  ])("rejects secret-safe %s values", (_label, override) => {
+    const candidate = acceptedAssignments.map((assignment, index) => index === 0
+      ? { ...assignment, ...override, primary: { ...assignment.primary, ...override.primary } }
+      : assignment);
+    const rejectedValue = candidate[0].primary.model === acceptedAssignments[0].primary.model
+      ? candidate[0].primary.cli
+      : candidate[0].primary.model;
+    const error = captureConfigError(candidate);
+    expect(["invalid_target", "forbidden_value"]).toContain(error.code);
+    expect(error.message).not.toContain(rejectedValue);
+  });
+
+  it("does not echo an arbitrary invalid role", () => {
+    const role = "secret-role-value";
+    const error = captureConfigError([{ ...acceptedAssignments[0], role }]);
+    expect(error.code).toBe("invalid_role");
+    expect(error.message).not.toContain(role);
+  });
+
   it("keeps existing bot and legacy worker policy parsing unchanged", () => {
     const bots = loadBotsConfig({
       CODEX_COMMAND: "codex-custom",

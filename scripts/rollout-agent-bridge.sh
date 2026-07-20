@@ -639,7 +639,7 @@ if (( smoke_delay > 0 )); then /usr/bin/sleep "$smoke_delay"; fi
 journal_args=()
 for unit in "${units[@]}"; do journal_args+=(-u "$unit"); done
 startup_errors="$("$journalctl_cmd" --since "$journal_since" --priority err --no-pager "${journal_args[@]}" 2>&1)" || die "journal smoke command failed"
-[[ -z "$startup_errors" ]] || die "startup journal smoke found errors: $startup_errors"
+[[ -z "$startup_errors" || "$startup_errors" == "-- No entries --" ]] || die "startup journal smoke found errors: $startup_errors"
 for unit in "${units[@]}"; do
   assert_service_active "$unit"
   current_restarts="$("$systemctl_cmd" show "$unit" --property=NRestarts --value)"

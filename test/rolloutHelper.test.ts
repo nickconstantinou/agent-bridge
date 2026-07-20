@@ -265,6 +265,7 @@ if [ -n "\${FAKE_TAMPER_SENTINEL_DELETE:-}" ]; then
   rm -f -- "\${FAKE_TAMPER_SENTINEL_DELETE}"
 fi
 if [ "\${FAKE_FAIL_PHASE:-}" = smoke ]; then echo 'simulated startup error'; fi
+if [ "\${FAKE_NO_JOURNAL_ENTRIES:-}" = 1 ]; then echo '-- No entries --'; fi
 `);
 }
 
@@ -863,6 +864,14 @@ fi
     expect(fixture.dbPaths.map(sha256)).not.toEqual(before);
     expect(actions(fixture).match(/systemctl:stop/g)?.length).toBeGreaterThanOrEqual(2);
     expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+  });
+
+  it("accepts journalctl's benign no-entries marker during the smoke check", () => {
+    const fixture = useMinimalInventory(createFixture());
+    const result = runRollout(fixture, undefined, undefined, { FAKE_NO_JOURNAL_ENTRIES: "1" });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(readFileSync(join(fixture.logDir, "latest"), "utf8")).toContain("/logs/");
   });
 
   it("contains all services when one crashes during the smoke window", () => {

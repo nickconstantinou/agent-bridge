@@ -11,7 +11,7 @@ See `docs/roadmap/issue-135-phase4c-migration-ownership.md` for the schema-migra
 The enforced sequence is:
 
 1. Acquire the exclusive OS rollout lock.
-2. Verify the root-owned config, selected units from the compiled seven-unit allowlist, clean `main`, and the exact expected commit. Every Git command runs as the runtime user.
+2. Verify the root-owned config, selected units from the compiled seven-unit allowlist, clean `main`, and the exact expected commit. Units may already be quiesced; any active unit must be stably running, and every unit is still stopped and containment-verified before migration. Every Git command runs as the runtime user.
 3. Resolve each selected unit's effective `DB_PATH` or `HEALTH_DB_PATH` using shared-then-unit environment-file precedence. Reject defaults, unknown units, missing files, non-canonical paths, duplicates, inventory mismatches, unknown schemas, integrity failures, or nonzero legacy queues.
 4. Stop every service and prove containment from `MainPID=0`, `ControlPID=0`, and an empty unit cgroup. A nonzero stop result is retained as diagnostic evidence; `inactive/dead`, `inactive/exited`, and process-free `failed/dead|failed` states are accepted. An empty `ControlGroup` is accepted only as systemd's affirmative no-cgroup report on a dead unit; a non-empty `ControlGroup` must resolve to a real, non-symlink, fully readable cgroup directory, and any cgroup state that cannot be inspected reliably fails containment.
 5. Recheck Git and database preconditions.

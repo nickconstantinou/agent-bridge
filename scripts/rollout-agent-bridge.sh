@@ -205,6 +205,16 @@ assert_service_active() {
   sub_state="$("$systemctl_cmd" show "$unit" --property=SubState --value)"
   [[ "$active_state" == active && "$sub_state" == running ]] || die "service is not stably running: $unit state=$active_state/$sub_state"
 }
+assert_service_ready_for_rollout() {
+  local unit="$1" active_state sub_state
+  active_state="$($systemctl_cmd show "$unit" --property=ActiveState --value)"
+  sub_state="$($systemctl_cmd show "$unit" --property=SubState --value)"
+  case "$active_state/$sub_state" in
+    active/running) assert_service_active "$unit" ;;
+    inactive/dead|inactive/exited|failed/dead|failed/failed) ;;
+    *) die "service is not in a quiesceable state: $unit state=$active_state/$sub_state" ;;
+  esac
+}
 
 backup_databases() {
   /usr/bin/mkdir --mode=0700 -- "$backup_set"
@@ -570,7 +580,7 @@ run_db_tool() {
 
 declare -A restart_baseline=()
 for unit in "${units[@]}"; do
-  assert_service_active "$unit"
+  assert_service_ready_for_rollout "$unit"
   restart_baseline[$unit]="$("$systemctl_cmd" show "$unit" --property=NRestarts --value)"
   [[ "${restart_baseline[$unit]}" =~ ^[0-9]+$ ]] || die "invalid NRestarts for $unit"
 done

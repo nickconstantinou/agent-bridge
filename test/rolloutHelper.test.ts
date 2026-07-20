@@ -268,7 +268,7 @@ if [ "\${FAKE_FAIL_PHASE:-}" = smoke ]; then echo 'simulated startup error'; fi
 `);
 }
 
-function createFixture(options: { pending?: number; unknownSchema?: boolean; missingDb?: boolean } = {}): Fixture {
+function createFixture(options: { pending?: number; unknownSchema?: boolean; missingDb?: boolean; initiallyStopped?: boolean } = {}): Fixture {
   const root = mkdtempSync(join(tmpdir(), "agent-bridge-rollout-"));
   roots.push(root);
   const project = join(root, "project");
@@ -334,7 +334,7 @@ function createFixture(options: { pending?: number; unknownSchema?: boolean; mis
     ...dbPaths.map((path) => `database=${path}`),
     "",
   ].join("\n"), { mode: 0o600 });
-  writeFileSync(stateFile, `${units.join("\n")}\n`);
+  writeFileSync(stateFile, options.initiallyStopped ? "" : `${units.join("\n")}\n`);
   writeFileSync(actionLog, "");
   const fixture = { root, project, expectedCommit, dbPaths, actionLog, stateFile, backupDir, logDir, lockFile, configFile, envDir, cgroupRoot };
   writeFakeCommands(fixture);
@@ -404,6 +404,18 @@ describe("guarded rollout helper", () => {
     expect(existsSync(join(artifacts, "backup-manifest.tsv"))).toBe(true);
     expect(existsSync(join(artifacts, "migration-evidence.json"))).toBe(true);
     expect(readFileSync(join(artifacts, "rollout.log"), "utf8")).toContain("rollout completed");
+  });
+
+  it("accepts a cohort that is already stopped and still proves containment before migration", () => {
+    const fixture = createFixture({ initiallyStopped: true });
+    const result = runRollout(fixture);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const log = actions(fixture);
+    expect(log.indexOf(" inspect ")).toBeGreaterThanOrEqual(0);
+    expect(log.indexOf(" backup ")).toBeGreaterThan(log.indexOf("systemctl:stop"));
+    expect(log.indexOf(" migrate ")).toBeGreaterThan(log.indexOf(" backup "));
+    expect(log).toContain("systemctl:start");
   });
 
   it("attaches per-database resolving-units evidence, correctly collapsing the shared antigravity/claude/codex unit onto one database", () => {

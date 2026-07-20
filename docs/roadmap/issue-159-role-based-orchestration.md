@@ -3,7 +3,7 @@ status: active-roadmap
 type: roadmap
 authority: canonical
 implementation_status: partially-implemented
-last_validated_against: db2ab80f6895bad76cdf46930790bfe70691408a
+last_validated_against: agent/issue-161-role-assignment-persistence
 ---
 
 # Issue #159 — Role-Based Agentic Orchestration
@@ -20,7 +20,7 @@ The worker exposes exactly three configurable roles:
 
 Agent Bridge remains authoritative for requirements state, workflow transitions, issue and PR mutation, permissions, role/model resolution, prompts, lifecycle skills, validators, evidence, budgets, retries, cancellation, approvals, merge, deployment, and audit.
 
-## Delivered foundation — PR #160
+## Delivered prompt foundation — PR #160
 
 PR #160 at exact head `db2ab80f6895bad76cdf46930790bfe70691408a` delivers:
 
@@ -47,13 +47,44 @@ PR #160 at exact head `db2ab80f6895bad76cdf46930790bfe70691408a` delivers:
 - schema migration 2, which removes an absent or empty legacy `prompts` table and fails closed if an unexpected row exists;
 - target-state architecture, testing, configuration, operations, documentation, and rollout policy.
 
-Role routing, durable role assignment, requirements lifecycle, complete structured plan persistence, permissions, Documentation Steward execution, platform allocation, durable prompt/skill audit persistence, and final role-workflow qualification remain to be implemented through the slices below.
+PR #160 remains the target-state authority for later role routing and orchestration slices.
 
-## Slice 0 reconciliation
+## Slice 0 reconciliation — PR #170
 
-Slice 0 is documented by `docs/implementation-plans/issue-159-slice-0-reconciliation.md`. It records the exact PR #160 and Platform baselines, current owners, overlap decisions, concrete target-path classification, actual child issues, cross-repository ownership, human gates and retrospective.
+Slice 0 is documented by `docs/implementation-plans/issue-159-slice-0-reconciliation.md`. Its approved exact head is `44eb3b6363bac34bfbb56fb72fb186cbbdbd0a09`, stacked on PR #160. It records current owners, overlap decisions, concrete target-path classification, actual child issues, cross-repository ownership, human gates, and retrospective.
 
-Slice 0 creates documentation and issue metadata only. It does not authorize Slice 1, merge, deployment, restart, production migration, service mutation, Platform runtime mutation or any other behavioural change.
+Slice 0 creates documentation and issue metadata only. It does not itself merge, deploy, restart services, migrate production databases, mutate Platform runtime state, or activate any role behaviour.
+
+## Slice 1 dormant role persistence — Issue #161 / draft PR #174
+
+Issue #161 is the sole Slice 1 implementation owner. Draft PR #174 is stacked on the approved Slice 0 head and implements the following dormant foundation:
+
+- the exact three-role public domain and canonical mode registry;
+- bounded explicit desired CLI/model assignments with ordered fallbacks;
+- deterministic desired-assignment identity and append-only revisions;
+- schema migration 3 through the existing registry, repository SQL owner, and `BridgeDb` compatibility façade;
+- representative schema-version-2 migration, reopen, idempotency, foreign-key, rollback, and guarded-rollout test contracts;
+- `/chain` reporting of desired assignments as `configured_dormant`;
+- explicit `Role routing: disabled` status;
+- explicit reporting of the effective legacy interactive, code, and scribe chains;
+- unchanged current handler routing and Git/GitHub authorities;
+- current architecture, configuration, operations, testing, readiness, and worker documentation updates.
+
+Slice 1 does **not** implement or activate:
+
+- capability or model discovery/ranking;
+- automatic, recommended, or manual resolution behaviour beyond persisting the selection label;
+- applied/effective role routing;
+- permission profiles or capability tokens;
+- requirements or canonical issue lifecycle;
+- role-native planning, implementation review, operations review, or PR-readiness execution;
+- Documentation Steward execution;
+- Platform transport or desired/effective API/UI state;
+- deployment, service restart, production database migration, queue mutation, or merge.
+
+Draft PR #174 must not be represented as ready or complete until all required exact-head local and GitHub checks, implementation and operations review, documentation validation, PR readiness, and genuinely independent final review pass at one exact final head. Its branch state and evidence belong in the PR and Issue #161 rather than being frozen as a completion claim in this roadmap.
+
+Role routing, capability resolution, requirements lifecycle, complete structured plan persistence, permissions, Documentation Steward execution, Platform allocation, durable prompt/skill audit persistence, and final role-workflow qualification remain to be implemented through later slices.
 
 ## Approved scope
 
@@ -78,7 +109,9 @@ Prompt text and reusable SDLC know-how are reviewed source artefacts. Canonical 
 
 The four canonical skills are `requirements-to-acceptance`, `risk-based-test-strategy`, `red-green-refactor-tdd`, and `release-readiness-review`. Role and compatibility contracts declare exactly which skills they consume. The loader validates one marked runtime block and the matching manifest version, then composes the skills deterministically. Prompt-specific authority and structured output remain in role prompts and code.
 
-Schema migration 2 retires the legacy table. It treats an absent table as already removed, drops an empty table transactionally, and aborts without data loss if an unexpected row exists. On rejection, schema version 1 and the table contents remain intact for guarded investigation. Prompt rollback is application rollback to a reviewed SHA.
+Schema migration 2 retires the legacy prompt table. It treats an absent table as already removed, drops an empty table transactionally, and aborts without data loss if an unexpected row exists. On rejection, schema version 1 and the table contents remain intact for guarded investigation. Prompt rollback is application rollback to a reviewed SHA.
+
+Schema migration 3 adds only dormant role-assignment revisions and child assignment rows. Ordinary production startup remains strict; production migration and restart stay under the existing guarded rollout helper and separate human approval.
 
 ## Implementation strategy
 
@@ -121,8 +154,10 @@ The numbered graph is implementation delivery order, not runtime phase order. Sl
 
 ```text
 PR #160
-  -> #161 -> #162 -> #163 -> #164 -> #165 -> #166 -> #167 (dormant) -> #168 (activation) -> #169
-                                                                                              -> platform #134
+  -> Slice 0 / PR #170
+  -> #161 / PR #174
+  -> #162 -> #163 -> #164 -> #165 -> #166 -> #167 (dormant) -> #168 (activation) -> #169
+                                                                                         -> platform #134
 ```
 
 The dependency graph also includes #100/PR #152, #132 and #146 before or within #165/#168; #135/PR #158 before #169; and Platform #72/#93/#95/#96/#119 before or within Platform #134.
@@ -139,11 +174,11 @@ deterministic verification
 → human merge gate
 ```
 
-Slice #167 must not activate documentation execution. Slice #168 owns activation. Documentation requires accepted review and required operations evidence for the same exact code head. A code-changing repair invalidates verification, review, operations, documentation, readiness, and exact-head check/CI evidence for the previous head until the required phases rerun. Slice #169 qualifies the sequence across restart, retry, cancellation, lease loss, stale evidence, fallback, migration and rollback.
+Slice #167 must not activate documentation execution. Slice #168 owns activation. Documentation requires accepted review and required operations evidence for the same exact code head. A code-changing repair invalidates verification, review, operations, documentation, readiness, and exact-head check/CI evidence for the previous head until the required phases rerun. Slice #169 qualifies the sequence across restart, retry, cancellation, lease loss, stale evidence, fallback, migration, and rollback.
 
 Each child issue enumerates production-boundary red tests, product and architectural intent, expected current failure, authoritative oracle, focused red command, false-positive controls, sibling behaviour remaining green, migration/rollback impact, documentation triggers, classified target paths, and exact dependencies.
 
-Do not start Slice 1 until this decomposition receives maintainer approval. Do not pull a later slice into an earlier issue.
+Slice 1 began only after the maintainer approved the Slice 0 gate. A later slice must not be pulled into an earlier issue.
 
 ## Detailed implementation plans
 
@@ -151,7 +186,7 @@ Do not start Slice 1 until this decomposition receives maintainer approval. Do n
 - `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md`
 - `docs/implementation-plans/issue-159-slice-0-reconciliation.md`
 
-These plans are normative for implementation and subordinate only to the accepted ADR, canonical architecture, Issue #159, and current repository evidence. The Slice 0 reconciliation is authoritative for current owner modules, concrete likely target files, overlap decisions, actual issue numbers, sequencing and the cross-repository interface at the stated exact base.
+These plans are normative for implementation and subordinate only to the accepted ADR, canonical architecture, Issue #159, and current repository evidence. The Slice 0 reconciliation is authoritative for current owner modules, concrete likely target files, overlap decisions, actual issue numbers, sequencing, and the cross-repository interface at the stated exact base.
 
 ## Dependencies and coordination
 
@@ -178,8 +213,8 @@ Human approval remains required for:
 - material canonical issue or delivery-scope changes;
 - role defaults and high-risk review policy;
 - merge;
-- production deployment/restart;
-- database/fleet migration;
+- production deployment or restart;
+- database or fleet migration;
 - destructive, secret, permission, or policy changes.
 
 ## Completion

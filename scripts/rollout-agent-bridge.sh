@@ -364,6 +364,27 @@ stop_and_verify_all_services() {
   echo "all selected services verified stopped"
 }
 
+clear_stale_sqlite_sidecars() {
+  local database sidecar wal_size
+  for database in "${databases[@]}"; do
+    for sidecar in "${database}-wal" "${database}-shm"; do
+      if [[ -e "$sidecar" || -L "$sidecar" ]]; then
+        [[ -f "$sidecar" && ! -L "$sidecar" ]] || die "SQLite sidecar is not a regular non-symlink file: $sidecar"
+      fi
+    done
+    if [[ -e "${database}-wal" ]]; then
+      wal_size="$(/usr/bin/stat -c %s "${database}-wal")"
+      [[ "$wal_size" =~ ^[0-9]+$ ]] || die "unable to determine SQLite WAL size: ${database}-wal"
+      (( wal_size == 0 )) || die "database has a non-empty WAL after service stop: $database"
+    fi
+    if [[ -e "${database}-wal" || -e "${database}-shm" ]]; then
+      echo "clear-stale-sidecars database=$database"
+      /usr/bin/rm -f -- "${database}-wal" "${database}-shm"
+      [[ ! -e "${database}-wal" && ! -L "${database}-wal" && ! -e "${database}-shm" && ! -L "${database}-shm" ]] || die "failed to clear stale SQLite sidecars: $database"
+    fi
+  done
+}
+
 # Removes the sentinel only when sentinel_removable=1 was explicitly set —
 # never inferred from $? (the script's own exit status stays nonzero on
 # every failure path, including a cleanly auto-restored one, so exit code
@@ -592,6 +613,7 @@ stop_attempted=1
 stop_and_verify_all_services || die "CONTAINMENT INCOMPLETE during primary stop"
 
 git_check
+clear_stale_sqlite_sidecars
 run_db_tool inspect --evidence - "${db_args[@]}" > "$artifact_dir/stopped-evidence.json"
 
 echo "backing up all databases"

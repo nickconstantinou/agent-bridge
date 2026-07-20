@@ -418,6 +418,19 @@ describe("guarded rollout helper", () => {
     expect(log).toContain("systemctl:start");
   });
 
+  it("removes stale empty WAL sidecars only after the cohort is contained", () => {
+    const fixture = createFixture({ initiallyStopped: true });
+    writeFileSync(`${fixture.dbPaths[0]}-wal`, "");
+    writeFileSync(`${fixture.dbPaths[0]}-shm`, "stale shared-memory index");
+
+    const result = runRollout(fixture);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain("clear-stale-sidecars");
+    const log = actions(fixture);
+    expect(log.indexOf("systemctl:stop")).toBeLessThan(log.indexOf(" backup "));
+  });
+
   it("attaches per-database resolving-units evidence, correctly collapsing the shared antigravity/claude/codex unit onto one database", () => {
     // Issue #135 Phase 4C.3: rollout-db.ts inspect gains a resolving-units
     // evidence field, sourced from the same unit->canonical-path resolution

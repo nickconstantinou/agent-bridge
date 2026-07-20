@@ -117,6 +117,22 @@ describe("schema 3 rollout qualification", () => {
     expect(() => runRolloutDb("validate", path)).toThrow(/unknown schema after migration/i);
   });
 
+  it("rejects schema 3 when the required latest-revision index uses ascending order", () => {
+    const path = createVersion2Database();
+    runRolloutDb("migrate", path);
+    const raw = new Database(path);
+    raw.exec(`
+      DROP INDEX idx_role_assignment_revisions_scope_revision;
+      CREATE INDEX idx_role_assignment_revisions_scope_revision
+        ON role_assignment_revisions(scope_key, revision ASC);
+    `);
+    raw.close();
+
+    expect(() => openProductionDb(path, { serviceId: "test:ascending-role-index" }))
+      .toThrow(/unexpected role_assignment_revisions indexes/i);
+    expect(() => runRolloutDb("validate", path)).toThrow(/unknown schema after migration/i);
+  });
+
   it("rejects schema 3 when same-metadata role constraints omit code_worker", () => {
     const path = createVersion2Database();
     runRolloutDb("migrate", path);

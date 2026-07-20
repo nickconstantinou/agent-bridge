@@ -171,6 +171,14 @@ The Companion Runtime must not own or depend on Engineering Worker concepts:
 
 If a conversational surface needs to trigger engineering work, it should do so through an explicit worker command/API boundary, not by importing worker internals.
 
+Companion/provider development remains supported when used independently. The
+companion services intentionally do not take the worker's Git worktree lock;
+the worker uses isolated per-job workspaces and keeps locking enabled. Running
+development turns through both paths at the same time is an operational risk:
+the worker workspace is a snapshot and does not automatically include
+uncommitted changes made in the canonical checkout. Overlapping file or branch
+scopes must be coordinated by the operator.
+
 ## Compatibility
 
 Current service names such as interactive Telegram and Discord services may remain unchanged for compatibility. The architectural term is Companion Runtime even where legacy file, service, or environment names still say interactive or bot.

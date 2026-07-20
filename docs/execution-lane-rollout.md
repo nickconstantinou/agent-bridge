@@ -18,4 +18,11 @@ Deployment, restart, legacy-row discard, and production acceptance each require 
 
 ## Wider parallelism gate
 
-Shared repository/worktree concurrency is guarded by the OS-backed canonical-worktree lock delivered for Issue #133. Same-checkout CLI runs serialize across services and databases; genuinely different checkouts remain independent.
+Worker jobs retain the OS-backed lock for their isolated per-job worktrees.
+Companion and individual provider services set
+`BRIDGE_WORKSPACE_LOCK_MODE=off` because they intentionally use the canonical
+checkout without the worker lock. This keeps ordinary companion/provider turns
+from blocking behind worker jobs, but it does not coordinate development work
+across those two paths. Do not run overlapping edits to the same repository
+through a companion/provider bot and the worker: worker workspaces start from a
+snapshot and do not include later uncommitted canonical-checkout changes.

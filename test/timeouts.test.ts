@@ -26,18 +26,18 @@ afterEach(() => {
 });
 
 describe("resolveTimeoutsForKind — built-in defaults", () => {
-  it("all kinds get 1200s idle timeout by default", () => {
+  it("all kinds get idle timeout disabled (0) by default", () => {
     setEnv({ CODEX_CLI_IDLE_TIMEOUT_MS: undefined, ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: undefined, CLAUDE_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("codex").cliIdleTimeoutMs).toBe(1_200_000);
-    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(1_200_000);
-    expect(resolveTimeoutsForKind("claude").cliIdleTimeoutMs).toBe(1_200_000);
+    expect(resolveTimeoutsForKind("codex").cliIdleTimeoutMs).toBe(0);
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(0);
+    expect(resolveTimeoutsForKind("claude").cliIdleTimeoutMs).toBe(0);
   });
 
-  it("all kinds get 1800s hard timeout by default", () => {
+  it("all kinds get hard timeout disabled (0) by default", () => {
     setEnv({ CODEX_CLI_TIMEOUT_MS: undefined, ANTIGRAVITY_CLI_TIMEOUT_MS: undefined, CLAUDE_CLI_TIMEOUT_MS: undefined, CLI_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("codex").cliTimeoutMs).toBe(1_800_000);
-    expect(resolveTimeoutsForKind("antigravity").cliTimeoutMs).toBe(1_800_000);
-    expect(resolveTimeoutsForKind("claude").cliTimeoutMs).toBe(1_800_000);
+    expect(resolveTimeoutsForKind("codex").cliTimeoutMs).toBe(0);
+    expect(resolveTimeoutsForKind("antigravity").cliTimeoutMs).toBe(0);
+    expect(resolveTimeoutsForKind("claude").cliTimeoutMs).toBe(0);
   });
 
   it("fetch timeout defaults to 45s", () => {
@@ -85,11 +85,30 @@ describe("resolveTimeoutsForKind — env precedence", () => {
     expect(resolveTimeoutsForKind("antigravity").fetchTimeoutMs).toBe(60_000);
   });
 
-  it("ignores zero or non-numeric values and falls back", () => {
-    setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: "0", CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(1_200_000);
+  it("ignores non-numeric values and falls back to the built-in default", () => {
     setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: "not-a-number", CLI_IDLE_TIMEOUT_MS: undefined });
-    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(1_200_000);
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(0);
+    setEnv({ ANTIGRAVITY_CLI_TIMEOUT_MS: "not-a-number", CLI_TIMEOUT_MS: undefined });
+    expect(resolveTimeoutsForKind("antigravity").cliTimeoutMs).toBe(0);
+  });
+
+  it("explicit 0 disables the idle timeout, per-CLI or global", () => {
+    setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: "0", CLI_IDLE_TIMEOUT_MS: undefined });
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(0);
+    setEnv({ ANTIGRAVITY_CLI_IDLE_TIMEOUT_MS: undefined, CLI_IDLE_TIMEOUT_MS: "0" });
+    expect(resolveTimeoutsForKind("antigravity").cliIdleTimeoutMs).toBe(0);
+  });
+
+  it("explicit 0 disables the hard timeout, per-CLI or global", () => {
+    setEnv({ ANTIGRAVITY_CLI_TIMEOUT_MS: "0", CLI_TIMEOUT_MS: undefined });
+    expect(resolveTimeoutsForKind("antigravity").cliTimeoutMs).toBe(0);
+    setEnv({ ANTIGRAVITY_CLI_TIMEOUT_MS: undefined, CLI_TIMEOUT_MS: "0" });
+    expect(resolveTimeoutsForKind("antigravity").cliTimeoutMs).toBe(0);
+  });
+
+  it("a positive per-CLI value still overrides an explicit global 0", () => {
+    setEnv({ ANTIGRAVITY_CLI_TIMEOUT_MS: "5000", CLI_TIMEOUT_MS: "0" });
+    expect(resolveTimeoutsForKind("antigravity").cliTimeoutMs).toBe(5_000);
   });
 });
 
@@ -102,8 +121,8 @@ describe("buildExecutionOptions", () => {
       CLI_TIMEOUT_MS: undefined,
     });
     const opts = buildExecutionOptions("antigravity");
-    expect(opts.idleTimeoutMs).toBe(1_200_000);
-    expect(opts.timeoutMs).toBe(1_800_000);
+    expect(opts.idleTimeoutMs).toBe(0);
+    expect(opts.timeoutMs).toBe(0);
   });
 
   it("reflects env overrides at call time", () => {
@@ -132,5 +151,25 @@ describe("idle timeout fires on silence (integration)", () => {
       { timeoutMs: 5000, idleTimeoutMs: 1000, killGraceMs: 25 },
     );
     expect(result.text).toContain("3");
+  }, 5000);
+
+  it("idleTimeoutMs: 0 disables the idle timeout — silent process is not killed", async () => {
+    const { runCliAsync } = await import("../src/cli.js");
+    const result = await runCliAsync(
+      "bash", ["-lc", "sleep 0.3; echo done"],
+      cliTestCwd,
+      { timeoutMs: 5000, idleTimeoutMs: 0, killGraceMs: 25 },
+    );
+    expect(result.text).toContain("done");
+  }, 5000);
+
+  it("timeoutMs: 0 disables the hard timeout — long-running process is not killed", async () => {
+    const { runCliAsync } = await import("../src/cli.js");
+    const result = await runCliAsync(
+      "bash", ["-lc", "sleep 0.3; echo done"],
+      cliTestCwd,
+      { timeoutMs: 0, idleTimeoutMs: 0, killGraceMs: 25 },
+    );
+    expect(result.text).toContain("done");
   }, 5000);
 });

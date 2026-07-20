@@ -1,6 +1,6 @@
 # Issue #135 Phase 4C — Production Migration Ownership and Gating
 
-Status: **draft policy and implementation plan. Docs only — no code, migration, rollout-tooling, service, or production change is authorized by this document.** Production deployment of the merged Phase 4A/4B work (`main` @ `8e7b8fd62d2fd32d4c7cad66c5085fb85423e1d1`, PRs #147 and #154) remains blocked until this plan is reviewed and its implementation phase merged.
+Status: **draft policy and implementation plan.** This document records design history; the implementation is now present in the guarded rollout helper. The current helper additionally accepts a cohort whose services are already quiesced, proves containment again, performs the post-stop database inspection, and clears only zero-byte WAL sidecars before backup. References below that say `assert_service_active` blocks every re-invocation describe the earlier design and are superseded by that implemented flow; the interrupted sentinel and explicit operator review requirements remain in force.
 
 ## 0. Why this exists
 

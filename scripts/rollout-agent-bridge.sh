@@ -205,6 +205,16 @@ assert_service_active() {
   sub_state="$("$systemctl_cmd" show "$unit" --property=SubState --value)"
   [[ "$active_state" == active && "$sub_state" == running ]] || die "service is not stably running: $unit state=$active_state/$sub_state"
 }
+assert_service_ready_for_rollout() {
+  local unit="$1" active_state sub_state
+  active_state="$($systemctl_cmd show "$unit" --property=ActiveState --value)"
+  sub_state="$($systemctl_cmd show "$unit" --property=SubState --value)"
+  case "$active_state/$sub_state" in
+    active/running) assert_service_active "$unit" ;;
+    inactive/dead|inactive/exited|failed/dead|failed/failed) ;;
+    *) die "service is not in a quiesceable state: $unit state=$active_state/$sub_state" ;;
+  esac
+}
 
 backup_databases() {
   /usr/bin/mkdir --mode=0700 -- "$backup_set"
@@ -352,6 +362,27 @@ stop_and_verify_all_services() {
   fi
   (( stop_ok == 1 )) || echo "systemctl stop returned nonzero; containment independently verified" >&2
   echo "all selected services verified stopped"
+}
+
+clear_stale_sqlite_sidecars() {
+  local database sidecar wal_size
+  for database in "${databases[@]}"; do
+    for sidecar in "${database}-wal" "${database}-shm"; do
+      if [[ -e "$sidecar" || -L "$sidecar" ]]; then
+        [[ -f "$sidecar" && ! -L "$sidecar" ]] || die "SQLite sidecar is not a regular non-symlink file: $sidecar"
+      fi
+    done
+    if [[ -e "${database}-wal" ]]; then
+      wal_size="$(/usr/bin/stat -c %s "${database}-wal")"
+      [[ "$wal_size" =~ ^[0-9]+$ ]] || die "unable to determine SQLite WAL size: ${database}-wal"
+      (( wal_size == 0 )) || die "database has a non-empty WAL after service stop: $database"
+    fi
+    if [[ -e "${database}-wal" || -e "${database}-shm" ]]; then
+      echo "clear-stale-sidecars database=$database"
+      /usr/bin/rm -f -- "${database}-wal" "${database}-shm"
+      [[ ! -e "${database}-wal" && ! -L "${database}-wal" && ! -e "${database}-shm" && ! -L "${database}-shm" ]] || die "failed to clear stale SQLite sidecars: $database"
+    fi
+  done
 }
 
 # Removes the sentinel only when sentinel_removable=1 was explicitly set —
@@ -570,7 +601,7 @@ run_db_tool() {
 
 declare -A restart_baseline=()
 for unit in "${units[@]}"; do
-  assert_service_active "$unit"
+  assert_service_ready_for_rollout "$unit"
   restart_baseline[$unit]="$("$systemctl_cmd" show "$unit" --property=NRestarts --value)"
   [[ "${restart_baseline[$unit]}" =~ ^[0-9]+$ ]] || die "invalid NRestarts for $unit"
 done
@@ -583,6 +614,7 @@ stop_and_verify_all_services || die "CONTAINMENT INCOMPLETE during primary stop"
 
 git_check
 run_db_tool inspect --evidence - "${db_args[@]}" > "$artifact_dir/stopped-evidence.json"
+clear_stale_sqlite_sidecars
 
 echo "backing up all databases"
 backup_databases
@@ -607,7 +639,7 @@ if (( smoke_delay > 0 )); then /usr/bin/sleep "$smoke_delay"; fi
 journal_args=()
 for unit in "${units[@]}"; do journal_args+=(-u "$unit"); done
 startup_errors="$("$journalctl_cmd" --since "$journal_since" --priority err --no-pager "${journal_args[@]}" 2>&1)" || die "journal smoke command failed"
-[[ -z "$startup_errors" ]] || die "startup journal smoke found errors: $startup_errors"
+[[ -z "$startup_errors" || "$startup_errors" == "-- No entries --" ]] || die "startup journal smoke found errors: $startup_errors"
 for unit in "${units[@]}"; do
   assert_service_active "$unit"
   current_restarts="$("$systemctl_cmd" show "$unit" --property=NRestarts --value)"

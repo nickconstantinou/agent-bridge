@@ -23,6 +23,16 @@ export interface LockedInvocation {
 const LOCK_FILE_NAME = "agent-bridge-execution.lock";
 const FLOCK_CANDIDATES = ["/usr/bin/flock", "/bin/flock"];
 
+/**
+ * Workspace locking is enabled by default for fail-safe compatibility. The
+ * companion/provider services can explicitly opt out because they share the
+ * canonical checkout by design; worker jobs retain locking in their isolated
+ * worktrees.
+ */
+function workspaceLockEnabled(): boolean {
+  return process.env.BRIDGE_WORKSPACE_LOCK_MODE !== "off";
+}
+
 function resolveGitDir(marker: string): string | null {
   try {
     if (statSync(marker).isDirectory()) return realpathSync(marker);
@@ -65,6 +75,7 @@ function resolveFlockCommand(): string {
 }
 
 export function buildWorkspaceLockedInvocation(command: string, args: string[], cwd: string): LockedInvocation {
+  if (!workspaceLockEnabled()) return { command, args, workspaceLock: null };
   const workspaceLock = resolveWorkspaceLock(cwd);
   if (!workspaceLock) return { command, args, workspaceLock: null };
   return {

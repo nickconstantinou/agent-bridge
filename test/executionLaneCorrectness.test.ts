@@ -453,6 +453,7 @@ describe("execution lane correctness", () => {
     expect(doc).toMatch(/stop-all.*migrate.*start-all/is);
     expect(doc).toMatch(/legacy queue count/i); expect(doc).toMatch(/explicit discard decision/i);
     expect(doc).toMatch(/flat private-chat history.*quarantin/is); expect(doc).toMatch(/separate approval/i);
-    expect(doc).toMatch(/shared.*worktree.*concurrency/is);
+    expect(doc).toMatch(/BRIDGE_WORKSPACE_LOCK_MODE=off/is);
+    expect(doc).toMatch(/isolated per-job worktrees/is);
   });
 });

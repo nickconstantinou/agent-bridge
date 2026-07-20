@@ -4,7 +4,7 @@ Status: guarded deployment contract for Issue #131. This document does not autho
 
 ## Required sequence
 
-Use the separately installed root-owned helper documented in [GUARDED-ROLLOUT.md](GUARDED-ROLLOUT.md). It enforces the strict **preflight → stop-all → verify stopped → backup → migrate → validate → start-all → smoke** sequence. Confirm every old service process has exited before migration and do not allow old/new binary overlap. Starting one provider at a time is not safe because all surfaces share the SQLite schema.
+Use the separately installed root-owned helper documented in [GUARDED-ROLLOUT.md](GUARDED-ROLLOUT.md). It enforces the strict **preflight → stop-all → verify stopped → post-stop inspect/sidecar cleanup → backup → migrate → validate → start-all → smoke** sequence. The cohort may already be stopped when the helper starts, but every process must still be proven gone before migration and old/new binary overlap is never allowed. Starting one provider at a time is not safe because all surfaces share the SQLite schema.
 
 Before stopping services, record the **legacy queue count** reported by migration diagnostics. Require an **explicit discard decision** from the operator; quarantined rows must never drain automatically. Preserve a database backup and rollback binary before schema migration.
 
@@ -18,4 +18,11 @@ Deployment, restart, legacy-row discard, and production acceptance each require 
 
 ## Wider parallelism gate
 
-Shared repository/worktree concurrency is guarded by the OS-backed canonical-worktree lock delivered for Issue #133. Same-checkout CLI runs serialize across services and databases; genuinely different checkouts remain independent.
+Worker jobs retain the OS-backed lock for their isolated per-job worktrees.
+Companion and individual provider services set
+`BRIDGE_WORKSPACE_LOCK_MODE=off` because they intentionally use the canonical
+checkout without the worker lock. This keeps ordinary companion/provider turns
+from blocking behind worker jobs, but it does not coordinate development work
+across those two paths. Do not run overlapping edits to the same repository
+through a companion/provider bot and the worker: worker workspaces start from a
+snapshot and do not include later uncommitted canonical-checkout changes.

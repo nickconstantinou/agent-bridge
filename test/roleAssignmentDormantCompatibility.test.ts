@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { loadRoleAssignmentConfig } from "../src/config.js";
+import { loadBotsConfig, loadRoleAssignmentConfig } from "../src/config.js";
 import { openDb } from "../src/db.js";
 import { executeNextJob, type JobHandler } from "../src/jobExecutor.js";
 import {
@@ -39,11 +39,16 @@ const legacyEnv = {
   WORKER_CLI_CHAIN: "antigravity,codex,claude",
   WORKER_CODE_CLI_CHAIN: "codex,claude",
   WORKER_SCRIBE_CLI_CHAIN: "antigravity,claude,codex",
+  CODEX_MODEL_PREFERENCE: "gpt-5.5-codex,gpt-5.4-codex",
+  CLAUDE_MODEL_PREFERENCE: "claude-sonnet-5,claude-fable-5",
+  ANTIGRAVITY_MODEL_PREFERENCE: "gemini-3.1-pro,gemini-3.0-pro",
 } as NodeJS.ProcessEnv;
 
 type RouteFixture = {
   owner: "scribe" | "code" | "github" | "git_github";
+  provider: string | null;
   command: string;
+  modelPreference: string[];
   chain: string[];
 };
 
@@ -109,13 +114,16 @@ describe("dormant role assignment compatibility", () => {
   it("ignores persisted role assignments for every existing handler while routing is disabled", async () => {
     const db = openDb(":memory:");
     const config = roleConfig();
-    const policyBefore = resolveWorkerCliPolicy(legacyEnv);
-    const policyAfter = resolveWorkerCliPolicy({
-      ...legacyEnv,
+    const roleEnv = {
       WORKER_ROLE_ASSIGNMENTS_JSON: JSON.stringify(config.assignments),
       WORKER_ROLE_ASSIGNMENT_SCOPE: config.scopeKey,
-    });
+    };
+    const policyBefore = resolveWorkerCliPolicy(legacyEnv);
+    const policyAfter = resolveWorkerCliPolicy({ ...legacyEnv, ...roleEnv });
+    const botsBefore = loadBotsConfig(legacyEnv);
+    const botsAfter = loadBotsConfig({ ...legacyEnv, ...roleEnv });
     expect(policyAfter).toEqual(policyBefore);
+    expect(botsAfter).toEqual(botsBefore);
 
     const desiredRevision = db.createRoleAssignmentRevision(config);
     const source = readFileSync(new URL("../src/index-worker.ts", import.meta.url), "utf8");
@@ -125,40 +133,39 @@ describe("dormant role assignment compatibility", () => {
     expect(handlerMapEnd).toBeGreaterThan(handlerMapStart);
     const productionHandlerMap = source.slice(handlerMapStart, handlerMapEnd);
 
+    const cliRoute = (
+      owner: "scribe" | "code",
+      chain: string[],
+    ): RouteFixture => {
+      const provider = chain[0];
+      const bot = botsBefore[provider as keyof typeof botsBefore];
+      return {
+        owner,
+        provider,
+        command: bot?.command ?? provider,
+        modelPreference: bot?.modelPreference ?? [],
+        chain,
+      };
+    };
+
     const expectedRoutes: Record<string, RouteFixture> = {
-      defect_scan: {
-        owner: "scribe",
-        command: policyBefore.scribeChain[0],
-        chain: policyBefore.scribeChain,
-      },
-      feature_plan: {
-        owner: "scribe",
-        command: policyBefore.scribeChain[0],
-        chain: policyBefore.scribeChain,
-      },
-      implementation_plan: {
-        owner: "scribe",
-        command: policyBefore.scribeChain[0],
-        chain: policyBefore.scribeChain,
-      },
-      tdd_implementation: {
-        owner: "code",
-        command: policyBefore.codeChain[0],
-        chain: policyBefore.codeChain,
-      },
-      orchestrated_task: {
-        owner: "code",
-        command: policyBefore.codeChain[0],
-        chain: policyBefore.codeChain,
-      },
+      defect_scan: cliRoute("scribe", policyBefore.scribeChain),
+      feature_plan: cliRoute("scribe", policyBefore.scribeChain),
+      implementation_plan: cliRoute("scribe", policyBefore.scribeChain),
+      tdd_implementation: cliRoute("code", policyBefore.codeChain),
+      orchestrated_task: cliRoute("code", policyBefore.codeChain),
       open_github_issue: {
         owner: "github",
+        provider: null,
         command: "runWorkerCommand",
+        modelPreference: [],
         chain: [],
       },
       pr_lifecycle: {
         owner: "git_github",
+        provider: null,
         command: "runGit/runWorkerCommand",
+        modelPreference: [],
         chain: [],
       },
     };

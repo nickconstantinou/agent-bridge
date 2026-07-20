@@ -2,7 +2,7 @@
 
 Status: canonical documentation index.
 
-Validated against: `agent/role-based-worker-orchestration-docs` for the Issue #159 target-state, prompt-foundation implementation, and completed prompt-storage retirement.
+Validated against: `agent/role-based-worker-orchestration-docs` for the Issue #159 target-state, prompt-foundation implementation, completed prompt-storage retirement, and execution-readiness safeguards.
 
 ## Authority order
 
@@ -57,11 +57,12 @@ last_validated_against: <commit-sha-or-branch>
 6. `docs/roadmap/issue-159-role-based-orchestration.md` — active implementation roadmap and delivered prompt/storage foundation.
 7. `docs/implementation-plans/issue-159-role-based-orchestration.md` — epic coding-agent handoff and delivery slices.
 8. `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md` — normative prompt and comprehensive red-test addendum.
-9. `docs/configuration/agent-role-assignment.md` — CLI/model allocation and degraded operation.
-10. `docs/operations/agentic-worker-runbook.md` — enablement, recovery, and rollback.
-11. `docs/testing/agentic-worker-verification.md` — verification contract.
-12. `agentic-maintenance.yaml` — machine-readable document registry and triggers.
-13. `docs/WORKER-GUIDE.md` — user and operator guide.
+9. `docs/implementation-plans/issue-159-execution-readiness-safeguards.md` — mandatory executable-worktree, observed-red, stacked-CI, guarded-mutation, documentation-scope, and independent-review gates.
+10. `docs/configuration/agent-role-assignment.md` — CLI/model allocation and degraded operation.
+11. `docs/operations/agentic-worker-runbook.md` — enablement, recovery, and rollback.
+12. `docs/testing/agentic-worker-verification.md` — verification contract.
+13. `agentic-maintenance.yaml` — machine-readable document registry and triggers.
+14. `docs/WORKER-GUIDE.md` — user and operator guide.
 
 ## Current map
 
@@ -97,12 +98,13 @@ last_validated_against: <commit-sha-or-branch>
 | `docs/roadmap/issue-159-role-based-orchestration.md` | active-roadmap, partially implemented | canonical | Prompt foundation and legacy prompt-storage retirement delivered; remaining role orchestration tracked by slices. |
 | `docs/implementation-plans/issue-159-role-based-orchestration.md` | detailed implementation handoff | advisory under roadmap | Minimal-change delivery slices, red-test catalogue, migration, rollout, verification, and execution contract. |
 | `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md` | normative implementation addendum | advisory under roadmap | Prompt separation, comprehensive advisor-authored red-test requirements, and completed database-override removal. |
+| `docs/implementation-plans/issue-159-execution-readiness-safeguards.md` | normative process addendum | canonical for Issue #159 execution readiness | Blocks behavioural mutation without executable preflight and observed red; requires stacked exact-head CI, guarded issue mutation, trigger-bounded docs, and the required independent-review lane. |
 | `docs/agentic-maintenance.md` | authoritative workflow | canonical | Feature, defect, refactor, planning, prompt, and completion contracts. |
 | `docs/configuration/agent-role-assignment.md` | authoritative configuration | canonical | Role CLI/model allocation, fallbacks, and degraded operation. |
 | `docs/operations/agentic-worker-runbook.md` | authoritative operations | canonical | Role enablement, status, cancellation, recovery, and rollback. |
 | `docs/testing/agentic-worker-verification.md` | authoritative testing | canonical | Detailed role, prompt, planning, lifecycle, and rollout verification contract. |
-| `agentic-maintenance.yaml` | machine-readable policy | canonical | Canonical documents, triggers, authoring paths, readiness, prompt changes, and role modes. |
-| `src/agenticPromptContracts.ts` | implemented prompt foundation | canonical runtime registry | Versioned 21-key role/mode prompt registry; source-controlled only. |
+| `agentic-maintenance.yaml` | machine-readable policy | canonical | Canonical documents, triggers, authoring paths, execution preflight, observed red, stacked CI, guarded mutation, readiness, and role modes. |
+| `src/agenticPromptContracts.ts` | implemented prompt foundation | canonical runtime registry | Versioned 22-key role/mode prompt registry; source-controlled only. |
 | `prompts/worker/roles/` | implemented prompt foundation | canonical runtime prompts | Separate Technical Lead, Code Worker, and Documentation Steward prompt files. |
 | `docs/WORKER-GUIDE.md` | authoritative operations | canonical for worker use | Role-based worker guide, prompt contracts, red-test quality, and source-only prompt operation. |
 | `docs/SAFE-RESTART.md` | authoritative operations | canonical for safe restart helper | Referenced by `AGENTS.md` restart policy. |

@@ -36,8 +36,9 @@ The platform exposes exactly three role assignments:
 ```text
 Technical Lead
   requirements → issue validation/authoring → planning
-  → guidance → implementation review → operations review → readiness
-  read-only advisor evidence boundary
+  → guidance → implementation review → operations review
+  → readiness → fresh exact-head final review
+  read-only AdvisorService evidence boundary
 
 Code Worker
   scan/investigate (read-only)
@@ -67,8 +68,9 @@ Raw feature request, imported issue, or scan finding
 → deterministic verification
 → Technical Lead implementation and operations review
 → Documentation Steward updates and validation
-→ PR readiness
-→ draft PR, CI, reviewer feedback
+→ Technical Lead PR readiness
+→ exact-head CI
+→ fresh exact-head Technical Lead final review
 → human merge gate
 ```
 
@@ -78,7 +80,9 @@ Incoming issues and scan findings are not trusted as complete specifications. Re
 
 A role binds an authenticated CLI, explicit model, fallbacks, permissions, budgets, and output contracts. The platform supports automatic, recommended, and manual assignment.
 
-A single authenticated CLI can provide different models to each role. A single model can provide every role with isolated sessions and permissions, while status reports that model diversity and independent-model review are unavailable.
+A single authenticated CLI can provide different models to each role. A single model can provide every role with isolated sessions and permissions. Model diversity is reported as unavailable, but Technical Lead review remains independent from Code Worker mutation when the Technical Lead did not author or modify the implementation, has no mutation authority, and performs a fresh exact-head review invocation.
+
+The same frontier model or CLI may be reused. Model diversity is optional metadata and not a blocking gate. The Code Worker cannot review its own mutation.
 
 ## Layer diagram
 
@@ -108,26 +112,28 @@ A single authenticated CLI can provide different models to each role. A single m
 1. Provider adapters and capability metadata remain registry-driven.
 2. SQLite remains the local authoritative store; repositories own SQL.
 3. Agent Bridge, not a model, is the workflow engine and authority.
-4. The advisor path is the Technical Lead execution boundary.
+4. The advisor path is the Technical Lead execution and independent-review boundary.
 5. Canonical requirements precede planning for feature, defect, and refactor paths.
 6. Code mutation remains bounded by existing disposable workspaces and TDD guards.
 7. Documentation is a first-class readiness obligation driven by `agentic-maintenance.yaml`.
-8. Role identity is independent of CLI/provider identity.
-9. Single-provider operation is supported with explicit degradation reporting.
+8. Role identity and review independence are separate from CLI/provider/model identity.
+9. Single-provider and single-model operation are supported with explicit model-diversity reporting.
 10. GitHub is authoritative for externally authored issue content where configured; SQLite remains authoritative for execution state.
 11. Platform and OSS communicate through stable configuration/status boundaries; platform cannot bypass OSS policy.
+12. Exact-head CI precedes the fresh final Technical Lead review and human merge gate.
 
 ## Canonical references
 
 - `docs/architecture/engineering-worker.md`
 - `docs/architecture/agentic-worker-orchestration.md`
 - `docs/agentic-maintenance.md`
-- `docs/decisions/ADR-009-role-based-agentic-orchestration.md`
+- `docs/adr/ADR-005-role-based-agentic-orchestration.md`
 - `docs/configuration/agent-role-assignment.md`
 - `docs/operations/agentic-worker-runbook.md`
 - `docs/testing/agentic-worker-verification.md`
+- `docs/implementation-plans/issue-159-execution-readiness-safeguards.md`
 - `agentic-maintenance.yaml`
 
 ## Guardrail
 
-Do not turn this into an unrestricted engineering operating system or a free-form model-to-model loop. Every model call has one role, one mode, one bounded contract, one permission profile, one owner, and one auditable transition.
+Do not turn this into an unrestricted engineering operating system or a free-form model-to-model loop. Every model call has one role, one mode, one bounded contract, one permission profile, one owner, and one auditable transition. Final review requires a fresh exact-head Technical Lead invocation, not an endlessly different model.

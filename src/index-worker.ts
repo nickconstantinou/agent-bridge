@@ -13,7 +13,7 @@ import {
   isAuthorizedMessage,
 } from "./bridge.js";
 import { openProductionDb } from "./db.js";
-import { loadBotsConfig } from "./config.js";
+import { loadBotsConfig, resolveBusyMessageMode, validateBusyMessageModeEnv } from "./config.js";
 import { TelegramClient } from "./telegram.js";
 import { BridgeEngine } from "./engine.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
@@ -88,6 +88,8 @@ const scribeCommand = process.env.WORKER_SCRIBE_CLI_COMMAND || process.env.DEFEC
 const dbPath = process.env.DB_PATH || `${getBridgeProjectDir()}/.data/bridge.sqlite`;
 const pollIntervalMs = Number(process.env.POLL_INTERVAL_MS || 1000);
 const executionMode = (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") || "safe";
+validateBusyMessageModeEnv(process.env);
+const busyMessageMode = resolveBusyMessageMode(process.env);
 const asyncEnabled = process.env.BRIDGE_ASYNC_ENABLED !== "false";
 const advisorConfig = parseAdvisorConfig(process.env);
 
@@ -112,6 +114,7 @@ const config: BridgeConfig = {
   serviceKind: null,
   pollIntervalMs,
   executionMode,
+  busyMessageMode,
   asyncEnabled,
   dbPath,
   bots: loadBotsConfig(process.env),
@@ -133,6 +136,7 @@ const engines = Object.fromEntries(
           botConfig: { ...botConfig, token },
           allowedUserIds,
           executionMode,
+          busyMessageMode,
           asyncEnabled,
           pollIntervalMs,
           fullConfig: config,

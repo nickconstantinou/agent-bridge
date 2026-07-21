@@ -75,6 +75,35 @@ describe("/context operator diagnostics", () => {
   });
 });
 
+describe("/btw command parsing (Issue #177)", () => {
+  let db: BridgeDb;
+
+  beforeEach(() => { db = openDb(":memory:"); });
+  afterEach(() => { db.close(); });
+
+  it("returns a usage message when no prompt is supplied", () => {
+    const result = handleCommand("claude", "/btw", { db, chatId: "100", config: makeConfig() });
+    expect(result?.kind).toBe("message");
+    expect((result as { text: string }).text).toMatch(/usage/i);
+  });
+
+  it("returns a usage message when only whitespace is supplied", () => {
+    const result = handleCommand("claude", "/btw    ", { db, chatId: "100", config: makeConfig() });
+    expect(result?.kind).toBe("message");
+    expect((result as { text: string }).text).toMatch(/usage/i);
+  });
+
+  it("returns kind 'btw' with the trimmed prompt when supplied", () => {
+    const result = handleCommand("claude", "/btw what does this repo build?", { db, chatId: "100", config: makeConfig() });
+    expect(result).toEqual({ kind: "btw", prompt: "what does this repo build?" });
+  });
+
+  it("is recognised as a bridge command", () => {
+    const result = handleCommand("codex", "/btw quick side question", { db, chatId: "100", config: makeConfig() });
+    expect(result?.kind).toBe("btw");
+  });
+});
+
 const advisorEnvKeys = [
   "BRIDGE_ADVISOR_ENABLED",
   "BRIDGE_ADVISOR_MODE",

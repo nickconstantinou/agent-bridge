@@ -8,6 +8,7 @@ import {
   abortCliProcessAndWait,
   runCli,
   runCliAsync,
+  resolveSupervisorTimeouts,
   shutdownCliProcessesAndWait,
 } from "../src/cli.js";
 import type { BridgeEvent } from "../src/events/types.js";
@@ -20,6 +21,12 @@ import type { CliOptions } from "../src/types.js";
 // section "PR 2 — unified CLI process supervision".
 
 const cliTestCwd = mkdtempSync(join(tmpdir(), "agent-bridge-supervisor-matrix-"));
+
+describe("supervisor timeout defaults", () => {
+  it("disables hard and idle timeouts when callers omit options", () => {
+    expect(resolveSupervisorTimeouts({})).toEqual({ timeoutMs: 0, idleTimeoutMs: null });
+  });
+});
 
 function initRepository(): string {
   const root = mkdtempSync(join(tmpdir(), "agent-bridge-supervisor-matrix-repo-"));

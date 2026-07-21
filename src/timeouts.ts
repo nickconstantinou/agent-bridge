@@ -6,14 +6,14 @@ interface PerKindDefaults {
 }
 
 // Per-CLI built-in defaults.
-// All kinds: 30m hard timeout, 20m idle timeout.
-// Idle timeout guards silent hangs; 20m is generous enough for long inference phases
-// while still recovering from genuine stalls within a reasonable window.
+// Canonical default (Issue #177): both hard and idle timeouts are disabled
+// (0) unless explicitly configured. 0 means "no timeout" throughout this
+// module and in runSupervisedProcess().
 const DEFAULTS: Record<BotKind, PerKindDefaults> = {
-  codex:       { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 1_200_000 },
-  antigravity: { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 1_200_000 },
-  claude:      { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 1_200_000 },
-  kimchi:      { cliTimeoutMs: 1_800_000, cliIdleTimeoutMs: 1_200_000 },
+  codex:       { cliTimeoutMs: 0, cliIdleTimeoutMs: 0 },
+  antigravity: { cliTimeoutMs: 0, cliIdleTimeoutMs: 0 },
+  claude:      { cliTimeoutMs: 0, cliIdleTimeoutMs: 0 },
+  kimchi:      { cliTimeoutMs: 0, cliIdleTimeoutMs: 0 },
 };
 
 const DEFAULT_FETCH_TIMEOUT_MS = 45_000;
@@ -23,6 +23,14 @@ function envNum(name: string): number | null {
   if (!v) return null;
   const n = Number(v);
   return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+/** Like envNum(), but an explicit "0" resolves to 0 (disabled) instead of falling through. */
+function envTimeoutMs(name: string): number | null {
+  const v = process.env[name];
+  if (!v) return null;
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : null;
 }
 
 export interface ResolvedTimeouts {
@@ -47,12 +55,12 @@ export function resolveTimeoutsForKind(kind: BotKind): ResolvedTimeouts {
   const defaults = DEFAULTS[kind];
   return {
     cliTimeoutMs:
-      envNum(`${prefix}_CLI_TIMEOUT_MS`) ??
-      envNum("CLI_TIMEOUT_MS") ??
+      envTimeoutMs(`${prefix}_CLI_TIMEOUT_MS`) ??
+      envTimeoutMs("CLI_TIMEOUT_MS") ??
       defaults.cliTimeoutMs,
     cliIdleTimeoutMs:
-      envNum(`${prefix}_CLI_IDLE_TIMEOUT_MS`) ??
-      envNum("CLI_IDLE_TIMEOUT_MS") ??
+      envTimeoutMs(`${prefix}_CLI_IDLE_TIMEOUT_MS`) ??
+      envTimeoutMs("CLI_IDLE_TIMEOUT_MS") ??
       defaults.cliIdleTimeoutMs,
     fetchTimeoutMs:
       envNum("TELEGRAM_FETCH_TIMEOUT_MS") ??

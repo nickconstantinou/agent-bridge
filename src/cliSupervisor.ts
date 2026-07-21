@@ -67,6 +67,16 @@ const KILL_GRACE_MS = 5_000;
 const GROUP_EXIT_POLL_INTERVAL_MS = 25;
 const GROUP_EXIT_POLL_BOUND_MS = 1_000;
 
+export function resolveSupervisorTimeouts(options: Pick<CliOptions, "timeoutMs" | "idleTimeoutMs"> = {}): {
+  timeoutMs: number;
+  idleTimeoutMs: number | null;
+} {
+  return {
+    timeoutMs: options.timeoutMs ?? 0,
+    idleTimeoutMs: options.idleTimeoutMs ?? null,
+  };
+}
+
 /**
  * Sends SIGTERM to the full process group (child spawned with detached:true
  * is the group leader) and escalates to SIGKILL after graceMs — unless a
@@ -118,6 +128,17 @@ function killChildTree(child: ChildProcess, graceMs: number = KILL_GRACE_MS): Pr
     };
     poll();
   });
+}
+
+/**
+ * Structured cancellation reason for a configured hard/idle timeout (Issue
+ * #177) — callers must branch on `timeoutKind`, not on Error#message text.
+ */
+export class CliTimeoutError extends Error {
+  constructor(message: string, public readonly timeoutKind: "hard" | "idle") {
+    super(message);
+    this.name = "CliTimeoutError";
+  }
 }
 
 function killChild(child: ChildProcess, graceMs: number = KILL_GRACE_MS): Promise<void> {
@@ -263,8 +284,7 @@ export async function runSupervisedProcess(
   options: CliOptions = {},
   onProgress?: (text: string) => void,
 ): Promise<{ stdout: string }> {
-  const timeoutMs = options.timeoutMs ?? 300_000;
-  const idleTimeoutMs = options.idleTimeoutMs ?? null;
+  const { timeoutMs, idleTimeoutMs } = resolveSupervisorTimeouts(options);
   const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
   const onEvent = options.onEvent;
   const evtCtx = options.eventContext;
@@ -288,7 +308,9 @@ export async function runSupervisedProcess(
 
   return new Promise((resolve, reject) => {
     const normalizedArgs = normalizeCliArgs(command, args);
-    const spawnInvocation = buildWorkspaceLockedInvocation(command, normalizedArgs, cwd);
+    const spawnInvocation = buildWorkspaceLockedInvocation(command, normalizedArgs, cwd, {
+      bypassWorkspaceLock: options.bypassWorkspaceLock,
+    });
     console.log(formatSpawnLog(command, normalizedArgs, cwd, options.chatId, options.stdin));
     // detached:true puts the child in its own process group so timeout kills
     // can signal the whole subtree (process.kill(-pid)) instead of stranding
@@ -320,11 +342,12 @@ export async function runSupervisedProcess(
       resolve(val);
     };
 
-    const timer = setTimeout(() => {
+    // timeoutMs === 0 means the hard timeout is disabled (Issue #177 canonical default).
+    const timer: NodeJS.Timeout | null = timeoutMs === 0 ? null : setTimeout(() => {
       if (settled || pendingError) return;
       console.error(`[HARD TIMEOUT] CLI hard timeout after ${timeoutMs}ms - killing process\n${formatSpawnLog(command, args, cwd, options.chatId)}`);
       if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI hard timeout after ${timeoutMs}ms`, category: "timeout" }));
-      pendingError = new Error(`CLI hard timeout after ${timeoutMs}ms`);
+      pendingError = new CliTimeoutError(`CLI hard timeout after ${timeoutMs}ms`, "hard");
       pendingKill = killChildTree(child, killGraceMs);
     }, timeoutMs);
 
@@ -342,13 +365,14 @@ export async function runSupervisedProcess(
 
     let idleTimer: NodeJS.Timeout | null = null;
     const resetIdleTimer = () => {
-      if (idleTimeoutMs === null) return;
+      // null or 0 means the idle timeout is disabled (Issue #177 canonical default).
+      if (idleTimeoutMs === null || idleTimeoutMs === 0) return;
       if (idleTimer) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
         if (settled || pendingError) return;
         console.error(`[IDLE TIMEOUT] CLI idle timeout after ${idleTimeoutMs}ms with no stdout/stderr${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""}`);
         if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI idle timeout after ${idleTimeoutMs}ms`, category: "timeout" }));
-        pendingError = new Error(`CLI idle timeout after ${idleTimeoutMs}ms`);
+        pendingError = new CliTimeoutError(`CLI idle timeout after ${idleTimeoutMs}ms`, "idle");
         pendingKill = killChildTree(child, killGraceMs);
       }, idleTimeoutMs);
     };
@@ -371,7 +395,7 @@ export async function runSupervisedProcess(
     });
 
     child.on("close", (code, signal) => {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       if (processWatchTimer) clearInterval(processWatchTimer);
       if (idleTimer) clearTimeout(idleTimer);
       if (options.chatId != null) deregisterProcess(options.chatId, child);
@@ -405,7 +429,7 @@ export async function runSupervisedProcess(
     });
 
     child.on("error", (err) => {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       if (processWatchTimer) clearInterval(processWatchTimer);
       if (idleTimer) clearTimeout(idleTimer);
       if (options.chatId != null) deregisterProcess(options.chatId, child);

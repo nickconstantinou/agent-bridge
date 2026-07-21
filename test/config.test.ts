@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { loadBotsConfig, validateTokenUniqueness, resolveExecutionMode } from "../src/config.js";
+import { loadBotsConfig, validateTokenUniqueness, resolveExecutionMode, resolveBusyMessageMode, validateBusyMessageModeEnv } from "../src/config.js";
 
 describe("loadBotsConfig", () => {
   it("builds all four bot configs with defaults from an empty env", () => {
@@ -68,6 +68,43 @@ describe("resolveExecutionMode", () => {
   it("falls back to BRIDGE_EXECUTION_MODE when no per-bot var is set", () => {
     expect(resolveExecutionMode("kimchi", { BRIDGE_EXECUTION_MODE: "safe" })).toBe("safe");
     expect(resolveExecutionMode("codex", { BRIDGE_EXECUTION_MODE: "trusted" })).toBe("trusted");
+  });
+});
+
+describe("resolveBusyMessageMode", () => {
+  it("defaults to interrupt when unset", () => {
+    expect(resolveBusyMessageMode({})).toBe("interrupt");
+  });
+
+  it("honours an explicit queue setting", () => {
+    expect(resolveBusyMessageMode({ BRIDGE_BUSY_MESSAGE_MODE: "queue" })).toBe("queue");
+  });
+
+  it("honours an explicit interrupt setting", () => {
+    expect(resolveBusyMessageMode({ BRIDGE_BUSY_MESSAGE_MODE: "interrupt" })).toBe("interrupt");
+  });
+
+  it("has no per-CLI override — only the flat BRIDGE_BUSY_MESSAGE_MODE var is read", () => {
+    const src = readFileSync(new URL("../src/config.ts", import.meta.url), "utf8");
+    const fnStart = src.indexOf("export function resolveBusyMessageMode");
+    const fn = src.slice(fnStart, src.indexOf("\n}", fnStart));
+    expect(fn).not.toMatch(/\$\{.*\}_BUSY_MESSAGE_MODE/); // no per-kind prefix template
+    expect(fn).not.toMatch(/toUpperCase/);
+  });
+});
+
+describe("validateBusyMessageModeEnv", () => {
+  it("accepts an unset value", () => {
+    expect(() => validateBusyMessageModeEnv({})).not.toThrow();
+  });
+
+  it("accepts interrupt and queue", () => {
+    expect(() => validateBusyMessageModeEnv({ BRIDGE_BUSY_MESSAGE_MODE: "interrupt" })).not.toThrow();
+    expect(() => validateBusyMessageModeEnv({ BRIDGE_BUSY_MESSAGE_MODE: "queue" })).not.toThrow();
+  });
+
+  it("throws on an invalid value", () => {
+    expect(() => validateBusyMessageModeEnv({ BRIDGE_BUSY_MESSAGE_MODE: "replace" })).toThrow(/BRIDGE_BUSY_MESSAGE_MODE/);
   });
 });
 

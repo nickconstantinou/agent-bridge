@@ -23,9 +23,10 @@ export type CommandResult =
   | { kind: "execute"; prompt: string }
   | { kind: "codex_usage" }
   | { kind: "compact"; chatKey: string }
-  | { kind: "advisor"; action: "ask" | "review" | "plan" | "debug"; task: string; chatKey: string };
+  | { kind: "advisor"; action: "ask" | "review" | "plan" | "debug"; task: string; chatKey: string }
+  | { kind: "btw"; prompt: string };
 
-const bridgeCommands = new Set(["/start", "/reset", "/models", "/effort", "/skills", "/usage", "/narration", "/compact", "/context", "/advisor"]);
+const bridgeCommands = new Set(["/start", "/reset", "/models", "/effort", "/skills", "/usage", "/narration", "/compact", "/context", "/advisor", "/btw"]);
 
 function normalizeCommand(text: string): string {
   const [command] = String(text || "").trim().toLowerCase().split(/\s+/, 1);
@@ -207,6 +208,14 @@ export function handleCommand(
     return { kind: "advisor", action: action as "ask" | "review" | "plan" | "debug", task, chatKey: chatId };
   }
 
+  if (text === "/btw") {
+    const btwPrompt = String(prompt || "").trim().replace(/^\/btw\S*\s*/i, "").trim();
+    if (!btwPrompt) {
+      return { kind: "message", text: "Usage: /btw <prompt> — a fresh, read-only, one-off side question that does not disturb the active session." };
+    }
+    return { kind: "btw", prompt: btwPrompt };
+  }
+
   if (text === "/context") {
     const status = db.getConvStatus(chatId, surfaceIdentity);
     const summary = db.getLatestConvSummary(chatId);
@@ -269,6 +278,7 @@ export function buildTelegramCommands(kind: "codex" | "antigravity" | "claude" |
     { command: "compact",  description: "Compact conversation context" },
     { command: "context",  description: "Show context status" },
     { command: "advisor",  description: "Ask frontier advisor" },
+    { command: "btw",      description: "Fresh read-only side question" },
   ];
 
   if (kind === "codex") {

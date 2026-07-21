@@ -263,8 +263,8 @@ Photos sent as an album share a `media_group_id`. `MediaGroupBuffer` collects me
 
 | Setting | Default | Env variable |
 |--------|---------|-------------|
-| CLI hard timeout | 300s | `CLI_TIMEOUT_MS` |
-| Idle timeout | 60s | `CLI_IDLE_TIMEOUT_MS` |
+| CLI hard timeout | disabled (`0`) | `CLI_TIMEOUT_MS` |
+| Idle timeout | disabled (`0`) | `CLI_IDLE_TIMEOUT_MS` |
 | Telegram fetch timeout | 45s | `FETCH_TIMEOUT_MS` |
 | Poll interval | 1s | `POLL_INTERVAL_MS` |
 

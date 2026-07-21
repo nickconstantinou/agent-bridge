@@ -15,7 +15,7 @@ import { BridgeEngine } from "./engine.js";
 import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import type { BridgeConfig, BotConfig, BotKind } from "./types.js";
-import { loadBotsConfig, validateTokenUniqueness, resolveExecutionMode } from "./config.js";
+import { loadBotsConfig, validateTokenUniqueness, resolveExecutionMode, resolveBusyMessageMode, validateBusyMessageModeEnv } from "./config.js";
 import { runCli } from "./cli.js";
 import { startConfiguredAdvisorBroker } from "./advisorBroker.js";
 import { standaloneServiceId } from "./executionIdentity.js";
@@ -48,11 +48,13 @@ const config: BridgeConfig = {
   serviceKind: getServiceKindFromEnvFile(process.env.BRIDGE_ENV_FILE || ""),
   pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 1000),
   executionMode: resolveExecutionMode(getServiceKindFromEnvFile(process.env.BRIDGE_ENV_FILE || "") || "codex", process.env),
+  busyMessageMode: resolveBusyMessageMode(process.env),
   asyncEnabled: process.env.BRIDGE_ASYNC_ENABLED !== "false",
   dbPath: process.env.DB_PATH || `${getBridgeProjectDir()}/.data/bridge.sqlite`,
   bots: loadBotsConfig(process.env, { withTokens: true }),
 };
 
+validateBusyMessageModeEnv(process.env);
 validateTokenUniqueness(
   Object.fromEntries(Object.entries(config.bots).map(([kind, bot]) => [kind, bot.token]))
 );
@@ -84,6 +86,7 @@ const engines = (Object.entries(config.bots) as [BotKind, BotConfig][])
         botConfig,
         allowedUserIds: config.allowedUserIds,
         executionMode: resolveExecutionMode(kind, process.env),
+        busyMessageMode: config.busyMessageMode,
         asyncEnabled: config.asyncEnabled,
         pollIntervalMs: config.pollIntervalMs,
         soulContext,

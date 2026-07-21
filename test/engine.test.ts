@@ -1122,6 +1122,10 @@ describe("BridgeEngine", () => {
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
           executionMode: "safe",
+          // Externally-held synthetic lock, no real process to abort — pin
+          // queue mode so this FIFO-notification test isn't affected by the
+          // Issue #177 interrupt default.
+          busyMessageMode: "queue",
           asyncEnabled: false,
           pollIntervalMs: 1000,
         },
@@ -1156,6 +1160,9 @@ describe("BridgeEngine", () => {
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
           executionMode: "safe",
+          // Pinned explicitly: this test validates durable-FIFO queue
+          // notification text, not busy-mode admission (Issue #177).
+          busyMessageMode: "queue",
           asyncEnabled: false,
           pollIntervalMs: 1000,
         },
@@ -1265,15 +1272,19 @@ describe("BridgeEngine", () => {
       const secondRun = vi.fn().mockResolvedValue("second done");
       const firstClient = makeMockClient();
       const secondClient = makeMockClient();
+      // busyMessageMode pinned to "queue": these mocked runCli implementations
+      // never register a real killable child process, so interrupt mode has
+      // nothing to abort and would otherwise just block on natural
+      // completion — this test is about FIFO queue mechanics, not that.
       const first = new BridgeEngine({
         kind: "codex", surfaceIdentity: "telegram:interactive",
         botConfig: { command: "codex", modelPreference: [] }, allowedUserIds: new Set(["42"]),
-        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+        executionMode: "safe", busyMessageMode: "queue", asyncEnabled: false, pollIntervalMs: 1000,
       }, db, firstClient, { runCli: firstRun });
       const second = new BridgeEngine({
         kind: "claude", surfaceIdentity: "telegram:interactive",
         botConfig: { command: "claude", modelPreference: [] }, allowedUserIds: new Set(["42"]),
-        executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+        executionMode: "safe", busyMessageMode: "queue", asyncEnabled: false, pollIntervalMs: 1000,
       }, db, secondClient, { runCli: secondRun });
 
       const firstTask = first.handleMessages([makePrivateTopicMessage("first", 7)]);
@@ -1662,6 +1673,10 @@ describe("BridgeEngine", () => {
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
           executionMode: "safe",
+          // Externally-held synthetic lock, no real process to abort — pin
+          // queue mode so this FIFO-notification test isn't affected by the
+          // Issue #177 interrupt default.
+          busyMessageMode: "queue",
           asyncEnabled: false,
           pollIntervalMs: 1000,
         },
@@ -1700,6 +1715,10 @@ describe("BridgeEngine", () => {
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
           executionMode: "safe",
+          // Externally-held synthetic lock, no real process to abort — pin
+          // queue mode so this FIFO-notification test isn't affected by the
+          // Issue #177 interrupt default.
+          busyMessageMode: "queue",
           asyncEnabled: false,
           pollIntervalMs: 1000,
         },
@@ -1777,6 +1796,10 @@ describe("BridgeEngine", () => {
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
           executionMode: "safe",
+          // Externally-held synthetic lock, no real process to abort — pin
+          // queue mode so this FIFO-notification test isn't affected by the
+          // Issue #177 interrupt default.
+          busyMessageMode: "queue",
           asyncEnabled: false,
           pollIntervalMs: 1000,
         },
@@ -1818,6 +1841,10 @@ describe("BridgeEngine", () => {
           botConfig: { command: "claude", modelPreference: [] },
           allowedUserIds: new Set(["42"]),
           executionMode: "safe",
+          // Externally-held synthetic lock, no real process to abort — pin
+          // queue mode so this FIFO-notification test isn't affected by the
+          // Issue #177 interrupt default.
+          busyMessageMode: "queue",
           asyncEnabled: false,
           pollIntervalMs: 1000,
         },

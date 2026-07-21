@@ -7,7 +7,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import { openDb } from "../src/db.js";
@@ -16,7 +16,7 @@ import { CURRENT_SCHEMA_VERSION } from "../src/db/schema.js";
 /** The five canonical database roles (policy doc §4) — structural validity only; the actual role/path allowlist lives in the root-owned bootstrap config, outside this script's scope. */
 const VALID_ROLES = new Set(["shared", "discord", "health", "interactive", "worker"]);
 
-type Mode = "inspect" | "migrate" | "validate" | "bootstrap";
+type Mode = "inspect" | "checkpoint" | "migrate" | "validate" | "bootstrap";
 
 interface Options {
   mode: Mode;
@@ -63,8 +63,8 @@ const CURRENT_LOCK_COLUMNS = new Set([
 
 function parseArgs(argv: string[]): Options {
   const mode = argv.shift() as Mode | undefined;
-  if (!mode || !["inspect", "migrate", "validate"].includes(mode)) {
-    throw new Error("usage: rollout-db.ts <inspect|migrate|validate> --db PATH [--db PATH ...]");
+  if (!mode || !["inspect", "checkpoint", "migrate", "validate"].includes(mode)) {
+    throw new Error("usage: rollout-db.ts <inspect|checkpoint|migrate|validate> --db PATH [--db PATH ...]");
   }
   const databases: string[] = [];
   let evidencePath: string | null = null;
@@ -207,6 +207,45 @@ function inspectDatabase(path: string, requireCurrent: boolean, resolvingUnits: 
   } finally {
     db.close();
   }
+}
+
+function sidecarSize(path: string): number {
+  try {
+    return statSync(path).size;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw error;
+  }
+}
+
+function checkpointDatabase(path: string, resolvingUnits: string[] = []): DbEvidence & {
+  walBytesBefore: number;
+  walBytesAfter: number;
+  checkpointedPages: number;
+} {
+  const walPath = `${path}-wal`;
+  const walBytesBefore = sidecarSize(walPath);
+  const db = new Database(path, { fileMustExist: true });
+  let checkpointResult: Array<{ busy: number; log: number; checkpointed: number }>;
+  try {
+    checkpointResult = db.pragma("wal_checkpoint(TRUNCATE)") as Array<{ busy: number; log: number; checkpointed: number }>;
+  } finally {
+    db.close();
+  }
+  const result = checkpointResult[0];
+  if (!result || result.busy !== 0) {
+    throw new Error(`SQLite WAL checkpoint was busy for ${path}`);
+  }
+  const walBytesAfter = sidecarSize(walPath);
+  if (walBytesAfter !== 0) {
+    throw new Error(`SQLite WAL checkpoint did not drain the WAL for ${path}: ${walBytesAfter} bytes remain`);
+  }
+  return {
+    ...inspectDatabase(path, false, resolvingUnits),
+    walBytesBefore,
+    walBytesAfter,
+    checkpointedPages: result.checkpointed,
+  };
 }
 
 /** True if anything at all exists at `path` — including a symlink, even a dangling one. Deliberately lstat-based (not existsSync, which follows symlinks and would report a dangling symlink as "nothing here"). */
@@ -710,6 +749,11 @@ async function main(): Promise<void> {
     const evidence = options.databases.map((path) => inspectDatabase(path, false, unitsFor(path)));
     const legacyQueues = evidence.reduce((sum, database) => sum + database.legacyQueueCount, 0);
     if (legacyQueues !== 0) throw new Error(`legacy queue count is nonzero: ${legacyQueues}`);
+    writeEvidence(options.evidencePath, options.mode, evidence);
+    return;
+  }
+  if (options.mode === "checkpoint") {
+    const evidence = options.databases.map((path) => checkpointDatabase(path, unitsFor(path)));
     writeEvidence(options.evidencePath, options.mode, evidence);
     return;
   }

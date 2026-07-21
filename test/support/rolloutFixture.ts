@@ -253,7 +253,7 @@ echo "runuser:$*" >> "${fixture.actionLog}"
 if [ "\${1:-}" = --user ]; then shift 2; fi
 if [ "\${1:-}" = -- ]; then shift; fi
 phase=""
-for arg in "$@"; do case "$arg" in inspect|backup|migrate|validate) phase="$arg";; esac; done
+for arg in "$@"; do case "$arg" in inspect|checkpoint|backup|migrate|validate) phase="$arg";; esac; done
 if [ -n "\${FAKE_FAIL_PHASE:-}" ] && [ "\${FAKE_FAIL_PHASE:-}" = "$phase" ]; then
   "$@"
   if [ -n "\${FAKE_CORRUPT_DB:-}" ]; then printf 'corrupt' > "$FAKE_CORRUPT_DB"; fi

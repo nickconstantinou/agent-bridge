@@ -74,7 +74,15 @@ function resolveFlockCommand(): string {
   return command;
 }
 
-export function buildWorkspaceLockedInvocation(command: string, args: string[], cwd: string): LockedInvocation {
+export function buildWorkspaceLockedInvocation(
+  command: string,
+  args: string[],
+  cwd: string,
+  opts: { bypassWorkspaceLock?: boolean } = {},
+): LockedInvocation {
+  // Narrowly scoped opt-out for verified fresh, read-only, tool-free
+  // invocations (Issue #177 /btw) — never a general-purpose toggle.
+  if (opts.bypassWorkspaceLock) return { command, args, workspaceLock: null };
   if (!workspaceLockEnabled()) return { command, args, workspaceLock: null };
   const workspaceLock = resolveWorkspaceLock(cwd);
   if (!workspaceLock) return { command, args, workspaceLock: null };

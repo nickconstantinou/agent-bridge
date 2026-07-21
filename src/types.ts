@@ -131,6 +131,12 @@ export interface CliOptions {
   onEvent?: (event: import("./events/types.js").BridgeEvent) => void;
   /** Optional provider-supplied failure watch; supervisor only owns lifecycle/settlement. */
   processWatch?: CliProcessWatch;
+  /**
+   * Narrowly scoped opt-out of the exclusive worktree flock (Issue #177
+   * /btw) for verified fresh, read-only, tool-free invocations only — never
+   * set this for a normal writable execution.
+   */
+  bypassWorkspaceLock?: boolean;
 }
 
 export interface CliProcessWatchContext {

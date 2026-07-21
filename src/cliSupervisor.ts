@@ -299,7 +299,9 @@ export async function runSupervisedProcess(
 
   return new Promise((resolve, reject) => {
     const normalizedArgs = normalizeCliArgs(command, args);
-    const spawnInvocation = buildWorkspaceLockedInvocation(command, normalizedArgs, cwd);
+    const spawnInvocation = buildWorkspaceLockedInvocation(command, normalizedArgs, cwd, {
+      bypassWorkspaceLock: options.bypassWorkspaceLock,
+    });
     console.log(formatSpawnLog(command, normalizedArgs, cwd, options.chatId, options.stdin));
     // detached:true puts the child in its own process group so timeout kills
     // can signal the whole subtree (process.kill(-pid)) instead of stranding

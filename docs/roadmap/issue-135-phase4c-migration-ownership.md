@@ -1,6 +1,6 @@
 # Issue #135 Phase 4C — Production Migration Ownership and Gating
 
-Status: **draft policy and implementation plan.** This document records design history; the implementation is now present in the guarded rollout helper. The current helper additionally accepts a cohort whose services are already quiesced, proves containment again, performs the post-stop database inspection, and clears only zero-byte WAL sidecars before backup. References below that say `assert_service_active` blocks every re-invocation describe the earlier design and are superseded by that implemented flow; the interrupted sentinel and explicit operator review requirements remain in force.
+Status: **Phase 4C.6 closeout complete; Phase 4C.7 production deployment remains separately authorized.** This document retains design history and records the implemented guarded-rollout contract. The current helper additionally accepts a cohort whose services are already quiesced, proves containment again, performs the post-stop database inspection, and clears only zero-byte WAL sidecars before backup. References below that say `assert_service_active` blocks every re-invocation describe the earlier design and are superseded by that implemented flow; the interrupted sentinel and explicit operator review requirements remain in force.
 
 ## 0. Why this exists
 
@@ -302,6 +302,20 @@ There is no state in this machine that represents "new code + old schema" *runni
 | 4C.7 | Separately authorized production deployment (§12 runbook) | 4C.6, explicit human approval |
 
 Each of 4C.2–4C.4 is its own draft PR through the same review discipline as PRs #147/#154 (red-green-refactor, full parallel+serial suite, arch-lint, exact-head CI, no merge without explicit approval).
+
+### Phase 4C.6 closeout record
+
+Phase 4C.5 is complete: PR #176 merged to `main` as `38b45ae8fe450b3b54072ba7f23ed9c841391cc4` from approved head `d58788cca79a050f54fe20c764e6e322d8bdc5d9`. Exact-head evidence recorded 76 real-systemd/UAT tests passed; serial and parallel suites each recorded 1,911 passed and 9 skipped; typecheck, Architecture Lint, diff/path audit and Knip-vs-main comparison passed. The migration implementation was verified byte-for-byte unchanged after extraction behind the fail-closed executable boundary.
+
+Phase 4C acceptance reconciliation:
+
+- ordinary startup and guarded rollout now have one reviewed migration-ownership contract;
+- minimum/current/future schema behavior and rollback expectations are documented and tested;
+- no schema-changing production deployment has occurred before the gate was ready;
+- full parallel/serial tests, typecheck, Architecture Lint, exact-head CI and static comparisons passed;
+- compatibility retirement remains Phase 5 scope and is not claimed by this closeout.
+
+Phase 4C.6 is complete. Phase 4C.7 remains a separate production-deployment decision requiring explicit human authorization. No deployment, restart, sentinel clearing or database mutation occurred during this closeout.
 
 ## 11. Test and UAT matrix
 

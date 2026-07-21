@@ -4,12 +4,24 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   arch-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout the exact event head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify the exact event head
+        run: test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - uses: actions/setup-node@v4
         with:

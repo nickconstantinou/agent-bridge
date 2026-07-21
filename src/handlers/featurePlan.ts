@@ -40,7 +40,6 @@ export function createFeaturePlanHandler(deps: FeaturePlanDeps): JobHandler {
         repository: repository ?? "(unknown)",
       },
       promptReader,
-      { dbTemplate: ctx.db.getPrompt("feature_plan", "") },
     );
     const planText = await runCli(command, ["--print", "--output-format", "text", prompt]);
 

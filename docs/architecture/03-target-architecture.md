@@ -1,14 +1,14 @@
 # 03 — Target Architecture
 
-Evolution of the existing codebase, not a rewrite. Every layer below maps to modules that already exist; new elements are marked ★.
+Evolution of the existing codebase, not a rewrite. Every layer maps to existing boundaries or an approved extension.
 
 ## Mission
 
-> Agent Bridge is an open-source runtime for autonomous AI agents. It consists of a domain-agnostic **Companion Runtime** for conversational AI agents and a specialized autonomous **Engineering Worker** for software development. Both share a common runtime providing provider abstraction, memory, eventing, capability management, and infrastructure services. The hosted Agent Bridge Platform provisions, manages, and monitors deployments, but all autonomous execution lives within the OSS.
+> Agent Bridge is an open-source runtime for autonomous AI agents. It consists of a domain-agnostic Companion Runtime for conversational agents and a specialised Engineering Worker for software development. Both share provider abstraction, memory, eventing, capability management, configuration, persistence, and process supervision. The hosted platform provisions and configures workspaces; autonomous execution remains in OSS.
 
-## Two products, one shared runtime (ADR-008)
+## Two products, one shared runtime
 
-```
+```text
                 Agent Bridge OSS
                        │
       ┌────────────────┴────────────────┐
@@ -16,64 +16,124 @@ Evolution of the existing codebase, not a rewrite. Every layer below maps to mod
 Companion Runtime              Engineering Worker
 (domain-agnostic)              (software engineering only)
       │                                 │
-Telegram/Discord/future        Work item → plan → arch review
-surfaces → conversation        → TDD → implement → test →
-router → provider selection    review → repair → PR → CI →
-→ sessions → usage/fallback    reviewer comments → merge gate
-→ memory → response            Owns: repos, worktrees, Git,
-Knows nothing of Git/PR/CI     GitHub, CI, releases. Nothing else.
+conversation routing           validated issue workflows
+provider/model selection       Technical Lead orchestration
+sessions and memory            Code Worker TDD execution
+responses and tools            Documentation Steward lane
       └────────────────┬────────────────┘
                 Shared Runtime
-  SQLite · Event store · Memory · Provider adapters ·
-  CLI mgmt · Config/secrets · Notifications · Metrics ·
-  Capability Registry★ (Tranche 2 — ProviderAdapter is member #1)
+  SQLite repositories · provider adapters · advisor service ·
+  capability policy · config · memory · notifications · metrics ·
+  process supervision · lifecycle ownership
 ```
 
-Boundary rule (enforced by arch-lint, Epic 11): companion modules (`engine.ts`, `interactiveBot.ts`, router) never import worker modules (`workerBot`, `jobExecutor*`, `handlers/*`, `prMergeGate`, `workspace`) and vice versa; both import only Shared Runtime.
+Companion modules never import worker modules and vice versa; both depend on Shared Runtime boundaries.
+
+## Engineering Worker role architecture
+
+The platform exposes exactly three role assignments:
+
+```text
+Technical Lead
+  requirements → issue validation/authoring → planning
+  → guidance → implementation review → operations review
+  → readiness → fresh exact-head final review
+  read-only AdvisorService evidence boundary
+
+Code Worker
+  scan/investigate (read-only)
+  → red/green/repair/verify (mode-specific worktree permissions)
+
+Documentation Steward
+  impact/validate (read-only)
+  → author/maintenance (documentation-only mutation)
+```
+
+Scanner is a Code Worker mode. Reviewer and operations are Technical Lead modes.
+
+Agent Bridge owns all workflow transitions, role resolution, permissions, budgets, validation, retries, cancellation, approvals, merge, deployment, and audit.
+
+## Worker lifecycle
+
+```text
+Raw feature request, imported issue, or scan finding
+→ classify feature | defect | refactor
+→ Technical Lead gathers or validates requirements
+→ canonical issue
+→ requirements_ready
+→ Technical Lead authors implementation plan and execution contract
+→ Documentation Steward impact assessment
+→ approval when policy requires it
+→ Code Worker TDD implementation in a disposable workspace
+→ deterministic verification
+→ Technical Lead implementation and operations review
+→ Documentation Steward updates and validation
+→ Technical Lead PR readiness
+→ exact-head CI
+→ fresh exact-head Technical Lead final review
+→ human merge gate
+```
+
+Incoming issues and scan findings are not trusted as complete specifications. Repository facts are gathered through typed, allowlisted, bounded read-only tools. Product decisions are surfaced to a human.
+
+## Role and model assignment
+
+A role binds an authenticated CLI, explicit model, fallbacks, permissions, budgets, and output contracts. The platform supports automatic, recommended, and manual assignment.
+
+A single authenticated CLI can provide different models to each role. A single model can provide every role with isolated sessions and permissions. Model diversity is reported as unavailable, but Technical Lead review remains independent from Code Worker mutation when the Technical Lead did not author or modify the implementation, has no mutation authority, and performs a fresh exact-head review invocation.
+
+The same frontier model or CLI may be reused. Model diversity is optional metadata and not a blocking gate. The Code Worker cannot review its own mutation.
 
 ## Layer diagram
 
-```
-┌────────────────────────── Interfaces ──────────────────────────┐
-│ Telegram bots · Interactive router · Discord · Worker commands │
-│ (telegram.ts, interactiveBot.ts, discord*.ts, workerBot.ts)    │
-├────────────────────────── Companion ───────────────────────────┤
-│ Router★ (intent → engine)  Session mgr (bridge_state)          │
-│ Fallback chains (workerFallback.ts)  Rendering (markdownIR)    │
-├────────────────────────── Orchestration ───────────────────────┤
-│ Worker Engine (jobExecutor+Loop)   Workflow Engine★            │
-│ Approval gates (prMergeGate)       Skills (skills.ts)          │
-├────────────────────────── Providers ───────────────────────────┤
-│ ProviderAdapter★: codex · claude · antigravity · kimchi        │
-│ (extracted from cli.ts/effort.ts/timeouts.ts branches)         │
-├────────────────────────── Runtime ─────────────────────────────┤
-│ Workspaces (workspace.ts)  Event Store (events/*)              │
-│ Memory (projectMemory + kinds★)  Locks/Repos (repositories/*)  │
-├────────────────────────── Persistence ─────────────────────────┤
-│ SQLite via repositories only★ (BridgeDb = facade)              │
-└────────────────────────────────────────────────────────────────┘
-   Platform (hosted): auth, billing, provisioning — OUT OF SCOPE,
-   integrates via Workspace Bootstrap API★ + Heartbeat API★ only.
+```text
+┌──────────────────────── Interfaces ─────────────────────────┐
+│ Telegram/Discord · Worker commands · Platform role settings │
+├──────────────────── Worker orchestration ───────────────────┤
+│ Intake and requirements · workflow state · role resolver    │
+│ issue/plan validators · documentation triggers · approvals  │
+├────────────────── Role execution boundaries ────────────────┤
+│ Technical Lead via AdvisorService and read-only tools       │
+│ Code Worker via workspace and mode permission policy        │
+│ Documentation Steward via documentation-only path policy    │
+├──────────────────────── Providers ───────────────────────────┤
+│ ProviderAdapter registry · model discovery/probes/fallback  │
+├──────────────────────── Runtime ─────────────────────────────┤
+│ Workspaces · supervisor · event/lifecycle ownership · memory│
+├────────────────────── Persistence ───────────────────────────┤
+│ SQLite via owning repositories · jobs · roles · audit       │
+└─────────────────────────────────────────────────────────────┘
+ Platform: authentication, provisioning, role/model allocation,
+ effective status, and policy UI; no direct worker authority.
 ```
 
-## Key decisions (full ADRs in doc 04)
+## Key decisions
 
-1. **ProviderAdapter interface** replaces BotKind branch logic. Registry-driven; unions become `keyof registry`. Capabilities: `{ streaming, resume, interrupt, effort, models, attachments }`.
-2. **Events become the write path** for worker lifecycle. `work_jobs.status` retained as a materialized view derived by `events/reducer.ts`. Extends the existing EventStore rather than introducing a bus dependency; the "bus" is table + in-process subscribers.
-3. **Declarative workflows**: `Workflow = { name, steps: Step[], gates, repairPolicy }` interpreted by one engine; current handlers become step executors. Feature/bug/review/refactor/docs/security/release are data, not code.
-4. **Single config loader** (`src/config.ts`), consumed by all entry points.
-5. **Repositories own SQL**; arch-lint forbids `prepare(` outside `src/db/` and `src/repositories/`.
-6. **Memory kinds** on one table: `kind ∈ {workspace, repository, conversation, provider, decision, review, failure}` + `scope_ref`. Typed accessors; capture hooks in review and repair paths.
-7. **GitHub issues authoritative** for externally-created work; sync job reconciles; SQLite remains authoritative for jobs/runs (execution state never lives in GitHub).
-8. **OSS/platform boundary**: OSS exposes two stable APIs (Workspace Bootstrap, Heartbeat/Status); platform code never imports OSS internals; appliance consumes a published client.
+1. Provider adapters and capability metadata remain registry-driven.
+2. SQLite remains the local authoritative store; repositories own SQL.
+3. Agent Bridge, not a model, is the workflow engine and authority.
+4. The advisor path is the Technical Lead execution and independent-review boundary.
+5. Canonical requirements precede planning for feature, defect, and refactor paths.
+6. Code mutation remains bounded by existing disposable workspaces and TDD guards.
+7. Documentation is a first-class readiness obligation driven by `agentic-maintenance.yaml`.
+8. Role identity and review independence are separate from CLI/provider/model identity.
+9. Single-provider and single-model operation are supported with explicit model-diversity reporting.
+10. GitHub is authoritative for externally authored issue content where configured; SQLite remains authoritative for execution state.
+11. Platform and OSS communicate through stable configuration/status boundaries; platform cannot bypass OSS policy.
+12. Exact-head CI precedes the fresh final Technical Lead review and human merge gate.
 
-## Reference-project influences (patterns only, no code import)
+## Canonical references
 
-| Source | Adopted pattern | Layer influenced |
-|---|---|---|
-| gstack | Named engineering skills as first-class workflow steps; planning discipline (plan artifact gates implementation); review/QA as separate pipeline stages | **Engineering Workflows** (Workflow Engine, skills.ts, implementationPlanQuality.ts) |
-| agent-orchestrator | Adapter abstraction per agent; durable event model as truth; isolated worktrees; parallel sessions; feedback routing; runtime supervision | **Engineering Worker** (ProviderAdapter, Event Store, workspace.ts, jobExecutorLoop) |
-| Agent-Reach (github.com/Panniantong/Agent-Reach) | Capability layer giving agents internet access (web pages, YouTube transcripts, social platforms, RSS, semantic search) with per-channel primary+fallback backends and a `doctor` diagnostic | **Companion Runtime** + Capability Registry shape; its fallback-chain-per-channel pattern independently validates Epic 8. Near-term: installable as a host tool for the CLIs directly, zero bridge code |
-| Rejected | Claude-specific assumptions, interactive-only flow, Electron/desktop, loopback daemon | — |
+- `docs/architecture/engineering-worker.md`
+- `docs/architecture/agentic-worker-orchestration.md`
+- `docs/agentic-maintenance.md`
+- `docs/adr/ADR-005-role-based-agentic-orchestration.md`
+- `docs/configuration/agent-role-assignment.md`
+- `docs/operations/agentic-worker-runbook.md`
+- `docs/testing/agentic-worker-verification.md`
+- `docs/implementation-plans/issue-159-execution-readiness-safeguards.md`
+- `agentic-maintenance.yaml`
 
-Rule: each external influence maps to exactly one layer — general-purpose agent capabilities never blend into the engineering-specific worker.
+## Guardrail
+
+Do not turn this into an unrestricted engineering operating system or a free-form model-to-model loop. Every model call has one role, one mode, one bounded contract, one permission profile, one owner, and one auditable transition. Final review requires a fresh exact-head Technical Lead invocation, not an endlessly different model.

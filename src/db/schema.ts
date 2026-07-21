@@ -1,8 +1,9 @@
 import type Database from "better-sqlite3";
 import { applyLegacyCompatibleBaseline } from "./legacyBaselineMigration.js";
+import { dropLegacyPromptOverrides } from "./dropLegacyPromptOverridesMigration.js";
 
-/** The schema version written after the legacy-compatible baseline is applied. */
-export const CURRENT_SCHEMA_VERSION = 1;
+/** The schema version reached after the complete registered migration plan. */
+export const CURRENT_SCHEMA_VERSION = 2;
 
 export interface Migration {
   version: number;
@@ -117,10 +118,11 @@ export function applyMigrations(
 }
 
 /**
- * Version 1 is the compatibility baseline: it owns the full legacy DDL and
- * historical repair path, transactionally, so user_version is authoritative
- * once a database reaches 1 (no more shape-detected repairs on every open).
+ * Version 1 owns the legacy-compatible DDL and historical repair path.
+ * Version 2 removes the empty legacy prompt-override table. Each step is
+ * transactional and user_version remains authoritative after completion.
  */
 const DEFAULT_MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "legacy-compatible-baseline", up: applyLegacyCompatibleBaseline },
+  { version: 2, name: "drop-empty-legacy-prompt-overrides", up: dropLegacyPromptOverrides },
 ];

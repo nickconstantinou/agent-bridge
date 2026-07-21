@@ -6,14 +6,74 @@ const strongPlan = `## Problem Summary
 Fix the imported issue.
 
 ## Target Files
-- src/workerBot.ts
-- test/workerBot.test.ts
+\`\`\`json
+[
+  {
+    "path": "src/workerBot.ts",
+    "classification": "existing_at_base",
+    "owner": "worker bot handler",
+    "dependency_ref": null,
+    "rationale": "change the current production caller"
+  },
+  {
+    "path": "test/workerBot.test.ts",
+    "classification": "existing_at_base",
+    "owner": "worker bot integration tests",
+    "dependency_ref": null,
+    "rationale": "extend the existing production-boundary coverage"
+  }
+]
+\`\`\`
 
 ## Architectural Intent
 Keep GitHub as source of truth and SQLite as orchestration mirror.
 
 ## Test Plan
-Add failing test in test/workerBot.test.ts for imported issues.
+Exercise the registered worker handler through the real caller and observe durable work-item state.
+
+## Red Tests
+
+\`\`\`json
+[
+  {
+    "id": "RT-1",
+    "requirement_ids": ["AC-1"],
+    "intent": {
+      "product": ["Imported issue creates one work item"],
+      "architecture": ["GitHub remains source of truth and SQLite remains the orchestration mirror"],
+      "invariants": ["Approval remains blocked until a valid plan exists"],
+      "risks": ["compatibility"]
+    },
+    "test_classes": ["behavioural", "architecture", "compatibility"],
+    "characterization_required": false,
+    "test_file": "test/workerBot.test.ts",
+    "test_name": "imports one GitHub issue through the registered worker path",
+    "production_boundary": "registered worker handler and work-item repository",
+    "fixture_and_state": "one open GitHub issue and an empty work-item store",
+    "action_through_real_caller": "invoke the worker import callback through its registered handler",
+    "expected_observable_result": "one durable work item linked to the GitHub issue",
+    "why_current_code_fails": "the imported issue route is not wired to the canonical work-item path",
+    "expected_red_assertion": "expected one linked work item but observed none",
+    "focused_red_command": "npm test -- workerBot",
+    "sibling_behaviour_remaining_green": ["existing local work-item creation remains green"],
+    "authoritative_oracle": "persisted work-item and GitHub-link rows",
+    "false_positive_controls": ["baseline passes before the new assertion and the fixture uses the production handler"]
+  }
+]
+\`\`\`
+
+## Red Test Coverage
+
+\`\`\`json
+{
+  "acceptance_coverage": [
+    {"requirement_id":"AC-1", "red_test_ids":["RT-1"], "non_test_proof":null},
+    {"requirement_id":"AC-2", "red_test_ids":[], "non_test_proof":"approval remains blocked until a validated plan is persisted"}
+  ],
+  "architecture_coverage": [{"boundary_or_invariant":"GitHub source of truth and SQLite orchestration mirror", "red_test_ids":["RT-1"], "characterization_test_ids":[]}],
+  "triggered_risk_coverage": [{"risk":"compatibility", "required_test_classes":["compatibility"], "red_test_ids":["RT-1"]}]
+}
+\`\`\`
 
 ## Implementation Phases
 1. Red: add failing test.
@@ -37,8 +97,8 @@ Add failing test in test/workerBot.test.ts for imported issues.
 \`\`\`
 
 ## Acceptance Criteria
-- Imported issue creates one work item.
-- Approval is blocked until plan exists.
+- AC-1: Imported issue creates one work item.
+- AC-2: Approval is blocked until plan exists.
 
 ## Verification Commands
 npm run typecheck
@@ -87,7 +147,6 @@ describe("implementation plan handler", () => {
       const handler = createImplementationPlanHandler({ runCli });
 
       const result = await handler({ work_item_id: item.id }, { db, workerId: "worker", phase: "initial", phaseData: {} });
-
       expect(result.work_item_id).toBe(item.id);
       expect(db.getWorkItemPlan(item.id)?.plan_text).toContain("Problem Summary");
       expect(runCli).toHaveBeenCalledOnce();

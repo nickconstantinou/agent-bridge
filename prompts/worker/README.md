@@ -1,99 +1,66 @@
 # Worker Prompt Pack
 
-This directory contains the version-controlled default prompts for the Agent Bridge engineering worker.
-
-This is a scaffold only. The current worker handlers still use their existing inline prompts and DB override paths until the follow-up wiring work is completed.
-
-For the exact handler-by-handler wiring contract, see [`WIRING.md`](./WIRING.md).
-
-## Boundary
-
-Prompts may guide CLI behavior, but they are not the source of truth for safety. These invariants must remain mechanically enforced in code:
-
-- No live checkout mutation.
-- No merge without explicit approval.
-- Red tests must fail before implementation.
-- Red commits may only contain test files.
-- Green commits may not modify test files.
-- Test-only imports must not leak into production code.
-- PR merge approval must verify the expected head SHA and green CI.
-- Repair attempts, PR caps, and stale handling remain code-controlled.
-
-## Prompt precedence after wiring
-
-The intended follow-up implementation should use this precedence:
-
-1. DB override template, if present.
-2. Bundled prompt file from this directory.
-3. Hardcoded emergency fallback only for critical paths.
-
-DB overrides are assumed to be complete templates. The prompt loader should not append bundled supplements to DB overrides unless a caller explicitly opts in.
-
-## Token budget policy
-
-The prompt pack should preserve quality without appending all context to every CLI call.
-
-Wiring rules:
-
-- Inject only the supplements mapped to the current prompt key.
-- Keep supplements compact and phase-specific.
-- Do not paste full Agent Skills documents into runtime prompts.
-- Create a compact execution contract during implementation planning and pass that to red/green/repair phases instead of repeatedly passing the full plan.
-- Cap large variables before rendering, especially `body`, `plan_text`, `failure_output`, CI logs, and PR diff excerpts.
-- Prefer narrow excerpts for execution phases: relevant phase, target files, verification command, risk boundary, and out-of-scope list.
-- Keep the full human-readable plan for approval packs and PR context, not for every CLI execution pass.
-- Add prompt-size tests or snapshot checks when wiring handlers.
-
-Recommended context shape:
-
-| Phase | Context to pass |
-|---|---|
-| Feature, defect, refactor scan | Repository name plus concise scan instructions; let the CLI inspect the repo locally. |
-| Implementation planning | Full work item context, capped, plus compact supplements. |
-| Red test | Execution contract plus relevant plan slice only. |
-| Green implementation | Execution contract, failing-test summary, target files, and verification command. |
-| CI fix | Execution contract plus capped CI failure excerpt. |
-| Repair | Execution contract plus capped prior failure and current phase. |
-
-## Execution contract
-
-Implementation planning prompts should emit a compact machine-facing section that later phases can consume without the full plan:
-
-```json
-{
-  "target_files": ["src/example.ts"],
-  "test_files": ["src/example.test.ts"],
-  "phase": "red-test | green-implementation | ci-fix | repair",
-  "verification": "npm test -- example",
-  "risk_level": "low | medium | high",
-  "out_of_scope": ["unrelated cleanup", "schema migration"]
-}
-```
-
-The follow-up wiring should store the full Markdown plan for humans and extract/store this compact execution contract for execution prompts.
+This directory contains the version-controlled prompts used by the Agent Bridge Engineering Worker.
 
 ## Prompt families
 
-| Prompt key | File | Purpose |
-|---|---|---|
-| `feature_plan` | `feature-plan.md` | Plan a user-requested feature before work-item approval. |
-| `implementation_plan:create` | `implementation-plan-create.md` | Produce the canonical approval/execution plan for a work item. |
-| `implementation_plan:improve` | `implementation-plan-improve.md` | Repair a weak implementation plan. |
-| `implementation_plan:contract_repair` | `implementation-plan-contract-repair.md` | Recover a missing machine contract from an otherwise valid plan. |
-| `defect_scan:scan` | `defect-scan.md` | Read-only defect discovery. |
-| `defect_scan:plan` | `defect-plan.md` | TDD plan for a defect finding. |
-| `defect_scan:triage` | `defect-triage.md` | Conservative approve/reject gate for scan findings. |
-| `refactor_scan:scan` | `refactor-scan.md` | Read-only refactor opportunity discovery. |
-| `refactor_scan:plan` | `refactor-plan.md` | Safe refactor implementation plan. |
-| `tdd_implementation:red_test` | `tdd-red-test.md` | Failing-test-only pass. |
-| `tdd_implementation:green_implementation` | `tdd-green-implementation.md` | Minimal production implementation pass. |
-| `tdd_implementation:ci_fix` | `tdd-ci-fix.md` | Existing PR branch CI repair pass. |
-| `tdd_implementation:repair` | `tdd-repair.md` | Repair a failed autonomous attempt. |
-| `orchestrated_task:plan` | `orchestrated-plan.md` | Legacy orchestrated task planning prompt. |
-| `orchestrated_task:execute` | `orchestrated-execute.md` | Legacy orchestrated task execution prompt. |
+- `roles/` contains canonical Technical Lead, Code Worker, and Documentation Steward prompts registered in `src/agenticPromptContracts.ts`.
+- Files in this directory retain current handler keys while Issue #159 migrates dispatch to role-native keys.
+- `supplements/` contains only additional Agent Bridge-specific, phase-specific guidance.
+- Canonical reusable software-development lifecycle know-how remains under `skills/` and is composed by `src/lifecycleSkillGuidance.ts`.
 
-## Skill supplements
+## Authority boundary
 
-The files under `supplements/` are compact local adaptations inspired by `addyosmani/agent-skills`. They are intentionally distilled rather than copied wholesale so the worker can inject phase-specific guidance without bloating every prompt.
+Prompts and skills guide model behaviour but never grant authority. Agent Bridge code owns role and mode selection, evidence, tools, permissions, budgets, validators, lifecycle state, persistence, GitHub mutation, approvals, merge, deployment, and destructive-operation gates.
 
-The follow-up wiring should keep supplements small, deterministic, and specific to each worker phase.
+## Resolution
+
+Every prompt resolves from reviewed repository files. There is no database template precedence, mutable prompt override, or runtime fallback text.
+
+The loaders:
+
+1. resolve the registered role or compatibility prompt file;
+2. load only the explicitly mapped canonical lifecycle skills;
+3. validate each skill manifest and its single marked runtime-guidance block;
+4. append additional registered worker supplements only where applicable;
+5. bound variables and render the prompt;
+6. fail closed on missing files, malformed skill blocks, version drift, duplicates, or budget violations.
+
+Canonical role prompts record stable role-template, skill-set, composed-template, and invocation-specific rendered hashes. Provider fallback changes only the target/model, not the prompt or skill contract.
+
+## Canonical lifecycle skills
+
+The authoritative reusable lifecycle sources are:
+
+- `skills/requirements-to-acceptance/SKILL.md`;
+- `skills/risk-based-test-strategy/SKILL.md`;
+- `skills/red-green-refactor-tdd/SKILL.md`;
+- `skills/release-readiness-review/SKILL.md`.
+
+Each skill exposes one block between `BEGIN AGENT_BRIDGE_RUNTIME_GUIDANCE` and `END AGENT_BRIDGE_RUNTIME_GUIDANCE`. Do not copy those passages into role prompts or compatibility supplements. Update the skill once and let all consuming prompt contracts receive the reviewed change through their explicit mapping.
+
+The former duplicated `supplements/test-driven-development.md` has been removed. TDD guidance now comes only from the canonical `red-green-refactor-tdd` skill.
+
+## Database retirement
+
+Schema migration 2 removes the legacy `prompts` table. Migration succeeds only when the table is absent or empty. An unexpected row aborts transactionally and leaves schema version 1 and the table unchanged for investigation.
+
+`BridgeDb.getPrompt()`, `BridgeDb.setPrompt()`, loader database-template options, and handler override reads have been removed. Prompt rollback is performed by deploying a reviewed application SHA, not by mutable SQLite content.
+
+## Planning, decomposition, and TDD
+
+Technical Lead planning owns comprehensive red-test design and classified target-path provenance. Plans map acceptance criteria, architecture boundaries, invariants, and triggered risks to concrete tests or deterministic proof. Invalid or unclassified target paths block plan approval. Code Worker red/green phases receive the approved execution contract rather than inventing or weakening test intent.
+
+When one request creates multiple issues, `technical_lead:decomposition_review` audits the complete proposed bundle before Agent Bridge mutates GitHub. It distinguishes implementation delivery order from runtime phase order and checks one canonical invariant matrix across all child issues.
+
+## Review and documentation order
+
+The canonical order is deterministic verification, Technical Lead implementation review, applicable operations review, Documentation Steward authoring/validation, Technical Lead PR readiness, exact-head CI, then the human merge gate.
+
+All later evidence is bound to one exact `subject_head_sha`. A code-changing repair invalidates verification, review, operations, documentation, and readiness evidence for the prior head. Missing, stale, contradictory, or misleading required documentation blocks readiness and must be corrected in the same delivery rather than deferred.
+
+## Maintenance
+
+Prompt or lifecycle-skill changes require a reviewed Git diff, version/contract review when compatibility changes, focused semantic and drift tests, full CI, and a known application-SHA rollback.
+
+See [`WIRING.md`](./WIRING.md) and `docs/architecture/agentic-prompt-contracts.md`.

@@ -8,6 +8,19 @@ import {
 const reader = {
   readText(path: string): string {
     if (path.endsWith("feature-plan.md")) return "Feature {value}";
+    const skillMatch = path.match(/^skills\/([^/]+)\/(SKILL\.md|skill\.json)$/);
+    if (skillMatch) {
+      const [, name, file] = skillMatch;
+      if (file === "skill.json") {
+        return JSON.stringify({ name, version: "1.0.0", description: `${name} test skill` });
+      }
+      return [
+        `# ${name}`,
+        "<!-- BEGIN AGENT_BRIDGE_RUNTIME_GUIDANCE -->",
+        `Canonical guidance from ${name}`,
+        "<!-- END AGENT_BRIDGE_RUNTIME_GUIDANCE -->",
+      ].join("\n");
+    }
     return "Supplement text";
   },
 };
@@ -17,29 +30,27 @@ describe("worker loader basics", () => {
     expect(renderWorkerPrompt("Hello {name}", { name: "Nick" })).toBe("Hello Nick");
   });
 
-  it("loads a bundled template", async () => {
+  it("keeps canonical lifecycle skills when optional worker supplements are disabled", async () => {
     const prompt = await loadWorkerPrompt("feature_plan", { value: "abc" }, reader, {
       includeSupplements: false,
     });
 
-    expect(prompt).toBe("Feature abc");
+    expect(prompt).toContain("Feature abc");
+    expect(prompt).toContain("Lifecycle skill: requirements-to-acceptance@1.0.0");
+    expect(prompt).toContain("Canonical guidance from risk-based-test-strategy");
+    expect(prompt).toContain("Canonical guidance from red-green-refactor-tdd");
+    expect(prompt).not.toContain("# Worker-specific supplements");
+    expect(prompt).not.toContain("Supplement text");
   });
 
-  it("uses an override without extras by default", async () => {
-    const prompt = await loadWorkerPrompt("feature_plan", { value: "abc" }, reader, {
-      dbTemplate: "Override {value}",
-    });
+  it("appends canonical lifecycle skills and registered worker supplements", async () => {
+    const prompt = await loadWorkerPrompt("feature_plan", { value: "abc" }, reader);
 
-    expect(prompt).toBe("Override abc");
-  });
-
-  it("can append extras to an override when requested", async () => {
-    const prompt = await loadWorkerPrompt("feature_plan", { value: "abc" }, reader, {
-      dbTemplate: "Override {value}",
-      includeSupplementsForDbTemplate: true,
-    });
-
-    expect(prompt).toContain("Override abc");
+    expect(prompt).toContain("Feature abc");
+    expect(prompt).toContain("Lifecycle skill: requirements-to-acceptance@1.0.0");
+    expect(prompt).toContain("Canonical guidance from risk-based-test-strategy");
+    expect(prompt).toContain("Canonical guidance from red-green-refactor-tdd");
+    expect(prompt).toContain("# Worker-specific supplements");
     expect(prompt).toContain("Supplement text");
   });
 

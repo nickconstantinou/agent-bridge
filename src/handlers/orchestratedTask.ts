@@ -98,7 +98,7 @@ function commandFor(deps: OrchestratedTaskDeps, cli: CliKind | null): string {
   return deps.command || "claude";
 }
 
-async function buildPlanPrompt(ctx: JobHandlerContext, item: { repository: string | null; title: string; body: string | null }): Promise<string> {
+async function buildPlanPrompt( item: { repository: string | null; title: string; body: string | null }): Promise<string> {
   return loadWorkerPrompt(
     "orchestrated_task:plan",
     {
@@ -107,11 +107,10 @@ async function buildPlanPrompt(ctx: JobHandlerContext, item: { repository: strin
       body: item.body ?? "",
     },
     promptReader,
-    { dbTemplate: ctx.db.getPrompt("orchestrated_task:plan", "") },
   );
 }
 
-async function buildExecutePrompt(ctx: JobHandlerContext, title: string, plan: string, advisorPlan?: string): Promise<string> {
+async function buildExecutePrompt( title: string, plan: string, advisorPlan?: string): Promise<string> {
   return loadWorkerPrompt(
     "orchestrated_task:execute",
     {
@@ -120,7 +119,6 @@ async function buildExecutePrompt(ctx: JobHandlerContext, title: string, plan: s
       execution_contract: advisorPlan ? `Frontier advisor review:\n${advisorPlan}` : "",
     },
     promptReader,
-    { dbTemplate: ctx.db.getPrompt("orchestrated_task:execute", "") },
   );
 }
 
@@ -140,7 +138,7 @@ async function buildDebugRetryPrompt(
   blocked: WorkerBlockedResult,
   debug: AdvisorDebugCheckpointResult,
 ): Promise<string> {
-  const base = await buildExecutePrompt(ctx, title, plan, advisorPlan);
+  const base = await buildExecutePrompt(title, plan, advisorPlan);
   const basis = evidenceBasisText(debug);
   return [
     base,
@@ -314,7 +312,7 @@ export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHa
       }
       await runGit(["checkout", "-b", branchName], repoPath);
 
-      const planPrompt = await buildPlanPrompt(ctx, item);
+      const planPrompt = await buildPlanPrompt( item);
       const plan = await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, planPrompt], repoPath);
       const advisorPlan = await consultAdvisor(input, {
         mode: "plan",
@@ -333,7 +331,7 @@ export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHa
 
     if (ctx.phase === "executing") {
       if (!phaseData.repoPath || !phaseData.plan) throw new Error("orchestrated_task missing execution phase data");
-      const executePrompt = await buildExecutePrompt(ctx, item.title, phaseData.plan, phaseData.advisorPlan);
+      const executePrompt = await buildExecutePrompt(item.title, phaseData.plan, phaseData.advisorPlan);
       const output = await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, executePrompt], phaseData.repoPath);
       const blocked = parseWorkerBlockedResult(output);
       if (!blocked) return commitExecution(phaseData.repoPath, phaseData);
@@ -348,7 +346,7 @@ export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHa
       }, ctx.db, selectedCli ?? "codex");
       if (!advisorDebug || advisorDebug.verdict !== "retry") return blockedSummary(workItemId, blocked, advisorDebug);
 
-      return {
+       return {
         status: "continue",
         phase: "executing_retry",
         phaseData: {

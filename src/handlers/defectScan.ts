@@ -53,7 +53,7 @@ interface DefectFinding {
   effort_score?: number;
 }
 
-async function buildScanPrompt(ctx: JobHandlerContext, repository: string, prChangedFiles = ""): Promise<string> {
+async function buildScanPrompt( repository: string, prChangedFiles = ""): Promise<string> {
   return loadWorkerPrompt(
     "defect_scan:scan",
     {
@@ -62,11 +62,10 @@ async function buildScanPrompt(ctx: JobHandlerContext, repository: string, prCha
       typecheck_output: "",
     },
     promptReader,
-    { dbTemplate: ctx.db.getPrompt("defect_scan:scan", "") },
   );
 }
 
-async function buildPlanPrompt(ctx: JobHandlerContext, finding: DefectFinding, repository: string): Promise<string> {
+async function buildPlanPrompt( finding: DefectFinding, repository: string): Promise<string> {
   return loadWorkerPrompt(
     "defect_scan:plan",
     {
@@ -78,12 +77,10 @@ async function buildPlanPrompt(ctx: JobHandlerContext, finding: DefectFinding, r
       effort_score: String(finding.effort_score ?? "?"),
     },
     promptReader,
-    { dbTemplate: ctx.db.getPrompt("defect_scan:plan", "") },
   );
 }
 
 async function buildTriagePrompt(
-  ctx: JobHandlerContext,
   repository: string,
   findings: Array<{ title: string; evidence?: string; confidence?: string; impact?: string }>,
 ): Promise<string> {
@@ -95,7 +92,6 @@ async function buildTriagePrompt(
     "defect_scan:triage",
     { repository, findings: findingsText },
     promptReader,
-    { dbTemplate: ctx.db.getPrompt("defect_scan:triage", "") },
   );
 }
 
@@ -230,7 +226,7 @@ export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
         } catch {}
       }
 
-      const prompt = await buildScanPrompt(ctx, repository, prChangedFiles);
+      const prompt = await buildScanPrompt( repository, prChangedFiles);
       const rawOutput = await runCli(command, ["--print", "--output-format", "text", prompt], scanCwd);
 
       const findings = parseFindings(rawOutput);
@@ -265,7 +261,7 @@ export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
       for (const f of actionableFindings) {
         let planText = "";
         try {
-          const planPrompt = await buildPlanPrompt(ctx, f, repository);
+          const planPrompt = await buildPlanPrompt( f, repository);
           planText = await runCli(command, ["--print", "--output-format", "text", planPrompt], scanCwd);
         } catch (err) {
           console.warn("[defect-scan] plan generation failed for:", f.title, err);
@@ -315,7 +311,7 @@ export function createDefectScanHandler(deps: DefectScanDeps): JobHandler {
       }
 
       if (autoTriage && createdItems.length > 0) {
-        const triagePrompt = await buildTriagePrompt(ctx, repository, actionableFindings);
+        const triagePrompt = await buildTriagePrompt( repository, actionableFindings);
         const triageOutput = await runCli(command, ["--print", "--output-format", "text", triagePrompt], scanCwd);
         const decisions = parseTriageDecisions(triageOutput);
         const notify = notifyFields(input);

@@ -7,6 +7,7 @@ description: Use when deciding what tests or checks a software change needs base
 
 Use this skill when planning or reviewing test coverage for a change.
 
+<!-- BEGIN AGENT_BRIDGE_RUNTIME_GUIDANCE -->
 ## Risk Scan
 
 Consider:
@@ -32,3 +33,4 @@ Prefer the narrowest test that would catch the failure, then add broader checks 
 ## Final Verification
 
 Before finishing, name what was tested, what was not tested, and the residual risk.
+<!-- END AGENT_BRIDGE_RUNTIME_GUIDANCE -->

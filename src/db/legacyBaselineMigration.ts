@@ -153,12 +153,6 @@ export function applyLegacyCompatibleBaseline(raw: Database.Database): void {
       updated_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY(work_item_id) REFERENCES work_items(id)
     );
-    CREATE TABLE IF NOT EXISTS prompts (
-      name        TEXT    PRIMARY KEY,
-      prompt_text TEXT    NOT NULL,
-      created_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
-    );
     CREATE TABLE IF NOT EXISTS advisor_calls (
       request_id        TEXT PRIMARY KEY,
       scope_key         TEXT NOT NULL,

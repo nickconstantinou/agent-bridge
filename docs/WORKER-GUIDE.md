@@ -1,233 +1,222 @@
-# Autonomous Worker Loop — User Guide
+# Engineering Worker — User and Operator Guide
 
-The worker bot is a second Telegram bot that runs engineering jobs in the
-background: scanning repositories for defects, planning features, implementing
-approved fixes with strict TDD, running resumable orchestrated implementation
-jobs, and opening draft PRs that wait for your merge approval. You talk to it on Telegram; it does the work in disposable git
-workspaces and reports back at each boundary. In the three-part OSS
-architecture (ADR-008, `docs/architecture/03-target-architecture.md`) the
-worker bot is the **Engineering Worker** product; the conversational bots form
-the **Companion Runtime**, and both sit on the **Shared Runtime**.
+## Status
 
-**The one invariant: nothing merges without your explicit approval.** The
-worker can scan, plan, branch, commit, push, and open draft PRs on its own.
-Merging — and anything destructive — always comes back to you.
+This guide distinguishes the **current worker behaviour** from the **Issue #159 target workflow**. PR #160 supplies prompt, lifecycle-skill, plan-validation, documentation-policy, and schema foundations; it does not activate role assignment or role-based routing.
 
-## The Loop at a Glance
+## Current worker
+
+The current worker turns feature briefs, imported GitHub issues, defect/refactor scans, and approved work items into plans, bounded implementation jobs, draft pull requests, and merge-gated outcomes.
+
+Current owners remain:
+
+- `src/workerBot.ts` and `src/workCallbacks.ts` for Telegram work-item and approval surfaces;
+- `src/jobExecutor.ts` and `src/jobExecutorLoop.ts` for durable job execution;
+- current handlers under `src/handlers/`;
+- `src/workerCliPolicy.ts` and `src/workerDispatch.ts` for effective worker CLI policy;
+- `src/workspace.ts` for disposable implementation workspaces;
+- current GitHub/PR lifecycle helpers and `src/prMergeGate.ts` for issue, PR, and human merge authority.
+
+PR #160 strengthens the active implementation-plan and TDD prompt path but does not switch existing jobs to Technical Lead, Code Worker, or Documentation Steward routing.
+
+## Target three-role workflow
+
+Issue #159 introduces exactly three configurable roles:
+
+| Role | Target responsibility |
+|---|---|
+| Technical Lead | Requirements and issue validation, bundle review, planning, bounded guidance, implementation/operations review, final exact-head review, and PR-readiness advice using read-only evidence |
+| Code Worker | Read-only scanning/investigation and approved red, green, repair, and verification work in disposable workspaces |
+| Documentation Steward | Documentation impact, documentation-only authoring, and validation of every required canonical document |
+
+Scanner is a Code Worker mode. Review and operations are Technical Lead modes, not separate roles.
+
+The target runtime order is:
 
 ```text
-/review            →  defect scan  →  proposed work items   (/issues)
-/feature <brief>   →  plan drafted →  proposed work item    (/issues)
-       [Approve]   →  GitHub issue + TDD implementation job
-                   →  red tests → green fix → verification  (in a clone)
-                   →  branch pushed → draft PR opened
-                   →  merge keyboard arrives in your chat
-orchestrated_task  →  plan checkpoint → execute checkpoint → verify
-                   →  pr_lifecycle job → draft PR + merge gate
-   [Merge PR]      →  head SHA + CI checks verified → squash merge
+request, imported issue, or scan candidate
+→ requirements discovery or validation
+→ canonical issue
+→ requirements_ready
+→ Technical Lead implementation plan and red-test contract
+→ approval when required
+→ Code Worker red/green/repair
+→ deterministic verification
+→ Technical Lead implementation review
+→ Technical Lead operations review when triggered
+→ Documentation Steward authoring and validation
+→ Technical Lead PR readiness
+→ exact-head CI
+→ fresh exact-head Technical Lead final review
+→ human merge gate
 ```
 
-## Commands
+A code-changing repair after verification invalidates verification, review, operations, documentation, readiness, CI, and final-review evidence for the previous head. The workflow returns to deterministic verification.
 
-| Command | What it does |
-|---|---|
-| `/review [repo]` | Queue a read-only defect scan. Defaults to `agent-bridge`. |
-| `/feature <brief>` | Draft an implementation plan for a feature. Bare `/feature` captures your next message as the brief. |
-| `/issues` | List proposed work items with View / Approve / Close buttons. |
-| `/issue <id>` | Show one work item in detail. |
-| `/jobs` | List active and pending jobs with Cancel buttons. |
-| `/job <id>` | Show one job in detail (lease, attempts, errors, result). |
-| `/approvals` | Re-list every pending approval with its action buttons. Use this if you lost or dismissed a merge keyboard. |
-| `/models` | Show/change the active CLI model. |
-| `/chain` | Show the CLI fallback chain (`codex → claude → antigravity`). |
-| `/effort` | Show/change manual effort for interactive worker chat. Job effort is task-selected. |
-| `/cli` | Show active CLI with switch keyboard. |
+## Multi-issue requests
 
-Plain messages (not commands) are routed to the CLI chain like a normal
-interactive chat.
+When one request is split into multiple child issues, Agent Bridge first assembles all proposed issue bodies without mutating GitHub. The Technical Lead then runs a bundle-wide decomposition review that records:
 
-## A Typical Session
+- implementation delivery order;
+- runtime phase order;
+- one canonical invariant matrix;
+- current owners and caller paths;
+- lifecycle, permission, persistence, GitHub, and platform/appliance authority;
+- overlap, missing dependencies, and unresolved product decisions.
 
-1. **`/review content-crawler`** — the worker queues a defect scan. The scan
-   runs the CLI *inside* the target repo's checkout; if no local checkout
-   exists for that name, the job fails loudly rather than scanning the wrong
-   directory.
-2. The scan posts a summary and creates proposed work items for high/medium
-   confidence findings. **`/issues`** shows them.
-3. Tap **Approve** on a finding. Two jobs queue: a GitHub issue is created
-   first, then a TDD implementation job.
-4. The implementation job **clones the repo into a disposable workspace**
-   (`~/agent-bridge-workspaces/work-<id>`) — your live checkouts are never
-   touched. Inside the clone it:
-   - creates branch `agent/work-<id>`
-   - writes failing tests, **verifies they actually fail**, commits tests only
-   - implements the fix, verifies the suite passes, commits implementation only
-   - enforces the split mechanically: test commits may not contain production
-     files; implementation commits may not touch test files
-5. The branch is pushed, a **draft PR** opens, and the merge keyboard arrives
-   in your chat with the PR URL.
-6. Tap **Merge PR**. Before merging, the worker verifies:
-   - the PR head SHA still matches what was approved (a moved head blocks the
-     merge and asks for re-review)
-   - CI checks are green (failing or incomplete checks block; retry the button
-     once they pass)
-   Then it squash-merges and deletes the branch. **Close PR** closes without
-   merging instead.
+Agent Bridge creates or updates issues only after `ready_for_issue_mutation`. A group of individually plausible issues is not accepted when the bundle contradicts itself.
 
-## Failure Behaviour
+## Requirements and issue quality
 
-- `orchestrated_task` checkpoints each phase in `work_jobs.phase` and
-  `phase_data_json`: planning, executing, then verifying. A successful verify
-  queues `pr_lifecycle`; it does not merge directly.
-- Failed jobs are retried once (`max_attempts` 2), then marked `failed`. The
-  failure reason lands in your chat and in `/job <id>`.
-- A failed implementation job deletes its workspace, so the retry starts from
-  a clean clone — no stranded branches or dirty trees.
-- Jobs whose task type has no registered handler fail immediately with a clear
-  error instead of blocking the queue.
-- **Cancel** on `/jobs` marks the job cancelled; a handler already running
-  cannot overwrite that status afterwards.
-- Long jobs heartbeat their lease while running, so a slow TDD pass is never
-  claimed twice in parallel.
+A detailed issue may pass without additional questions, but it never bypasses validation. A scan finding remains a candidate until the Technical Lead validates, rejects, combines, splits, or requests evidence.
 
-## Configuration
+Canonical feature, defect, and refactor contracts are defined in `docs/agentic-maintenance.md`.
 
-Set in the worker's env file (`.env.worker` or the systemd default file):
+## Implementation plans
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `TELEGRAM_BOT_TOKEN_WORKER` | — | Worker bot token (required) |
-| `TELEGRAM_ALLOWED_USER_IDS` | — | Comma-separated allowed Telegram user IDs |
-| `WORKER_ENABLED` | `false` | Master switch for job commands |
-| `WORKER_JOB_POLL_INTERVAL_MS` | `10000` | Queue poll interval (ms) |
-| `WORKER_CLI_CHAIN` | `codex,claude,antigravity` | CLI fallback order |
-| `WORKER_CODE_CLI_CHAIN` | `codex,claude` | Code-writing fallback order (no Antigravity) |
-| `WORKER_SCRIBE_CLI_CHAIN` | `antigravity,codex,claude` | Scribe/read-only fallback order |
-| `CODEX_EFFORT` / `CLAUDE_EFFORT` / `ANTIGRAVITY_EFFORT` | `medium` | Shared effort defaults. Agy is recorded/displayed only; no CLI effort flag exists |
-| `WORKER_DEFAULT_REPO` | — | Repository attached to `/feature` plans |
-| `WORKER_REPO_ROOT` | `$HOME` | Where repo names resolve to local checkouts |
-| `WORKER_WORKSPACE_DIR` | `~/agent-bridge-workspaces` | Per-job clone location |
-| `DEFECT_SCAN_CLI_COMMAND` | `claude` | CLI used for scans/plans/implementation |
-| `GITHUB_TOKEN_FILE` | `~/.secrets/GITHUB_TOKEN.TXT` | Token for `gh` API calls |
-| `WORKER_MAX_OPEN_PRS` | `3` | Max simultaneous open agent PRs per repo |
-| `WORKER_MAX_DAILY_PRS` | `3` | Max new agent PRs opened per UTC calendar day |
-| `WORKER_PR_STALE_HOURS` | `72` | Hours of inactivity before a PR is marked stale |
-| `WORKER_PR_WATCH_INTERVAL` | `3600000` | How often (ms) to enqueue a `pr_watch` job |
-| `WORKER_NOTIFY_CHAT_ID` | — | Telegram chat ID for stale PR digest messages |
-| `WORKER_GIT_NAME` | `agent-bridge worker` | Git author name used in workspace commits |
-| `WORKER_GIT_EMAIL` | `agent-bridge-worker@users.noreply.github.com` | Git author email used in workspace commits |
-| `DB_PATH` | `.data/bridge.sqlite` | SQLite database path |
-| `BRIDGE_EXECUTION_MODE` | `safe` | Execution mode (`safe` or `trusted`) |
-| `BRIDGE_ADVISOR_ENABLED` | `false` | Enable frontier plan and PR-readiness checkpoints |
-| `BRIDGE_ADVISOR_CHAIN` | — | Up to two ordered `provider:model` advisor targets |
-| `BRIDGE_ADVISOR_MAX_CALLS_PER_TASK` | `2` | Logical advisor requests allowed per worker task |
-| `BRIDGE_ADVISOR_TIMEOUT_MS` | `120000` | Timeout for each advisor target attempt |
-| `PR_DEFECT_SCAN_ENABLED` | `false` | Enable pre-merge defect scanning when CI checks pass |
+The Technical Lead owns the implementation and test strategy. Generic instructions such as `write tests`, `add unit tests`, or `increase coverage` are invalid.
 
-Advisor audit records store provider/model, status, timing, budget, and error
-metadata only. Bounded selected checkpoint advice may be persisted in
-resumable job phase/result state because it is part of the execution review,
-not raw advisor transcript storage.
+Each plan includes:
 
+- stable acceptance-criterion IDs;
+- product and architecture intent;
+- current owners and real caller paths;
+- structured target-path provenance;
+- comprehensive red-test specifications;
+- acceptance, architecture, invariant, and triggered-risk coverage;
+- bounded red/green/repair/verify packets;
+- exact verification commands;
+- documentation obligations;
+- operations, migration, rollback, and human gates;
+- a compact execution contract.
 
-Code-writing jobs (`tdd_implementation`, `orchestrated_task`) use the code
-chain and never fall back to Agy. Scribe/read-only jobs (`defect_scan`,
-`feature_plan`, summaries, PR/doc prose) use the scribe chain, which defaults
-to Agy first to conserve Codex/Claude coding capacity.
+Every production and test path is classified as:
 
-Worker effort is selected by task type. Scribe/read-only jobs use `medium`;
-code-writing jobs use `high`. Codex maps effort to `model_reasoning_effort`,
-Claude maps effort to `--effort`, and Agy effort is an explicit no-op because
-the Agy CLI exposes low/high choices through model labels instead.
+- `existing_at_base`;
+- `existing_in_dependency`;
+- `proposed_new_production`;
+- `proposed_new_test`.
 
-Repository names resolve to `$WORKER_REPO_ROOT/<name>` (the part after `/` for
-`owner/name` forms). The directory must be a git checkout; workspaces clone
-from it and repoint `origin` at its real remote so pushes reach GitHub.
+Dependency paths name the dependency PR and exact reviewed ref. Proposed production files name the neighbouring current owner and why no existing file is sufficient. Invalid or unclassified paths block new-plan persistence and approval.
+
+Already-persisted plans created before this provenance contract retain a narrow compatibility check for concrete paths. New and repaired model output must use the structured contract.
+
+## Red and green execution
+
+The Code Worker receives the approved red-test and execution contract. It does not invent or weaken the strategy.
+
+- Red mode may implement the approved failing tests only.
+- The focused test must fail for the expected missing behaviour, not syntax, imports, fixtures, timeouts, or unrelated failures.
+- Green mode implements the smallest production change and may not modify committed red tests.
+- Repair remains inside the approved packet.
+- Verify runs approved commands and returns evidence without expanding scope.
+
+Existing TDD Git guards, workspace isolation, queue/lease ownership, provider fallback, and human merge gate remain authoritative.
+
+## Prompt and lifecycle-skill contracts
+
+Canonical prompts are separate by role, mode, and repair purpose. Agent Bridge selects the prompt and separately enforces role, tools, permissions, schemas, validators, budgets, lifecycle state, GitHub mutation, and human gates.
+
+Reusable engineering know-how remains authoritative in four repository skills:
+
+- `requirements-to-acceptance`;
+- `risk-based-test-strategy`;
+- `red-green-refactor-tdd`;
+- `release-readiness-review`.
+
+Each consuming prompt declares its ordered skill set. `src/lifecycleSkillGuidance.ts` validates each manifest and the single marked runtime-guidance block, enforces budgets, and records skill identities. Provider fallback preserves the same prompt and skill contract.
+
+Prompts and skills resolve only from reviewed source files. Schema migration 2 retires the absent or empty legacy prompt table and rejects unexpected rows without data loss. Prompt rollback is application rollback to a reviewed SHA.
+
+## Exact-head evidence
+
+Verification, implementation review, operations review, documentation validation, PR readiness, CI, and final Technical Lead review evidence identify one `subject_head_sha`.
+
+Required gate status is one of:
+
+- `passed`;
+- `failed`;
+- `not_run`;
+- `not_scheduled`;
+- `stale`;
+- `unknown`.
+
+Only authoritative `passed` evidence for the exact current head satisfies a required gate. A workflow must not describe `not_scheduled`, `not_run`, or stale evidence as green.
+
+Review independence comes from role and authority separation. A fresh exact-head review by the read-only Technical Lead advisor is independent from Code Worker implementation when the Technical Lead did not author or modify the reviewed implementation and has no mutation authority in the review invocation. The same frontier model or CLI may be reused. Model diversity is recorded separately and is not a blocking requirement. The Code Worker cannot review its own mutation.
+
+## Documentation readiness
+
+`agentic-maintenance.yaml` lists canonical documents and deterministic change triggers.
+
+A PR cannot become ready until:
+
+- every triggered required document is current and validated against the exact final head; or
+- `no_documentation_change` is validated with rationale, trigger evidence, and Technical Lead confirmation.
+
+A missing, stale, contradictory, or materially misleading required document is a blocking defect. It must be corrected and revalidated in the same delivery. Creating a later issue, assigning an owner, or listing a follow-up does not satisfy readiness.
+
+When a required correction materially changes approved scope or authority, the workflow holds for human scope approval. It does not defer the stale state and claim readiness.
+
+## Human authority
+
+Nothing merges, deploys, restarts services, changes secrets or permissions, performs destructive operations, or waives policy without the existing explicit human gate.
+
+Models cannot grant themselves tools, mutate GitHub, change role, broaden scope, approve their own work, merge, deploy, or reinterpret missing evidence.
+
+## Current commands
+
+Use the existing worker commands and callbacks for current functionality. Commands or status fields described in target-state architecture are not available until their owning Issue #159 slice is implemented and qualified.
+
+Common current surfaces include:
+
+- `/review [repo]` for a read-only defect scan;
+- `/feature <brief>` for feature planning intake;
+- `/issues` and `/issue <id>` for work items;
+- `/jobs` and `/job <id>` for job state;
+- `/approvals` for pending decisions and merge controls;
+- existing interactive `/cli`, `/models`, `/effort`, and chain/status surfaces where configured.
+
+Consult the live command help and current code for the exact deployed surface. Target role assignment, desired/effective role status, and role-native lifecycle phases remain planned work until delivered by Slices 1–10.
 
 ## Troubleshooting
 
-- **Approve did nothing?** `/jobs` shows the queued jobs and their errors;
-  `/job <id>` has the full failure reason.
-- **Lost the merge keyboard?** `/approvals` re-lists every pending approval
-  with its buttons.
-- **Merge button blocked?** The message says why — head moved (re-review) or
-  checks not green (wait and retry). The approval stays pending.
-- **Job stuck?** Leases expire (5 min standard, 30 min for plans and TDD jobs)
-  and are reclaimed automatically; `/job <id>` shows lease owner and expiry.
-- Logs: `journalctl --user -u agent-bridge-worker-bot` (or system unit,
-  depending on install). Job state lives in the worker's SQLite DB
-  (`work_items`, `work_jobs`, `approvals`, `github_links`).
+### A proposed issue bundle is blocked
 
-## What It Will Not Do
+Inspect the decomposition-review invariant matrix. Resolve runtime-order versus implementation-order conflicts, duplicate ownership, missing lifecycle edges, unclassified paths, or unresolved product decisions before issue mutation.
 
-- Merge, force-push, delete branches outside merge, or run destructive git
-  operations without an explicit approval.
-- Push to `main` directly — all work goes through agent branches and PRs.
-- Operate in your live checkouts — implementation work happens in clones.
-- Treat its own defect reports as confirmed bugs: findings are proposals
-  until you approve them.
+### A plan is rejected
 
-## PR Lifecycle Controls
+Inspect typed validation errors. New plans require structured target provenance, comprehensive red tests, real caller coverage, authoritative oracles, and complete risk matrices.
 
-The Phase 9 PR lifecycle controls are implemented in the worker lane:
+### Lifecycle skill loading fails
 
-- `pr_lifecycle` reuses an existing agent PR for the same branch instead of
-  creating duplicates on retry.
-- `WORKER_MAX_OPEN_PRS` and `WORKER_MAX_DAILY_PRS` cap new agent PR creation
-  while still allowing existing PRs to be refreshed.
-- `pr_watch` runs on the configured interval, checks CI and merge readiness,
-  marks stale PRs, and refreshes merge approvals with the current head SHA.
-- stale PRs are batched into a digest with hold, refresh, close, and release
-  decisions.
-- `pr_refresh` merges the base branch into the PR branch in a disposable
-  workspace, runs verification, and pushes only on success.
-- merge approval messages include an owner decision brief and proof comment
-  data so the user is not asked to approve from a bare URL.
+Confirm the declared skill exists, its `skill.json` name/version matches the registry, and `SKILL.md` contains exactly one non-empty runtime-guidance block within budget. Do not paste emergency lifecycle text into prompts.
 
-The remaining roadmap is maintainer queue triage: turning external issue/PR
-queues into the same policy-gated worker flow. Plan:
-`docs/autonomous-agent-bridge-research.md` → "Phase 9.5 — Maintainer Queue
-Triage".
+### Prompt migration finds an unexpected row
 
-## Git Worktree Sandboxing
+Do not restart or bypass the migration. Migration 2 preserves schema version 1 and the table contents for guarded investigation. Runtime code has no prompt-table reader or writer.
 
-For substantial or complex changes, the worker can use the `git-sandbox` skill to isolate its execution environment. This avoids writing changes directly into the main workspace. The sandbox workflow:
-1. Creates a feature branch and isolates the workspace using `git worktree`.
-2. Commits tests first (TDD mode) to verify failure.
-3. Implements the fix, verifies all checks pass, and commits the implementation.
-4. Opens a Draft Pull Request using the GitHub CLI (`gh pr create --draft`).
-5. Cleans up the local worktree after merge or close.
+### Documentation blocks readiness
 
-## Prompt Customization Templates
+Correct every required stale, contradictory, missing, or misleading document through the documentation-only lane. Do not create a follow-up issue as a substitute for correction.
 
-The worker supports dynamic database-backed prompt customization templates. If a template exists in the SQLite `prompts` table, the worker loads it instead of the hardcoded default prompt.
+### Review independence is unavailable
 
-### DB Schema
-The templates are stored in the `prompts` table:
-```sql
-CREATE TABLE prompts (
-  name        TEXT    PRIMARY KEY,
-  prompt_text TEXT    NOT NULL,
-  created_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at  TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-```
+Confirm the final reviewer is the read-only Technical Lead, did not author or modify the implementation, has no mutation authority, and is reviewing the exact checked head in a fresh invocation. A second model or CLI is not required. If those role/authority conditions cannot be met, the workflow remains blocked.
 
-### Overridable Prompt Names and Placeholders
+## Canonical references
 
-| Prompt Name | Handled In | Purpose | Placeholders |
-|---|---|---|---|
-| `defect_scan:triage` | `defectScan.ts` | Triaging scan findings | `{repository}`, `{findings}` |
-| `feature_plan` | `featurePlan.ts` | Feature plan generation | `{brief}` (or `${brief}`) |
-| `refactor_scan:scan` | `refactorScan.ts` | Running refactoring scan | `{repository}` (or `${repository}`) |
-| `refactor_scan:plan` | `refactorScan.ts` | TDD plan for refactor finding | `{repository}`, `{title}`, `{rationale}`, `{files}`, `{impact_score}`, `{effort_score}` |
-| `tdd_implementation:ci_fix` | `tddImplementation.ts` | Fixing failing CI checks | `{title}`, `{body}`, `{ciSummary}`, `{ciLog}` |
-| `tdd_implementation:repair` | `tddImplementation.ts` | Fixing implementation compile/run errors | `{title}`, `{body}`, `{priorError}` |
-| `tdd_implementation:red_test` | `tddImplementation.ts` | Writing failing TDD tests | `{title}`, `{body}` |
-| `tdd_implementation:green_implementation` | `tddImplementation.ts` | Implementing the fix | `{title}`, `{body}` |
-
-### Setting a Template Customization
-You can inject a customized prompt directly into the SQLite DB:
-```bash
-sqlite3 .data/bridge.sqlite "INSERT OR REPLACE INTO prompts (name, prompt_text) VALUES ('feature_plan', 'My custom feature plan template: {brief}');"
-```
+- Current architecture: `docs/architecture/01-current-architecture.md`
+- Engineering Worker architecture: `docs/architecture/engineering-worker.md`
+- Role orchestration: `docs/architecture/agentic-worker-orchestration.md`
+- Prompt contracts: `docs/architecture/agentic-prompt-contracts.md`
+- Maintenance workflow: `docs/agentic-maintenance.md`
+- Configuration: `docs/configuration/agent-role-assignment.md`
+- Operations: `docs/operations/agentic-worker-runbook.md`
+- Testing: `docs/testing/agentic-worker-verification.md`
+- Decision: `docs/adr/ADR-005-role-based-agentic-orchestration.md`
+- Epic plan: `docs/implementation-plans/issue-159-role-based-orchestration.md`
+- Prompt/red-test addendum: `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md`
+- Execution/readiness addendum: `docs/implementation-plans/issue-159-execution-readiness-safeguards.md`
+- Document registry: `agentic-maintenance.yaml`

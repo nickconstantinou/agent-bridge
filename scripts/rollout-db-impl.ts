@@ -12,6 +12,7 @@ import { basename, dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import { openDb } from "../src/db.js";
 import { CURRENT_SCHEMA_VERSION } from "../src/db/schema.js";
+import { assertDatabaseForeignKeyIntegrity, assertExactRoleAssignmentSchema } from "../src/db/roleAssignmentsMigration.js";
 
 /** The five canonical database roles (policy doc §4) — structural validity only; the actual role/path allowlist lives in the root-owned bootstrap config, outside this script's scope. */
 const VALID_ROLES = new Set(["shared", "discord", "health", "interactive", "worker"]);
@@ -46,10 +47,11 @@ const ALLOWED_TABLES = new Set([
   "github_links", "health_context", "pending_messages", "project_memories", "project_memories_fts",
   "project_memories_fts_config", "project_memories_fts_content", "project_memories_fts_data",
   "project_memories_fts_docsize", "project_memories_fts_idx", "prompts", "settings", "sqlite_sequence",
-  "work_item_plans", "work_items", "work_jobs",
+  "role_assignment_revisions", "role_assignments", "work_item_plans", "work_items", "work_jobs",
 ]);
 
 const REQUIRED_TABLES = new Set(["bridge_state", "pending_messages", "settings"]);
+const CURRENT_ROLE_TABLES = ["role_assignment_revisions", "role_assignments"] as const;
 const LEGACY_PENDING_COLUMNS = new Set([
   "id", "chat_key", "prompt", "chat_id", "thread_id", "chat_type", "user_id", "created_at",
 ]);
@@ -191,9 +193,21 @@ function inspectDatabase(path: string, requireCurrent: boolean, resolvingUnits: 
     const lockColumns = tables.includes("execution_locks") ? columnNames(db, "execution_locks") : [];
     const currentPending = sameSet(pendingColumns, CURRENT_PENDING_COLUMNS);
     const currentLocks = sameSet(lockColumns, CURRENT_LOCK_COLUMNS);
+    let currentRoleTables = CURRENT_ROLE_TABLES.every((table) => tables.includes(table));
+    if (userVersion === CURRENT_SCHEMA_VERSION) {
+      try {
+        assertExactRoleAssignmentSchema(db);
+        assertDatabaseForeignKeyIntegrity(db);
+        currentRoleTables = true;
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const phase = requireCurrent ? " after migration" : "";
+        throw new Error(`unknown schema${phase} for ${path}: ${detail}`);
+      }
+    }
     const schema = userVersion === 0
       ? "legacy"
-      : currentPending && currentLocks
+      : currentPending && currentLocks && currentRoleTables
         ? "current"
       : sameSet(pendingColumns, LEGACY_PENDING_COLUMNS) && lockColumns.length === 0
         ? "legacy"

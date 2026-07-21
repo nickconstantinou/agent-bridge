@@ -2,13 +2,27 @@
 
 ## Status
 
-Canonical target-state architecture.
+Canonical target-state architecture with an explicit current implementation boundary. Slice 1 implements dormant desired role validation, persistence, and status; later Issue #159 slices own active role resolution, permissions, and routing.
 
 ## Purpose
 
 The Engineering Worker is the software-engineering work engine inside Agent Bridge OSS. It converts incomplete intent, imported issues, and repository findings into validated issues, approved plans, tested branches, current documentation, and pull requests while preserving explicit human approval for merges, deployments, policy exceptions, and destructive operations.
 
 It is not a general-purpose autonomous agent framework. Agent Bridge owns orchestration and authority; models operate within bounded roles.
+
+## Current implementation boundary
+
+The current worker retains its existing handler map, durable queue and lease lifecycle, CLI-chain policy, provider runtimes, supervisor, workspace, GitHub, and merge owners.
+
+Slice 1 adds:
+
+- the exact three public role IDs and canonical mode registry;
+- explicit bounded desired CLI/model assignments and ordered fallbacks;
+- versioned schema-3 persistence through the existing `BridgeDb` and repository boundary;
+- truthful `/chain` projection of `configured_dormant` desired state;
+- explicit reporting that role routing is disabled and legacy interactive, code, and scribe chains remain effective.
+
+No current handler reads desired role assignments to choose a CLI or model. Capability discovery/ranking, applied assignments, role-native prompt routing, permission profiles, requirements state, role lifecycle phases, independent-review target selection, and Platform transport remain later-slice target behaviour.
 
 ## Role model
 
@@ -24,7 +38,7 @@ Scanner is a Code Worker mode. Independent review and operations are Technical L
 
 Full role and workflow architecture: `docs/architecture/agentic-worker-orchestration.md`.
 
-## Core workflow
+## Core workflow — later slices
 
 ```text
 Raw request, imported issue, or scan finding
@@ -45,11 +59,11 @@ Raw request, imported issue, or scan finding
 → human merge approval
 ```
 
-A scan finding is a candidate, not approved work. An apparently complete issue still receives repository-grounded validation. No implementation plan is created before `requirements_ready`.
+A scan finding is a candidate, not approved work. An apparently complete issue still receives repository-grounded validation. No implementation plan is created before `requirements_ready` after that lifecycle activates.
 
 ## Agent Bridge authority
 
-Agent Bridge owns:
+Agent Bridge owns or will own at the relevant slice:
 
 When the frontier advisor is enabled, `orchestrated_task` requests bounded
 advisor checkpoints after planning and after successful verification. Plan
@@ -109,8 +123,9 @@ verification and human gates remain authoritative.
 - classification and workflow transitions;
 - canonical work and phase state;
 - leases, cancellation, restart recovery, and stale-owner fencing;
-- role assignment and provider/model fallback;
-- permission profiles and capability tokens;
+- desired role-assignment validation and revision persistence;
+- later role resolution and provider/model fallback;
+- later permission profiles and capability tokens;
 - context selection, redaction, freshness, and budgets;
 - structured-output validation and bounded repair;
 - deterministic tests and evidence;
@@ -121,7 +136,7 @@ verification and human gates remain authoritative.
 
 Models cannot change role, grant themselves tools, expand scope, approve their own output, merge, deploy, or override deterministic or human gates.
 
-## Requirements and issue authority
+## Requirements and issue authority — later slices
 
 GitHub or local input is not assumed complete. The Technical Lead gathers repository facts through typed, allowlisted, bounded read-only tools and surfaces unresolved product decisions to a human.
 
@@ -129,7 +144,7 @@ The canonical issue is the durable unit of implementation work. It records curre
 
 Type-specific contracts are in `docs/agentic-maintenance.md`.
 
-## Planning
+## Planning — later slices
 
 The Technical Lead uses the existing authoritative advisor service to create the repository-grounded plan. Planning includes:
 
@@ -142,9 +157,9 @@ The Technical Lead uses the existing authoritative advisor service to create the
 - operations, migration, rollback, and escalation conditions;
 - a validated machine-readable execution contract.
 
-The prior scribe chain may remain only as explicit compatibility fallback. It is not the target source of canonical requirements or plans. Structural validation and bounded repair remain fail-closed before persistence.
+The prior scribe chain may remain only as explicit compatibility fallback after active role routing. It is not the target source of canonical requirements or plans. Structural validation and bounded repair remain fail-closed before persistence.
 
-## Execution
+## Execution — later slices
 
 Code Worker permissions depend on mode:
 
@@ -167,9 +182,9 @@ Independence is established by role and authority separation from the mutating C
 - the review invocation has no mutation authority;
 - the review is a fresh invocation bound to the exact checked `subject_head_sha`.
 
-The same frontier model or CLI may be reused. Provider/model diversity is useful metadata but is not a readiness requirement. Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations review does not disqualify the reviewer. The Code Worker cannot review its own mutation. A head change requires a fresh Technical Lead review invocation.
+Role and authority separation is necessary but not sufficient for Issue #161's final gate. A same-model fresh session is recorded as `non_independent`; a genuinely independent frontier reviewer is required. Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations review does not disqualify an otherwise independent reviewer. The Code Worker cannot review its own mutation. A head change requires a fresh Technical Lead review invocation.
 
-## Documentation
+## Documentation — later lifecycle activation
 
 The Documentation Steward assesses impact during planning and updates documents after final implementation evidence exists. Author mode is restricted by `agentic-maintenance.yaml` to documentation paths.
 
@@ -177,9 +192,21 @@ A PR is not ready until required documents are current or a validated `no_docume
 
 ## Role assignment
 
-A role assignment binds an authenticated CLI, explicit model, fallbacks, permissions, budgets, and output contracts. The platform supports automatic, recommended, and manual selection.
+### Current Slice 1 desired state
 
-With one authenticated CLI, Agent Bridge selects models independently for each role. With one model, role sessions and permissions remain separate. Status reports model diversity as unavailable while preserving `technical_lead_role_independent` review when the role/authority conditions are satisfied.
+A desired assignment binds a role, persisted selection label, explicit bounded primary CLI/model, ordered fallbacks, source, scope, revision identity, and dormant status. It does not include or activate capability resolution, permission profiles, budgets, or applied/effective routing.
+
+The current status contract is:
+
+- desired assignments are `configured_dormant`;
+- role routing is disabled;
+- existing `WORKER_CLI_CHAIN`, `WORKER_CODE_CLI_CHAIN`, and `WORKER_SCRIBE_CLI_CHAIN` remain effective.
+
+### Later active target state
+
+An active role assignment additionally binds verified capability, permissions, budgets, and output contracts. The platform target supports automatic, recommended, and manual selection.
+
+With one authenticated CLI, Agent Bridge selects models independently for each role. With one model, role sessions and permissions remain separate, but status reports model diversity as unavailable and actual review independence as `non_independent` for Issue #161's final gate.
 
 Configuration reference: `docs/configuration/agent-role-assignment.md`.
 
@@ -203,10 +230,12 @@ Configuration reference: `docs/configuration/agent-role-assignment.md`.
 16. Code Worker cannot review its own mutation.
 17. Model diversity is not required for Technical Lead review independence.
 18. Code-changing repair invalidates downstream exact-head evidence, including final Technical Lead review.
+19. Issue #161 requires a genuinely independent frontier reviewer; same-model freshness alone is insufficient.
+20. Dormant desired role assignments cannot affect current handler or interactive dispatch.
 
 ## Approval model
 
-Routine in-policy operations may create work items, gather read-only evidence, author canonical issues, create plans, create branches, perform TDD, run verification, update approved documentation, push agent branches, and open or refresh draft PRs.
+Routine in-policy operations may create work items, gather read-only evidence, author canonical issues, create plans, create branches, perform TDD, run verification, update approved documentation, push agent branches, and open or refresh draft PRs where the owning lifecycle exists and policy permits it.
 
 Human approval remains required for unresolved product decisions, merge, destructive Git, force-push, branch deletion outside approved cleanup, service restart, production deploy, secret/config/permission changes, configured-cap exceptions, and policy changes.
 

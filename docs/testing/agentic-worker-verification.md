@@ -2,7 +2,7 @@
 
 ## Status
 
-Canonical verification requirements for role-based Engineering Worker orchestration. These requirements apply as each Issue #159 slice activates its owning behaviour.
+Canonical verification requirements for role-based Engineering Worker orchestration. Slice 1 activates only the exact role domain, desired assignment validation and persistence, schema-version-3 migration, and truthful dormant status. The complete later-slice requirements remain normative as each owning Issue #159 slice activates its behaviour.
 
 ## Test principles
 
@@ -15,7 +15,85 @@ Canonical verification requirements for role-based Engineering Worker orchestrat
 - Deterministic evidence overrides model claims.
 - A stale required document or stale exact-head result is a failed readiness condition, not a deferred follow-up.
 
-## Acceptance suites
+## Slice 1 acceptance suites
+
+### Exact role domain and bounded configuration
+
+Cover:
+
+- exactly three externally configurable role IDs: `technical_lead`, `code_worker`, and `documentation_steward`;
+- the exact mode registry without exposing modes as roles;
+- exactly one assignment per role;
+- explicit CLI/model primary and ordered fallback targets;
+- `automatic`, `recommended`, and `manual` persisted only as desired selection labels;
+- duplicate, missing, unknown, and mode-as-role rejection;
+- bounded scope, CLI, model, and fallback counts;
+- secret-, prompt-, and repository-content-shaped scope values fail before database opening and errors do not echo scope or idempotency keys;
+- unknown-field rejection;
+- credential-, secret-, prompt-, and repository-content-shaped field rejection;
+- credential-shaped value rejection without echoing the value;
+- existing bot configuration and legacy worker-chain parsing unchanged.
+
+Slice 1 does not claim capability availability, model suitability, or permission suitability. Those belong to later resolution tests.
+
+### Schema 2 to 3 migration and repository persistence
+
+Use the existing schema registry, numbered migration boundary, repository SQL ownership, and `BridgeDb` façade. Cover:
+
+- exact prior schema version 2 fixture creation through registered migrations 1 and 2;
+- transactional migration to schema version 3;
+- exact role-table column order, declared types, nullability, primary keys, defaults, check constraints, unique/supporting indexes, and the cascading revision foreign key;
+- preservation of representative work items, jobs, approvals, GitHub links, advisor calls, and conversation turns;
+- zero database-wide `foreign_key_check` violations on strict production open and guarded rollout validation;
+- close/reopen persistence;
+- current-revision lookup and ordered history;
+- identical retry returns the same revision without a duplicate row;
+- reused idempotency identity with changed input fails deterministically;
+- persisted columns and values exclude credentials, prompts, and repository content;
+- any pre-existing role-assignment table at schema version 2 causes rollback, preserves existing rows and version 2, and leaves no partial sibling table;
+- fresh and legacy migration suites continue to reach the declared current version.
+
+### Guarded rollout qualification
+
+Cover:
+
+- the rollout inspector permits both role tables and no unrelated unknown table;
+- an exact schema-version-2 database with current legacy queue/lock shape is `migratable`, not `current`;
+- migration produces schema version 3 with both role tables;
+- validation reports `current` only for exact schema version 3 plus required queue and lock shape, exact role-table metadata/constraints/indexes/foreign key, and zero database-wide `foreign_key_check` violations;
+- queue counts, hashes, integrity, backup, and rollback behaviour remain owned by the existing guarded-helper tests.
+
+### Dormant status and dispatch compatibility
+
+Cover:
+
+- `/chain` preserves its exact legacy-only response when no role revision exists;
+- configured desired assignments are reported as `configured_dormant`;
+- desired revision, source, primary, and fallback targets are visible without secrets;
+- status states `Role routing: disabled`;
+- status reports effective legacy interactive, code, and scribe chains;
+- `resolveWorkerCliPolicy()` is identical with or without role-assignment environment values;
+- real durable job claim, execution, completion, and result persistence cover `defect_scan`, `feature_plan`, `implementation_plan`, `tdd_implementation`, `orchestrated_task`, `open_github_issue`, and `pr_lifecycle`;
+- the production handler-map fixture proves those task types remain on the existing scribe, code, command, Git, and GitHub owners;
+- no handler-map code references role assignment, capability resolution, or `configured_dormant` to select execution;
+- no role invocation, role audit, or alternative routing side effect occurs.
+
+### Required focused commands for Slice 1
+
+At the exact final head, run at minimum:
+
+```text
+npx vitest run test/agentRoles.test.ts
+npx vitest run test/roleAssignmentRepository.test.ts
+npx vitest run test/roleAssignmentMigrationRollback.test.ts
+npx vitest run test/roleAssignmentDormantCompatibility.test.ts
+npx vitest run test/rolloutDbRoleAssignments.test.ts
+npx vitest run test/dbSchema.test.ts test/rolloutHelper.test.ts
+```
+
+Add all existing config, worker-command, worker-policy, database strict-open, and handler tests affected by the actual diff. Run lifecycle-sensitive migration and rollout tests serially or repeatedly where the repository contract requires it.
+
+## Later active-role acceptance suites
 
 ### Role configuration
 
@@ -36,9 +114,9 @@ Cover:
 
 - one CLI exposing multiple models assigns each role independently;
 - one model can serve every role with separate sessions, prompts, validators, and permission profiles;
-- model-diversity status is accurate and separate from review independence;
-- a read-only Technical Lead review is `technical_lead_role_independent` when the reviewer did not author or modify the implementation, has no mutation authority, and performs a fresh exact-head invocation;
-- the same frontier model or CLI may be reused without blocking review independence;
+- model-diversity status is accurate and contributes to the Issue #161 review-independence classification;
+- the role/authority boundary is `technical_lead_role_independent` when the reviewer did not author or modify the implementation, has no mutation authority, and performs a fresh exact-head invocation;
+- role/authority separation remains required, but a same-model fresh session is `non_independent` for Issue #161's final gate;
 - the mutating Code Worker cannot review its own implementation;
 - required and actual independence basis are recorded separately;
 - a head change requires a fresh Technical Lead review invocation.
@@ -182,9 +260,9 @@ Cover:
 - only authoritative `passed` evidence for the current head satisfies a required gate;
 - `not_scheduled` or `not_run` cannot be reported as green;
 - final review is performed by the read-only Technical Lead advisor on the exact checked head;
-- independence is satisfied by Technical Lead/Code Worker role and mutation separation;
+- Technical Lead/Code Worker role and mutation separation is mandatory but not sufficient for Issue #161 independence;
 - reviewer role, target, implementation authorship, mutation authority, and fresh-invocation state are recorded;
-- provider/model diversity is optional metadata and unavailable diversity does not block readiness;
+- unavailable model diversity blocks Issue #161's genuinely independent final-review gate;
 - prior read-only Technical Lead requirements, planning, or advice does not disqualify the reviewer;
 - the Code Worker cannot self-review its own mutation;
 - a head change or blocker repair requires a fresh Technical Lead review invocation;
@@ -224,10 +302,13 @@ Cover:
 
 Architecture Lint should enforce or be supplemented by tests proving:
 
-- role IDs and permission profiles are centrally owned;
+- role IDs, modes, and permission profiles have central owners;
+- role-assignment SQL remains in one repository behind `BridgeDb`;
+- configuration and status owners contain no role-assignment SQL;
+- current handlers do not route through dormant role assignments;
 - one prompt-contract registry owns role/mode metadata;
 - one lifecycle-skill registry owns extraction, versions, budgets, and composition;
-- worker handlers do not invoke provider CLIs directly for role work;
+- worker handlers do not invoke provider CLIs directly for later role work;
 - Technical Lead calls route through the advisor boundary;
 - full planning and focused repairs use different keys;
 - prompts and skills cannot own tool, permission, budget, or lifecycle authority;
@@ -237,23 +318,44 @@ Architecture Lint should enforce or be supplemented by tests proving:
 - role audit SQL remains in its repository;
 - role status handlers remain read-only.
 
-## Required commands
+## Required deterministic evidence
 
 Final evidence includes:
 
 ```text
-focused lifecycle-skill, prompt, decomposition, plan-provenance, exact-head, review-independence, and documentation-gate tests
+complete focused suite for the implemented slice, plus focused lifecycle-skill, prompt, decomposition, plan-provenance, exact-head, review-independence, and documentation-gate tests
 full test suite
 npm run typecheck
 bash scripts/arch-lint.sh src
 npm run cleanup:check or documented pre-existing findings
 git diff --check
+changed-path and unexpected-file audit
+clean isolated worktree status
 exact-head GitHub Actions checks
 ```
 
-Migration work additionally runs upgrade and rollback tests against representative existing worker databases.
+Each check or workflow is recorded separately as `passed`, `failed`, `not_run`, `not_scheduled`, `stale`, or `unknown`. A partial workflow must not be summarized as “CI passed.” Migration work additionally runs upgrade, reopen, idempotency, failure rollback, and guarded-rollout qualification against representative existing worker databases.
 
 ## Live qualification
+
+### Slice 1
+
+A future separately approved production or appliance qualification demonstrates:
+
+1. the complete configured database inventory and protected backups;
+2. schema version 2 reported as `migratable` before migration;
+3. guarded transactional migration to schema version 3;
+4. both role tables, integrity, foreign keys, queue counts, ownership, modes, and hashes validated;
+5. desired assignments reported as `configured_dormant`;
+6. `Role routing: disabled` and unchanged effective legacy chains;
+7. no duplicate revision for identical desired configuration;
+8. no secret or raw content exposure;
+9. service and queue/lease health after the separately approved restart;
+10. protected rollback evidence.
+
+Production qualification is observational and separately approved. It does not occur implicitly on merge.
+
+### Later active role routing
 
 Before broad rollout, use a disposable workspace to demonstrate:
 
@@ -270,7 +372,7 @@ Before broad rollout, use a disposable workspace to demonstrate:
 11. stale required documentation blocking readiness until corrected;
 12. restart between phases without duplicate calls or prompt/skill drift;
 13. cancellation fencing late output;
-14. same-frontier-model Technical Lead review recorded as role-independent from Code Worker mutation;
+14. same-frontier-model fresh review recorded as `non_independent` for Issue #161 readiness;
 15. rejection of Code Worker self-review;
 16. provider fallback preserving prompt and skill identities;
 17. rollback to legacy routing without queue or state corruption.

@@ -20,7 +20,7 @@ The worker exposes exactly three configurable roles:
 
 Agent Bridge remains authoritative for requirements state, workflow transitions, issue and PR mutation, permissions, role/model resolution, prompts, lifecycle skills, validators, evidence, budgets, retries, cancellation, approvals, merge, deployment, and audit.
 
-## Delivered foundation — PR #160
+## Delivered prompt foundation — PR #160
 
 PR #160 delivers:
 
@@ -30,7 +30,7 @@ PR #160 delivers:
 - separate Documentation Steward impact, authoring, validation, and maintenance prompts;
 - a pre-mutation multi-issue bundle review against one canonical invariant matrix;
 - comprehensive advisor-authored red-test instructions protecting product intent, architecture, invariants, compatibility, and triggered risks;
-- reproducible target-path provenance with strict validation for all newly generated and repaired plans;
+- reproducible target-path provenance with strict validation for newly generated and repaired plans;
 - a narrow concrete-path compatibility boundary for already-persisted pre-provenance plans;
 - strengthened active implementation-plan and TDD red/green prompts;
 - canonical runtime-guidance blocks in the four repository SDLC skills;
@@ -39,7 +39,7 @@ PR #160 delivers:
 - role-template, lifecycle-skill-set, composed-template, and rendered-content identity tests;
 - exact-head review, operations, documentation, readiness, CI, and final Technical Lead review contracts;
 - explicit evidence states for passed, failed, not run, not scheduled, stale, and unknown checks;
-- Technical Lead/Code Worker role-separation review independence, with model diversity recorded as optional metadata rather than a blocking requirement;
+- Technical Lead/Code Worker role and authority separation, with Issue #161 additionally requiring a genuinely independent frontier reviewer;
 - same-delivery correction of every stale, contradictory, missing, or materially misleading required document;
 - full revalidation of `docs/architecture/01-current-architecture.md`;
 - source-only prompt resolution for canonical and compatibility-key handlers;
@@ -47,7 +47,44 @@ PR #160 delivers:
 - schema migration 2, which removes an absent or empty legacy `prompts` table and fails closed if an unexpected row exists;
 - target-state architecture, testing, configuration, operations, documentation, and rollout policy.
 
-Role routing, durable role assignment, requirements lifecycle, complete structured plan persistence, permissions, Documentation Steward execution, platform allocation, durable prompt/skill audit persistence, and final role-workflow qualification remain to be implemented through the slices below.
+PR #160 remains the target-state authority for later role routing and orchestration slices.
+
+## Slice 0 reconciliation — PR #170
+
+Slice 0 is documented by `docs/implementation-plans/issue-159-slice-0-reconciliation.md`. The mutable PR #160/#170 exact heads and comparisons are recorded in their PR and Issue #159 evidence, not frozen in this roadmap. This record covers current owners, overlap decisions, concrete target-path classification, actual child issues, cross-repository ownership, human gates, and retrospective.
+
+Slice 0 creates documentation and issue metadata only. It does not itself merge, deploy, restart services, migrate production databases, mutate Platform runtime state, or activate any role behaviour.
+
+## Slice 1 dormant role persistence — Issue #161 / merged PR #174
+
+Issue #161 is the sole Slice 1 implementation owner. PR #174 merged the dormant foundation; the rebased Slice 0 branch preserves that content without changing production state:
+
+- the exact three-role public domain and canonical mode registry;
+- bounded explicit desired CLI/model assignments with ordered fallbacks;
+- deterministic desired-assignment identity and append-only revisions;
+- schema migration 3 through the existing registry, repository SQL owner, and `BridgeDb` compatibility façade;
+- representative schema-version-2 migration, reopen, idempotency, foreign-key, rollback, and guarded-rollout test contracts;
+- `/chain` reporting of desired assignments as `configured_dormant`;
+- explicit `Role routing: disabled` status;
+- explicit reporting of the effective legacy interactive, code, and scribe chains;
+- unchanged current handler routing and Git/GitHub authorities;
+- current architecture, configuration, operations, testing, readiness, and worker documentation updates.
+
+Slice 1 does **not** implement or activate:
+
+- capability or model discovery/ranking;
+- automatic, recommended, or manual resolution behaviour beyond persisting the selection label;
+- applied/effective role routing;
+- permission profiles or capability tokens;
+- requirements or canonical issue lifecycle;
+- role-native planning, implementation review, operations review, or PR-readiness execution;
+- Documentation Steward execution;
+- Platform transport or desired/effective API/UI state;
+- deployment, service restart, production database migration, queue mutation, or merge.
+
+PR #174 is merged, but Slice 1 must not be represented as parent-acceptance complete until all required exact-head local and GitHub checks, implementation and operations review, documentation validation, PR readiness, and genuinely independent final review pass at one exact final head. Its branch state and evidence belong in the PR and Issue #161 rather than being frozen as a completion claim in this roadmap.
+
+Role routing, capability resolution, requirements lifecycle, complete structured plan persistence, permissions, Documentation Steward execution, Platform allocation, durable prompt/skill audit persistence, and final role-workflow qualification remain to be implemented through later slices.
 
 ## Approved scope
 
@@ -62,7 +99,7 @@ Role routing, durable role assignment, requirements lifecycle, complete structur
 - source-controlled prompt key/version and role-template hash per role invocation;
 - source-controlled lifecycle skill key/version/content hashes and composed-template hash per role invocation;
 - exact-head verification, review, operations, documentation, readiness, CI, and final Technical Lead review evidence;
-- single-CLI and single-model operation with explicit model-diversity metadata and preserved role-separation review independence;
+- single-CLI and single-model operation with explicit model-diversity metadata, while Issue #161's independent final-review gate remains held without a different frontier reviewer;
 - lifecycle, cancellation, restart, lease, audit, migration, rollback, and platform coordination;
 - completed removal of legacy database prompt overrides and their schema table.
 
@@ -72,7 +109,9 @@ Prompt text and reusable SDLC know-how are reviewed source artefacts. Canonical 
 
 The four canonical skills are `requirements-to-acceptance`, `risk-based-test-strategy`, `red-green-refactor-tdd`, and `release-readiness-review`. Role and compatibility contracts declare exactly which skills they consume. The loader validates one marked runtime block and the matching manifest version, then composes the skills deterministically. Prompt-specific authority and structured output remain in role prompts and code.
 
-Schema migration 2 retires the legacy table. It treats an absent table as already removed, drops an empty table transactionally, and aborts without data loss if an unexpected row exists. On rejection, schema version 1 and the table contents remain intact for guarded investigation. Prompt rollback is application rollback to a reviewed SHA.
+Schema migration 2 retires the legacy prompt table. It treats an absent table as already removed, drops an empty table transactionally, and aborts without data loss if an unexpected row exists. On rejection, schema version 1 and the table contents remain intact for guarded investigation. Prompt rollback is application rollback to a reviewed SHA.
+
+Schema migration 3 adds only dormant role-assignment revisions and child assignment rows. Ordinary production startup remains strict; production migration and restart stay under the existing guarded rollout helper and separate human approval.
 
 ## Implementation strategy
 
@@ -80,7 +119,7 @@ Deliver this as a strangler extension of the current worker, not a rewrite.
 
 Retain the current queue, repositories, handler map, executor loop, leases, cancellation, TDD commit guards, workspaces, process supervisor, AdvisorService, source-controlled prompt and skill registries, plan validator, GitHub lifecycle, and merge gate.
 
-Add role configuration, deterministic resolution, requirements/canonical issue phases, role-aware planning/review, documentation phases, durable prompt/skill audit identity, and desired/effective platform configuration behind compatibility controls. Do not introduce a new workflow engine, prompt service, queue, supervisor, state store, GitHub mutation path, platform transport, or merge path.
+Add role configuration, deterministic resolution, requirements/canonical issue phases, role-aware planning/review, documentation phases, durable prompt/skill audit identity, and desired/effective platform configuration behind compatibility controls. Do not introduce a new workflow engine, prompt service, queue, supervisor, state store, GitHub mutation path, Platform transport, or merge path.
 
 ## Multi-issue mutation gate
 
@@ -93,23 +132,37 @@ Before Agent Bridge creates or updates multiple child issues:
 5. repair all conflicts and rerun review;
 6. allow issue mutation only after `ready_for_issue_mutation`.
 
-## Delivery slices
+## Delivery issues and ordering
 
-The numbered list is **implementation delivery order**, not runtime phase order.
+| Slice | Repository | Issue | Scope boundary |
+|---:|---|---|---|
+| 0 | agent-bridge | parent #159 and draft PR #170 | current-state reconciliation and decomposition only |
+| 1 | agent-bridge | [#161](https://github.com/nickconstantinou/agent-bridge/issues/161) | role domain, additive persistence and dormant status; no routing |
+| 2 | agent-bridge | [#162](https://github.com/nickconstantinou/agent-bridge/issues/162) | capability/model discovery and deterministic resolver; no handler routing |
+| 3 | agent-bridge | [#163](https://github.com/nickconstantinou/agent-bridge/issues/163) | mode-specific permissions through existing dispatch/workspace/supervisor boundaries |
+| 4 | agent-bridge | [#164](https://github.com/nickconstantinou/agent-bridge/issues/164) | requirements, human decisions and canonical GitHub issue reconciliation |
+| 5 | agent-bridge | [#165](https://github.com/nickconstantinou/agent-bridge/issues/165) | extend #100/PR #152 evidence broker into Technical Lead planning |
+| 6 | agent-bridge | [#166](https://github.com/nickconstantinou/agent-bridge/issues/166) | scan candidates and immutable Code Worker packets through current handlers |
+| 7 | agent-bridge | [#167](https://github.com/nickconstantinou/agent-bridge/issues/167) | dormant Documentation Steward capability; no production documentation activation |
+| 8 | agent-bridge | [#168](https://github.com/nickconstantinou/agent-bridge/issues/168) | compose and activate Technical Lead review before documentation, then final readiness |
+| 9 | agent-bridge | [#169](https://github.com/nickconstantinou/agent-bridge/issues/169) | lifecycle, audit, compatibility, migration and rollout qualification |
+| 10 | agent-bridge-platform | [#134](https://github.com/nickconstantinou/agent-bridge-platform/issues/134) | Platform desired revisions and desired/effective API/UI/status only |
 
-0. Current-state reconciliation, pre-mutation bundle review, child issue creation, and linked platform plan.
-1. Role domain, additive persistence, and dormant status projection.
-2. CLI/model discovery and deterministic role resolution.
-3. Mode-specific permission enforcement through existing dispatch boundaries.
-4. Requirements validation, human clarification, and canonical GitHub issue reconciliation.
-5. Bounded Technical Lead tools, canonical prompt/skill routing, comprehensive plan validation, and advisor-authored planning.
-6. Code Worker scan candidates and bounded execution packets through existing TDD handlers.
-7. Dormant Documentation Steward capability in the existing implementation workspace.
-8. Technical Lead implementation/operations review and activation of review-before-documentation runtime composition.
-9. Lifecycle, durable prompt/skill audit, compatibility, migration, and rollback qualification.
-10. Platform desired/effective role assignment API and UI.
+### Implementation delivery order
 
-Canonical runtime order after activation:
+The numbered graph is implementation delivery order, not runtime phase order. Slice #167 is delivered first only so #168 can compose the dormant capability into the accepted lifecycle.
+
+```text
+PR #160
+  -> Slice 0 / PR #170
+  -> #161 / PR #174
+  -> #162 -> #163 -> #164 -> #165 -> #166 -> #167 (dormant) -> #168 (activation) -> #169
+                                                                                         -> platform #134
+```
+
+The dependency graph also includes #100/PR #152, #132 and #146 before or within #165/#168; #135/PR #158 before #169; and Platform #72/#93/#95/#96/#119 before or within Platform #134.
+
+### Canonical runtime order
 
 ```text
 deterministic verification
@@ -122,27 +175,32 @@ deterministic verification
 → human merge gate
 ```
 
-The final review is independent from the Code Worker through role and authority separation. The same frontier model or CLI may be reused. A code-changing repair invalidates verification, review, operations, documentation, readiness, CI, and final-review evidence for the previous head.
+The final review is independent from the Code Worker through role and authority separation. For Issue #161, a same-model or same-target fresh session is explicitly `non_independent`; a genuinely independent frontier reviewer is required. A code-changing repair invalidates verification, review, operations, documentation, readiness, CI, and final-review evidence for the previous head.
 
-Each child issue must enumerate production-boundary red tests, product and architectural intent, expected current failure, authoritative oracle, focused red command, false-positive controls, sibling behaviour remaining green, migration/rollback impact, documentation triggers, classified target paths, and exact dependencies.
+Slice #167 must not activate documentation execution. Slice #168 owns activation. Documentation requires accepted review and required operations evidence for the same exact code head. A code-changing repair invalidates verification, review, operations, documentation, readiness, CI, and final-review evidence until the required phases rerun. Slice #169 qualifies the sequence across restart, retry, cancellation, lease loss, stale evidence, fallback, migration and rollback.
+
+Each child issue enumerates production-boundary red tests, product and architectural intent, expected current failure, authoritative oracle, focused red command, false-positive controls, sibling behaviour remaining green, migration/rollback impact, documentation triggers, classified target paths, and exact dependencies.
+
+Slice 1 began only after the maintainer approved the Slice 0 gate. A later slice must not be pulled into an earlier issue.
 
 ## Detailed implementation plans
 
 - `docs/implementation-plans/issue-159-role-based-orchestration.md`
 - `docs/implementation-plans/issue-159-prompt-and-red-test-contract.md`
 - `docs/implementation-plans/issue-159-execution-readiness-safeguards.md`
+- `docs/implementation-plans/issue-159-slice-0-reconciliation.md`
 
-These plans are normative for implementation and subordinate only to the accepted ADR, canonical architecture, Issue #159, and current repository evidence. Material discoveries must update the roadmap and plans rather than silently changing scope.
+These plans are normative for implementation and subordinate only to the accepted ADR, canonical architecture, Issue #159, and current repository evidence. The Slice 0 reconciliation is authoritative for current owner modules, concrete likely target files, overlap decisions, actual issue numbers, sequencing, and the cross-repository interface at the stated exact base.
 
 ## Dependencies and coordination
 
-- Issue #100 — bounded advisor debug/read-only evidence;
-- Issue #119 — durable lifecycle, cancellation, lease, restart, and stale ownership;
-- Issue #132 — existing advisor checkpoint scope, revised by this roadmap;
-- Issue #135 — guarded database migration ownership used to roll out schema migration 2;
+- Issue #100 / PR #152 — current bounded Advisor evidence/debug owner, extended by #165;
+- Issue #119 / PR #120 — historical lifecycle design input; current job/repository/supervisor owners remain authoritative;
+- Issue #132 — Advisor checkpoint scope, budgets and risk gates;
+- Issue #135 / PR #158 — guarded database migration and rollout ownership;
 - Issue #146 — freshness and authority metadata;
 - PR #157 — transitional fail-closed execution-contract repair;
-- linked `agent-bridge-platform` role-allocation issue created during Slice 0.
+- Platform #134 — desired/effective role allocation after #169 OSS compatibility evidence.
 
 ## Documentation and readiness
 
@@ -154,14 +212,15 @@ A validated `no_documentation_change` result remains allowed only with rationale
 
 Human approval remains required for:
 
-- child-issue decomposition;
+- child-issue decomposition and permission to begin Slice 1;
 - unresolved product decisions;
 - material canonical issue or delivery-scope changes;
 - role defaults and review authority policy;
 - merge;
-- production deployment/restart;
+- production deployment or restart;
+- database or fleet migration;
 - destructive, secret, permission, or policy changes.
 
 ## Completion
 
-Complete only when all linked OSS and platform slices are implemented and reviewed by the read-only Technical Lead independently from Code Worker mutation, all role phases use the canonical prompt and lifecycle-skill registries, existing worker flows remain compatible except for explicitly approved phase changes, comprehensive red tests and exact-head evidence pass, prompt/skill identities are durably auditable, legacy database prompt overrides remain absent, migration and rollback are qualified, every required document matches reality, and no unresolved blocker remains.
+Issue #159 remains open. It completes only when all linked OSS and Platform slices are implemented and independently reviewed, all role phases use the canonical prompt and lifecycle-skill registries, existing worker flows remain compatible except for explicitly approved phase changes, comprehensive red tests and exact-head evidence pass, prompt/skill identities are durably auditable, legacy database prompt overrides remain absent, migration and rollback are qualified, every required document matches reality, and no unresolved blocker remains.

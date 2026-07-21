@@ -10,6 +10,7 @@ import Database from "better-sqlite3";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import type { RoleAssignmentConfig } from "./agentRoles.js";
 import { LockRepository, type ExecutionLaneHandle } from "./repositories/lockRepository.js";
 export type { ExecutionLaneHandle } from "./repositories/lockRepository.js";
 import { MemoryRepository } from "./repositories/memoryRepository.js";
@@ -23,9 +24,15 @@ import {
   type CompactionAttemptRecord,
 } from "./repositories/compactionRepository.js";
 import { AdvisorRepository } from "./repositories/advisorRepository.js";
+import {
+  RoleAssignmentRepository,
+  type RoleAssignmentRevisionRecord,
+} from "./repositories/roleAssignmentRepository.js";
+export type { RoleAssignmentRevisionRecord } from "./repositories/roleAssignmentRepository.js";
 import { ConversationRepository, DEFAULT_CONTEXT_MAX_CHARS } from "./repositories/conversationRepository.js";
 export { DEFAULT_CONTEXT_MAX_CHARS, DEFAULT_CONTEXT_RECENT_TURN_LIMIT } from "./repositories/conversationRepository.js";
 import { applyMigrations, CURRENT_SCHEMA_VERSION, MigrationRequiredError, UnsupportedSchemaVersionError } from "./db/schema.js";
+import { assertDatabaseForeignKeyIntegrity, assertExactRoleAssignmentSchema } from "./db/roleAssignmentsMigration.js";
 
 // Sentinel row keys stored in bridge_state for non-chat state
 const pollingKey = (bot: string) => `$polling:${bot}`;
@@ -208,6 +215,13 @@ export function openProductionDb(dbPath: string, options: OpenDbOptions = {}): B
     raw.close();
     throw new MigrationRequiredError(schemaVersion);
   }
+  try {
+    assertExactRoleAssignmentSchema(raw);
+    assertDatabaseForeignKeyIntegrity(raw);
+  } catch (error) {
+    raw.close();
+    throw error;
+  }
   return finishOpen(raw, options);
 }
 
@@ -222,6 +236,7 @@ export class BridgeDb {
   private readonly memories: MemoryRepository;
   private readonly compactions: CompactionRepository;
   private readonly advisorCalls: AdvisorRepository;
+  private readonly roleAssignments: RoleAssignmentRepository;
   private readonly conversations: ConversationRepository;
 
   constructor(raw: Database.Database, lockOptions: {
@@ -237,6 +252,7 @@ export class BridgeDb {
     this.memories = new MemoryRepository(raw);
     this.compactions = new CompactionRepository(raw);
     this.advisorCalls = new AdvisorRepository(raw);
+    this.roleAssignments = new RoleAssignmentRepository(raw);
     this.conversations = new ConversationRepository(raw);
   }
 
@@ -340,6 +356,20 @@ export class BridgeDb {
 
   getAdvisorAttempts(requestId: string): Array<Record<string, unknown>> {
     return this.advisorCalls.getAdvisorAttempts(requestId);
+  }
+
+  // ── Dormant role assignment revisions ───────────────────────────────────
+
+  createRoleAssignmentRevision(input: RoleAssignmentConfig): RoleAssignmentRevisionRecord {
+    return this.roleAssignments.createRevision(input);
+  }
+
+  getCurrentRoleAssignmentRevision(scopeKey: string): RoleAssignmentRevisionRecord | null {
+    return this.roleAssignments.getCurrentRevision(scopeKey);
+  }
+
+  listRoleAssignmentRevisions(scopeKey: string): RoleAssignmentRevisionRecord[] {
+    return this.roleAssignments.listRevisions(scopeKey);
   }
 
   getChatRepo(chatId: string): string | null {
@@ -817,7 +847,6 @@ export class BridgeDb {
   getMemoryCount(): number {
     return this.memories.getMemoryCount();
   }
-
 
   close(): void {
     this.raw.close();

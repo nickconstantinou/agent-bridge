@@ -2,17 +2,30 @@
 
 ## Status
 
-Canonical target-state architecture. This document describes the Engineering Worker after role-based orchestration is implemented.
+Canonical target-state architecture with an explicit delivered-foundation boundary. Slice 1 implements the exact public role domain, desired assignment validation and versioned persistence, and truthful dormant status. It does not activate the target role workflow described below.
+
+## Current delivered boundary
+
+The worker currently supports:
+
+- the exact three public role IDs and canonical mode registry;
+- explicit desired CLI/model primary and fallback assignments;
+- bounded fail-closed environment parsing;
+- additive schema-version-3 desired-assignment revisions behind `BridgeDb`;
+- `configured_dormant` `/chain` status;
+- explicit reporting that role routing is disabled and legacy interactive, code, and scribe chains remain effective.
+
+Current handlers do not read desired assignments to choose a CLI or model. Capability discovery/ranking, applied/effective assignments, permission profiles, role-native prompts, canonical requirements state, role workflow phases, review selection, and Platform transport remain later-slice work.
 
 ## Purpose
 
-The Engineering Worker converts incomplete intent, imported GitHub issues, and repository scan findings into validated engineering work, implementation plans, tested pull requests, and current documentation.
+The target Engineering Worker converts incomplete intent, imported GitHub issues, and repository scan findings into validated engineering work, implementation plans, tested pull requests, and current documentation.
 
 Agent Bridge remains the authoritative orchestrator. Models provide bounded reasoning or execution inside Bridge-owned lifecycle, permission, validation, retry, budget, exact-head, issue-mutation, and approval controls.
 
 ## Configurable roles
 
-The platform exposes three workspace roles:
+Agent Bridge exposes exactly three workspace roles:
 
 | Role | Responsibility | Default authority |
 |---|---|---|
@@ -20,14 +33,9 @@ The platform exposes three workspace roles:
 | Code Worker | Defect and refactor scanning, repository investigation, TDD implementation, repair, and deterministic verification | Permission varies by workflow mode |
 | Documentation Steward | Documentation impact assessment and creation, update, and validation of README, architecture, operations, configuration, testing, and maintenance documentation | Documentation-only mutation |
 
-A role is independent of provider authentication. A role assignment binds:
+Slice 1 desired assignments bind only role, selection label, explicit primary CLI/model, ordered fallbacks, source, scope, revision identity, and dormant status.
 
-- an authenticated CLI;
-- an explicit model;
-- ordered fallbacks;
-- a permission profile;
-- budgets and timeouts;
-- structured input and output contracts.
+Later active assignments additionally bind permission profiles, budgets/timeouts, capability evidence, structured input/output contracts, and effective/applied state.
 
 ## Role modes
 
@@ -38,12 +46,13 @@ A role is independent of provider authentication. A role assignment binds:
 - `issue_authoring`: create the canonical issue contract;
 - `decomposition_review`: audit a complete proposed child-issue bundle against one invariant table before any GitHub issue mutation;
 - `planning`: create the implementation plan, target-path provenance, and execution contract;
+- `planning_repair`: repair one bounded invalid planning section without changing approved scope;
 - `executor_guidance`: assess bounded evidence from a blocked or incomplete worker pass;
 - `implementation_review`: compare exact-head changes with requirements, invariants, and deterministic evidence before documentation;
 - `operations_review`: define exact-head rollout, rollback, migration, and operational evidence before documentation;
 - `pr_readiness`: produce the final advisory verdict after deterministic, review, operations, and documentation gates.
 
-The Technical Lead owns independent review and operations reasoning through the read-only AdvisorService path. Independence is based on separation from the mutating Code Worker: the Technical Lead did not author or modify the implementation, has no mutation authority in the review invocation, and performs a fresh review of the exact checked head. The same frontier model or CLI may be used. Provider/model diversity is useful metadata but is not a blocking requirement, and prior read-only Technical Lead planning or advice does not disqualify the reviewer.
+The Technical Lead owns review and operations reasoning through the read-only AdvisorService path. Role and authority separation from the mutating Code Worker is mandatory: the reviewer did not author or modify the implementation, has no mutation authority, and performs a fresh review of the exact checked head. Issue #161's final gate additionally requires a genuinely independent frontier reviewer; a same-model fresh session is `non_independent`. Prior read-only Technical Lead planning or advice does not disqualify an otherwise independent reviewer.
 
 ### Code Worker modes
 
@@ -54,7 +63,7 @@ The Technical Lead owns independent review and operations reasoning through the 
 - `repair`: bounded correction in response to deterministic or Technical Lead evidence;
 - `verify`: permitted commands and evidence collection without scope expansion.
 
-The same CLI and model may perform every mode, but Agent Bridge applies a distinct permission profile to each invocation.
+The same CLI and model may perform every mode, but Agent Bridge applies a distinct permission profile to each invocation after the permission slice activates.
 
 ### Documentation Steward modes
 
@@ -65,7 +74,7 @@ The same CLI and model may perform every mode, but Agent Bridge applies a distin
 
 The Documentation Steward may not change production code. A required code correction returns to the Code Worker and invalidates prior review, documentation, and readiness evidence for that code head.
 
-## Change workflows
+## Change workflows — later slices
 
 ### Feature workflow
 
@@ -128,7 +137,7 @@ Code Worker read-only refactor scan or maintainer request
 
 A refactor must have concrete evidence and measurable benefit. Consistency or cleanliness alone is insufficient.
 
-## Canonical issue contract
+## Canonical issue contract — later slices
 
 Every issue contains:
 
@@ -147,9 +156,9 @@ Every issue contains:
 
 Type-specific requirements are defined in `docs/agentic-maintenance.md`.
 
-No implementation plan is created until the issue is `requirements_ready`.
+No implementation plan is created until the issue is `requirements_ready` after that lifecycle activates.
 
-## Requirements validation
+## Requirements validation — later slices
 
 Even a detailed GitHub or local issue passes through Technical Lead validation. The validation result is structured:
 
@@ -170,39 +179,57 @@ Repository facts are gathered through typed, allowlisted, read-only Bridge tools
 
 When validation or authoring produces multiple child issues, Agent Bridge assembles every proposed issue body without mutation and invokes `technical_lead:decomposition_review`. The bundle review separates implementation delivery order from runtime phase order and checks one canonical invariant table covering owners/callers, lifecycle/state authority, permissions, schema/SQL ownership, GitHub authority, platform/appliance authority, compatibility, repair invalidation, and prohibited duplicate abstractions. GitHub issue mutation is blocked until the complete bundle is consistent.
 
-## Implementation planning
+## Implementation planning — later slices
 
 Every target production or test path is classified as `existing_at_base`, `existing_in_dependency`, `proposed_new_production`, or `proposed_new_test`. Dependency paths identify the dependency PR and exact reviewed ref. Proposed production files identify their neighbouring owner and why no current file is sufficient. Invalid or unclassified paths block plan approval.
 
 ## Role assignment and model selection
 
-The hosted platform and OSS configuration persist explicit role targets rather than relying on one global worker chain.
+### Current Slice 1 desired state
 
-For each role, the user may choose:
+Current configuration persists explicit desired role targets rather than interpreting them as one effective worker chain. The accepted selection labels are:
 
-- `automatic`: Agent Bridge ranks authenticated targets by role capability;
-- `recommended`: Agent Bridge proposes a mapping for approval;
-- `manual`: the user selects every CLI, model, and fallback.
+- `automatic`;
+- `recommended`;
+- `manual`.
 
-When only one CLI is authenticated, Agent Bridge still resolves a model separately for each role. When only one model is available, role separation, prompts, sessions, permissions, budgets, and audit remain distinct. The workspace reports model diversity as unavailable while retaining independent Technical Lead review through the read-only role boundary.
+In Slice 1 they are stored labels only. They do not trigger ranking, recommendations, capability validation, model selection, or activation.
 
-The configured Technical Lead advisor target owns final review. Agent Bridge may prefer a different CLI or model when available as an extra challenge signal, but the independence gate requires only:
+The current status contract is:
+
+- desired revision/source/targets are visible;
+- status is `configured_dormant`;
+- role routing is disabled;
+- existing `WORKER_CLI_CHAIN`, `WORKER_CODE_CLI_CHAIN`, and `WORKER_SCRIBE_CLI_CHAIN` remain effective.
+
+### Later active resolution
+
+After capability-resolution and routing slices activate:
+
+- `automatic` ranks authenticated targets by role capability;
+- `recommended` proposes a mapping for approval;
+- `manual` validates every selected CLI, model, and fallback.
+
+When only one CLI is authenticated, Agent Bridge still resolves a model separately for each role. When only one model is available, role separation, prompts, sessions, permissions, budgets, and audit remain distinct, while status reports that model diversity and independent-model review are unavailable.
+
+The configured Technical Lead advisor target owns final review. Role and authority separation requires:
 
 1. Technical Lead reviewer role;
 2. no authorship or modification of the reviewed implementation;
 3. no mutation authority in the review invocation;
 4. a fresh review bound to the exact checked `subject_head_sha`.
 
-Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations review does not disqualify the final reviewer. The Code Worker cannot review its own mutation. A head change requires a fresh Technical Lead invocation, not a different model or an endlessly new reviewer identity.
+Issue #161 additionally requires a genuinely independent frontier reviewer; a same-model fresh session remains `non_independent`. Prior read-only Technical Lead requirements, planning, decomposition, guidance, implementation review, or operations review does not disqualify an otherwise independent final reviewer. The Code Worker cannot review its own mutation. A head change requires a fresh Technical Lead invocation.
 
 ## Authority boundaries
 
-Agent Bridge owns:
+Agent Bridge owns or will own at the relevant slice:
 
 - workflow classification and transitions;
 - authoritative state and leases;
-- role resolution and fallback;
-- permission profiles and capability tokens;
+- desired assignment validation and revision persistence;
+- later role resolution and fallback;
+- later permission profiles and capability tokens;
 - context selection, redaction, and budgets;
 - structured-output validation and repair limits;
 - GitHub issue and PR mutation;
@@ -235,7 +262,7 @@ A PR cannot become ready until every required document is current or a validated
 
 When the required documentation correction would materially change approved product, architecture, authority, or scope, the workflow holds for human scope approval. That hold is not a deferral and cannot receive a ready verdict.
 
-## Degraded operation
+## Degraded operation — later active routing
 
 A workspace remains usable with one authenticated CLI or model. The effective status records:
 
@@ -246,7 +273,7 @@ A workspace remains usable with one authenticated CLI or model. The effective st
 - unavailable role capabilities;
 - any repository policy that blocks degraded execution.
 
-Model diversity degradation is explicit and audited, but it is not presented as loss of review independence when the Technical Lead role and authority boundary remain intact.
+Model diversity degradation is explicit and audited. For Issue #161, unavailable diversity means the independent final-review gate remains unsatisfied even when the Technical Lead role and authority boundary remain intact.
 
 ## Non-goals
 
@@ -256,4 +283,5 @@ Model diversity degradation is explicit and audited, but it is not presented as 
 - no requirement that every role use a different provider or model;
 - no automatic merge, production mutation, or destructive action;
 - no assumption that incoming issues or scan findings are complete;
-- no deferred stale required documentation while a delivery is represented as ready.
+- no deferred stale required documentation while a delivery is represented as ready;
+- no implication that Slice 1 desired assignments are effective execution policy.

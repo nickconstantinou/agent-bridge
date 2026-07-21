@@ -2,7 +2,79 @@
 
 ## Status
 
-Canonical target-state configuration reference for Engineering Worker role allocation. PR #160 defines the contracts; later Issue #159 slices implement persistence, resolution, and activation.
+Slice 1 of Issue #159 is implemented by Issue #161. Agent Bridge can now validate, persist, version, and report explicit desired role assignments, but the feature is deliberately dormant:
+
+- desired assignments are reported as `configured_dormant`;
+- role routing is disabled;
+- existing `WORKER_CLI_CHAIN`, `WORKER_CODE_CLI_CHAIN`, and `WORKER_SCRIBE_CLI_CHAIN` values remain the effective execution policy;
+- capability resolution, permission profiles, automatic selection, recommended selection, review-target selection, and later-slice lifecycle behaviour are not active.
+
+The remainder of this document distinguishes the current Slice 1 contract from the later target state defined by PR #160 and ADR-005.
+
+## Current Slice 1 configuration
+
+The worker accepts one optional JSON environment variable and one optional scope variable:
+
+- `WORKER_ROLE_ASSIGNMENTS_JSON` — an array containing exactly one assignment for each public role;
+- `WORKER_ROLE_ASSIGNMENT_SCOPE` — a bounded workspace/scope identifier; defaults to `worker:default`. Secret-, prompt-, and repository-content-shaped scope values fail closed before database opening.
+
+Example:
+
+```json
+[
+  {
+    "role": "technical_lead",
+    "selection": "manual",
+    "primary": { "cli": "claude", "model": "claude-fable-5" },
+    "fallbacks": [{ "cli": "codex", "model": "gpt-5.6-sol" }]
+  },
+  {
+    "role": "code_worker",
+    "selection": "manual",
+    "primary": { "cli": "codex", "model": "gpt-5.6-sol" },
+    "fallbacks": [{ "cli": "claude", "model": "claude-sonnet-5" }]
+  },
+  {
+    "role": "documentation_steward",
+    "selection": "manual",
+    "primary": { "cli": "antigravity", "model": "gemini-3.1-pro" },
+    "fallbacks": []
+  }
+]
+```
+
+The parser is fail-closed. It rejects:
+
+- missing, duplicate, or unknown roles;
+- a mode name presented as a role;
+- unknown fields;
+- credential-, prompt-, or repository-content-shaped fields or scope values;
+- credential-shaped values;
+- unbounded or malformed scope, CLI, or model identifiers;
+- duplicate primary/fallback targets;
+- more than four fallbacks for one role.
+
+The persisted record contains only scope, revision, source, dormant status, deterministic idempotency identity, bounded CLI/model identifiers, selection labels, fallbacks, and timestamps. It does not store tokens, API keys, credentials, prompts, repository content, capability results, or permission profiles.
+
+### Startup and persistence
+
+Role configuration is parsed before the worker opens its production database. Invalid configuration therefore fails before role persistence.
+
+A valid explicit configuration is persisted through the existing `BridgeDb` compatibility façade and the sole role-assignment repository. Repeating the identical configuration returns the same revision. A changed valid configuration creates the next revision for the same scope.
+
+Production startup remains strict: ordinary services accept only the current schema version. Schema version 2 databases must be upgraded to schema version 3 through the guarded rollout helper before a schema-3 worker is started.
+
+### Current status surface
+
+`/chain` preserves its legacy output when no role assignment revision exists. When a revision exists it additionally reports:
+
+- `Role assignments: configured_dormant`;
+- desired revision and configuration source;
+- desired primary and fallback targets for each role;
+- `Role routing: disabled`;
+- the effective legacy interactive, code, and scribe chains.
+
+Desired configuration is never labelled effective. No assignment value is consulted by an existing job handler or interactive dispatch path.
 
 ## Roles and modes
 
@@ -45,9 +117,9 @@ Documentation Steward modes:
 
 Scanner is a Code Worker mode. Reviewer, operations, planning, decomposition review, and readiness are Technical Lead modes.
 
-## Assignment model
+## Target-state assignment model — later slices
 
-Each role resolves to a primary target and zero or more fallbacks:
+The following richer model is the canonical target state, not the current Slice 1 persisted schema:
 
 ```yaml
 roles:
@@ -95,25 +167,27 @@ roles:
       maintenance: documentation_only
 ```
 
-The persisted schema stores explicit model IDs. A CLI name without a model is not a complete manual assignment.
+A CLI name without a model is not a complete explicit assignment.
 
-## Assignment modes
+## Target-state assignment modes — later slices
+
+Slice 1 persists the `automatic`, `recommended`, and `manual` labels but does not execute their resolution behaviour.
 
 ### Automatic
 
-Agent Bridge ranks authenticated targets using verified capability metadata and workspace policy.
+Later slices rank authenticated targets using verified capability metadata and workspace policy.
 
 ### Recommended
 
-Agent Bridge proposes assignments. The platform displays reasoning tier, coding/documentation suitability, structured-output support, permission compatibility, cost tier, fallback coverage, role separation, and model-diversity metadata before the user accepts them.
+Later slices propose assignments. The platform displays reasoning tier, coding/documentation suitability, structured-output support, permission compatibility, cost tier, fallback coverage, role separation, and model-diversity metadata before the user accepts them.
 
 ### Manual
 
-The user selects primary and fallback CLI/model targets. Agent Bridge still rejects targets that cannot satisfy the role's permission or structured-output contract.
+Later slices validate selected primary and fallback CLI/model targets against role capability and permission contracts before activation.
 
-## Capability metadata
+## Target-state capability metadata — later slices
 
-Each discovered target records:
+Each discovered target will record:
 
 ```yaml
 cli: codex
@@ -133,9 +207,9 @@ last_probe:
   checked_at: <timestamp>
 ```
 
-CLI-supported discovery is preferred. Static provider metadata and manually entered model IDs are supported where discovery is unavailable, but a bounded validation probe is required before selection.
+CLI-supported discovery is preferred. Static provider metadata and manually entered model IDs are supported where discovery is unavailable, but a bounded validation probe is required before later activation.
 
-## Automatic ranking
+## Target-state automatic ranking — later slices
 
 - **Technical Lead:** reasoning quality, reliable structured output, read-only evidence compatibility, then cost and latency.
 - **Code Worker:** coding success and repository-tool compatibility, then cost and latency.
@@ -143,9 +217,9 @@ CLI-supported discovery is preferred. Static provider metadata and manually ente
 
 Fallback preserves required capability before optimising cost.
 
-## Single-CLI operation
+## Single-CLI and single-model target state — later slices
 
-When only one CLI is authenticated, Agent Bridge resolves a model separately for each role:
+When only one CLI is authenticated, later resolution chooses a model separately for each role. When only one model is available, it may serve every role and preserve the target-state role/authority boundary, but Issue #161 classifies actual delivery independence as `non_independent` and holds the workflow for a genuinely independent frontier reviewer or human decision.
 
 - Technical Lead: strongest suitable reasoning model;
 - Code Worker: strongest cost-effective coding model;
@@ -160,24 +234,24 @@ When only one model is available, it may serve every role. The status surface re
 ```text
 Role separation: preserved
 Model diversity: unavailable
-Actual review independence: technical_lead_role_independent
+Actual review independence: non_independent
 Single-provider dependency: active
 ```
 
-The independent-review status is valid only when the final reviewer acts through the read-only Technical Lead advisor path, did not author or modify the reviewed implementation, has no mutation authority in the review invocation, and reviews the exact checked head in a fresh invocation. Model diversity is reported separately and does not block the workflow.
+Role separation remains preserved, but a single-model fresh session does not satisfy Issue #161's genuinely independent final-review gate. The workflow stays held for a different frontier reviewer or human decision.
 
 ## Review target resolution
 
 The configured Technical Lead advisor target owns implementation, operations, readiness, and final review reasoning. Review independence is established by role and authority separation from the mutating Code Worker.
 
-Agent Bridge may prefer a different CLI or model when available as an additional challenge signal, but this is not required. The same frontier model and CLI may perform the review when:
+The target-state role policy still requires all of the following review-authority controls:
 
 1. the reviewer role is `technical_lead`;
 2. the Technical Lead did not author or modify the implementation under review;
 3. the review invocation is read-only and has no mutation authority;
 4. the review is a fresh invocation bound to the exact `subject_head_sha`.
 
-Prior read-only Technical Lead requirements, planning, decomposition, guidance, or review work does not disqualify the reviewer. The mutating Code Worker cannot review its own implementation. A head change requires a fresh Technical Lead review invocation, not a different model.
+Prior read-only Technical Lead requirements, planning, decomposition, guidance, or review work does not disqualify the reviewer. The mutating Code Worker cannot review its own implementation. A head change requires a fresh Technical Lead review invocation. For Issue #161 delivery readiness, these controls are necessary but not sufficient: the final reviewer must also be genuinely independent, and a same-model fresh session is recorded as `non_independent`.
 
 Every review records:
 
@@ -193,7 +267,7 @@ The platform does not expose a fourth Reviewer role.
 
 ## Phase and exact-head stability
 
-An active logical call snapshots its role, mode, assignment revision, target, permission profile, prompt/skill identity, and subject revision where applicable.
+A later active logical call snapshots its role, mode, assignment revision, target, permission profile, prompt/skill identity, and subject revision where applicable.
 
 Verification, implementation review, operations review, documentation, and readiness bind to one exact `subject_head_sha`. A code-changing repair invalidates later evidence for the old head; target reassignment or fallback does not permit reuse of stale evidence.
 
@@ -215,11 +289,11 @@ No fallback or degraded state is silent.
 
 ## Compatibility
 
-Legacy `WORKER_CODE_CLI_CHAIN` and `WORKER_SCRIBE_CLI_CHAIN` may be read during migration. Once role assignments are persisted and routing is explicitly activated, role configuration is authoritative. Legacy values remain visible compatibility inputs and do not silently override explicit role assignments.
+Legacy `WORKER_CLI_CHAIN`, `WORKER_CODE_CLI_CHAIN`, and `WORKER_SCRIBE_CLI_CHAIN` remain authoritative in Slice 1. Explicit role configuration is desired state only and cannot override or participate in dispatch.
 
-PR #160 itself does not activate role routing. Until the relevant slices are implemented, current legacy worker CLI policy remains effective.
+A later activation slice may make role configuration authoritative only after its own human gate, routing tests, capability-resolution implementation, and operational qualification.
 
-## Platform requirements
+## Platform requirements — later slices
 
 The hosted platform provides:
 
@@ -235,3 +309,5 @@ The hosted platform provides:
 - audit history without secrets or raw unrestricted prompts.
 
 Desired configuration is not represented as effective until the appliance reports the matching applied revision.
+
+Slice 1 does not add Platform transport or mutate Platform state.

@@ -2,26 +2,24 @@
 // (test/rolloutHelper.test.ts and test/rolloutUat.test.ts, Phase 4C
 // issue #135). Single source of truth so the two suites can never drift
 // on what a "fixture" actually looks like.
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
-  closeSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
   readFileSync,
   rmSync,
   statSync,
   symlinkSync,
-  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
+import { createLegacyFixture, ROLE_FIXTURES } from "./legacyDbFixture";
 
 export const helperPath = fileURLToPath(new URL("../../scripts/rollout-agent-bridge.sh", import.meta.url));
 export const sentinelClearPath = fileURLToPath(new URL("../../scripts/rollout-sentinel-clear.sh", import.meta.url));
@@ -43,7 +41,15 @@ export const units = [
 export interface Fixture {
   root: string;
   project: string;
+  /** HEAD of the fixture's "main" branch — the target commit a rollout migrates to. */
   expectedCommit: string;
+  /**
+   * A distinct, earlier real commit on the same branch (Phase 4C.5, issue
+   * #135) — `git reset --hard` to this SHA is what "revert to previous
+   * code" actually means in the rollback drills; it's never the same value
+   * as expectedCommit.
+   */
+  previousCommit: string;
   dbPaths: string[];
   actionLog: string;
   stateFile: string;
@@ -307,8 +313,16 @@ export function createFixture(options: { pending?: number; unknownSchema?: boole
   execFileSync("git", ["-C", project, "config", "user.email", "rollout@example.invalid"]);
   execFileSync("git", ["-C", project, "config", "user.name", "Rollout Test"]);
   execFileSync("git", ["-C", project, "add", "."]);
-  execFileSync("git", ["-C", project, "commit", "-qm", "fixture"]);
+  execFileSync("git", ["-C", project, "commit", "-qm", "fixture (previous release)"]);
   execFileSync("git", ["-C", project, "branch", "-M", "main"]);
+  const previousCommit = execFileSync("git", ["-C", project, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+  // A second, genuinely distinct commit — expectedCommit is always the
+  // target a rollout migrates to; previousCommit is always what "revert to
+  // previous code" (§9) actually checks out. Never the same SHA, so a
+  // rollback drill can't accidentally pass by comparing a value to itself.
+  writeFileSync(join(project, "RELEASE_MARKER"), "target release\n");
+  execFileSync("git", ["-C", project, "add", "RELEASE_MARKER"]);
+  execFileSync("git", ["-C", project, "commit", "-qm", "fixture (target release)"]);
   const expectedCommit = execFileSync("git", ["-C", project, "rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 
   const dbPaths = Array.from({ length: 5 }, (_, index) => join(dbDir, `bridge-${index}.sqlite`));
@@ -344,7 +358,7 @@ export function createFixture(options: { pending?: number; unknownSchema?: boole
   ].join("\n"), { mode: 0o600 });
   writeFileSync(stateFile, options.initiallyStopped ? "" : `${units.join("\n")}\n`);
   writeFileSync(actionLog, "");
-  const fixture = { root, project, expectedCommit, dbPaths, actionLog, stateFile, backupDir, logDir, lockFile, configFile, envDir, cgroupRoot };
+  const fixture = { root, project, expectedCommit, previousCommit, dbPaths, actionLog, stateFile, backupDir, logDir, lockFile, configFile, envDir, cgroupRoot };
   writeFakeCommands(fixture);
   return fixture;
 }
@@ -396,20 +410,101 @@ export async function waitForAction(fixture: Fixture, pattern: RegExp, timeoutMs
 // under test. This is a real mutual-exclusion lock, not a documented
 // "don't run these in parallel" convention — every real-systemd test
 // must acquire it before touching systemd --user and release it after.
-const REAL_SYSTEMD_LOCK_PATH = join(tmpdir(), "agent-bridge-real-systemd-uat.lock");
+//
+// Kernel-held (real `flock`), not an exclusive-create sentinel file: a
+// crashed test runner's own process death releases the flock for free.
+// An exclusive-create file would instead be left behind indefinitely,
+// blocking every future run until someone notices and removes it by
+// hand. The lock file itself (the inode flock operates on) is never
+// deleted — only ever the process holding it is killed to release.
+const REAL_SYSTEMD_LOCK_PATH = join(tmpdir(), "agent-bridge-real-systemd-uat.flock");
 
 export async function acquireRealSystemdLock(timeoutMs = 60_000): Promise<() => void> {
+  const holder = spawn("bash", [
+    "-c",
+    `exec 9>"${REAL_SYSTEMD_LOCK_PATH}"; flock --exclusive 9; echo LOCKED; exec sleep infinity`,
+  ], { stdio: ["ignore", "pipe", "ignore"] });
+
+  let locked = false;
+  let output = "";
+  holder.stdout?.on("data", (chunk: Buffer) => {
+    output += chunk.toString();
+    if (output.includes("LOCKED")) locked = true;
+  });
+
   const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    try {
-      closeSync(openSync(REAL_SYSTEMD_LOCK_PATH, "wx"));
-      return () => {
-        try { unlinkSync(REAL_SYSTEMD_LOCK_PATH); } catch { /* already released */ }
-      };
-    } catch (error: unknown) {
-      if (!(error && typeof error === "object" && "code" in error && (error as { code: string }).code === "EEXIST")) throw error;
-      if (Date.now() >= deadline) throw new Error("timed out waiting for the real-systemd UAT lock");
-      await new Promise((resolve) => setTimeout(resolve, 50));
+  while (!locked) {
+    if (Date.now() >= deadline) {
+      holder.kill("SIGKILL");
+      throw new Error("timed out waiting for the real-systemd UAT lock");
     }
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
+  return () => {
+    holder.kill("SIGKILL");
+  };
+}
+
+/**
+ * Per-fixture unique suffix (Phase 4C.5, issue #135), deterministic from
+ * the fixture's own unique temp root so every call site (the fake
+ * systemctl shim, unit-file setup, teardown, assertions) derives the same
+ * mapping independently without threading extra state through every
+ * function signature.
+ */
+function uatRunId(fixture: Fixture): string {
+  return createHash("sha1").update(fixture.root).digest("hex").slice(0, 12);
+}
+
+/**
+ * The real, unique systemd unit name a production unit name maps to for
+ * this fixture's real-systemd UAT run. `rollout-agent-bridge.sh`'s
+ * compiled ALLOWED_UNITS allowlist requires the *config* to list the
+ * exact production names — that allowlist is exactly what's under test
+ * and must never be loosened — so the remapping happens one layer below,
+ * inside the fake systemctl shim that translates each unit-name argument
+ * before ever touching the real systemd --user session. Real systemd
+ * therefore never manages anything named after a real Agent Bridge
+ * service, regardless of what the script itself believes it's operating
+ * on.
+ */
+export function uniqueUnitName(fixture: Fixture, productionUnit: string): string {
+  return productionUnit.replace(/\.service$/, `-uat-${uatRunId(fixture)}.service`);
+}
+
+/**
+ * Reseeds all five configured databases from the fixed, pre-versioned
+ * PR #147 role fixtures (shared/discord/health/interactive/worker, in the
+ * same order as fixture.dbPaths — see the DB_PATH wiring above), instead
+ * of the generic minimal shape createFixture() uses by default. Layers a
+ * legacy-shaped pending_messages table on top of the untouched upstream
+ * fixture: rollout-db.ts's own inspectDatabase() REQUIRE_TABLES check
+ * demands pending_messages exist even pre-migration (a stricter
+ * precondition than openDb()'s own CREATE TABLE IF NOT EXISTS repair
+ * path), so without this the real rollout's preflight `inspect` step
+ * would reject the fixture before migration ever ran.
+ */
+export function seedRoleFixtures(fixture: Fixture): void {
+  fixture.dbPaths.forEach((path, index) => {
+    const role = ROLE_FIXTURES[index];
+    if (!role) throw new Error(`no PR #147 role fixture for database index ${index}`);
+    rmSync(path, { force: true });
+    rmSync(`${path}-wal`, { force: true });
+    rmSync(`${path}-shm`, { force: true });
+    createLegacyFixture(path);
+    const db = new Database(path);
+    db.exec(`
+      CREATE TABLE pending_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_key TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        chat_id INTEGER NOT NULL,
+        thread_id INTEGER,
+        chat_type TEXT NOT NULL DEFAULT 'private',
+        user_id INTEGER,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+    `);
+    db.close();
+  });
 }

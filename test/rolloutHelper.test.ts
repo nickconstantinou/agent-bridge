@@ -38,6 +38,7 @@ import {
   runRollout,
   sentinelClearPath,
   sha256,
+  uniqueUnitName,
   sourceDir,
   units,
   useMinimalInventory,
@@ -240,6 +241,15 @@ describe("guarded rollout helper", () => {
     async () => {
       const fixture = useMinimalInventory(createFixture());
       const unit = units[0];
+      // Safety (Phase 4C.5, issue #135): real systemd must never manage
+      // anything literally named after a production Agent Bridge service,
+      // even transiently. The script only ever sees the production name
+      // (required by its compiled ALLOWED_UNITS allowlist); the fake
+      // systemctl shim remaps it to a per-fixture-unique real unit name
+      // one layer below, before ever touching the real systemd --user
+      // session — see test/rolloutUat.test.ts's uniqueUnitName() for the
+      // full rationale.
+      const realUnit = uniqueUnitName(fixture, unit);
       const runtimeDir = `/run/user/${process.getuid()}`;
       const userEnv = {
         ...process.env,
@@ -258,7 +268,11 @@ if [ "\${1:-}" = show ] && [[ " $* " == *" --property=EnvironmentFiles "* ]]; th
 elif [ "\${1:-}" = show ] && [[ " $* " == *" --property=Environment "* ]]; then
   echo NODE_ENV=production
 else
-  exec /usr/bin/systemctl --user "$@"
+  args=()
+  for arg in "$@"; do
+    if [ "\$arg" = "${unit}" ]; then args+=("${realUnit}"); else args+=("\$arg"); fi
+  done
+  exec /usr/bin/systemctl --user "\${args[@]}"
 fi
 `);
 
@@ -267,9 +281,13 @@ fi
       // it for real, so they must never run concurrently against it.
       const releaseSystemdLock = await acquireRealSystemdLock();
       try {
+        const loadState = execFileSync("systemctl", ["--user", "show", realUnit, "-p", "LoadState", "--value"], { env: userEnv, encoding: "utf8" }).trim();
+        if (loadState && loadState !== "not-found") {
+          throw new Error(`refusing to start real-systemd UAT unit: ${realUnit} is already loaded (LoadState=${loadState})`);
+        }
         execFileSync("systemd-run", [
           "--user",
-          `--unit=${unit}`,
+          `--unit=${realUnit}`,
           "--service-type=simple",
           "--property=Restart=no",
           "/bin/sh",
@@ -277,7 +295,7 @@ fi
           "trap 'exit 143' TERM; while :; do sleep 1; done",
         ], { env: userEnv, stdio: "ignore" });
         const deadline = Date.now() + 5_000;
-        while (execFileSync("systemctl", ["--user", "show", unit, "-p", "ActiveState", "--value"], { env: userEnv, encoding: "utf8" }).trim() !== "active") {
+        while (execFileSync("systemctl", ["--user", "show", realUnit, "-p", "ActiveState", "--value"], { env: userEnv, encoding: "utf8" }).trim() !== "active") {
           if (Date.now() >= deadline) throw new Error("real systemd fixture did not become active");
           await new Promise((resolve) => setTimeout(resolve, 25));
         }
@@ -298,8 +316,8 @@ fi
           remainingCgroupPids: [],
         }));
       } finally {
-        spawnSync("systemctl", ["--user", "stop", unit], { env: userEnv, stdio: "ignore" });
-        spawnSync("systemctl", ["--user", "reset-failed", unit], { env: userEnv, stdio: "ignore" });
+        spawnSync("systemctl", ["--user", "stop", realUnit], { env: userEnv, stdio: "ignore" });
+        spawnSync("systemctl", ["--user", "reset-failed", realUnit], { env: userEnv, stdio: "ignore" });
         releaseSystemdLock();
       }
     },

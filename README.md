@@ -143,8 +143,12 @@ unless the PR head SHA still matches the approval and CI checks are green.
 
 Worker commands: `/review`, `/feature`, `/issues`, `/issue`, `/jobs`, `/job`,
 `/approvals`, `/chain`, `/models`, `/effort`. `/models` follows the active CLI;
-`/chain` shows the worker fallback order. The worker also schedules `pr_watch` jobs to react to
-CI status, stale PRs, and held/refresh/close decisions.
+`/chain` keeps the legacy-only response when no desired role revision exists.
+When configured, it reports the exact three-role assignment as
+`configured_dormant`, states `Role routing: disabled`, and separately shows the
+effective legacy interactive, code, and scribe chains. Desired assignments do
+not participate in dispatch. The worker also schedules `pr_watch` jobs to react
+to CI status, stale PRs, and held/refresh/close decisions.
 
 Full guide: `docs/WORKER-GUIDE.md`. Architecture:
 `docs/architecture/engineering-worker.md`. Design history and Phase 9
@@ -206,6 +210,8 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `WORKER_CLI_CHAIN` | Worker | `codex,claude,antigravity` | CLI fallback order for worker interactive chat |
 | `WORKER_CODE_CLI_CHAIN` | Worker | `codex,claude` | Code-writing job fallback order; `antigravity` is stripped if present |
 | `WORKER_SCRIBE_CLI_CHAIN` | Worker | `antigravity,codex,claude` | Read-only/prose worker job fallback order for scans, plans, summaries, docs |
+| `WORKER_ROLE_ASSIGNMENTS_JSON` | Worker | — | Optional exact three-role desired assignment array; persisted as `configured_dormant` and never used for current dispatch |
+| `WORKER_ROLE_ASSIGNMENT_SCOPE` | Worker | `worker:default` | Bounded scope key for dormant desired role-assignment revisions |
 | `WORKER_CODE_CLI_COMMAND` | Worker | first `WORKER_CODE_CLI_CHAIN` entry | Primary CLI command for code-writing jobs |
 | `WORKER_SCRIBE_CLI_COMMAND` | Worker | `DEFECT_SCAN_CLI_COMMAND` or first `WORKER_SCRIBE_CLI_CHAIN` entry | Primary CLI command for read-only/prose jobs |
 | `BRIDGE_ASYNC_ENABLED` | All | `true` | Enable streaming (disable for sync/plain mode) |
@@ -665,7 +671,13 @@ Telegram / Discord update
 
 Each service has its own SQLite database by default (`DB_PATH`, WAL mode). The
 main bridge database stores chat sessions and polling state; the worker database
-also stores `work_items`, `work_jobs`, `approvals`, and `github_links`.
+also stores `work_items`, `work_jobs`, `approvals`, `github_links`, and dormant
+`role_assignment_revisions` with child `role_assignments` rows.
+
+Schema migration 2 retires the legacy SQLite `prompts` table. Schema migration 3
+adds the dormant desired role-assignment tables. Ordinary production services
+remain strict and require the guarded rollout helper to upgrade schema-version-2
+databases before a schema-3 service starts.
 
 ### Guarded production rollout
 

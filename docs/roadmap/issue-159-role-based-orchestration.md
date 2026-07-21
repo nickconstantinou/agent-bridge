@@ -3,7 +3,7 @@ status: active-roadmap
 type: roadmap
 authority: canonical
 implementation_status: partially-implemented
-last_validated_against: db2ab80f6895bad76cdf46930790bfe70691408a
+last_validated_against: 4cfd960
 ---
 
 # Issue #159 — Role-Based Agentic Orchestration
@@ -20,9 +20,9 @@ The worker exposes exactly three configurable roles:
 
 Agent Bridge remains authoritative for requirements state, workflow transitions, issue and PR mutation, permissions, role/model resolution, prompts, lifecycle skills, validators, evidence, budgets, retries, cancellation, approvals, merge, deployment, and audit.
 
-## Delivered foundation — PR #160
+## Delivered prompt foundation — PR #160
 
-PR #160 at exact head `db2ab80f6895bad76cdf46930790bfe70691408a` delivers:
+PR #160 at exact head `4cfd960` delivers:
 
 - a source-controlled canonical registry for 22 role/mode prompt contracts;
 - separate Technical Lead requirements, issue, decomposition-review, planning, focused repair, guidance, implementation review, operations review, and readiness prompts;
@@ -39,7 +39,7 @@ PR #160 at exact head `db2ab80f6895bad76cdf46930790bfe70691408a` delivers:
 - role-template, lifecycle-skill-set, composed-template, and rendered-content identity tests;
 - exact-head review, operations, documentation, readiness, CI, and final Technical Lead review contracts;
 - explicit evidence states for passed, failed, not run, not scheduled, stale, and unknown checks;
-- Technical Lead/Code Worker role-separation review independence, with model diversity recorded as optional metadata rather than a blocking requirement;
+- Technical Lead/Code Worker role and authority separation, with Issue #161 additionally requiring a genuinely independent frontier reviewer;
 - same-delivery correction of every stale, contradictory, missing, or materially misleading required document;
 - full revalidation of `docs/architecture/01-current-architecture.md`;
 - source-only prompt resolution for canonical and compatibility-key handlers;
@@ -47,13 +47,44 @@ PR #160 at exact head `db2ab80f6895bad76cdf46930790bfe70691408a` delivers:
 - schema migration 2, which removes an absent or empty legacy `prompts` table and fails closed if an unexpected row exists;
 - target-state architecture, testing, configuration, operations, documentation, and rollout policy.
 
-Role routing, durable role assignment, requirements lifecycle, complete structured plan persistence, permissions, Documentation Steward execution, platform allocation, durable prompt/skill audit persistence, and final role-workflow qualification remain to be implemented through the slices below.
+PR #160 remains the target-state authority for later role routing and orchestration slices.
 
-## Slice 0 reconciliation
+## Slice 0 reconciliation — PR #170
 
-Slice 0 is documented by `docs/implementation-plans/issue-159-slice-0-reconciliation.md`. It records the exact PR #160 and Platform baselines, current owners, overlap decisions, concrete target-path classification, actual child issues, cross-repository ownership, human gates and retrospective.
+Slice 0 is documented by `docs/implementation-plans/issue-159-slice-0-reconciliation.md`. Its current exact head is `f8ee5415c4bc5331a8331c923b7fa8d53601a8de`, stacked on PR #160. It records current owners, overlap decisions, concrete target-path classification, actual child issues, cross-repository ownership, human gates, and retrospective.
 
-Slice 0 creates documentation and issue metadata only. It does not authorize Slice 1, merge, deployment, restart, production migration, service mutation, Platform runtime mutation or any other behavioural change.
+Slice 0 creates documentation and issue metadata only. It does not itself merge, deploy, restart services, migrate production databases, mutate Platform runtime state, or activate any role behaviour.
+
+## Slice 1 dormant role persistence — Issue #161 / draft PR #174
+
+Issue #161 is the sole Slice 1 implementation owner. Draft PR #174 is stacked on the approved Slice 0 head and implements the following dormant foundation:
+
+- the exact three-role public domain and canonical mode registry;
+- bounded explicit desired CLI/model assignments with ordered fallbacks;
+- deterministic desired-assignment identity and append-only revisions;
+- schema migration 3 through the existing registry, repository SQL owner, and `BridgeDb` compatibility façade;
+- representative schema-version-2 migration, reopen, idempotency, foreign-key, rollback, and guarded-rollout test contracts;
+- `/chain` reporting of desired assignments as `configured_dormant`;
+- explicit `Role routing: disabled` status;
+- explicit reporting of the effective legacy interactive, code, and scribe chains;
+- unchanged current handler routing and Git/GitHub authorities;
+- current architecture, configuration, operations, testing, readiness, and worker documentation updates.
+
+Slice 1 does **not** implement or activate:
+
+- capability or model discovery/ranking;
+- automatic, recommended, or manual resolution behaviour beyond persisting the selection label;
+- applied/effective role routing;
+- permission profiles or capability tokens;
+- requirements or canonical issue lifecycle;
+- role-native planning, implementation review, operations review, or PR-readiness execution;
+- Documentation Steward execution;
+- Platform transport or desired/effective API/UI state;
+- deployment, service restart, production database migration, queue mutation, or merge.
+
+Draft PR #174 must not be represented as ready or complete until all required exact-head local and GitHub checks, implementation and operations review, documentation validation, PR readiness, and genuinely independent final review pass at one exact final head. Its branch state and evidence belong in the PR and Issue #161 rather than being frozen as a completion claim in this roadmap.
+
+Role routing, capability resolution, requirements lifecycle, complete structured plan persistence, permissions, Documentation Steward execution, Platform allocation, durable prompt/skill audit persistence, and final role-workflow qualification remain to be implemented through later slices.
 
 ## Approved scope
 
@@ -68,7 +99,7 @@ Slice 0 creates documentation and issue metadata only. It does not authorize Sli
 - source-controlled prompt key/version and role-template hash per role invocation;
 - source-controlled lifecycle skill key/version/content hashes and composed-template hash per role invocation;
 - exact-head verification, review, operations, documentation, readiness, CI, and final Technical Lead review evidence;
-- single-CLI and single-model operation with explicit model-diversity metadata and preserved role-separation review independence;
+- single-CLI and single-model operation with explicit model-diversity metadata, while Issue #161's independent final-review gate remains held without a different frontier reviewer;
 - lifecycle, cancellation, restart, lease, audit, migration, rollback, and platform coordination;
 - completed removal of legacy database prompt overrides and their schema table.
 
@@ -78,7 +109,9 @@ Prompt text and reusable SDLC know-how are reviewed source artefacts. Canonical 
 
 The four canonical skills are `requirements-to-acceptance`, `risk-based-test-strategy`, `red-green-refactor-tdd`, and `release-readiness-review`. Role and compatibility contracts declare exactly which skills they consume. The loader validates one marked runtime block and the matching manifest version, then composes the skills deterministically. Prompt-specific authority and structured output remain in role prompts and code.
 
-Schema migration 2 retires the legacy table. It treats an absent table as already removed, drops an empty table transactionally, and aborts without data loss if an unexpected row exists. On rejection, schema version 1 and the table contents remain intact for guarded investigation. Prompt rollback is application rollback to a reviewed SHA.
+Schema migration 2 retires the legacy prompt table. It treats an absent table as already removed, drops an empty table transactionally, and aborts without data loss if an unexpected row exists. On rejection, schema version 1 and the table contents remain intact for guarded investigation. Prompt rollback is application rollback to a reviewed SHA.
+
+Schema migration 3 adds only dormant role-assignment revisions and child assignment rows. Ordinary production startup remains strict; production migration and restart stay under the existing guarded rollout helper and separate human approval.
 
 ## Implementation strategy
 
@@ -121,8 +154,10 @@ The numbered graph is implementation delivery order, not runtime phase order. Sl
 
 ```text
 PR #160
-  -> #161 -> #162 -> #163 -> #164 -> #165 -> #166 -> #167 (dormant) -> #168 (activation) -> #169
-                                                                                              -> platform #134
+  -> Slice 0 / PR #170
+  -> #161 / PR #174
+  -> #162 -> #163 -> #164 -> #165 -> #166 -> #167 (dormant) -> #168 (activation) -> #169
+                                                                                         -> platform #134
 ```
 
 The dependency graph also includes #100/PR #152, #132 and #146 before or within #165/#168; #135/PR #158 before #169; and Platform #72/#93/#95/#96/#119 before or within Platform #134.
@@ -146,7 +181,7 @@ Slice #167 must not activate documentation execution. Slice #168 owns activation
 
 Each child issue enumerates production-boundary red tests, product and architectural intent, expected current failure, authoritative oracle, focused red command, false-positive controls, sibling behaviour remaining green, migration/rollback impact, documentation triggers, classified target paths, and exact dependencies.
 
-Do not start Slice 1 until this decomposition receives maintainer approval. Do not pull a later slice into an earlier issue.
+Slice 1 began only after the maintainer approved the Slice 0 gate. A later slice must not be pulled into an earlier issue.
 
 ## Detailed implementation plans
 
@@ -155,7 +190,7 @@ Do not start Slice 1 until this decomposition receives maintainer approval. Do n
 - `docs/implementation-plans/issue-159-execution-readiness-safeguards.md`
 - `docs/implementation-plans/issue-159-slice-0-reconciliation.md`
 
-These plans are normative for implementation and subordinate only to the accepted ADR, canonical architecture, Issue #159, and current repository evidence. The Slice 0 reconciliation is authoritative for current owner modules, concrete likely target files, overlap decisions, actual issue numbers, sequencing and the cross-repository interface at the stated exact base.
+These plans are normative for implementation and subordinate only to the accepted ADR, canonical architecture, Issue #159, and current repository evidence. The Slice 0 reconciliation is authoritative for current owner modules, concrete likely target files, overlap decisions, actual issue numbers, sequencing, and the cross-repository interface at the stated exact base.
 
 ## Dependencies and coordination
 
@@ -182,8 +217,8 @@ Human approval remains required for:
 - material canonical issue or delivery-scope changes;
 - role defaults and review authority policy;
 - merge;
-- production deployment/restart;
-- database/fleet migration;
+- production deployment or restart;
+- database or fleet migration;
 - destructive, secret, permission, or policy changes.
 
 ## Completion

@@ -34,7 +34,7 @@ The Technical Lead uses the strongest configured read-only advisor path. No impl
 
 The platform binds each role to an authenticated CLI, explicit model, fallbacks, permission profiles, and budgets. One authenticated CLI may expose different models to different roles. One available frontier model may serve every role through separate sessions and permissions.
 
-Review independence is defined by role and authority separation, not model identity. A Technical Lead review is independent from Code Worker implementation when the reviewer did not author or modify the reviewed implementation, has no mutation authority in the review invocation, and performs a fresh review of the exact checked head. Provider/model diversity is preferred metadata but is not required.
+Target-state role and authority separation requires that a Technical Lead reviewer did not author or modify the reviewed implementation, has no mutation authority in the review invocation, and performs a fresh review of the exact checked head. Issue #161 uses a stricter delivery gate without changing the later target-state option: a same-model fresh session is `non_independent` and a genuinely independent frontier reviewer is required.
 
 ## Consequences
 
@@ -59,7 +59,7 @@ Trade-offs:
 Risks and controls:
 
 - the Technical Lead must not become an autonomous authority: Agent Bridge owns every transition and permission;
-- same-model review may correlate reasoning errors: model diversity is reported and may be preferred, while deterministic evidence, a fresh exact-head review invocation, the read-only Technical Lead boundary, and the human merge gate remain authoritative controls;
+- same-model review may correlate reasoning errors: Issue #161 therefore requires a genuinely independent frontier review in addition to deterministic evidence, a fresh exact-head read-only Technical Lead boundary, and the human merge gate;
 - the Code Worker must not self-review its own mutation: reviewer role, mutation history, invocation authority, and exact head are recorded;
 - requirements discovery may over-call models: calls are bounded, structured, durable, and driven by unresolved facts or decisions;
 - read-only evidence tools may escape their boundary: tools are typed, allowlisted, budgeted, audited, and Bridge-owned.
@@ -76,7 +76,7 @@ Rejected. Scanner and Code Worker share repository capability under different mo
 
 ### Require a separate provider or model for every role
 
-Rejected. It would make single-CLI or single-model workspaces unusable and confuses provider/model diversity with role and authority isolation.
+Rejected as a universal target-state rule because it would make single-CLI or single-model workspaces unusable and confuses provider/model diversity with role and authority isolation. Issue #161's final delivery review is the narrower exception and remains held when no genuinely independent frontier reviewer is available.
 
 ### Let the Technical Lead dispatch or mutate directly
 

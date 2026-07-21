@@ -10,6 +10,7 @@ import { setPendingFeatureBrief, setPendingRepoBrief } from "./featureBriefCaptu
 import { closeLinkedIssueForMergedPr } from "./githubIssueClosure.js";
 import { buildRepoKeyboard, buildRepoSetKeyboard, resolveGithubOwner } from "./repoRegistry.js";
 import { createRunCommand } from "./runCommandAsync.js";
+import type { WorkerCliPolicy } from "./workerCliPolicy.js";
 
 const DEFAULT_CLI_CHAIN = ["codex", "claude", "antigravity"];
 const ACTIVE_WORK_ITEM_PREFIX = "active_work_item:";
@@ -17,7 +18,9 @@ const ACTIVE_WORK_ITEM_PREFIX = "active_work_item:";
 export interface WorkerCommandContext {
   workerEnabled: boolean;
   cliChain?: string[];
+  cliPolicy?: WorkerCliPolicy;
   db?: BridgeDb;
+  roleScopeKey?: string;
   chatId?: number;
   threadId?: number;
   userId?: string;
@@ -149,6 +152,43 @@ async function reconcilePendingMergeApprovals(
       if (link) db.updatePrState(link.id, "closed");
     }
   }
+}
+
+function buildWorkerChainStatus(ctx: WorkerCommandContext, chain: string[]): string {
+  const legacyText = `[worker CLI chain]\n\nExecution order: ${chain.join(" → ")}\n\nOn failure, the next CLI in the chain is tried. Merge approval always requires your explicit confirmation.`;
+  if (!ctx.db || !ctx.roleScopeKey) return legacyText;
+
+  const revision = ctx.db.getCurrentRoleAssignmentRevision(ctx.roleScopeKey);
+  if (!revision) return legacyText;
+
+  const policy = ctx.cliPolicy ?? {
+    interactiveChain: chain,
+    codeChain: chain,
+    scribeChain: chain,
+  };
+  const desired = revision.assignments.map((assignment) => {
+    const fallbackText = assignment.fallbacks.length > 0
+      ? `; fallbacks: ${assignment.fallbacks.map((target) => `${target.cli}/${target.model}`).join(" → ")}`
+      : "; fallbacks: none";
+    return `${assignment.role}: ${assignment.primary.cli}/${assignment.primary.model} (${assignment.selection}${fallbackText})`;
+  });
+
+  return [
+    "[worker CLI chain]",
+    "",
+    `Execution order: ${chain.join(" → ")}`,
+    "",
+    `Role assignments: ${revision.status}`,
+    `Desired revision: ${revision.revision}`,
+    `Configuration source: ${revision.source}`,
+    ...desired,
+    "Role routing: disabled",
+    `Effective legacy interactive chain: ${policy.interactiveChain.join(" → ")}`,
+    `Effective legacy code chain: ${policy.codeChain.join(" → ")}`,
+    `Effective legacy scribe chain: ${policy.scribeChain.join(" → ")}`,
+    "",
+    "On failure, the next CLI in the effective legacy chain is tried. Merge approval always requires your explicit confirmation.",
+  ].join("\n");
 }
 
 export function isWorkerCommand(text: string): boolean {
@@ -413,7 +453,7 @@ export async function handleWorkerCommand(
     const chain = ctx.cliChain ?? DEFAULT_CLI_CHAIN;
     return {
       kind: "keyboard_message",
-      text: `[worker CLI chain]\n\nExecution order: ${chain.join(" → ")}\n\nOn failure, the next CLI in the chain is tried. Merge approval always requires your explicit confirmation.`,
+      text: buildWorkerChainStatus(ctx, chain),
       reply_markup: {
         inline_keyboard: chain.map((cli) => [{ text: cli, callback_data: `worker:cli:${cli}` }]),
       },

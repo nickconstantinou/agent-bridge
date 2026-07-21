@@ -65,9 +65,9 @@ Independence is established by role and authority separation:
 3. the review invocation has no mutation authority;
 4. the reviewer performs a fresh review of the exact checked `subject_head_sha`.
 
-The Technical Lead may use the same frontier model or CLI as the Code Worker or as earlier Technical Lead phases. Provider or model diversity remains useful metadata and may improve challenge quality, but it is not a blocking independence requirement. Prior read-only requirements, planning, decomposition, guidance, implementation-review, or operations advice does not disqualify the Technical Lead from performing the final review.
+Issue #161 adds a genuinely independent frontier requirement to the role/authority controls above. A same-model fresh session is `non_independent`. Prior read-only requirements, planning, decomposition, guidance, implementation-review, or operations advice does not disqualify an otherwise independent Technical Lead from performing the final review.
 
-The mutating Code Worker cannot review its own implementation. A fresh invocation is required after any head change or blocker repair, but the workflow does not require an endlessly new model or reviewer identity. The Technical Lead reports its role, target, lack of mutation authority, whether it changed the reviewed code, and the exact reviewed head.
+The mutating Code Worker cannot review its own implementation. The general target-state policy does not require an endlessly new model identity, but Issue #161 still requires a genuinely independent frontier reviewer. A fresh invocation is required after any head change or blocker repair. The Technical Lead reports its role, target, model identity, lack of mutation authority, whether it changed the reviewed code, and the exact reviewed head.
 
 The final review applies to the exact checked head. Any blocker correction invalidates the applicable downstream evidence and requires a fresh Technical Lead review invocation.
 

@@ -7,7 +7,7 @@ Strict red-green-refactor applies to every behaviour change. Acceptance and boun
 | Layer | Location | Purpose |
 |---|---|---|
 | Acceptance | `test/acceptance/**` or current repository convention | End-to-end workflow, issue-mutation, exact-head, and structural intent |
-| Integration | existing `test/*.test.ts` pattern | Handler, repository, advisor, provider, workspace, documentation, and lifecycle seams |
+| Integration | existing `test/*.test.ts` pattern | Handler, repository, advisor, provider, workspace, documentation, migration, and lifecycle seams |
 | Unit | current pure-logic test locations | Validators, target provenance, ranking, schemas, and policy functions |
 | Characterization | current integration fixtures | Preserve existing worker, provider, stored-plan, TDD, and compatibility behaviour before refactoring |
 | Architecture Lint | `scripts/arch-lint.sh` | Ownership, permission, SQL, import, and bypass rules |
@@ -29,15 +29,33 @@ Strict red-green-refactor applies to every behaviour change. Acceptance and boun
 11. Ask the read-only Technical Lead advisor for a fresh final review of the exact checked head.
 12. Repair blockers, rerun invalidated phases, and finish with a retrospective.
 
-## Role orchestration suites
+## Slice 1 dormant role suites
 
 ### Role and configuration
 
-Test exactly three configurable roles, explicit CLI/model assignments, automatic/recommended/manual selection, ordered fallbacks, capability rejection, configuration-source status, and legacy-chain precedence.
+Test exactly three configurable roles and exact mode ownership; explicit bounded CLI/model assignments; ordered fallbacks; selection labels; duplicate/missing/unknown/mode-as-role rejection; unknown/credential/prompt/repository-content field rejection; secret-safe errors; configuration source; and unchanged legacy bot/worker-policy parsing.
 
-### Single CLI and model
+Do not treat `automatic`, `recommended`, or `manual` labels as active resolution semantics. Capability/authentication/permission suitability is later-slice coverage.
 
-Test per-role model selection from one CLI, one-model role separation, separate sessions and permission profiles, model-diversity reporting, and independent Technical Lead review through role and authority separation. The same frontier model or CLI may be reused. Verify that the Technical Lead did not author or modify the implementation, has no mutation authority in the review invocation, and reviews the exact checked head in a fresh invocation. Reject Code Worker self-review.
+### Persistence and migration
+
+Test schema-2 representative fixtures, transactional migration to schema 3, exact role-table shape, repository-only SQL ownership, preservation of existing worker data, foreign-key integrity, close/reopen persistence, append-only revisions, deterministic identical retry, conflict on changed input with reused idempotency identity, malformed-table rollback, and absence of secret/prompt/content fields.
+
+Test the guarded rollout boundary separately: schema 2 is `migratable`; schema 3 is `current` only with the required queue, lock, and both role tables.
+
+### Dormant compatibility
+
+Test the exact legacy `/chain` response when no revision exists. With a revision, test `configured_dormant`, desired source/revision/targets, `Role routing: disabled`, and explicit effective legacy interactive/code/scribe chains.
+
+Structurally prove that every current handler remains wired to its existing scribe, code, Git, or GitHub owner and that role assignments do not participate in dispatch.
+
+## Later role-orchestration suites
+
+### Role resolution and degraded operation
+
+Test automatic/recommended/manual semantics, capability rejection, non-mutating probes, per-role model selection from one CLI, one-model role separation, separate sessions and permission profiles, degradation reporting, and policy-required holds.
+
+Test Technical Lead role and authority separation: the reviewer did not author or modify the implementation, has no mutation authority, and reviews the exact checked head in a fresh invocation. Reject Code Worker self-review. For Issue #161 readiness, also reject a same-model fresh session as `non_independent` and require a genuinely independent frontier reviewer.
 
 ### Requirements, issue contracts, and decomposition
 
@@ -63,7 +81,7 @@ Test read-only scan/investigate, test-only red, production-only green, bounded r
 
 Test deterministic verification before implementation review; implementation and applicable operations review before documentation; documentation before PR readiness; exact-head CI before final Technical Lead review; exact `subject_head_sha` equality across all later evidence; explicit `passed`, `failed`, `not_run`, `not_scheduled`, `stale`, and `unknown` states; and rejection of any non-passed required evidence.
 
-Test the final-review independence basis: Technical Lead reviewer role, no authorship or modification of reviewed implementation, no mutation authority, and a fresh exact-head invocation. Provider/model diversity is optional metadata and unavailable diversity must not block readiness. Prior read-only Technical Lead requirements, planning, or advice does not disqualify the reviewer.
+Test the final-review independence basis: Technical Lead reviewer role, no authorship or modification of reviewed implementation, no mutation authority, a fresh exact-head invocation, and the delivery's independent-frontier requirement. For Issue #161, unavailable model diversity blocks the independent final-review gate. Prior read-only Technical Lead requirements, planning, or advice does not disqualify an otherwise independent reviewer.
 
 Test that code-changing repair invalidates verification, implementation review, operations review, documentation, readiness, CI, and final Technical Lead review evidence for the old head.
 
@@ -83,14 +101,16 @@ Detailed contract: `docs/testing/agentic-worker-verification.md`.
 
 Enforce or supplement with structural tests proving:
 
-- role IDs and mode-permission mappings have one owner;
+- role IDs and mode ownership have one owner;
+- role-assignment SQL remains in one repository behind `BridgeDb`;
+- configuration and status owners do not own SQL;
+- current handlers cannot route using dormant role assignments;
 - prompt and lifecycle-skill registries have one owner each;
-- worker handlers cannot invoke provider CLIs directly for role work;
+- worker handlers cannot invoke provider CLIs directly for later role work;
 - Technical Lead calls use AdvisorService;
 - Technical Lead review invocations have no mutation authority;
 - Code Worker cannot invoke its own final review;
 - documentation authoring cannot import production mutation helpers;
-- role and audit SQL remains in owning repositories;
 - status and probe surfaces are read-only;
 - legacy scribe calls cannot become canonical planning without an explicit compatibility marker.
 
@@ -106,25 +126,16 @@ npm run cleanup:check
 git diff --check
 ```
 
-Account for pre-existing cleanup findings and prove none were introduced in changed files. Run lifecycle/concurrency-sensitive suites repeatedly and serially where isolation risk warrants it. Verify exact-head GitHub Actions checks and state accurately when a workflow was not run or not scheduled. After those checks pass, perform the fresh exact-head read-only Technical Lead final review.
+Slice 1 additionally runs the focused role-domain, repository/migration/reopen/idempotency, malformed-schema rollback, rollout qualification, and dormant-dispatch suites named in `docs/testing/agentic-worker-verification.md`.
+
+Account for pre-existing cleanup findings and prove none were introduced in changed files. Run lifecycle, migration, and concurrency-sensitive suites repeatedly and serially where isolation risk warrants it. Verify exact-head GitHub Actions checks and state accurately when a workflow was not run or not scheduled. After those checks pass, perform the fresh exact-head read-only Technical Lead final review.
 
 ## Live qualification
 
-Use a disposable workspace to demonstrate:
+For Slice 1, a future separately approved production qualification demonstrates guarded schema-3 migration across the real database inventory, desired `configured_dormant` status, disabled role routing, unchanged effective legacy chains, queue/lease health, secret-safe output, and protected rollback evidence.
 
-- one CLI with per-role model selection;
-- one-model operation with role separation preserved;
-- requirements clarification and validation of a complete issue;
-- inconsistent multi-issue decomposition blocked before mutation;
-- guarded issue update and semantic post-write verification;
-- rejected scan candidate;
-- classified Technical Lead plan and approved TDD implementation;
-- observed intended red failure before green;
-- implementation review before documentation;
-- stale required documentation blocking readiness until corrected;
-- restart and cancellation without duplicate calls;
-- same-frontier-model Technical Lead review accepted as independent from Code Worker mutation;
-- Code Worker self-review rejected;
-- rollback to legacy routing without queue or state corruption.
+Later active-routing qualification demonstrates per-role capability/model selection, degraded operation, requirements/decomposition, planning/TDD, review/documentation, restart/cancellation, independence reporting, and rollback to legacy routing.
+
+That later qualification includes same-frontier-model Technical Lead review classified as `non_independent` for Issue #161, Code Worker self-review rejection, genuinely independent frontier review, and rollback to legacy routing without queue or state corruption.
 
 Production rollout is separately approved and is not implied by passing disposable qualification.

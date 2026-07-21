@@ -13,7 +13,7 @@ import {
   isAuthorizedMessage,
 } from "./bridge.js";
 import { openProductionDb } from "./db.js";
-import { loadBotsConfig, resolveBusyMessageMode, validateBusyMessageModeEnv } from "./config.js";
+import { loadBotsConfig, loadRoleAssignmentConfig, resolveBusyMessageMode, validateBusyMessageModeEnv } from "./config.js";
 import { TelegramClient } from "./telegram.js";
 import { BridgeEngine } from "./engine.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
@@ -92,8 +92,17 @@ validateBusyMessageModeEnv(process.env);
 const busyMessageMode = resolveBusyMessageMode(process.env);
 const asyncEnabled = process.env.BRIDGE_ASYNC_ENABLED !== "false";
 const advisorConfig = parseAdvisorConfig(process.env);
+// Parse fail-closed before opening the database so malformed or secret-bearing
+// desired policy cannot cause startup maintenance or persistence side effects.
+const roleAssignmentConfig = loadRoleAssignmentConfig(process.env);
+const roleScopeKey = roleAssignmentConfig?.scopeKey
+  ?? process.env.WORKER_ROLE_ASSIGNMENT_SCOPE?.trim()
+  ?? "worker:default";
 
 const db = openProductionDb(dbPath, { serviceId: "telegram:worker" });
+const roleAssignmentRevision = roleAssignmentConfig
+  ? db.createRoleAssignmentRevision(roleAssignmentConfig)
+  : db.getCurrentRoleAssignmentRevision(roleScopeKey);
 const client = new TelegramClient(token, fetch, 45_000);
 
 function withThread<T extends Record<string, unknown>>(body: T, threadId?: number): T & { message_thread_id?: number } {
@@ -384,7 +393,8 @@ setInterval(enqueuePrWatch, prWatchIntervalMs);
 console.log(
   `[worker-bot] starting (workerEnabled=${workerEnabled}, ` +
   `interactiveChain=${cliChain.join(",")}, codeChain=${codeCliChain.join(",")}, ` +
-  `scribeChain=${scribeCliChain.join(",")}, jobPollIntervalMs=${jobPollIntervalMs})`,
+  `scribeChain=${scribeCliChain.join(",")}, roleAssignments=${roleAssignmentRevision?.status ?? "not_configured"}, ` +
+  `jobPollIntervalMs=${jobPollIntervalMs})`,
 );
 
 let offset = 0;
@@ -461,7 +471,9 @@ for (;;) {
           const result = await handleWorkerCommand(rawText, {
             workerEnabled,
             cliChain,
+            cliPolicy: workerCliPolicy,
             db,
+            roleScopeKey,
             chatId,
             threadId,
             userId,
@@ -500,7 +512,9 @@ for (;;) {
           const briefResult = await handleWorkerCommand(`/feature ${capturedBrief}`, {
             workerEnabled,
             cliChain,
+            cliPolicy: workerCliPolicy,
             db,
+            roleScopeKey,
             chatId,
             threadId,
             userId,
@@ -519,7 +533,9 @@ for (;;) {
         const workflowResult = handleWorkerConversationText(rawText, {
           workerEnabled,
           cliChain,
+          cliPolicy: workerCliPolicy,
           db,
+          roleScopeKey,
           chatId,
           threadId,
           userId,

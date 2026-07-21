@@ -217,7 +217,7 @@ At each final head record:
 - path/link classification and residual risk;
 - independent-review identity or independence description.
 
-A same-model review is non-independent. Any source correction invalidates old exact-head verification and review evidence.
+Review independence requires a fresh exact-head invocation by a reviewer that did not author or modify the implementation and has no mutation authority in the review invocation. Provider/model diversity is recorded separately; any source correction invalidates old exact-head verification and review evidence.
 
 ## Human approval gate
 

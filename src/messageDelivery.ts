@@ -185,6 +185,7 @@ export async function sendMessageWithProgress({
   showProgressNarration = false,
   isAborted,
   beforeFinalDelivery,
+  afterFinalDelivery,
   runId,
   onEvent,
 }: {
@@ -197,6 +198,7 @@ export async function sendMessageWithProgress({
   showProgressNarration?: boolean;
   isAborted?: () => boolean;
   beforeFinalDelivery?: () => boolean;
+  afterFinalDelivery?: () => void | Promise<void>;
   runId?: string;
   onEvent?: (event: BridgeEvent) => void;
 }): Promise<CliResult | null> {
@@ -323,11 +325,13 @@ export async function sendMessageWithProgress({
       return null;
     }
     await deliverFinal(finalText);
+    await afterFinalDelivery?.();
 
     clearInterval(typingInterval);
     return cliResult;
   } catch (err: any) {
     clearInterval(typingInterval);
+    if (isAborted?.()) return null;
     if (isCapacityExhaustedError(err instanceof Error ? err : new Error(String(err)))) {
       throw err;
     }

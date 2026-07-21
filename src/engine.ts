@@ -52,7 +52,7 @@ import type { BridgeConfig, BotKind, BotConfig, TelegramUpdate, TelegramMessage,
 import { ExecutionLockLostError, type BridgeDb, type ExecutionLaneHandle } from "./db.js";
 import { DEFAULT_CONTEXT_MAX_CHARS } from "./db.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
-import { extractProjectMemorySidecars, storeProjectMemoryCandidate } from "./projectMemory.js";
+import { extractProjectMemorySidecars, storeProjectMemoryCandidate, type ProjectMemoryCandidate } from "./projectMemory.js";
 import { parseAdvisorConfig } from "./advisorConfig.js";
 import { formatAdvisorResult } from "./advisor.js";
 import { AdvisorService } from "./advisorService.js";
@@ -93,6 +93,8 @@ export interface PendingMessage {
 }
 
 export type ExecutionOutcome = "committed" | "queued" | "failed" | "fenced";
+
+type StagedCliResult = CliResult & { memoryCandidates: ProjectMemoryCandidate[] };
 
 class LostExecutionLeaseError extends Error {
   constructor() { super("execution lane ownership lost"); }
@@ -817,6 +819,7 @@ export class BridgeEngine {
     try {
       if (useAsync) {
         const { runId, eventContext, collect, finalize } = this._createEventContext(chatId, threadId);
+        let stagedResult: StagedCliResult | null = null;
         const delivered = await sendMessageWithProgress({
           client: this.client,
           kind: this._deliveryKind(),
@@ -825,26 +828,33 @@ export class BridgeEngine {
           showProgressNarration: this.kind === "antigravity" && isAntigravityNarrationVisible(this.db, chatKey),
           isAborted: () => this.abortedChats.has(this._executionLane(chatKey)) || !this.db.ownsLock(laneHandle!),
           beforeFinalDelivery: () => {
-            try { this._renewLaneOrThrow(laneHandle!); return true; }
+            try { this._runWithFence(laneHandle!, () => undefined); return true; }
             catch (error) { if (error instanceof LostExecutionLeaseError) return false; throw error; }
           },
           runId,
           onEvent: (e) => collect(e),
-          execution: (onProgress: (text: string) => void) =>
-            this.executePromptAsync(prompt, sessionId, chatId, { message_thread_id: threadId }, onProgress, attachments, eventContext, runId, collect, chatKey, laneHandle!),
+          execution: async (onProgress: (text: string) => void) => {
+            stagedResult = await this.executePromptAsync(prompt, sessionId, chatId, { message_thread_id: threadId }, onProgress, attachments, eventContext, runId, collect, chatKey, laneHandle!);
+            return stagedResult;
+          },
+          afterFinalDelivery: () => {
+            if (!stagedResult) throw new Error("missing staged CLI result at final delivery");
+            this._commitResultState(laneHandle!, prompt, stagedResult);
+          },
         });
         if (!delivered) return "fenced";
         finalize();
       } else {
         const { runId, eventContext, collect, finalize } = this._createEventContext(chatId, threadId);
         const result = await this.executePrompt(prompt, sessionId, chatId, { message_thread_id: threadId }, attachments, eventContext, runId, collect, chatKey, laneHandle!);
-        finalize();
         // For the sync path the final message is sent below; build a view from the
         // collected events so the new event-driven path drives the output text.
-        this._renewLaneOrThrow(laneHandle!);
+        this._runWithFence(laneHandle!, () => undefined);
         if (result && result.text) {
           await this.sendText(chatId, { text: result.text, message_thread_id: threadId });
         }
+        this._commitResultState(laneHandle!, prompt, result);
+        finalize();
       }
       return "committed";
     } catch (error) {
@@ -1106,12 +1116,23 @@ export class BridgeEngine {
     }
   }
 
-  private _commitResultState(handle: ExecutionLaneHandle, prompt: string, result: CliResult): void {
+  private _stageResultState(result: CliResult): StagedCliResult {
+    const extracted = extractProjectMemorySidecars(result.text);
+    return { ...result, text: extracted.cleanText, memoryCandidates: extracted.candidates };
+  }
+
+  private _commitResultState(handle: ExecutionLaneHandle, prompt: string, result: StagedCliResult): void {
     const chatKey = handle.chatKey;
     this._runWithFence(handle, () => {
       if (result.sessionId && isAgentKind(this.kind)) db_setSession(this.db, chatKey, this.kind, result.sessionId);
       if (isAgentKind(this.kind)) this.db.resetFailures(chatKey, this.kind);
-      result.text = this._applyMemorySidecars(chatKey, result.text);
+      for (const candidate of result.memoryCandidates) {
+        storeProjectMemoryCandidate(this.db, candidate, {
+          chatKey,
+          cliKind: this.kind,
+          repoPath: process.cwd(),
+        });
+      }
       if (isAgentKind(this.kind)) this._rememberTurn(chatKey, promptForMemory(prompt), result.text);
     });
   }
@@ -1132,18 +1153,6 @@ export class BridgeEngine {
   private _rememberTurn(chatKey: string, userPrompt: string, assistantText: string): void {
     this.db.addConvTurn(chatKey, "user", trimTurnText(userPrompt), this.kind);
     this.db.addConvTurn(chatKey, "assistant", trimTurnText(assistantText), this.kind);
-  }
-
-  private _applyMemorySidecars(chatKey: string, resultText: string): string {
-    const extracted = extractProjectMemorySidecars(resultText);
-    for (const candidate of extracted.candidates) {
-      storeProjectMemoryCandidate(this.db, candidate, {
-        chatKey,
-        cliKind: this.kind,
-        repoPath: process.cwd(),
-      });
-    }
-    return extracted.cleanText;
   }
 
   /**
@@ -1312,7 +1321,7 @@ export class BridgeEngine {
     collect: ((e: BridgeEvent) => void) | null = null,
     chatKey: string = String(chatId),
     laneHandle: ExecutionLaneHandle = undefined as never,
-  ): Promise<CliResult> {
+  ): Promise<StagedCliResult> {
     if (!laneHandle) throw new Error("execution lane handle is required");
     const executionKind = this._executionKind();
     const model = isAgentKind(this.kind)
@@ -1376,10 +1385,10 @@ export class BridgeEngine {
         result.sessionId = resolveKimchiSessionId(cwd);
       }
       result.text = scrubOutputDir(result.text, outDir);
-      this._commitResultState(laneHandle, prompt, result);
+      const stagedResult = this._stageResultState(result);
       this._renewLaneOrThrow(laneHandle);
       if (this.hooks.onAfterExecute) {
-        await this.hooks.onAfterExecute(prompt, result.text, hookContext(chatId, chatKey, body.message_thread_id));
+        await this.hooks.onAfterExecute(prompt, stagedResult.text, hookContext(chatId, chatKey, body.message_thread_id));
       }
       this._renewLaneOrThrow(laneHandle);
       await uploadOutputFiles(outDir, chatId, this.client, fileSendOptions).catch((err) =>
@@ -1399,11 +1408,11 @@ export class BridgeEngine {
           bot: eventContext.bot,
           chatId: eventContext.chatId,
           threadId: eventContext.threadId,
-          sessionId: result.sessionId ?? null,
-          text: result.text,
+          sessionId: stagedResult.sessionId ?? null,
+          text: stagedResult.text,
         });
       }
-      return result;
+      return stagedResult;
     } catch (error) {
       if (logFile) { try { rmSync(logFile); } catch {} }
       if (error instanceof LostExecutionLeaseError) throw error;
@@ -1439,7 +1448,7 @@ export class BridgeEngine {
     collect: ((e: BridgeEvent) => void) | null = null,
     chatKey: string = String(chatId),
     laneHandle: ExecutionLaneHandle = undefined as never,
-  ): Promise<CliResult> {
+  ): Promise<StagedCliResult> {
     if (!laneHandle) throw new Error("execution lane handle is required");
     const { message_thread_id: threadId } = body;
     const executionKind = this._executionKind();
@@ -1504,10 +1513,10 @@ export class BridgeEngine {
         result.sessionId = resolveAntigravityConversationId({ cwd, sinceMs: startedAtMs, explicitLogContent: logContent });
       }
       result.text = scrubOutputDir(result.text, outDir);
-      this._commitResultState(laneHandle, prompt, result);
+      const stagedResult = this._stageResultState(result);
       this._renewLaneOrThrow(laneHandle);
       if (this.hooks.onAfterExecute) {
-        await this.hooks.onAfterExecute(prompt, result.text, hookContext(chatId, chatKey, body.message_thread_id));
+        await this.hooks.onAfterExecute(prompt, stagedResult.text, hookContext(chatId, chatKey, body.message_thread_id));
       }
       this._renewLaneOrThrow(laneHandle);
       await uploadOutputFiles(outDir, chatId, this.client, fileSendOptions).catch((err) =>
@@ -1523,11 +1532,11 @@ export class BridgeEngine {
           bot: eventContext.bot,
           chatId: eventContext.chatId,
           threadId: eventContext.threadId,
-          sessionId: result.sessionId ?? null,
-          text: result.text,
+          sessionId: stagedResult.sessionId ?? null,
+          text: stagedResult.text,
         });
       }
-      return result;
+      return stagedResult;
     } catch (error) {
       if (logFile) { try { rmSync(logFile); } catch {} }
       if (error instanceof LostExecutionLeaseError) throw error;
@@ -1566,7 +1575,7 @@ export class BridgeEngine {
     eventContext: CliOptions["eventContext"] = undefined as any,
     runId: string | null = null,
     collect: ((e: BridgeEvent) => void) | null = null,
-  ): Promise<CliResult> {
+  ): Promise<StagedCliResult> {
     const executionKind = this._executionKind();
     const model = isAgentKind(this.kind)
       ? (this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null)
@@ -1618,6 +1627,7 @@ export class BridgeEngine {
         result.sessionId = resolveAntigravityConversationId({ cwd: retryCwd, sinceMs: retryStartedAtMs, explicitLogContent: retryLogContent });
       }
       result.text = scrubOutputDir(result.text, outDir);
+      const stagedResult = this._stageResultState(result);
       if (collect && runId && eventContext) {
         collect({
           type: "run.completed",
@@ -1628,11 +1638,11 @@ export class BridgeEngine {
           bot: eventContext.bot,
           chatId: eventContext.chatId,
           threadId: eventContext.threadId,
-          sessionId: result.sessionId ?? null,
-          text: result.text,
+          sessionId: stagedResult.sessionId ?? null,
+          text: stagedResult.text,
         });
       }
-      return result;
+      return stagedResult;
     } catch (retryError) {
       try { rmSync(retryLogFile); } catch {}
       throw retryError;
@@ -1652,12 +1662,12 @@ export class BridgeEngine {
     runId: string | null = null,
     collect: ((e: BridgeEvent) => void) | null = null,
     bodyThreadId?: number | string,
-  ): Promise<CliResult> {
+  ): Promise<StagedCliResult> {
     if (isAgentKind(this.kind)) this._runWithFence(laneHandle, () => db_setSession(this.db, chatKey, this.kind as BotKind, null));
     // Fresh-session retry: sessionId is null, so this always injects under handoff_once too.
     const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt, null);
     const maxFreshAttempts = 2;
-    let retryResult: CliResult | null = null;
+    let retryResult: StagedCliResult | null = null;
     for (let attempt = 1; attempt <= maxFreshAttempts; attempt++) {
       try {
         retryResult = await this._runFreshAntigravityRetry(
@@ -1689,7 +1699,6 @@ export class BridgeEngine {
       }
     }
     if (!retryResult) throw new Error("Agy fresh-session retry produced no result.");
-    this._commitResultState(laneHandle, prompt, retryResult);
     this._renewLaneOrThrow(laneHandle);
     if (this.hooks.onAfterExecute) {
       await this.hooks.onAfterExecute(prompt, retryResult.text, hookContext(chatId, chatKey, bodyThreadId));
@@ -1714,7 +1723,7 @@ export class BridgeEngine {
     eventContext: CliOptions["eventContext"] = undefined as any,
     runId: string | null = null,
     collect: ((e: BridgeEvent) => void) | null = null,
-  ): Promise<CliResult> {
+  ): Promise<StagedCliResult> {
     const executionKind = this._executionKind();
     let fallbackLogFile: string | null = null;
     if (executionKind === "antigravity") {
@@ -1774,12 +1783,12 @@ export class BridgeEngine {
         ...result,
         text: `⚠️ Fell back to ${fallbackModel} (${currentModel || "default"} at capacity)\n\n${result.text}`,
       };
-      this._commitResultState(laneHandle, prompt, finalResult);
+      const stagedResult = this._stageResultState(finalResult);
       this._renewLaneOrThrow(laneHandle);
       if (this.hooks.onAfterExecute) {
-        await this.hooks.onAfterExecute(prompt, finalResult.text, hookContext(chatId, chatKey, eventContext?.threadId));
+        await this.hooks.onAfterExecute(prompt, stagedResult.text, hookContext(chatId, chatKey, eventContext?.threadId));
       }
-      return finalResult;
+      return stagedResult;
     } catch (fallbackError) {
       if (fallbackLogFile) { try { rmSync(fallbackLogFile); } catch {} }
       throw fallbackError;

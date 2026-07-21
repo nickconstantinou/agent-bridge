@@ -121,6 +121,15 @@ export interface BridgeEngineOptions {
   advisorCapabilities?: AdvisorCapabilityIssuer;
 }
 
+interface LaneCancellation {
+  mode: "interrupt" | "stop";
+  promise: Promise<void>;
+}
+
+interface LaneDrainer {
+  promise: Promise<void>;
+}
+
 /** Injected execution functions — replace real CLI for unit tests. */
 export interface ExecFns {
   runCli: typeof _runCli;
@@ -242,7 +251,8 @@ export class BridgeEngine {
   private readonly exec: ExecFns;
   private queuedMessageHandler?: (message: PendingMessage) => Promise<ExecutionOutcome>;
   private readonly queueRecoveryTimers = new Map<string, NodeJS.Timeout>();
-  private readonly cancellationOperations = new Map<string, Promise<void>>();
+  private readonly cancellationOperations = new Map<string, LaneCancellation>();
+  private readonly laneDrainers = new Map<string, LaneDrainer>();
   private readonly abortedChats = new Set<string>();
   private readonly resettingChats = new Set<string>();
   private readonly advisorSuggestions = new Map<string, {
@@ -934,34 +944,70 @@ export class BridgeEngine {
   private _cancelLane(chatKey: string, mode: "interrupt" | "stop"): Promise<void> {
     const executionLane = this._executionLane(chatKey);
     const existing = this.cancellationOperations.get(executionLane);
-    if (existing) return existing;
+    if (existing) {
+      if (mode === "stop" && existing.mode !== "stop") {
+        existing.mode = "stop";
+        this._discardPendingMessages(chatKey);
+      }
+      return existing.promise;
+    }
+
+    const record = { mode, promise: Promise.resolve() } as LaneCancellation;
 
     const operation = (async () => {
       this.resettingChats.add(executionLane);
       this.abortedChats.add(executionLane);
       let handle: ExecutionLaneHandle | null = null;
       try {
-        if (mode === "stop") this._discardPendingMessages(chatKey);
+        if (record.mode === "stop") this._discardPendingMessages(chatKey);
         handle = await abortExecutionAndWait(executionLane);
 
         // abortExecutionAndWait has confirmed both process-tree termination
         // and lifecycle completion, so the old turn can no longer commit.
         this.abortedChats.delete(executionLane);
         this.resettingChats.delete(executionLane);
+        const activeDrainer = this.laneDrainers.get(executionLane);
+        if (activeDrainer) await activeDrainer.promise;
+        // Keep cancellation coalescing active until the old drainer has
+        // released its claimed row. Only then may a successor become the
+        // target of a fresh interrupt.
+        this.cancellationOperations.delete(executionLane);
         if (handle) await this._drainQueueAndUnlock(handle);
       } finally {
-        this.abortedChats.delete(executionLane);
-        this.resettingChats.delete(executionLane);
-        if (handle && this.db.ownsLock(handle)) this.db.unlock(handle);
-        this.cancellationOperations.delete(executionLane);
+        if (this.cancellationOperations.get(executionLane) === record) {
+          this.abortedChats.delete(executionLane);
+          this.resettingChats.delete(executionLane);
+          this.cancellationOperations.delete(executionLane);
+        }
+        if (handle && !this.cancellationOperations.has(executionLane) && this.db.ownsLock(handle)) this.db.unlock(handle);
       }
     })();
 
-    this.cancellationOperations.set(executionLane, operation);
-    return operation;
+    record.promise = operation;
+    this.cancellationOperations.set(executionLane, record);
+    return record.promise;
   }
 
   private async _drainQueueAndUnlock(handle: ExecutionLaneHandle, initial?: PendingMessage, recoveryAttempt = 0, lifecycleAlreadyManaged = false): Promise<void> {
+    const executionLane = this._executionLane(handle.chatKey);
+    const existing = this.laneDrainers.get(executionLane);
+    if (existing) return existing.promise;
+
+    const record = { promise: Promise.resolve() } as LaneDrainer;
+    const operation = this._drainQueueAndUnlockOwned(handle, initial, recoveryAttempt, lifecycleAlreadyManaged);
+    record.promise = operation.finally(() => {
+      if (this.laneDrainers.get(executionLane) === record) this.laneDrainers.delete(executionLane);
+    });
+    this.laneDrainers.set(executionLane, record);
+    return record.promise;
+  }
+
+  private async _drainQueueAndUnlockOwned(
+    handle: ExecutionLaneHandle,
+    initial: PendingMessage | undefined,
+    recoveryAttempt: number,
+    lifecycleAlreadyManaged: boolean,
+  ): Promise<void> {
     const chatKey = handle.chatKey;
     const scheduled = this.queueRecoveryTimers.get(chatKey);
     if (scheduled) {
@@ -973,6 +1019,7 @@ export class BridgeEngine {
       const next = nextPending ?? this.db.claimNextPendingMsg(handle);
       nextPending = undefined;
       if (!next) {
+        if (this.db.pendingMsgCount(this.surfaceIdentity, chatKey) > 0) return;
         if (this.db.unlockIfQueueEmpty(handle)) return;
         if (!this.db.ownsLock(handle)) return;
         continue;
@@ -982,10 +1029,14 @@ export class BridgeEngine {
         const outcome = this.queuedMessageHandler
           ? await this.queuedMessageHandler({ ...next, laneHandle: handle, laneLifecycleManaged: lifecycleAlreadyManaged })
           : await this.executeClaimedMessage({ ...next, laneHandle: handle, laneLifecycleManaged: lifecycleAlreadyManaged });
-        if (outcome === "fenced") return;
+        if (outcome === "fenced") {
+          this.db.releasePendingClaim(handle, next.id);
+          return;
+        }
         if (outcome !== "committed") {
           this.db.releasePendingClaim(handle, next.id);
           this.db.unlock(handle);
+          if (this.abortedChats.has(executionLane) || this.cancellationOperations.has(executionLane)) return;
           this._scheduleQueueRecovery(chatKey, recoveryAttempt + 1);
           return;
         }
@@ -1005,11 +1056,15 @@ export class BridgeEngine {
     if (attempt > 3 || this.queueRecoveryTimers.has(chatKey)) return;
     const timer = setTimeout(() => {
       this.queueRecoveryTimers.delete(chatKey);
-      const handle = this.db.acquireLock(this.surfaceIdentity, chatKey);
-      if (!handle) return;
-      void this._drainQueueAndUnlock(handle, undefined, attempt).catch((error) =>
-        console.error(`[${this.kind}] queue recovery failed chatKey=${chatKey}`, error)
-      );
+      try {
+        const handle = this.db.acquireLock(this.surfaceIdentity, chatKey);
+        if (!handle) return;
+        void this._drainQueueAndUnlock(handle, undefined, attempt).catch((error) =>
+          console.error(`[${this.kind}] queue recovery failed chatKey=${chatKey}`, error)
+        );
+      } catch (error) {
+        console.error(`[${this.kind}] queue recovery could not acquire lane chatKey=${chatKey}`, error);
+      }
     }, Math.min(1_000, 100 * (2 ** (attempt - 1))));
     timer.unref();
     this.queueRecoveryTimers.set(chatKey, timer);

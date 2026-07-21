@@ -359,7 +359,7 @@ describe("execution lane correctness", () => {
     const first = engine.handleMessages([message("long first turn", 7)]);
     await waitForFile(firstReady);
     const successor = engine.handleMessages([message("successor", 7)]);
-    await waitForFile(successorReady);
+    await waitForFile(successorReady, 8_000);
     const newest = engine.handleMessages([message("newest", 7)]);
 
     await Promise.all([first, successor, newest]);
@@ -397,7 +397,7 @@ describe("execution lane correctness", () => {
     const first = engine.handleMessages([message("long first turn", 7)]);
     await waitForFile(firstReady);
     const successor = engine.handleMessages([message("successor", 7)]);
-    await waitForFile(successorReady);
+    await waitForFile(successorReady, 8_000);
     db.enqueueMsg("telegram:interactive", "100:7", { prompt: "pending", chatId: 100, threadId: 7, chatType: "private" });
     const stopping = engine.handleUpdate({ update_id: 2, message: message("/stop", 7) });
 

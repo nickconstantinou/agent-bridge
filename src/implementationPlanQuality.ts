@@ -156,13 +156,24 @@ function parseDeclaredAcceptanceCriteria(sectionText: string): { valid: boolean;
 function hasStructuredRedTests(
   sectionText: string,
   declaredCriteria: Set<string>,
-): { valid: boolean; ids: Set<string>; classesById: Map<string, Set<string>> } {
+): {
+  valid: boolean;
+  ids: Set<string>;
+  classesById: Map<string, Set<string>>;
+  requirementsById: Map<string, Set<string>>;
+} {
   const parsed = extractJsonValue(sectionText);
-  const empty = { valid: false, ids: new Set<string>(), classesById: new Map<string, Set<string>>() };
+  const empty = {
+    valid: false,
+    ids: new Set<string>(),
+    classesById: new Map<string, Set<string>>(),
+    requirementsById: new Map<string, Set<string>>(),
+  };
   if (!Array.isArray(parsed) || parsed.length === 0) return empty;
 
   const ids = new Set<string>();
   const classesById = new Map<string, Set<string>>();
+  const requirementsById = new Map<string, Set<string>>();
   for (const entry of parsed) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
       return empty;
@@ -179,6 +190,7 @@ function hasStructuredRedTests(
     const requirementIds = record.requirement_ids as string[];
     if (!requirementIds.every(id => declaredCriteria.has(id))) return empty;
     classesById.set(record.id as string, new Set(record.test_classes as string[]));
+    requirementsById.set(record.id as string, new Set(requirementIds));
     if (typeof record.characterization_required !== "boolean") {
       return empty;
     }
@@ -190,7 +202,7 @@ function hasStructuredRedTests(
       if (!isNonEmptyStringArray(intent[field])) return empty;
     }
   }
-  return { valid: true, ids, classesById };
+  return { valid: true, ids, classesById, requirementsById };
 }
 
 function hasStructuredRedTestCoverage(
@@ -198,6 +210,7 @@ function hasStructuredRedTestCoverage(
   redTestIds: Set<string>,
   declaredCriteria: Set<string>,
   classesById: Map<string, Set<string>>,
+  requirementsById: Map<string, Set<string>>,
 ): {
   valid: boolean;
   referencesValid: boolean;
@@ -243,6 +256,8 @@ function hasStructuredRedTestCoverage(
     if (redIds.length === 0) {
       if (!isNonEmptyString(proof)) return { valid: false, referencesValid: false };
     } else if (!referencesKnown(redIds)) {
+      return { valid: true, referencesValid: false };
+    } else if (!(redIds as string[]).every(id => requirementsById.get(id)?.has(record.requirement_id as string))) {
       return { valid: true, referencesValid: false };
     }
   }
@@ -314,6 +329,7 @@ export function validateImplementationPlan(
     structuredRedTests.ids,
     acceptanceCriteria.ids,
     structuredRedTests.classesById,
+    structuredRedTests.requirementsById,
   );
   if (!structuredCoverage.valid || !containsAllFields(redTestCoverage, RED_TEST_COVERAGE_FIELDS)) {
     missing.push("Red-test coverage matrices");

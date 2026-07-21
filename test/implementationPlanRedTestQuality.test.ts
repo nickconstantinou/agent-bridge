@@ -79,6 +79,21 @@ const COMPLETE_RED_TESTS = `
 }
 `;
 
+const redTestsJson = JSON.parse(COMPLETE_RED_TESTS.match(/## Red Tests\n([\s\S]*?)\n\n## Red Test Coverage/)![1]);
+const coverageJson = JSON.parse(COMPLETE_RED_TESTS.match(/## Red Test Coverage\n([\s\S]*)/)![1]);
+redTestsJson.push({ ...redTestsJson[0], id: "RT-2", requirement_ids: ["AC-2"] });
+coverageJson.acceptance_coverage = [
+  { requirement_id: "AC-1", red_test_ids: ["RT-2"] },
+  { requirement_id: "AC-2", red_test_ids: ["RT-1"] },
+];
+const TWO_CRITERIA_SWAPPED_COVERAGE = `
+## Red Tests
+${JSON.stringify(redTestsJson)}
+
+## Red Test Coverage
+${JSON.stringify(coverageJson)}
+`;
+
 describe("implementation plan red-test quality", () => {
   it("rejects a plan that omits the red-test contract", () => {
     const result = validateGeneratedImplementationPlan(BASE_PLAN);
@@ -199,6 +214,16 @@ acceptance_coverage architecture_coverage triggered_risk_coverage`);
       '"required_test_classes":["security"]',
     );
     const result = validateGeneratedImplementationPlan(`${BASE_PLAN}\n${malformed}`);
+
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects acceptance coverage that cross-wires known red tests to the wrong criteria", () => {
+    const planWithTwoCriteria = BASE_PLAN.replace(
+      "- AC-1: the user-visible behaviour is correct.",
+      "- AC-1: the user-visible behaviour is correct.\n- AC-2: rollback preserves the prior state.",
+    );
+    const result = validateGeneratedImplementationPlan(`${planWithTwoCriteria}\n${TWO_CRITERIA_SWAPPED_COVERAGE}`);
 
     expect(result.valid).toBe(false);
   });

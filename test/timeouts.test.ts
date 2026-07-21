@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, afterAll, afterEach } from "vitest";
 import { resolveTimeoutsForKind } from "../src/timeouts.js";
 import { buildExecutionOptions } from "../src/cli.js";
+import { CliTimeoutError } from "../src/cliSupervisor.js";
 
 const cliTestCwd = mkdtempSync(join(tmpdir(), "agent-bridge-timeout-tests-"));
 afterAll(() => rmSync(cliTestCwd, { recursive: true, force: true }));
@@ -141,6 +142,36 @@ describe("idle timeout fires on silence (integration)", () => {
         killGraceMs: 25,
       }),
     ).rejects.toThrow(/idle timeout/i);
+  }, 5000);
+
+  it("rejects with a structured CliTimeoutError (kind: idle), not just a message-matched Error", async () => {
+    const { runCliAsync } = await import("../src/cli.js");
+    let caught: unknown;
+    try {
+      await runCliAsync("bash", ["-lc", "sleep 5"], cliTestCwd, {
+        timeoutMs: 2000, idleTimeoutMs: 80, killGraceMs: 25,
+      });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(CliTimeoutError);
+    expect((caught as CliTimeoutError).timeoutKind).toBe("idle");
+  }, 5000);
+
+  it("rejects with a structured CliTimeoutError (kind: hard) when the hard timeout fires", async () => {
+    const { runCliAsync } = await import("../src/cli.js");
+    let caught: unknown;
+    try {
+      await runCliAsync(
+        "bash", ["-lc", "for i in 1 2 3 4 5; do echo tick; sleep 0.1; done; sleep 5"],
+        cliTestCwd,
+        { timeoutMs: 300, idleTimeoutMs: 0, killGraceMs: 25 },
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(CliTimeoutError);
+    expect((caught as CliTimeoutError).timeoutKind).toBe("hard");
   }, 5000);
 
   it("does not idle-timeout when process emits regular output", async () => {

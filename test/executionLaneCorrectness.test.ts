@@ -237,6 +237,45 @@ describe("execution lane correctness", () => {
     db.close(); rmSync(path, { force: true }); rmSync(childReady, { force: true });
   }, 8_000);
 
+  it("a configured hard timeout follows the /stop cancellation path — discards queued work, preserves last committed session (Issue #177)", async () => {
+    const path = join(tmpdir(), `timeout-cancel-${Date.now()}-${Math.random()}.sqlite`);
+    const db = openDb(path);
+    const c = client();
+    const savedTimeout = process.env.CLAUDE_CLI_TIMEOUT_MS;
+    const savedIdle = process.env.CLAUDE_CLI_IDLE_TIMEOUT_MS;
+    process.env.CLAUDE_CLI_TIMEOUT_MS = "300";
+    process.env.CLAUDE_CLI_IDLE_TIMEOUT_MS = "0";
+    const secondRun = vi.fn().mockResolvedValue("should never run");
+    const engine = new BridgeEngine({ ...options("claude"), busyMessageMode: "queue" }, db, c, {
+      runCli: vi.fn()
+        .mockImplementationOnce((_command, _args, cwd, cliOptions) => runCli(
+          process.execPath,
+          ["-e", "setTimeout(()=>{},10000)"],
+          cwd,
+          cliOptions,
+        ))
+        .mockImplementationOnce(secondRun),
+    });
+    try {
+      const first = engine.handleMessages([message("times out", 7)]);
+      await new Promise((r) => setTimeout(r, 50));
+      const second = engine.handleMessages([message("queued behind the timeout", 7)]);
+      await Promise.all([first, second]);
+
+      // The queued message must be discarded, not executed — same as /stop.
+      expect(secondRun).not.toHaveBeenCalled();
+      expect(db.pendingMsgCount("telegram:interactive", "100:7")).toBe(0);
+      // No session was committed by the timed-out turn.
+      expect(db.getSession("100:7", "claude")).toBeNull();
+      // The lane is released, not stuck.
+      expect(db.acquireLock("telegram:interactive", "100:7")).not.toBeNull();
+    } finally {
+      if (savedTimeout === undefined) delete process.env.CLAUDE_CLI_TIMEOUT_MS; else process.env.CLAUDE_CLI_TIMEOUT_MS = savedTimeout;
+      if (savedIdle === undefined) delete process.env.CLAUDE_CLI_IDLE_TIMEOUT_MS; else process.env.CLAUDE_CLI_IDLE_TIMEOUT_MS = savedIdle;
+      db.close(); rmSync(path, { force: true });
+    }
+  }, 8_000);
+
   it("queue mode (explicit) still waits for the active turn's natural completion before running the next message", async () => {
     const path = join(tmpdir(), `queue-mode-${Date.now()}-${Math.random()}.sqlite`);
     const db = openDb(path);

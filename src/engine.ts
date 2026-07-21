@@ -132,6 +132,11 @@ interface LaneDrainer {
   promise: Promise<void>;
 }
 
+interface FinalDeliveryPhase {
+  promise: Promise<void>;
+  release: () => void;
+}
+
 /** Injected execution functions — replace real CLI for unit tests. */
 export interface ExecFns {
   runCli: typeof _runCli;
@@ -255,6 +260,7 @@ export class BridgeEngine {
   private readonly queueRecoveryTimers = new Map<string, NodeJS.Timeout>();
   private readonly cancellationOperations = new Map<string, LaneCancellation>();
   private readonly laneDrainers = new Map<string, LaneDrainer>();
+  private readonly finalDeliveryPhases = new Map<string, FinalDeliveryPhase>();
   private readonly abortedChats = new Set<string>();
   private readonly resettingChats = new Set<string>();
   private readonly advisorSuggestions = new Map<string, {
@@ -820,41 +826,51 @@ export class BridgeEngine {
       if (useAsync) {
         const { runId, eventContext, collect, finalize } = this._createEventContext(chatId, threadId);
         let stagedResult: StagedCliResult | null = null;
-        const delivered = await sendMessageWithProgress({
-          client: this.client,
-          kind: this._deliveryKind(),
-          chatId,
-          body: { message_thread_id: threadId },
-          showProgressNarration: this.kind === "antigravity" && isAntigravityNarrationVisible(this.db, chatKey),
-          isAborted: () => this.abortedChats.has(this._executionLane(chatKey)) || !this.db.ownsLock(laneHandle!),
-          beforeFinalDelivery: () => {
-            try { this._runWithFence(laneHandle!, () => undefined); return true; }
-            catch (error) { if (error instanceof LostExecutionLeaseError) return false; throw error; }
-          },
-          runId,
-          onEvent: (e) => collect(e),
-          execution: async (onProgress: (text: string) => void) => {
-            stagedResult = await this.executePromptAsync(prompt, sessionId, chatId, { message_thread_id: threadId }, onProgress, attachments, eventContext, runId, collect, chatKey, laneHandle!);
-            return stagedResult;
-          },
-          afterFinalDelivery: () => {
-            if (!stagedResult) throw new Error("missing staged CLI result at final delivery");
-            this._commitResultState(laneHandle!, prompt, stagedResult);
-          },
-        });
-        if (!delivered) return "fenced";
-        finalize();
+        let finalDeliveryPhase: FinalDeliveryPhase | null = null;
+        try {
+          const delivered = await sendMessageWithProgress({
+            client: this.client,
+            kind: this._deliveryKind(),
+            chatId,
+            body: { message_thread_id: threadId },
+            showProgressNarration: this.kind === "antigravity" && isAntigravityNarrationVisible(this.db, chatKey),
+            isAborted: () => this.abortedChats.has(this._executionLane(chatKey)) || !this.db.ownsLock(laneHandle!),
+            beforeFinalDelivery: () => {
+              finalDeliveryPhase = this._claimFinalDeliveryPhase(laneHandle!);
+              return finalDeliveryPhase !== null;
+            },
+            runId,
+            onEvent: (e) => collect(e),
+            execution: async (onProgress: (text: string) => void) => {
+              stagedResult = await this.executePromptAsync(prompt, sessionId, chatId, { message_thread_id: threadId }, onProgress, attachments, eventContext, runId, collect, chatKey, laneHandle!);
+              return stagedResult;
+            },
+            afterFinalDelivery: () => {
+              if (!stagedResult) throw new Error("missing staged CLI result at final delivery");
+              this._commitResultState(laneHandle!, prompt, stagedResult);
+            },
+          });
+          if (!delivered) return "fenced";
+          finalize();
+        } finally {
+          this._releaseFinalDeliveryPhase(laneHandle!, finalDeliveryPhase);
+        }
       } else {
         const { runId, eventContext, collect, finalize } = this._createEventContext(chatId, threadId);
         const result = await this.executePrompt(prompt, sessionId, chatId, { message_thread_id: threadId }, attachments, eventContext, runId, collect, chatKey, laneHandle!);
         // For the sync path the final message is sent below; build a view from the
         // collected events so the new event-driven path drives the output text.
-        this._runWithFence(laneHandle!, () => undefined);
-        if (result && result.text) {
-          await this.sendText(chatId, { text: result.text, message_thread_id: threadId });
+        const finalDeliveryPhase = this._claimFinalDeliveryPhase(laneHandle!);
+        if (!finalDeliveryPhase) return "fenced";
+        try {
+          if (result && result.text) {
+            await this.sendText(chatId, { text: result.text, message_thread_id: threadId });
+          }
+          this._commitResultState(laneHandle!, prompt, result);
+          finalize();
+        } finally {
+          this._releaseFinalDeliveryPhase(laneHandle!, finalDeliveryPhase);
         }
-        this._commitResultState(laneHandle!, prompt, result);
-        finalize();
       }
       return "committed";
     } catch (error) {
@@ -965,6 +981,8 @@ export class BridgeEngine {
     const record = { mode, promise: Promise.resolve() } as LaneCancellation;
 
     const operation = (async () => {
+      const finalDelivery = this.finalDeliveryPhases.get(executionLane);
+      if (finalDelivery) await finalDelivery.promise;
       this.resettingChats.add(executionLane);
       this.abortedChats.add(executionLane);
       let handle: ExecutionLaneHandle | null = null;
@@ -1010,6 +1028,31 @@ export class BridgeEngine {
     });
     this.laneDrainers.set(executionLane, record);
     return record.promise;
+  }
+
+  private _claimFinalDeliveryPhase(handle: ExecutionLaneHandle): FinalDeliveryPhase | null {
+    const executionLane = this._executionLane(handle.chatKey);
+    if (this.abortedChats.has(executionLane) || this.finalDeliveryPhases.has(executionLane)) return null;
+    try {
+      this._runWithFence(handle, () => undefined);
+    } catch (error) {
+      if (error instanceof LostExecutionLeaseError) return null;
+      throw error;
+    }
+
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => { release = resolve; });
+    const phase = { promise, release };
+    this.finalDeliveryPhases.set(executionLane, phase);
+    return phase;
+  }
+
+  private _releaseFinalDeliveryPhase(handle: ExecutionLaneHandle, phase: FinalDeliveryPhase | null): void {
+    if (!phase) return;
+    const executionLane = this._executionLane(handle.chatKey);
+    if (this.finalDeliveryPhases.get(executionLane) !== phase) return;
+    this.finalDeliveryPhases.delete(executionLane);
+    phase.release();
   }
 
   private async _drainQueueAndUnlockOwned(

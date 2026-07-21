@@ -1,6 +1,6 @@
 # Issue #135 Phase 4C — Production Migration Ownership and Gating
 
-Status: **Phase 4C.6 closeout complete; Phase 4C.7 production deployment remains separately authorized.** This document retains design history and records the implemented guarded-rollout contract. The current helper additionally accepts a cohort whose services are already quiesced, proves containment again, performs the post-stop database inspection, and clears only zero-byte WAL sidecars before backup. References below that say `assert_service_active` blocks every re-invocation describe the earlier design and are superseded by that implemented flow; the interrupted sentinel and explicit operator review requirements remain in force.
+Status: **Phase 4C complete, including the Phase 4C.7 production deployment.** This document retains design history and records the implemented guarded-rollout contract. The current helper additionally accepts a cohort whose services are already quiesced, proves containment again, drains SQLite WALs offline before backup, performs the post-stop database inspection, and clears only zero-byte sidecars after checkpointing. References below that say `assert_service_active` blocks every re-invocation describe the earlier design and are superseded by that implemented flow; the interrupted sentinel and explicit operator review requirements remain in force.
 
 ## 0. Why this exists
 
@@ -300,7 +300,7 @@ There is no state in this machine that represents "new code + old schema" *runni
 | 4C.4 | `rollout-agent-bridge.sh` interrupted-rollout sentinel: full storage spec (fixed root-owned path under `log_dir`, regular file, mode 0600, atomic write, structured contents — §6.4); lock-then-sentinel ordering; guarded clearing (automatic only within the same invocation under the same lock, or a separate explicitly-reviewed manual operator action); the explicit `sentinel_removable` flag (§7) gated on whether a bare re-invocation can actually proceed, not just on containment or which phase failed; the new `STOPPED_UNCHANGED` state (§9) for a stopped-but-database-untouched failure, and `RESTORE_INCOMPLETE` (§9) for a failed or unverified automatic restore — both distinct from `FAILED_RESTORED` | 4C.3 (can proceed in parallel with 4C.3 if reviewed as a separate PR) |
 | 4C.5 | Full test/UAT matrix (§11) executed against a non-production fixture environment, including a UAT case proving the *already-existing* whole-cohort restore-on-migration-failure behavior (§7) under a real induced failure, and separate UAT cases for all four §9 rollback paths (`STOPPED_UNCHANGED`, `FAILED_RESTORED`, `RESTORE_INCOMPLETE`, `STOPPED_PRESERVED`) | 4C.2–4C.4 merged |
 | 4C.6 | This issue's Phase 4C acceptance criteria reviewed and checked off; Issue #135 updated | 4C.5 |
-| 4C.7 | Separately authorized production deployment (§12 runbook) | 4C.6, explicit human approval |
+| 4C.7 | Production deployment (§12 runbook), including offline WAL drain, verified backup, migration, validation, service restart and evidence closeout | 4C.6, explicit human approval |
 
 Each of 4C.2–4C.4 is its own draft PR through the same review discipline as PRs #147/#154 (red-green-refactor, full parallel+serial suite, arch-lint, exact-head CI, no merge without explicit approval).
 
@@ -316,7 +316,13 @@ Phase 4C acceptance reconciliation:
 - full parallel/serial tests, typecheck, Architecture Lint, exact-head CI and static comparisons passed;
 - compatibility retirement remains Phase 5 scope and is not claimed by this closeout.
 
-Phase 4C.6 is complete. Phase 4C.7 remains a separate production-deployment decision requiring explicit human authorization. No deployment, restart, sentinel clearing or database mutation occurred during this closeout.
+### Phase 4C.7 production deployment closeout
+
+Phase 4C.7 is complete. The guarded rollout ran successfully at deployed head `8c74c3f78f3742297cf4346ec3458124d9d64749`; PR #184 merged that unchanged tree as `f3c40327763c4b3232a86e0e6e073545bdbd84cf`. No second rollout or restart was performed after the merge because the merge added no file changes.
+
+Final evidence: `/var/log/agent-bridge-rollouts/20260721T114637Z-8c74c3f78f3742297cf4346ec3458124d9d64749` (`rollout.log`, `containment-evidence.json`, `checkpoint-evidence.json` plus SHA-256, `backup-manifest.tsv`, `migration-evidence.json`, `validation-evidence.json`, and `post-start-evidence.json`). The checkpoint evidence recorded interactive WAL `2,401,992` bytes and worker WAL `366,712` bytes drained to zero before backup; all five databases passed integrity/current-schema validation with zero legacy and pending queue rows; all seven services were active/running; the rollout sentinel was absent; and startup error smoke was clean.
+
+The Phase 4C production deployment runbook in §12 is complete. Phase 4C is complete; compatibility retirement remains Phase 5 scope.
 
 ## 11. Test and UAT matrix
 
@@ -352,9 +358,9 @@ Phase 4C.6 is complete. Phase 4C.7 remains a separate production-deployment deci
 | Full rollback drill, `STOPPED_PRESERVED` path: fixture cohort, forced post-start service failure, manual operator-approved restore invocation, confirm code is reverted before restart | UAT, non-production fixture environment (new) | §9's distinct `STOPPED_PRESERVED` path — database on new schema, no automatic restore, requires explicit operator invocation — is actually exercised, not conflated with any path above |
 | Existing rollout-helper test suite (`test/rolloutHelper.test.ts`, 39 tests) | Regression | No existing containment/backup/evidence guarantee regresses |
 
-## 12. Production deployment runbook (for 4C.7, not this PR)
+## 12. Production deployment runbook (4C.7 — complete)
 
-Reproduced here as the target end-state the phased plan is building toward — **not authorized for execution by this document.**
+This runbook was executed successfully at deployed head `8c74c3f78f3742297cf4346ec3458124d9d64749` and is retained as the operational record. The subsequent PR merge commit `f3c40327763c4b3232a86e0e6e073545bdbd84cf` changed no deployed files; no second rollout or restart was required.
 
 1. Confirm 4C.2–4C.6 merged to `main`; record the exact `main` SHA to be deployed.
 2. Inventory the live instance: confirm all seven units and five canonical database paths match §4 exactly (no drift since this document was written).
@@ -362,7 +368,7 @@ Reproduced here as the target end-state the phased plan is building toward — *
 4. Dry-run `rollout-db.ts inspect` against the live five databases (read-only) to confirm current schema state, zero legacy queue count, and expected resolving-units mapping before touching anything.
 5. Obtain explicit, separate human authorization for the actual rollout (per this project's standing rule — no deployment proceeds on implicit approval).
 6. Invoke `sudo -n /usr/local/sbin/rollout-agent-bridge --expected-commit <exact 40-char SHA>`.
-7. On success: verify every service active, `rollout-db.ts validate` reports `current` for all five, queues intact (counts match pre-rollout inspect), logs show no migration/credential/process-lifecycle errors.
+7. On success: verify every service active, `rollout-db.ts validate` reports `current` for all five, queues intact (counts match pre-rollout inspect), logs show no migration/credential/process-lifecycle errors. **Completed:** all seven services were active/running; all five databases were integrity-valid/current with zero legacy and pending queue rows; checkpoint evidence recorded the interactive and worker WAL drains; backup and SHA-256 manifests were present; startup error smoke was clean; and the sentinel was absent.
 8. On any failure: do not attempt manual remediation — follow the evidence path recorded in `log_dir/latest`, and if rollback is warranted, use the state machine in §9. Report the exact failure per this thread's standing reporting convention.
 
 ---

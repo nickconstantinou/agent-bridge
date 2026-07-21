@@ -45,6 +45,19 @@ function captureConfigError(assignments: unknown): RoleAssignmentConfigError {
   throw new Error("expected role assignment configuration to fail");
 }
 
+function captureScopeError(scopeKey: string): RoleAssignmentConfigError {
+  try {
+    loadRoleAssignmentConfig({
+      WORKER_ROLE_ASSIGNMENTS_JSON: JSON.stringify(acceptedAssignments),
+      WORKER_ROLE_ASSIGNMENT_SCOPE: scopeKey,
+    });
+  } catch (error) {
+    expect(error).toBeInstanceOf(RoleAssignmentConfigError);
+    return error as RoleAssignmentConfigError;
+  }
+  throw new Error("expected role assignment scope to fail");
+}
+
 describe("role assignment configuration", () => {
   it("parses exactly the three accepted roles and their accepted modes", () => {
     const config = loadRoleAssignmentConfig(envWith(acceptedAssignments));
@@ -149,6 +162,19 @@ describe("role assignment configuration", () => {
     const error = captureConfigError(candidate);
     expect(["invalid_target", "forbidden_value"]).toContain(error.code);
     expect(error.message).not.toContain(rejectedValue);
+  });
+
+  it.each([
+    ["secret-shaped", "workspace:ghp_example_secret"],
+    ["secret-shaped", "workspace:api-key"],
+    ["prompt-shaped", "workspace:system-prompt"],
+    ["prompt-shaped", "workspace:raw-prompt"],
+    ["repository-content-shaped", "workspace:src/config.ts"],
+    ["repository-content-shaped", "workspace:repository-content"],
+  ])("rejects %s scope values without echoing them", (_label, scopeKey) => {
+    const error = captureScopeError(scopeKey);
+    expect(error.code).toBe("invalid_scope");
+    expect(error.message).not.toContain(scopeKey);
   });
 
   it("does not echo an arbitrary invalid role", () => {

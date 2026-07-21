@@ -192,9 +192,14 @@ describe("role assignment repository migration", () => {
       ...configuredAssignments("gpt-5.6-sol-updated"),
       idempotencyKey: original.idempotencyKey,
     };
-    expect(() => db.createRoleAssignmentRevision(conflicting)).toThrowError(
-      RoleAssignmentIdempotencyConflictError,
-    );
+    try {
+      db.createRoleAssignmentRevision(conflicting);
+      throw new Error("expected idempotency conflict");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RoleAssignmentIdempotencyConflictError);
+      expect((error as Error).message).not.toContain(original.scopeKey);
+      expect((error as Error).message).not.toContain(original.idempotencyKey);
+    }
     expect(db.listRoleAssignmentRevisions(original.scopeKey)).toEqual([created]);
     expect(db.raw.pragma("foreign_key_check")).toEqual([]);
     db.close();

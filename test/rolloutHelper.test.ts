@@ -97,6 +97,69 @@ describe("guarded rollout helper", () => {
     expect(log.indexOf("systemctl:stop")).toBeLessThan(log.indexOf(" backup "));
   });
 
+  it("rejects a symlinked WAL sidecar before checkpointing", () => {
+    const fixture = useMinimalInventory(createFixture({ initiallyStopped: true }));
+    const victim = join(fixture.root, "wal-victim");
+    writeFileSync(victim, "do-not-touch");
+    symlinkSync(victim, `${fixture.dbPaths[0]}-wal`);
+
+    const result = runRollout(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(actions(fixture)).not.toMatch(/systemctl:stop|\scheckpoint\s|\sbackup\s|\smigrate\s/);
+    expect(readFileSync(victim, "utf8")).toBe("do-not-touch");
+  });
+
+  it("drains non-empty WAL sidecars offline before backing up", () => {
+    const fixture = useMinimalInventory(createFixture({ initiallyStopped: true }));
+    const reader = new Database(fixture.dbPaths[0]);
+    reader.pragma("journal_mode = WAL");
+    reader.exec("BEGIN");
+    reader.prepare("SELECT count(*) FROM pending_messages").get();
+    const db = new Database(fixture.dbPaths[0]);
+    db.pragma("journal_mode = WAL");
+    db.pragma("wal_autocheckpoint = 0");
+    db.exec("INSERT INTO settings(key, value) VALUES ('wal-checkpoint-test', 'must survive checkpoint');");
+    db.close();
+    expect(statSync(`${fixture.dbPaths[0]}-wal`).size).toBeGreaterThan(0);
+    reader.close();
+
+    const result = runRollout(fixture);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+    const checkpointEvidence = JSON.parse(readFileSync(join(artifacts, "checkpoint-evidence.json"), "utf8"));
+    expect(checkpointEvidence.databases[0]).toEqual(expect.objectContaining({ walBytesBefore: expect.any(Number), walBytesAfter: 0 }));
+    const checkpointed = new Database(fixture.dbPaths[0], { readonly: true });
+    expect(checkpointed.prepare("SELECT value FROM settings WHERE key = 'wal-checkpoint-test'").pluck().get()).toBe("must survive checkpoint");
+    checkpointed.close();
+    const log = actions(fixture);
+    expect(log.indexOf("systemctl:stop")).toBeLessThan(log.indexOf(" checkpoint "));
+    expect(log.indexOf(" checkpoint ")).toBeLessThan(log.indexOf(" backup "));
+  });
+
+  it("fails closed when an offline WAL checkpoint is busy", () => {
+    const fixture = useMinimalInventory(createFixture({ initiallyStopped: true }));
+    const reader = new Database(fixture.dbPaths[0]);
+    reader.pragma("journal_mode = WAL");
+    reader.exec("BEGIN");
+    reader.prepare("SELECT count(*) FROM pending_messages").get();
+    const writer = new Database(fixture.dbPaths[0]);
+    writer.pragma("journal_mode = WAL");
+    writer.pragma("wal_autocheckpoint = 0");
+    writer.exec("INSERT INTO settings(key, value) VALUES ('wal-checkpoint-busy-test', 'must remain intact');");
+    writer.close();
+
+    const result = runRollout(fixture);
+    reader.close();
+
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/checkpoint|busy/i);
+    expect(output).toMatch(/services remain stopped|STOPPED_UNCHANGED/i);
+    expect(actions(fixture)).not.toMatch(/\sbackup\s|\smigrate\s/);
+  }, 15_000);
+
   it("attaches per-database resolving-units evidence, correctly collapsing the shared antigravity/claude/codex unit onto one database", () => {
     // Issue #135 Phase 4C.3: rollout-db.ts inspect gains a resolving-units
     // evidence field, sourced from the same unit->canonical-path resolution

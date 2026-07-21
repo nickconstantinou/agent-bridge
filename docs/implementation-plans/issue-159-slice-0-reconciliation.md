@@ -24,7 +24,7 @@ For owners, likely target files, dependencies and overlap decisions, this record
 | OSS repository | `nickconstantinou/agent-bridge` |
 | OSS `main` used by PR #160 | `1ce03d5e22ec44b3b23fef847b273f2bce08303c` |
 | PR #160 branch | `agent/role-based-worker-orchestration-docs` |
-| PR #160 exact head / stacked base | `4cfd960` |
+| PR #160 exact head / stacked base | `5279b1b5f49fa18ab5f7697ff294a80d65ee1fcc` |
 | PR #160 state | open, draft, unmerged |
 | Platform repository | `nickconstantinou/agent-bridge-platform` |
 | Platform `main` used for reconciliation | `31d6b5e42b89eeb433e272816fd6bbb7aced2dce` |

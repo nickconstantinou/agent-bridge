@@ -51,7 +51,7 @@ PR #160 remains the target-state authority for later role routing and orchestrat
 
 ## Slice 0 reconciliation — PR #170
 
-Slice 0 is documented by `docs/implementation-plans/issue-159-slice-0-reconciliation.md`. Its rebased exact head is `44ccd03593d8bc993357fe33e0ca0cb836ce959e`, stacked on PR #160 head `b704043` pending final evidence refresh. It records current owners, overlap decisions, concrete target-path classification, actual child issues, cross-repository ownership, human gates, and retrospective.
+Slice 0 is documented by `docs/implementation-plans/issue-159-slice-0-reconciliation.md`. Its rebased exact head is `52d600ad8d89549b60e72edb6ede1f850a49cad5`, stacked on PR #160 head `b70404304116d3b7a8bc5740a30e22d89ac0cc78`. It records current owners, overlap decisions, concrete target-path classification, actual child issues, cross-repository ownership, human gates, and retrospective.
 
 Slice 0 creates documentation and issue metadata only. It does not itself merge, deploy, restart services, migrate production databases, mutate Platform runtime state, or activate any role behaviour.
 

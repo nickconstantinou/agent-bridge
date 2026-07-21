@@ -114,6 +114,124 @@ function hasStructuredTargetFileClassification(sectionText: string): boolean {
   });
 }
 
+const RED_TEST_INTENT_FIELDS = ["product", "architecture", "invariants", "risks"] as const;
+const RED_TEST_STRING_FIELDS = [
+  "id",
+  "test_file",
+  "test_name",
+  "production_boundary",
+  "fixture_and_state",
+  "action_through_real_caller",
+  "expected_observable_result",
+  "why_current_code_fails",
+  "expected_red_assertion",
+  "focused_red_command",
+  "authoritative_oracle",
+] as const;
+const RED_TEST_ARRAY_FIELDS = [
+  "requirement_ids",
+  "test_classes",
+  "sibling_behaviour_remaining_green",
+  "false_positive_controls",
+] as const;
+
+function isNonEmptyStringArray(value: unknown): value is string[] {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.every(item => isNonEmptyString(item));
+}
+
+function hasStructuredRedTests(sectionText: string): { valid: boolean; ids: Set<string> } {
+  const parsed = extractJsonValue(sectionText);
+  if (!Array.isArray(parsed) || parsed.length === 0) return { valid: false, ids: new Set() };
+
+  const ids = new Set<string>();
+  for (const entry of parsed) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
+      return { valid: false, ids: new Set() };
+    }
+    const record = entry as Record<string, unknown>;
+    for (const field of RED_TEST_STRING_FIELDS) {
+      if (!isNonEmptyString(record[field])) return { valid: false, ids: new Set() };
+    }
+    if (ids.has(record.id as string)) return { valid: false, ids: new Set() };
+    ids.add(record.id as string);
+    for (const field of RED_TEST_ARRAY_FIELDS) {
+      if (!isNonEmptyStringArray(record[field])) return { valid: false, ids: new Set() };
+    }
+    if (typeof record.characterization_required !== "boolean") {
+      return { valid: false, ids: new Set() };
+    }
+    if (typeof record.intent !== "object" || record.intent === null || Array.isArray(record.intent)) {
+      return { valid: false, ids: new Set() };
+    }
+    const intent = record.intent as Record<string, unknown>;
+    for (const field of RED_TEST_INTENT_FIELDS) {
+      if (!isNonEmptyStringArray(intent[field])) return { valid: false, ids: new Set() };
+    }
+  }
+  return { valid: true, ids };
+}
+
+function hasStructuredRedTestCoverage(sectionText: string, redTestIds: Set<string>): {
+  valid: boolean;
+  referencesValid: boolean;
+} {
+  const parsed = extractJsonValue(sectionText);
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { valid: false, referencesValid: false };
+  }
+  const coverage = parsed as Record<string, unknown>;
+  const acceptance = coverage.acceptance_coverage;
+  const architecture = coverage.architecture_coverage;
+  const risks = coverage.triggered_risk_coverage;
+  if (!Array.isArray(acceptance) || acceptance.length === 0
+    || !Array.isArray(architecture) || architecture.length === 0
+    || !Array.isArray(risks) || risks.length === 0) {
+    return { valid: false, referencesValid: false };
+  }
+
+  const references = (value: unknown): string[] | null => {
+    if (!Array.isArray(value) || value.length === 0 || !value.every(item => isNonEmptyString(item))) return null;
+    return value as string[];
+  };
+  const optionalReferences = (value: unknown): string[] | null => {
+    if (!Array.isArray(value) || !value.every(item => isNonEmptyString(item))) return null;
+    return value as string[];
+  };
+  const referencesKnown = (ids: string[] | null): boolean => ids !== null && ids.every(id => redTestIds.has(id));
+
+  for (const entry of acceptance) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return { valid: false, referencesValid: false };
+    const record = entry as Record<string, unknown>;
+    if (!isNonEmptyString(record.requirement_id)) return { valid: false, referencesValid: false };
+    const redIds = references(record.red_test_ids);
+    const proof = record.non_test_proof;
+    if ((redIds === null && !isNonEmptyString(proof)) || (redIds !== null && !referencesKnown(redIds))) {
+      return { valid: redIds !== null, referencesValid: false };
+    }
+  }
+  for (const entry of architecture) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return { valid: false, referencesValid: false };
+    const record = entry as Record<string, unknown>;
+    if (!isNonEmptyString(record.boundary_or_invariant)) return { valid: false, referencesValid: false };
+    const redIds = references(record.red_test_ids);
+    const characterizationIds = record.characterization_test_ids === undefined
+      ? []
+      : optionalReferences(record.characterization_test_ids);
+    if (!referencesKnown(redIds) || characterizationIds === null && record.characterization_test_ids !== undefined
+      || !referencesKnown(characterizationIds ?? [])) return { valid: false, referencesValid: false };
+  }
+  for (const entry of risks) {
+    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return { valid: false, referencesValid: false };
+    const record = entry as Record<string, unknown>;
+    const redIds = references(record.red_test_ids);
+    if (!isNonEmptyString(record.risk) || !isNonEmptyStringArray(record.required_test_classes)
+      || !referencesKnown(redIds)) return { valid: false, referencesValid: false };
+  }
+  return { valid: true, referencesValid: true };
+}
+
 function hasLegacyConcreteTargetFiles(sectionText: string): boolean {
   if (/invalid_or_unclassified/i.test(sectionText)) return false;
   const paths = sectionText.match(/\b(?:src|test|scripts|docs)\/[^\s`),]+/gi) ?? [];
@@ -137,13 +255,19 @@ export function validateImplementationPlan(
   if (!targetFilesValid) missing.push("Target-file classification");
 
   const redTests = extractSection(text, "Red Tests");
-  if (!containsAllFields(redTests, RED_TEST_FIELDS)) {
+  const structuredRedTests = hasStructuredRedTests(redTests);
+  if (!structuredRedTests.valid || !containsAllFields(redTests, RED_TEST_FIELDS)) {
     missing.push("Comprehensive red-test fields");
+    missing.push("Structured red-test records");
   }
 
   const redTestCoverage = extractSection(text, "Red Test Coverage");
-  if (!containsAllFields(redTestCoverage, RED_TEST_COVERAGE_FIELDS)) {
+  const structuredCoverage = hasStructuredRedTestCoverage(redTestCoverage, structuredRedTests.ids);
+  if (!structuredCoverage.valid || !containsAllFields(redTestCoverage, RED_TEST_COVERAGE_FIELDS)) {
     missing.push("Red-test coverage matrices");
+    missing.push("Structured red-test coverage");
+  } else if (!structuredCoverage.referencesValid) {
+    missing.push("Red-test coverage references");
   }
 
   if (!/\b(?:src|test|scripts|docs)\/[^\s`),]+/i.test(text)) missing.push("Concrete file paths");

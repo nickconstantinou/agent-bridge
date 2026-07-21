@@ -131,4 +131,27 @@ describe("implementation plan red-test quality", () => {
 
     expect(result).toEqual({ valid: true, missing: [] });
   });
+
+  it("rejects red-test sections that only mention the required field names", () => {
+    const result = validateGeneratedImplementationPlan(`${BASE_PLAN}
+## Red Tests
+requirement_ids product architecture invariants risks test_classes test_file test_name production_boundary fixture_and_state action_through_real_caller expected_observable_result why_current_code_fails expected_red_assertion focused_red_command sibling_behaviour_remaining_green authoritative_oracle false_positive_controls
+
+## Red Test Coverage
+acceptance_coverage architecture_coverage triggered_risk_coverage`);
+
+    expect(result.valid).toBe(false);
+    expect(result.missing).toContain("Structured red-test records");
+    expect(result.missing).toContain("Structured red-test coverage");
+  });
+
+  it("rejects coverage that references unknown red tests or omits required mappings", () => {
+    const malformed = COMPLETE_RED_TESTS
+      .replace('"red_test_ids":["RT-1"]', '"red_test_ids":["RT-404"]')
+      .replace('"red_test_ids":["RT-1"]', '"red_test_ids":[]');
+    const result = validateGeneratedImplementationPlan(`${BASE_PLAN}\n${malformed}`);
+
+    expect(result.valid).toBe(false);
+    expect(result.missing).toContain("Red-test coverage references");
+  });
 });

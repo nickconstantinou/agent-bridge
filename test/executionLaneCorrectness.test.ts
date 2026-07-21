@@ -303,6 +303,112 @@ describe("execution lane correctness", () => {
     db.close(); rmSync(path, { force: true }); rmSync(childReady, { force: true });
   }, 8_000);
 
+  it("upgrades an in-flight interrupt to /stop and discards the queued successor", async () => {
+    const path = join(tmpdir(), `interrupt-stop-upgrade-${Date.now()}-${Math.random()}.sqlite`);
+    const childReady = join(tmpdir(), `interrupt-stop-upgrade-ready-${Date.now()}-${Math.random()}`);
+    const db = openDb(path);
+    const c = client();
+    const successorRun = vi.fn().mockResolvedValue('{"result":"must be discarded","session_id":"bad"}');
+    const engine = new BridgeEngine({ ...options("claude"), busyMessageMode: "interrupt" }, db, c, {
+      runCli: vi.fn().mockImplementationOnce((_command, _args, cwd, cliOptions) => runCli(
+        process.execPath,
+        ["-e", "process.on('SIGTERM',()=>{}); require('node:fs').writeFileSync(process.argv[1], 'ready'); setTimeout(()=>{},10000)", childReady],
+        cwd,
+        cliOptions,
+      )).mockImplementationOnce(successorRun),
+    });
+
+    const first = engine.handleMessages([message("long first turn", 7)]);
+    await waitForFile(childReady);
+    const interrupting = engine.handleMessages([message("queued successor", 7)]);
+    await waitForCondition(() => c.sendMessage.mock.calls.some((call: any[]) => call[0]?.text === "⏹️ Interrupting current work..."));
+    const stopping = engine.handleUpdate({ update_id: 2, message: message("/stop", 7) });
+
+    await Promise.all([first, interrupting, stopping]);
+
+    expect(successorRun).not.toHaveBeenCalled();
+    expect(db.pendingMsgCount("telegram:interactive", "100:7")).toBe(0);
+    expect(db.getSession("100:7", "claude")).toBeNull();
+    db.close(); rmSync(path, { force: true }); rmSync(childReady, { force: true });
+  }, 12_000);
+
+  it("allows a new interrupt to terminate a successor while it is running", async () => {
+    const path = join(tmpdir(), `successor-interrupt-${Date.now()}-${Math.random()}.sqlite`);
+    const firstReady = join(tmpdir(), `successor-interrupt-first-${Date.now()}-${Math.random()}`);
+    const successorReady = join(tmpdir(), `successor-interrupt-successor-${Date.now()}-${Math.random()}`);
+    const db = openDb(path);
+    const c = client();
+    const newestRun = vi.fn().mockResolvedValue('{"result":"newest done","session_id":"newest"}');
+    const engine = new BridgeEngine({ ...options("claude"), busyMessageMode: "interrupt" }, db, c, {
+      runCli: vi.fn()
+        .mockImplementationOnce((_command, _args, cwd, cliOptions) => runCli(
+          process.execPath,
+          ["-e", "process.on('SIGTERM',()=>{}); require('node:fs').writeFileSync(process.argv[1], 'ready'); setTimeout(()=>{},10000)", firstReady],
+          cwd,
+          cliOptions,
+        ))
+        .mockImplementationOnce((_command, _args, cwd, cliOptions) => runCli(
+          process.execPath,
+          ["-e", "process.on('SIGTERM',()=>{}); require('node:fs').writeFileSync(process.argv[1], 'ready'); setTimeout(()=>{},10000)", successorReady],
+          cwd,
+          cliOptions,
+        ))
+        .mockImplementationOnce(newestRun),
+    });
+
+    const first = engine.handleMessages([message("long first turn", 7)]);
+    await waitForFile(firstReady);
+    const successor = engine.handleMessages([message("successor", 7)]);
+    await waitForFile(successorReady);
+    const newest = engine.handleMessages([message("newest", 7)]);
+
+    await Promise.all([first, successor, newest]);
+
+    expect(newestRun).toHaveBeenCalledOnce();
+    expect(db.getSession("100:7", "claude")).toBe("newest");
+    expect(c.sendMessage.mock.calls.filter((call: any[]) => call[0]?.text === "newest done")).toHaveLength(1);
+    db.close(); rmSync(path, { force: true }); rmSync(firstReady, { force: true }); rmSync(successorReady, { force: true });
+  }, 18_000);
+
+  it("cancels a running successor and pending work when /stop arrives", async () => {
+    const path = join(tmpdir(), `successor-stop-${Date.now()}-${Math.random()}.sqlite`);
+    const firstReady = join(tmpdir(), `successor-stop-first-${Date.now()}-${Math.random()}`);
+    const successorReady = join(tmpdir(), `successor-stop-successor-${Date.now()}-${Math.random()}`);
+    const db = openDb(path);
+    const c = client();
+    const successorRun = vi.fn();
+    const engine = new BridgeEngine({ ...options("claude"), busyMessageMode: "interrupt" }, db, c, {
+      runCli: vi.fn()
+        .mockImplementationOnce((_command, _args, cwd, cliOptions) => runCli(
+          process.execPath,
+          ["-e", "process.on('SIGTERM',()=>{}); require('node:fs').writeFileSync(process.argv[1], 'ready'); setTimeout(()=>{},10000)", firstReady],
+          cwd,
+          cliOptions,
+        ))
+        .mockImplementationOnce((_command, _args, cwd, cliOptions) => runCli(
+          process.execPath,
+          ["-e", "process.on('SIGTERM',()=>{}); require('node:fs').writeFileSync(process.argv[1], 'ready'); setTimeout(()=>{},10000)", successorReady],
+          cwd,
+          cliOptions,
+        ))
+        .mockImplementationOnce(successorRun),
+    });
+
+    const first = engine.handleMessages([message("long first turn", 7)]);
+    await waitForFile(firstReady);
+    const successor = engine.handleMessages([message("successor", 7)]);
+    await waitForFile(successorReady);
+    db.enqueueMsg("telegram:interactive", "100:7", { prompt: "pending", chatId: 100, threadId: 7, chatType: "private" });
+    const stopping = engine.handleUpdate({ update_id: 2, message: message("/stop", 7) });
+
+    await Promise.all([first, successor, stopping]);
+
+    expect(successorRun).not.toHaveBeenCalled();
+    expect(db.pendingMsgCount("telegram:interactive", "100:7")).toBe(0);
+    expect(db.getSession("100:7", "claude")).toBeNull();
+    db.close(); rmSync(path, { force: true }); rmSync(firstReady, { force: true }); rmSync(successorReady, { force: true });
+  }, 18_000);
+
   it("does not clear /stop cancellation while process-tree finalization is waiting", async () => {
     const path = join(tmpdir(), `stop-race-${Date.now()}-${Math.random()}.sqlite`);
     const childReady = join(tmpdir(), `stop-race-ready-${Date.now()}-${Math.random()}`);

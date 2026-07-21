@@ -51,13 +51,13 @@ PR #160 remains the target-state authority for later role routing and orchestrat
 
 ## Slice 0 reconciliation — PR #170
 
-Slice 0 is documented by `docs/implementation-plans/issue-159-slice-0-reconciliation.md`. Its current exact head is `f8ee5415c4bc5331a8331c923b7fa8d53601a8de`, stacked on PR #160. It records current owners, overlap decisions, concrete target-path classification, actual child issues, cross-repository ownership, human gates, and retrospective.
+Slice 0 is documented by `docs/implementation-plans/issue-159-slice-0-reconciliation.md`. Its rebased exact head is `772b409`, stacked on rebased PR #160 at `4cfd960`. It records current owners, overlap decisions, concrete target-path classification, actual child issues, cross-repository ownership, human gates, and retrospective.
 
 Slice 0 creates documentation and issue metadata only. It does not itself merge, deploy, restart services, migrate production databases, mutate Platform runtime state, or activate any role behaviour.
 
-## Slice 1 dormant role persistence — Issue #161 / draft PR #174
+## Slice 1 dormant role persistence — Issue #161 / merged PR #174
 
-Issue #161 is the sole Slice 1 implementation owner. Draft PR #174 is stacked on the approved Slice 0 head and implements the following dormant foundation:
+Issue #161 is the sole Slice 1 implementation owner. PR #174 merged the dormant foundation at exact head `e3ddf9768e81505b14a4f93d3d989857766de567`; the rebased Slice 0 branch preserves that content without changing production state:
 
 - the exact three-role public domain and canonical mode registry;
 - bounded explicit desired CLI/model assignments with ordered fallbacks;

@@ -19,11 +19,14 @@ import { loadBotsConfig, validateTokenUniqueness, resolveExecutionMode } from ".
 import { runCli } from "./cli.js";
 import { startConfiguredAdvisorBroker } from "./advisorBroker.js";
 import { standaloneServiceId } from "./executionIdentity.js";
+import { logCompatibilityDiagnostics } from "./compatibilityDiagnostics.js";
 
 dotenv.config({
   path: process.env.BRIDGE_ENV_FILE || ".env",
   override: false,
 });
+
+logCompatibilityDiagnostics("telegram-standalone");
 
 function getServiceKindFromEnvFile(envPath: string): "codex" | "antigravity" | "claude" | "kimchi" | null {
   if (!envPath) return null;

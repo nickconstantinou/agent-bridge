@@ -13,6 +13,7 @@ export type ContextInjectionPolicy = "always" | "handoff_once";
  * when there is no native CLI session, a handoff is pending, or /compact /
  * invalid-session recovery just reset the session — then rely on the
  * provider-native session for continuity until the next such event.
+ * Soul and active-model handoff metadata follow the same gate.
  */
 export function contextInjectionPolicy(): ContextInjectionPolicy {
   return process.env.BRIDGE_CONTEXT_INJECTION_POLICY === "handoff_once" ? "handoff_once" : "always";

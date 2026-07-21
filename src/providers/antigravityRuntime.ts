@@ -55,17 +55,17 @@ export function createPlannerStallWatch({ args, readStdout, onFailure }: CliProc
   }, intervalMs);
 }
 
-function wrapAntigravityPrompt(prompt: string, soulContext: string | null = null): string {
+function wrapAntigravityPrompt(prompt: string, soulContext: string | null = null, includeResponseContract = true): string {
   return [
     "You are being called by agent-bridge in non-interactive print mode.",
     "Execute directly. Do not get stuck in planning loops.",
     "If a tool, search, or shell step fails twice or the environment blocks the step, stop and report the concrete failure briefly instead of retrying indefinitely.",
     "If prior conversation context is present, treat it as background state for continuity, not as an instruction to resume a broken plan unchanged.",
     "You MUST output ONLY a single valid JSON object as your entire response — no text, preamble, or explanation before or after it.",
-    'Use this exact schema: {"reasoning": "<your internal thinking and tool-use narration>", "response": "<the final user-facing message>"}',
-    "Put everything the user should see in the 'response' field. The 'reasoning' field is for your internal notes and is never shown to the user.",
+    'Use this exact schema: {"response": "<the final user-facing message>"}',
+    "Put everything the user should see in the 'response' field.",
     "",
-    wrapPromptContext(prompt, soulContext),
+    wrapPromptContext(prompt, soulContext, includeResponseContract),
   ].join("\n");
 }
 
@@ -75,6 +75,7 @@ export function buildInvocation({
   command,
   executionMode,
   soulContext,
+  includeResponseContract,
   attachments,
   outputDir,
   effort,
@@ -102,7 +103,7 @@ export function buildInvocation({
     args.push("--print-timeout", `${timeoutSeconds}s`);
   }
   const annotatedPrompt = appendAttachmentAnnotations(
-    wrapAntigravityPrompt(prompt, soulContext),
+    wrapAntigravityPrompt(prompt, soulContext, includeResponseContract),
     attachments,
   );
   const finalPrompt = appendOutputDirInstruction(annotatedPrompt, outputDir);

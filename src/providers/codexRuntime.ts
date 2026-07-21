@@ -22,6 +22,7 @@ export function buildInvocation({
   executionMode,
   outputFormat,
   soulContext,
+  includeResponseContract,
   attachments,
   outputDir,
   effort,
@@ -60,7 +61,7 @@ export function buildInvocation({
   if (outputFormat === "json") {
     args.push("--json");
   }
-  const finalPrompt = appendOutputDirInstruction(wrapPromptContext(prompt, soulContext), outputDir);
+  const finalPrompt = appendOutputDirInstruction(wrapPromptContext(prompt, soulContext, includeResponseContract), outputDir);
   // Codex supports -i <file> for image attachments on fresh exec invocations.
   // Because --image accepts multiple files, pass the prompt via stdin to avoid
   // the prompt being parsed as another image path.

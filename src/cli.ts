@@ -95,6 +95,7 @@ export function buildCliInvocation({
   outputFormat = null,
   logFile = null,
   soulContext = null,
+  includeResponseContract = true,
   attachments = [],
   outputDir = null,
   effort = null,
@@ -111,6 +112,7 @@ export function buildCliInvocation({
   outputFormat?: "json" | null;
   logFile?: string | null;
   soulContext?: string | null;
+  includeResponseContract?: boolean;
   attachments?: string[];
   outputDir?: string | null;
   effort?: EffortLevel | null;
@@ -123,22 +125,22 @@ export function buildCliInvocation({
 
   if (bot === "codex") {
     return codexRuntime.buildInvocation({
-      prompt, sessionId, command, model, executionMode, outputFormat, soulContext, attachments, outputDir, effort, toolMode,
+      prompt, sessionId, command, model, executionMode, outputFormat, soulContext, includeResponseContract, attachments, outputDir, effort, toolMode,
     });
   }
   if (bot === "claude") {
     return claudeRuntime.buildInvocation({
-      prompt, sessionId, command, model, executionMode, outputFormat, soulContext, attachments, outputDir, effort, toolMode,
+      prompt, sessionId, command, model, executionMode, outputFormat, soulContext, includeResponseContract, attachments, outputDir, effort, toolMode,
     });
   }
   if (bot === "antigravity") {
     return antigravityRuntime.buildInvocation({
-      prompt, sessionId, command, model, executionMode, outputFormat, soulContext, attachments, outputDir, effort, toolMode, logFile, homeDir,
+      prompt, sessionId, command, model, executionMode, outputFormat, soulContext, includeResponseContract, attachments, outputDir, effort, toolMode, logFile, homeDir,
     });
   }
   if (bot === "kimchi") {
     return kimchiRuntime.buildInvocation({
-      prompt, sessionId, command, model, executionMode, outputFormat, soulContext, attachments, outputDir, effort, toolMode,
+      prompt, sessionId, command, model, executionMode, outputFormat, soulContext, includeResponseContract, attachments, outputDir, effort, toolMode,
     });
   }
 

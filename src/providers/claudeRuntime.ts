@@ -24,13 +24,14 @@ export function buildInvocation({
   executionMode,
   outputFormat,
   soulContext,
+  includeResponseContract,
   attachments,
   outputDir,
   effort,
   toolMode,
 }: ProviderInvocationRequest): ProviderInvocation {
   const args: string[] = [];
-  const finalPrompt = appendOutputDirInstruction(wrapPromptContext(prompt, soulContext), outputDir);
+  const finalPrompt = appendOutputDirInstruction(wrapPromptContext(prompt, soulContext, includeResponseContract), outputDir);
   if (attachments.length > 0) {
     // Multimodal path: pipe stream-json with base64 images to stdin
     args.push(...buildClaudeSettingsArg());

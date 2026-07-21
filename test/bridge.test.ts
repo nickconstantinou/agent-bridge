@@ -175,7 +175,7 @@ describe("agent bridge MVP", () => {
     expect(args).not.toContain("--output");
   });
 
-  it("wraps codex prompts with Telegram response style instructions", () => {
+  it("wraps codex prompts with the minimum response contract when Soul is absent", () => {
     const { args } = buildCliInvocation({
       bot: "codex",
       prompt: "hello",
@@ -186,10 +186,9 @@ describe("agent bridge MVP", () => {
 
     const printedPrompt = String(args.at(-1));
     expect(printedPrompt).toContain("hello");
-    expect(printedPrompt).toContain("Telegram response style");
-    expect(printedPrompt).toContain("Use fenced code blocks");
-    expect(printedPrompt).toContain("Never drop critical facts");
-    expect(printedPrompt).toContain("Retain all specific commands, signals, file paths, error codes");
+    expect(printedPrompt).toContain("Response contract:");
+    expect(printedPrompt).toContain("Preserve critical facts");
+    expect(printedPrompt).not.toContain("Keep replies extremely concise");
   });
 
   it("includes SOUL.md context in wrapped prompts when provided", () => {
@@ -206,8 +205,23 @@ describe("agent bridge MVP", () => {
     expect(printedPrompt).toContain("Soul contract:");
     expect(printedPrompt).toContain("Identity: Chas");
     expect(printedPrompt).toContain("Values: clarity before cleverness");
-    expect(printedPrompt).toContain("Telegram response style:");
+    expect(printedPrompt).toContain("Response contract:");
     expect(printedPrompt).toContain("User request:");
+  });
+
+  it("uses Soul's configurable Communication Style instead of the fallback contract", () => {
+    const { args } = buildCliInvocation({
+      bot: "codex",
+      prompt: "hello",
+      sessionId: null,
+      command: "codex",
+      model: null,
+      soulContext: "## Communication Style\nUse a warm paragraph.",
+    });
+
+    const printedPrompt = String(args.at(-1));
+    expect(printedPrompt).toContain("Use a warm paragraph.");
+    expect(printedPrompt).not.toContain("Response contract:");
   });
 
   it("creates fresh antigravity invocation with --print prompt after all flags", () => {
@@ -240,7 +254,7 @@ describe("agent bridge MVP", () => {
     expect(printedPrompt).toContain("Execute directly. Do not get stuck in planning loops.");
     expect(printedPrompt).toContain("If a tool, search, or shell step fails twice");
     expect(printedPrompt).toContain('"response"');
-    expect(printedPrompt).toContain('"reasoning"');
+    expect(printedPrompt).not.toContain('"reasoning"');
   });
 
   it("keeps antigravity delimiter outside SOUL.md and Telegram style context", () => {
@@ -255,8 +269,7 @@ describe("agent bridge MVP", () => {
 
     const printedPrompt = String(args.at(-1));
     expect(printedPrompt.indexOf("line containing only ***")).toBeLessThan(printedPrompt.indexOf("Soul contract:"));
-    expect(printedPrompt.indexOf("Soul contract:")).toBeLessThan(printedPrompt.indexOf("Telegram response style:"));
-    expect(printedPrompt.indexOf("Telegram response style:")).toBeLessThan(printedPrompt.indexOf("User request:"));
+    expect(printedPrompt.indexOf("Soul contract:")).toBeLessThan(printedPrompt.indexOf("User request:"));
   });
 
   it("antigravity session invocation uses --conversation to continue an existing session", () => {
@@ -303,7 +316,7 @@ describe("agent bridge MVP", () => {
     expect(args).not.toContain("--resume");
   });
 
-  it("wraps claude prompts with Telegram response style instructions", () => {
+  it("wraps claude prompts with the minimum response contract when Soul is absent", () => {
     const { args } = buildCliInvocation({
       bot: "claude",
       prompt: "hello",
@@ -314,10 +327,9 @@ describe("agent bridge MVP", () => {
 
     const printedPrompt = String(args.at(-1));
     expect(printedPrompt).toContain("hello");
-    expect(printedPrompt).toContain("Telegram response style");
-    expect(printedPrompt).toContain("Use fenced code blocks");
-    expect(printedPrompt).toContain("Never drop critical facts");
-    expect(printedPrompt).toContain("Retain all specific commands, signals, file paths, error codes");
+    expect(printedPrompt).toContain("Response contract:");
+    expect(printedPrompt).toContain("Preserve critical facts");
+    expect(printedPrompt).not.toContain("Keep replies extremely concise");
   });
 
   it("creates resume claude invocation with --resume flag", () => {

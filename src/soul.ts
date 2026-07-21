@@ -3,7 +3,7 @@
  * INPUTS: Markdown persona files, environment-derived mode/path options, and prompt-size limits.
  * OUTPUTS: Compact soul contract text or null when disabled/missing.
  * NEIGHBORS: src/cli.ts, src/index.ts, docs/soul.md
- * LOGIC: Parses the 9 canonical SOUL.md sections in stable order, caps output size, and preserves bridge safety precedence.
+ * LOGIC: Parses persona sections in stable order, including configurable response style, caps output size, and preserves bridge safety precedence.
  */
 
 import { existsSync, readFileSync } from "node:fs";

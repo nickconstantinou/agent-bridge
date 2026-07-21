@@ -168,4 +168,38 @@ acceptance_coverage architecture_coverage triggered_risk_coverage`);
       expect(result.missing).toContain("Structured red-test coverage");
     },
   );
+
+  it("rejects a declared acceptance criterion with no coverage", () => {
+    const planWithTwoCriteria = BASE_PLAN.replace(
+      "- AC-1: the user-visible behaviour is correct.",
+      "- AC-1: the user-visible behaviour is correct.\n- AC-2: rollback preserves the prior state.",
+    );
+    const result = validateGeneratedImplementationPlan(`${planWithTwoCriteria}\n${COMPLETE_RED_TESTS}`);
+
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects unknown red-test requirement and coverage criterion IDs", () => {
+    const unknownRedRequirement = COMPLETE_RED_TESTS.replace(
+      '"requirement_ids": ["AC-1"]',
+      '"requirement_ids": ["AC-404"]',
+    );
+    const unknownCoverageCriterion = unknownRedRequirement.replace(
+      '"requirement_id":"AC-1"',
+      '"requirement_id":"AC-404"',
+    );
+    const result = validateGeneratedImplementationPlan(`${BASE_PLAN}\n${unknownCoverageCriterion}`);
+
+    expect(result.valid).toBe(false);
+  });
+
+  it("rejects triggered risk coverage when required test classes are absent", () => {
+    const malformed = COMPLETE_RED_TESTS.replace(
+      '"required_test_classes":["compatibility"]',
+      '"required_test_classes":["security"]',
+    );
+    const result = validateGeneratedImplementationPlan(`${BASE_PLAN}\n${malformed}`);
+
+    expect(result.valid).toBe(false);
+  });
 });

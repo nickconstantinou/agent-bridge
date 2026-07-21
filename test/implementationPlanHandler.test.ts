@@ -66,7 +66,10 @@ Exercise the registered worker handler through the real caller and observe durab
 
 \`\`\`json
 {
-  "acceptance_coverage": [{"requirement_id":"AC-1", "red_test_ids":["RT-1"], "non_test_proof":null}],
+  "acceptance_coverage": [
+    {"requirement_id":"AC-1", "red_test_ids":["RT-1"], "non_test_proof":null},
+    {"requirement_id":"AC-2", "red_test_ids":[], "non_test_proof":"approval remains blocked until a validated plan is persisted"}
+  ],
   "architecture_coverage": [{"boundary_or_invariant":"GitHub source of truth and SQLite orchestration mirror", "red_test_ids":["RT-1"], "characterization_test_ids":[]}],
   "triggered_risk_coverage": [{"risk":"compatibility", "required_test_classes":["compatibility"], "red_test_ids":["RT-1"]}]
 }

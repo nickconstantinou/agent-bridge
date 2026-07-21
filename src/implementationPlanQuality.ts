@@ -141,39 +141,64 @@ function isNonEmptyStringArray(value: unknown): value is string[] {
     && value.every(item => isNonEmptyString(item));
 }
 
-function hasStructuredRedTests(sectionText: string): { valid: boolean; ids: Set<string> } {
+function parseDeclaredAcceptanceCriteria(sectionText: string): { valid: boolean; ids: Set<string> } {
+  const ids = new Set<string>();
+  const criterionPattern = /^\s*(?:[-*]|\d+[.)])\s+([A-Za-z][A-Za-z0-9_.-]*)\s*:\s*\S.*$/gm;
+  let match: RegExpExecArray | null;
+  while ((match = criterionPattern.exec(sectionText)) !== null) {
+    const id = match[1];
+    if (ids.has(id)) return { valid: false, ids: new Set() };
+    ids.add(id);
+  }
+  return { valid: ids.size > 0, ids };
+}
+
+function hasStructuredRedTests(
+  sectionText: string,
+  declaredCriteria: Set<string>,
+): { valid: boolean; ids: Set<string>; classesById: Map<string, Set<string>> } {
   const parsed = extractJsonValue(sectionText);
-  if (!Array.isArray(parsed) || parsed.length === 0) return { valid: false, ids: new Set() };
+  const empty = { valid: false, ids: new Set<string>(), classesById: new Map<string, Set<string>>() };
+  if (!Array.isArray(parsed) || parsed.length === 0) return empty;
 
   const ids = new Set<string>();
+  const classesById = new Map<string, Set<string>>();
   for (const entry of parsed) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      return { valid: false, ids: new Set() };
+      return empty;
     }
     const record = entry as Record<string, unknown>;
     for (const field of RED_TEST_STRING_FIELDS) {
-      if (!isNonEmptyString(record[field])) return { valid: false, ids: new Set() };
+      if (!isNonEmptyString(record[field])) return empty;
     }
-    if (ids.has(record.id as string)) return { valid: false, ids: new Set() };
+    if (ids.has(record.id as string)) return empty;
     ids.add(record.id as string);
     for (const field of RED_TEST_ARRAY_FIELDS) {
-      if (!isNonEmptyStringArray(record[field])) return { valid: false, ids: new Set() };
+      if (!isNonEmptyStringArray(record[field])) return empty;
     }
+    const requirementIds = record.requirement_ids as string[];
+    if (!requirementIds.every(id => declaredCriteria.has(id))) return empty;
+    classesById.set(record.id as string, new Set(record.test_classes as string[]));
     if (typeof record.characterization_required !== "boolean") {
-      return { valid: false, ids: new Set() };
+      return empty;
     }
     if (typeof record.intent !== "object" || record.intent === null || Array.isArray(record.intent)) {
-      return { valid: false, ids: new Set() };
+      return empty;
     }
     const intent = record.intent as Record<string, unknown>;
     for (const field of RED_TEST_INTENT_FIELDS) {
-      if (!isNonEmptyStringArray(intent[field])) return { valid: false, ids: new Set() };
+      if (!isNonEmptyStringArray(intent[field])) return empty;
     }
   }
-  return { valid: true, ids };
+  return { valid: true, ids, classesById };
 }
 
-function hasStructuredRedTestCoverage(sectionText: string, redTestIds: Set<string>): {
+function hasStructuredRedTestCoverage(
+  sectionText: string,
+  redTestIds: Set<string>,
+  declaredCriteria: Set<string>,
+  classesById: Map<string, Set<string>>,
+): {
   valid: boolean;
   referencesValid: boolean;
 } {
@@ -201,10 +226,14 @@ function hasStructuredRedTestCoverage(sectionText: string, redTestIds: Set<strin
   };
   const referencesKnown = (ids: string[] | null): boolean => ids !== null && ids.every(id => redTestIds.has(id));
 
+  const coveredCriteria = new Set<string>();
   for (const entry of acceptance) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return { valid: false, referencesValid: false };
     const record = entry as Record<string, unknown>;
-    if (!isNonEmptyString(record.requirement_id)) return { valid: false, referencesValid: false };
+    if (!isNonEmptyString(record.requirement_id)
+      || !declaredCriteria.has(record.requirement_id)
+      || coveredCriteria.has(record.requirement_id)) return { valid: false, referencesValid: false };
+    coveredCriteria.add(record.requirement_id);
     if (!Array.isArray(record.red_test_ids)
       || !record.red_test_ids.every(item => isNonEmptyString(item))) {
       return { valid: false, referencesValid: false };
@@ -216,6 +245,10 @@ function hasStructuredRedTestCoverage(sectionText: string, redTestIds: Set<strin
     } else if (!referencesKnown(redIds)) {
       return { valid: true, referencesValid: false };
     }
+  }
+  if (coveredCriteria.size !== declaredCriteria.size
+    || [...declaredCriteria].some(id => !coveredCriteria.has(id))) {
+    return { valid: false, referencesValid: false };
   }
   for (const entry of architecture) {
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return { valid: false, referencesValid: false };
@@ -234,6 +267,11 @@ function hasStructuredRedTestCoverage(sectionText: string, redTestIds: Set<strin
     const redIds = references(record.red_test_ids);
     if (!isNonEmptyString(record.risk) || !isNonEmptyStringArray(record.required_test_classes)
       || !referencesKnown(redIds)) return { valid: false, referencesValid: false };
+    const requiredClasses = record.required_test_classes as string[];
+    if (!requiredClasses.every(requiredClass =>
+      (redIds as string[]).some(id => classesById.get(id)?.has(requiredClass)))) {
+      return { valid: false, referencesValid: false };
+    }
   }
   return { valid: true, referencesValid: true };
 }
@@ -260,15 +298,23 @@ export function validateImplementationPlan(
     || (options.allowLegacyTargetFiles === true && hasLegacyConcreteTargetFiles(targetFiles));
   if (!targetFilesValid) missing.push("Target-file classification");
 
+  const acceptanceCriteria = parseDeclaredAcceptanceCriteria(extractSection(text, "Acceptance Criteria"));
+  if (!acceptanceCriteria.valid) missing.push("Acceptance criteria IDs");
+
   const redTests = extractSection(text, "Red Tests");
-  const structuredRedTests = hasStructuredRedTests(redTests);
+  const structuredRedTests = hasStructuredRedTests(redTests, acceptanceCriteria.ids);
   if (!structuredRedTests.valid || !containsAllFields(redTests, RED_TEST_FIELDS)) {
     missing.push("Comprehensive red-test fields");
     missing.push("Structured red-test records");
   }
 
   const redTestCoverage = extractSection(text, "Red Test Coverage");
-  const structuredCoverage = hasStructuredRedTestCoverage(redTestCoverage, structuredRedTests.ids);
+  const structuredCoverage = hasStructuredRedTestCoverage(
+    redTestCoverage,
+    structuredRedTests.ids,
+    acceptanceCriteria.ids,
+    structuredRedTests.classesById,
+  );
   if (!structuredCoverage.valid || !containsAllFields(redTestCoverage, RED_TEST_COVERAGE_FIELDS)) {
     missing.push("Red-test coverage matrices");
     missing.push("Structured red-test coverage");

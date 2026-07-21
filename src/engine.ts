@@ -1009,6 +1009,7 @@ export class BridgeEngine {
     lifecycleAlreadyManaged: boolean,
   ): Promise<void> {
     const chatKey = handle.chatKey;
+    const executionLane = this._executionLane(chatKey);
     const scheduled = this.queueRecoveryTimers.get(chatKey);
     if (scheduled) {
       clearTimeout(scheduled);

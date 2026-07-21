@@ -134,39 +134,37 @@ describe("provider invocation fixtures — claude", () => {
 });
 
 describe("provider invocation fixtures — antigravity", () => {
-  it("fresh session — exact arg order, no --conversation flag", () => {
+  it("fresh session — exact arg order, no --conversation or disabled timeout flags", () => {
     const inv = buildCliInvocation({ bot: "antigravity", prompt: "hi", sessionId: null, command: "agy" });
-    expect(inv.args[0]).toBe("--print-timeout");
-    expect(inv.args[2]).toBe("--print");
-    expect(inv.args).toHaveLength(4);
+    expect(inv.args[0]).toBe("--print");
+    expect(inv.args).toHaveLength(2);
   });
 
   it("resumes an existing conversation — exact arg order", () => {
     const inv = buildCliInvocation({ bot: "antigravity", prompt: "hi", sessionId: "conv-1", command: "agy" });
     expect(inv.args[0]).toBe("--conversation");
     expect(inv.args[1]).toBe("conv-1");
-    expect(inv.args[2]).toBe("--print-timeout");
-    expect(inv.args[4]).toBe("--print");
-    expect(inv.args).toHaveLength(6);
+    expect(inv.args[2]).toBe("--print");
+    expect(inv.args).toHaveLength(4);
   });
 
   it("trusted mode — exact arg order", () => {
     const inv = buildCliInvocation({ bot: "antigravity", prompt: "hi", sessionId: null, command: "agy", executionMode: "trusted" });
     expect(inv.args[0]).toBe("--dangerously-skip-permissions");
-    expect(inv.args[1]).toBe("--print-timeout");
+    expect(inv.args[1]).toBe("--print");
   });
 
   it("tool-free mode — exact arg order, --sandbox present", () => {
     const inv = buildCliInvocation({ bot: "antigravity", prompt: "hi", sessionId: null, command: "agy", toolMode: "none" });
     expect(inv.args[0]).toBe("--sandbox");
-    expect(inv.args[1]).toBe("--print-timeout");
+    expect(inv.args[1]).toBe("--print");
   });
 
   it("attachments are annotated inline into the prompt text, not passed as separate flags", () => {
     const inv = buildCliInvocation({
       bot: "antigravity", prompt: "hi", sessionId: null, command: "agy", attachments: ["/tmp/a.png"],
     });
-    expect(inv.args).toHaveLength(4);
+    expect(inv.args).toHaveLength(2);
     expect(inv.args[inv.args.length - 1]).toContain("/tmp/a.png");
     expect(inv.stdin).toBeUndefined();
   });

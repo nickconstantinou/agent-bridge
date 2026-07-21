@@ -714,7 +714,31 @@ async function main(): Promise<void> {
     return;
   }
   if (options.mode === "migrate") {
-    for (const path of options.databases) openDb(path, { serviceId: "rollout:migration" }).close();
+    // Test-only synchronization point (Phase 4C.5, issue #135): lets a UAT
+    // test deterministically prove a SIGKILL landed mid-cohort — after at
+    // least one role has migrated, before the rest have — instead of
+    // guessing from timing. Only ever active when both an explicit barrier
+    // file path is supplied AND the process is not running as root (the
+    // same "never under a real production invocation" gate the shell
+    // helpers' test-only env seams use); a real operator invocation never
+    // sets this variable, so this is a no-op path in production.
+    const barrierFile = process.env.AGENT_BRIDGE_ROLLOUT_TEST_MIGRATE_BARRIER_FILE;
+    const pauseAfterIndex = process.env.AGENT_BRIDGE_ROLLOUT_TEST_MIGRATE_PAUSE_AFTER_INDEX;
+    const testHooksAllowed = Boolean(barrierFile) && process.getuid?.() !== 0;
+    let migratedCount = 0;
+    for (const path of options.databases) {
+      openDb(path, { serviceId: "rollout:migration" }).close();
+      migratedCount += 1;
+      if (testHooksAllowed) {
+        writeFileSync(barrierFile!, String(migratedCount));
+        if (pauseAfterIndex && migratedCount === Number(pauseAfterIndex)) {
+          const resumeFile = `${barrierFile}.resume`;
+          while (!existsSync(resumeFile)) {
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          }
+        }
+      }
+    }
     writeEvidence(options.evidencePath, options.mode, options.databases.map((path) => inspectDatabase(path, true, unitsFor(path))));
     return;
   }

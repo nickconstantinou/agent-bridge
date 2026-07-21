@@ -154,4 +154,18 @@ acceptance_coverage architecture_coverage triggered_risk_coverage`);
     expect(result.valid).toBe(false);
     expect(result.missing).toContain("Red-test coverage references");
   });
+
+  it.each(["\"RT-1\"", "null", "{}"])(
+    "rejects scalar/object/null acceptance red_test_ids: %s",
+    redTestIds => {
+      const malformed = COMPLETE_RED_TESTS.replace(
+        '"red_test_ids":["RT-1"]',
+        `"red_test_ids":${redTestIds},"non_test_proof":"claimed proof"`,
+      );
+      const result = validateGeneratedImplementationPlan(`${BASE_PLAN}\n${malformed}`);
+
+      expect(result.valid).toBe(false);
+      expect(result.missing).toContain("Structured red-test coverage");
+    },
+  );
 });

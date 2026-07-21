@@ -205,10 +205,16 @@ function hasStructuredRedTestCoverage(sectionText: string, redTestIds: Set<strin
     if (typeof entry !== "object" || entry === null || Array.isArray(entry)) return { valid: false, referencesValid: false };
     const record = entry as Record<string, unknown>;
     if (!isNonEmptyString(record.requirement_id)) return { valid: false, referencesValid: false };
-    const redIds = references(record.red_test_ids);
+    if (!Array.isArray(record.red_test_ids)
+      || !record.red_test_ids.every(item => isNonEmptyString(item))) {
+      return { valid: false, referencesValid: false };
+    }
+    const redIds = record.red_test_ids as string[];
     const proof = record.non_test_proof;
-    if ((redIds === null && !isNonEmptyString(proof)) || (redIds !== null && !referencesKnown(redIds))) {
-      return { valid: redIds !== null, referencesValid: false };
+    if (redIds.length === 0) {
+      if (!isNonEmptyString(proof)) return { valid: false, referencesValid: false };
+    } else if (!referencesKnown(redIds)) {
+      return { valid: true, referencesValid: false };
     }
   }
   for (const entry of architecture) {

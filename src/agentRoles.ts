@@ -81,6 +81,7 @@ const ASSIGNMENT_FIELDS = new Set(["role", "selection", "primary", "fallbacks"])
 const TARGET_FIELDS = new Set(["cli", "model"]);
 const FORBIDDEN_FIELD = /(?:^|[_-])(token|api[_-]?key|secret|password|credential|prompt|repository[_-]?content)(?:$|[_-])/i;
 const FORBIDDEN_VALUE = /(?:^(?:gh[pousr]_|github_pat_|sk-|xox[baprs]-|AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]+PRIVATE KEY-----)|(?:^|[-_.])(token|secret|password|credential|prompt|repository[-_]content)(?:$|[-_.])|^(?:src|test|docs|scripts)\/|(?:^|\/)package\.json$|\.(?:ts|tsx|js|jsx|json|md|ya?ml)$)/i;
+const FORBIDDEN_SCOPE_VALUE = /(?:gh[pousr]_|github_pat_|sk-|xox[baprs]-|AKIA[0-9A-Z]{12,}|-----BEGIN [A-Z ]+PRIVATE KEY-----|(?:^|[:/._-])(token|api[_-]?key|secret|password|credential|prompt|repository[_-]?content)(?:$|[:/._-])|(?:^|[:/])(src|test|docs|scripts)\/|(?:^|[:/])[^:]+\/[^:]+\.(?:ts|tsx|js|jsx|json|md|ya?ml)$)/i;
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:/-]*$/;
 const MAX_IDENTIFIER_LENGTH = 128;
 const MAX_SCOPE_LENGTH = 160;
@@ -211,6 +212,7 @@ function parseScopeKey(value: string | undefined): string {
   if (
     scopeKey.length > MAX_SCOPE_LENGTH
     || !/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(scopeKey)
+    || FORBIDDEN_SCOPE_VALUE.test(scopeKey)
   ) {
     throw new RoleAssignmentConfigError("invalid_scope", "Invalid role-assignment scope");
   }

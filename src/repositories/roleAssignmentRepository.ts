@@ -41,8 +41,8 @@ interface AssignmentRow {
 }
 
 export class RoleAssignmentIdempotencyConflictError extends Error {
-  constructor(scopeKey: string, idempotencyKey: string) {
-    super(`role-assignment idempotency conflict for scope ${scopeKey} and key ${idempotencyKey}`);
+  constructor(_scopeKey: string, _idempotencyKey: string) {
+    super("role-assignment idempotency conflict");
     this.name = "RoleAssignmentIdempotencyConflictError";
   }
 }

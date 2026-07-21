@@ -138,7 +138,7 @@ async function buildDebugRetryPrompt(
   blocked: WorkerBlockedResult,
   debug: AdvisorDebugCheckpointResult,
 ): Promise<string> {
-  const base = await buildExecutePrompt(ctx, title, plan, advisorPlan);
+  const base = await buildExecutePrompt(title, plan, advisorPlan);
   const basis = evidenceBasisText(debug);
   return [
     base,
@@ -331,7 +331,7 @@ export function createOrchestratedTaskHandler(deps: OrchestratedTaskDeps): JobHa
 
     if (ctx.phase === "executing") {
       if (!phaseData.repoPath || !phaseData.plan) throw new Error("orchestrated_task missing execution phase data");
-      const executePrompt = await buildExecutePrompt(ctx, item.title, phaseData.plan, phaseData.advisorPlan);
+      const executePrompt = await buildExecutePrompt(item.title, phaseData.plan, phaseData.advisorPlan);
       const output = await runCli(command, ["--print", "--output-format", "text", ...cliExtraArgs, executePrompt], phaseData.repoPath);
       const blocked = parseWorkerBlockedResult(output);
       if (!blocked) return commitExecution(phaseData.repoPath, phaseData);

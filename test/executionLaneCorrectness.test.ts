@@ -7,6 +7,7 @@ import { BridgeEngine } from "../src/engine.js";
 import { runCli, shutdownCliProcessesAndWait } from "../src/cli.js";
 import { dispatchClaimedInteractiveWithFallback, setUserCliPreference } from "../src/interactiveBot.js";
 import { WorkerFallbackChain } from "../src/workerFallback.js";
+import * as fileOutput from "../src/fileOutput.js";
 
 function message(text: string, threadId: number) {
   return { message_id: Math.random(), chat: { id: 100, type: "private" }, from: { id: 42, first_name: "T" }, message_thread_id: threadId, text } as any;
@@ -651,7 +652,7 @@ describe("execution lane correctness", () => {
     await entered;
     let stopFinished = false;
     const stopping = engine.handleUpdate({ update_id: 701, message: message("/stop", 7) }).then(() => { stopFinished = true; });
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await waitForCondition(() => (engine as any).cancellationOperations.has(JSON.stringify(["telegram:interactive", "100:7"])));
     expect(stopFinished).toBe(false);
     expect((engine as any).abortedChats.has(JSON.stringify(["telegram:interactive", "100:7"]))).toBe(false);
 
@@ -660,6 +661,52 @@ describe("execution lane correctness", () => {
 
     expect(db.getSession("100:7", "claude")).toBe("delivered-session");
     expect(c.sendMessage.mock.calls.some((call: any[]) => call[0]?.text === `delivery winner ${mode}`)).toBe(true);
+    db.close();
+  });
+
+  it("does not finalize an async run when cancellation wins during output upload", async () => {
+    const db = openDb(":memory:", { serviceId: "telegram:interactive", runId: "upload-cancel" });
+    const c = client();
+    const chatKey = "100:7";
+    db.setSession(chatKey, "claude", "previous-session");
+    db.addConvTurn(chatKey, "user", "previous request", "claude");
+    db.addConvTurn(chatKey, "assistant", "previous answer", "claude");
+    db.addMemory({ id: "upload-previous-memory", type: "decision", scope: "project", text: "previous upload memory" });
+    const turnsBefore = db.getConvTurnsForCompaction(chatKey).map(({ role, text, cli }) => ({ role, text, cli }));
+    const memoryCountBefore = db.getMemoryCount();
+    let releaseUpload!: () => void;
+    let uploadEntered!: () => void;
+    const uploadBarrier = new Promise<void>((resolve) => { releaseUpload = resolve; });
+    const uploadStarted = new Promise<void>((resolve) => { uploadEntered = resolve; });
+    const uploadSpy = vi.spyOn(fileOutput, "uploadOutputFiles").mockImplementation(async () => {
+      uploadEntered();
+      await uploadBarrier;
+    });
+    const firstResult = JSON.stringify({ result: "cancelled during upload", session_id: "cancelled-session" });
+    const nextRun = vi.fn().mockResolvedValue({ text: JSON.stringify({ result: "resumed", session_id: "resumed-session" }) });
+    const engine = new BridgeEngine({ ...options("claude"), asyncEnabled: true }, db, c, {
+      runCliAsync: vi.fn().mockResolvedValueOnce({ text: firstResult }).mockImplementationOnce(nextRun),
+    });
+
+    const execution = engine.handleMessages([message("first upload turn", 7)]);
+    await uploadStarted;
+    const stopping = engine.handleUpdate({ update_id: 702, message: message("/stop", 7) });
+    await waitForCondition(() => (engine as any).cancellationOperations.has(JSON.stringify(["telegram:interactive", chatKey])));
+    releaseUpload();
+    await Promise.all([execution, stopping]);
+
+    expect(c.sendMessage.mock.calls.some((call: any[]) => call[0]?.text === "cancelled during upload")).toBe(false);
+    expect(db.getSession(chatKey, "claude")).toBe("previous-session");
+    expect(db.getConvTurnsForCompaction(chatKey).map(({ role, text, cli }) => ({ role, text, cli }))).toEqual(turnsBefore);
+    expect(db.getMemoryCount()).toBe(memoryCountBefore);
+    const runs = db.raw.prepare("SELECT run_id, status FROM bridge_runs").all() as Array<{ run_id: string; status: string }>;
+    expect(runs.every((run) => run.status !== "done")).toBe(true);
+    expect(runs.flatMap((run) => db.getEventsForRun(run.run_id)).some((event) => event.type === "run.completed")).toBe(false);
+
+    uploadSpy.mockResolvedValue(undefined);
+    await engine.handleMessages([message("resume after upload cancellation", 7)]);
+    expect(nextRun).toHaveBeenCalled();
+    expect(db.getSession(chatKey, "claude")).toBe("resumed-session");
     db.close();
   });
 

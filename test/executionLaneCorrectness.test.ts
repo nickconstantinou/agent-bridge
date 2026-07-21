@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { join } from "node:path";
-import { tmpdir, mkdtempSync } from "node:os";
-import { rmSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { rmSync, readFileSync, writeFileSync, existsSync, mkdirSync, mkdtempSync } from "node:fs";
 import { openDb } from "../src/db.js";
 import { BridgeEngine } from "../src/engine.js";
 import { runCli, shutdownCliProcessesAndWait } from "../src/cli.js";

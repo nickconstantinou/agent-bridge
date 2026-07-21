@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { tmpdir, mkdtempSync } from "node:os";
+import { rmSync, readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { openDb } from "../src/db.js";
 import { BridgeEngine } from "../src/engine.js";
 import { runCli, shutdownCliProcessesAndWait } from "../src/cli.js";
@@ -27,6 +27,14 @@ async function waitForFile(path: string, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!existsSync(path)) {
     if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${path}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function waitForCondition(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for condition");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
@@ -259,6 +267,102 @@ describe("execution lane correctness", () => {
     expect(db.acquireLock("telegram:interactive", "100:7")).not.toBeNull();
     db.close(); rmSync(path, { force: true }); rmSync(childReady, { force: true });
   }, 8_000);
+
+  it("coalesces two simultaneous interrupt requests into one cancellation and one drainer", async () => {
+    const path = join(tmpdir(), `interrupt-coalesce-${Date.now()}-${Math.random()}.sqlite`);
+    const childReady = join(tmpdir(), `interrupt-coalesce-ready-${Date.now()}-${Math.random()}`);
+    const db = openDb(path);
+    const c = client();
+    const secondRun = vi.fn().mockResolvedValue('{"result":"second done","session_id":"s2"}');
+    const thirdRun = vi.fn().mockResolvedValue('{"result":"third done","session_id":"s3"}');
+    const engine = new BridgeEngine({ ...options("claude"), busyMessageMode: "interrupt" }, db, c, {
+      runCli: vi.fn()
+        .mockImplementationOnce((_command, _args, cwd, cliOptions) => runCli(
+          process.execPath,
+          ["-e", "require('node:fs').writeFileSync(process.argv[1], 'ready'); setTimeout(()=>{},10000)", childReady],
+          cwd,
+          cliOptions,
+        ))
+        .mockImplementationOnce(secondRun)
+        .mockImplementationOnce(thirdRun),
+    });
+
+    const first = engine.handleMessages([message("long first turn", 7)]);
+    await waitForFile(childReady);
+    const second = engine.handleMessages([message("second interrupt", 7)]);
+    await waitForCondition(() => c.sendMessage.mock.calls.some((call: any[]) => call[0]?.text === "⏹️ Interrupting current work..."));
+    const third = engine.handleMessages([message("third interrupt", 7)]);
+
+    await Promise.all([first, second, third]);
+
+    expect(secondRun).toHaveBeenCalledOnce();
+    expect(thirdRun).toHaveBeenCalledOnce();
+    expect(db.getSession("100:7", "claude")).toBe("s3");
+    expect(c.sendMessage.mock.calls.filter((call: any[]) => ["second done", "third done"].includes(call[0]?.text))).toHaveLength(2);
+    expect(db.acquireLock("telegram:interactive", "100:7")).not.toBeNull();
+    db.close(); rmSync(path, { force: true }); rmSync(childReady, { force: true });
+  }, 8_000);
+
+  it("does not clear /stop cancellation while process-tree finalization is waiting", async () => {
+    const path = join(tmpdir(), `stop-race-${Date.now()}-${Math.random()}.sqlite`);
+    const childReady = join(tmpdir(), `stop-race-ready-${Date.now()}-${Math.random()}`);
+    const db = openDb(path);
+    const c = client();
+    const afterStop = vi.fn().mockResolvedValue('{"result":"after stop","session_id":"after-stop"}');
+    const engine = new BridgeEngine({ ...options("claude"), busyMessageMode: "interrupt" }, db, c, {
+      runCli: vi.fn()
+        .mockImplementationOnce((_command, _args, cwd, cliOptions) => runCli(
+          process.execPath,
+          ["-e", "process.on('SIGTERM',()=>{}); require('node:fs').writeFileSync(process.argv[1], 'ready'); setTimeout(()=>{},10000)", childReady],
+          cwd,
+          cliOptions,
+        ))
+        .mockImplementationOnce(afterStop),
+    });
+
+    const first = engine.handleMessages([message("long first turn", 7)]);
+    await waitForFile(childReady);
+    const stopping = engine.handleUpdate({ update_id: 2, message: message("/stop", 7) });
+    await waitForCondition(() => db.acquireLock("telegram:interactive", "100:7") === null);
+    const next = engine.handleMessages([message("after stop", 7)]);
+
+    await Promise.all([first, stopping, next]);
+
+    expect(afterStop).toHaveBeenCalledOnce();
+    expect(db.getSession("100:7", "claude")).toBe("after-stop");
+    expect(c.sendMessage.mock.calls.filter((call: any[]) => call[0]?.text === "after stop")).toHaveLength(1);
+    expect(db.acquireLock("telegram:interactive", "100:7")).not.toBeNull();
+    db.close(); rmSync(path, { force: true }); rmSync(childReady, { force: true });
+  }, 12_000);
+
+  it("fails closed for Antigravity /btw without changing provider settings", async () => {
+    const path = join(tmpdir(), `btw-agy-${Date.now()}-${Math.random()}.sqlite`);
+    const home = mkdtempSync(join(tmpdir(), "btw-agy-home-"));
+    const settingsDir = join(home, ".gemini", "antigravity-cli");
+    const settingsPath = join(settingsDir, "settings.json");
+    const original = Buffer.from('{"model":"Gemini 3.5 Flash (High)","theme":"dark"}\n');
+    mkdirSync(settingsDir, { recursive: true });
+    writeFileSync(settingsPath, original);
+    const previousHome = process.env.HOME;
+    process.env.HOME = home;
+    const db = openDb(path);
+    const c = client();
+    const runCli = vi.fn().mockResolvedValue('{"result":"must not run"}');
+    const engine = new BridgeEngine({
+      surfaceIdentity: "telegram:interactive", kind: "antigravity", botConfig: { command: "agy", modelPreference: ["gemini-3.5-flash-high"] },
+      allowedUserIds: new Set(["42"]), executionMode: "safe", asyncEnabled: false, pollIntervalMs: 1000,
+    }, db, c, { runCli });
+
+    try {
+      await engine.handleMessages([message("/btw inspect without changing anything", 7)]);
+      expect(runCli).not.toHaveBeenCalled();
+      expect(readFileSync(settingsPath)).toEqual(original);
+      expect(c.sendMessage.mock.calls.some((call: any[]) => /unavailable/i.test(call[0]?.text))).toBe(true);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome;
+      db.close(); rmSync(path, { force: true }); rmSync(home, { recursive: true, force: true });
+    }
+  });
 
   it("a configured hard timeout follows the /stop cancellation path — discards queued work, preserves last committed session (Issue #177)", async () => {
     const path = join(tmpdir(), `timeout-cancel-${Date.now()}-${Math.random()}.sqlite`);

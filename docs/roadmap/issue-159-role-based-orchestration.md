@@ -51,7 +51,7 @@ PR #160 remains the target-state authority for later role routing and orchestrat
 
 ## Slice 0 reconciliation — PR #170
 
-Slice 0 is documented by `docs/implementation-plans/issue-159-slice-0-reconciliation.md`. Its rebased exact head is `4807f0e`, stacked on rebased PR #160 at `5279b1b5f49fa18ab5f7697ff294a80d65ee1fcc`. It records current owners, overlap decisions, concrete target-path classification, actual child issues, cross-repository ownership, human gates, and retrospective.
+Slice 0 is documented by `docs/implementation-plans/issue-159-slice-0-reconciliation.md`. Its rebased exact head is recorded in PR #170 and is stacked on the exact PR #160 head recorded there. It records current owners, overlap decisions, concrete target-path classification, actual child issues, cross-repository ownership, human gates, and retrospective.
 
 Slice 0 creates documentation and issue metadata only. It does not itself merge, deploy, restart services, migrate production databases, mutate Platform runtime state, or activate any role behaviour.
 
@@ -82,7 +82,7 @@ Slice 1 does **not** implement or activate:
 - Platform transport or desired/effective API/UI state;
 - deployment, service restart, production database migration, queue mutation, or merge.
 
-Draft PR #174 must not be represented as ready or complete until all required exact-head local and GitHub checks, implementation and operations review, documentation validation, PR readiness, and genuinely independent final review pass at one exact final head. Its branch state and evidence belong in the PR and Issue #161 rather than being frozen as a completion claim in this roadmap.
+PR #174 is merged, but Slice 1 must not be represented as parent-acceptance complete until all required exact-head local and GitHub checks, implementation and operations review, documentation validation, PR readiness, and genuinely independent final review pass at one exact final head. Its branch state and evidence belong in the PR and Issue #161 rather than being frozen as a completion claim in this roadmap.
 
 Role routing, capability resolution, requirements lifecycle, complete structured plan persistence, permissions, Documentation Steward execution, Platform allocation, durable prompt/skill audit persistence, and final role-workflow qualification remain to be implemented through later slices.
 
@@ -175,7 +175,7 @@ deterministic verification
 → human merge gate
 ```
 
-The final review is independent from the Code Worker through role and authority separation. The same frontier model or CLI may be reused. A code-changing repair invalidates verification, review, operations, documentation, readiness, CI, and final-review evidence for the previous head.
+The final review is independent from the Code Worker through role and authority separation. For Issue #161, a same-model or same-target fresh session is explicitly `non_independent`; a genuinely independent frontier reviewer is required. A code-changing repair invalidates verification, review, operations, documentation, readiness, CI, and final-review evidence for the previous head.
 
 Slice #167 must not activate documentation execution. Slice #168 owns activation. Documentation requires accepted review and required operations evidence for the same exact code head. A code-changing repair invalidates verification, review, operations, documentation, readiness, CI, and final-review evidence until the required phases rerun. Slice #169 qualifies the sequence across restart, retry, cancellation, lease loss, stale evidence, fallback, migration and rollback.
 

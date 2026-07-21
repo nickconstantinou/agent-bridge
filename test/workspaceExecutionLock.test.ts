@@ -130,6 +130,42 @@ describe("OS-backed workspace execution lock", () => {
     ]);
   });
 
+  it("bypassWorkspaceLock: true skips the flock wrapper entirely", () => {
+    const root = initRepository();
+    roots.push(root);
+    delete process.env.BRIDGE_WORKSPACE_LOCK_MODE;
+
+    const invocation = buildWorkspaceLockedInvocation("node", ["-e", ""], root, { bypassWorkspaceLock: true });
+
+    expect(invocation.command).toBe("node");
+    expect(invocation.args).toEqual(["-e", ""]);
+    expect(invocation.workspaceLock).toBeNull();
+  });
+
+  it("a bypassWorkspaceLock run executes concurrently with an active workspace-locked run instead of serializing (Issue #177 /btw)", async () => {
+    const root = initRepository();
+    roots.push(root);
+    const state = mkdtempSync(join(tmpdir(), "agent-bridge-workspace-state-"));
+    roots.push(state);
+    const marker = join(state, "active");
+    const overlap = join(state, "overlap");
+    const events = join(state, "events");
+
+    const first = runCli(process.execPath, ["-e", CRITICAL_SECTION, marker, overlap, events, "first", "250"], root, {
+      chatId: "workspace-lock-btw-holder",
+    });
+    await waitForFile(events);
+    const second = runCliAsync(process.execPath, ["-e", CRITICAL_SECTION, marker, overlap, events, "second", "25"], root, {
+      chatId: "workspace-lock-btw-side",
+      bypassWorkspaceLock: true,
+    });
+
+    await Promise.all([first, second]);
+    // The bypassing run entered the critical section WHILE "first" still held
+    // it — proven by the overlap marker the fixture writes on EEXIST.
+    expect(existsSync(overlap)).toBe(true);
+  });
+
   it("allows runs in distinct linked worktrees to execute concurrently", async () => {
     const root = initRepository();
     roots.push(root);

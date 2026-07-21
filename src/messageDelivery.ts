@@ -309,7 +309,7 @@ export async function sendMessageWithProgress({
 
     if (isAborted?.()) {
       clearInterval(typingInterval);
-      return cliResult;
+      return null;
     }
 
     validateParity({

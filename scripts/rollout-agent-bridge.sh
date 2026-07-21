@@ -364,18 +364,25 @@ stop_and_verify_all_services() {
   echo "all selected services verified stopped"
 }
 
-clear_stale_sqlite_sidecars() {
-  local database sidecar wal_size
+validate_sqlite_sidecars() {
+  local database sidecar
   for database in "${databases[@]}"; do
     for sidecar in "${database}-wal" "${database}-shm"; do
       if [[ -e "$sidecar" || -L "$sidecar" ]]; then
         [[ -f "$sidecar" && ! -L "$sidecar" ]] || die "SQLite sidecar is not a regular non-symlink file: $sidecar"
       fi
     done
+  done
+}
+
+clear_stale_sqlite_sidecars() {
+  local database wal_size
+  validate_sqlite_sidecars
+  for database in "${databases[@]}"; do
     if [[ -e "${database}-wal" ]]; then
       wal_size="$(/usr/bin/stat -c %s "${database}-wal")"
       [[ "$wal_size" =~ ^[0-9]+$ ]] || die "unable to determine SQLite WAL size: ${database}-wal"
-      (( wal_size == 0 )) || die "database has a non-empty WAL after service stop: $database"
+      (( wal_size == 0 )) || die "database has a non-empty WAL after offline checkpoint: $database"
     fi
     if [[ -e "${database}-wal" || -e "${database}-shm" ]]; then
       echo "clear-stale-sidecars database=$database"
@@ -490,8 +497,9 @@ on_exit() {
         # written to disk. A partial, unmanifested backup artifact may exist
         # under backup_set from a database copy that started before the
         # failure; it must never be treated as a valid cohort backup. The
-        # source databases themselves remain on the OLD schema, untouched.
-        echo "STATE: STOPPED_UNCHANGED — services stopped, source databases on the OLD schema and untouched, code still checked out at the NEW commit; no complete verified cohort backup exists — partial backup artifacts may exist under $backup_set and must not be used for restore; sentinel retained, see docs/GUARDED-ROLLOUT.md recovery flow" >&2
+        # The source databases remain on the OLD schema; the offline WAL phase
+        # may already have incorporated committed pages into the main file.
+        echo "STATE: STOPPED_UNCHANGED — services stopped, source databases remain on the OLD schema (offline WAL checkpointing may have changed file layout but no migration ran), code still checked out at the NEW commit; no complete verified cohort backup exists — partial backup artifacts may exist under $backup_set and must not be used for restore; sentinel retained, see docs/GUARDED-ROLLOUT.md recovery flow" >&2
       fi
     fi
   fi
@@ -614,6 +622,10 @@ stop_and_verify_all_services || die "CONTAINMENT INCOMPLETE during primary stop"
 
 git_check
 run_db_tool inspect --evidence - "${db_args[@]}" > "$artifact_dir/stopped-evidence.json"
+validate_sqlite_sidecars
+echo "draining SQLite WAL sidecars offline"
+run_db_tool checkpoint --evidence - "${db_args[@]}" > "$artifact_dir/checkpoint-evidence.json"
+/usr/bin/sha256sum "$artifact_dir/checkpoint-evidence.json" > "$artifact_dir/checkpoint-evidence.sha256"
 clear_stale_sqlite_sidecars
 
 echo "backing up all databases"

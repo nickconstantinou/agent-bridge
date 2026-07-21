@@ -18,6 +18,8 @@ export interface BridgeConfig {
   serviceKind: BotKind | null;
   pollIntervalMs: number;
   executionMode: "safe" | "trusted";
+  /** Busy-lane admission policy (Issue #177): interrupt (default) or queue. */
+  busyMessageMode?: "interrupt" | "queue";
   asyncEnabled: boolean;
   dbPath: string;
   bots: {

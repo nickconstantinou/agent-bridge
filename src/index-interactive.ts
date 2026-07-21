@@ -15,7 +15,7 @@ import { TelegramClient } from "./telegram.js";
 import { BridgeEngine } from "./engine.js";
 import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
 import { sendTelegramMessage } from "./messageDelivery.js";
-import { loadBotsConfig, resolveExecutionMode } from "./config.js";
+import { loadBotsConfig, resolveExecutionMode, resolveBusyMessageMode, validateBusyMessageModeEnv } from "./config.js";
 import { WorkerFallbackChain } from "./workerFallback.js";
 import { parseCliChain, interactiveChainKinds } from "./providers/selection.js";
 import { getAvailableCliKinds } from "./interactiveCliAuth.js";
@@ -60,6 +60,8 @@ const allowedUserIds = new Set(
 const dbPath = process.env.DB_PATH || `${getBridgeProjectDir()}/.data/bridge.sqlite`;
 const pollIntervalMs = Number(process.env.POLL_INTERVAL_MS || 1000);
 const executionMode = resolveExecutionMode("codex", process.env);
+validateBusyMessageModeEnv(process.env);
+const busyMessageMode = resolveBusyMessageMode(process.env);
 const asyncEnabled = process.env.BRIDGE_ASYNC_ENABLED !== "false";
 
 const config: BridgeConfig = {
@@ -68,6 +70,7 @@ const config: BridgeConfig = {
   serviceKind: null,
   pollIntervalMs,
   executionMode,
+  busyMessageMode,
   asyncEnabled,
   dbPath,
   bots: loadBotsConfig(process.env),
@@ -144,6 +147,7 @@ const engines = Object.fromEntries(
           botConfig: { ...botConfig, token },
           allowedUserIds,
           executionMode: resolveExecutionMode(kind as BotKind, process.env),
+          busyMessageMode,
           asyncEnabled,
           pollIntervalMs,
           soulContext,

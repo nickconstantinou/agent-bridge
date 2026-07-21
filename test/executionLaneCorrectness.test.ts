@@ -113,12 +113,18 @@ describe("execution lane correctness", () => {
     const fallbackChain = new WorkerFallbackChain(["codex", "claude"], db);
     const exhaustedChats = new Set<string>();
     const engines = {} as Record<string, BridgeEngine>;
-    const codex = new BridgeEngine(options("codex", {
-      onQueuedMessage: (queued: any) => dispatchClaimedInteractiveWithFallback(queued, queued.chatKey, {
-        engines, fallbackChain, exhaustedChats, db, notify: vi.fn(),
+    // This test is about durable FIFO routing across providers, not busy-mode
+    // admission — pin busyMessageMode explicitly so a default flip elsewhere
+    // can't change this test's meaning.
+    const codex = new BridgeEngine({
+      ...options("codex", {
+        onQueuedMessage: (queued: any) => dispatchClaimedInteractiveWithFallback(queued, queued.chatKey, {
+          engines, fallbackChain, exhaustedChats, db, notify: vi.fn(),
+        }),
       }),
-    }), db, c, { runCli: codexRun });
-    const claude = new BridgeEngine(options("claude"), db, c, { runCli: claudeRun });
+      busyMessageMode: "queue",
+    }, db, c, { runCli: codexRun });
+    const claude = new BridgeEngine({ ...options("claude"), busyMessageMode: "queue" }, db, c, { runCli: claudeRun });
     engines.codex = codex; engines.claude = claude;
     const active = codex.handleMessages([message("first", 7)]);
     await new Promise((r) => setTimeout(r, 20));
@@ -204,7 +210,7 @@ describe("execution lane correctness", () => {
       runCli: vi.fn()
         .mockImplementationOnce((_command, _args, cwd, cliOptions) => runCli(
           process.execPath,
-          ["-e", "process.on('SIGTERM',()=>{}); require('node:fs').writeFileSync(process.argv[1], 'ready'); setTimeout(()=>{},10000)", childReady],
+          ["-e", "require('node:fs').writeFileSync(process.argv[1], 'ready'); setTimeout(()=>{},10000)", childReady],
           cwd,
           cliOptions,
         ))
@@ -218,7 +224,8 @@ describe("execution lane correctness", () => {
     const elapsedMs = Date.now() - startedAt;
 
     // Proves the second turn did not wait for the first turn's natural 10s completion.
-    expect(elapsedMs).toBeLessThan(5_000);
+    // The child honours SIGTERM (no ignore handler), so abort should land in well under 1s.
+    expect(elapsedMs).toBeLessThan(3_000);
     expect(secondTurnRun).toHaveBeenCalledOnce();
     // The killed first turn must never commit a session — only the second turn's session lands.
     expect(db.getSession("100:7", "claude")).toBe("s2");

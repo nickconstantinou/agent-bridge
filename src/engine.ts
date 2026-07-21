@@ -105,6 +105,8 @@ export interface BridgeEngineOptions {
   botConfig: { command: string; modelPreference: string[]; token?: string };
   allowedUserIds: ReadonlySet<string>;
   executionMode: "safe" | "trusted";
+  /** Busy-lane admission policy (Issue #177). Defaults to "interrupt" when unset. */
+  busyMessageMode?: "interrupt" | "queue";
   asyncEnabled: boolean;
   pollIntervalMs: number;
   soulContext?: string | null;
@@ -615,7 +617,10 @@ export class BridgeEngine {
     }
     let executionOutcome: ExecutionOutcome = "failed";
     try {
-      executionOutcome = await this._executeAndSend(executionPrompt, chatId, chatKey, primaryMessage.chat.type, threadId, userId, hookCtx, attachments, attachmentLocalPath);
+      executionOutcome = await this._executeAndSend(
+        executionPrompt, chatId, chatKey, primaryMessage.chat.type, threadId, userId, hookCtx, attachments, attachmentLocalPath,
+        null, true, true, true,
+      );
     } finally {
       if (executionOutcome !== "queued") {
         try { rmSync(uploadDir, { recursive: true, force: true }); } catch {}
@@ -661,6 +666,7 @@ export class BridgeEngine {
     laneHandle: ExecutionLaneHandle | null = null,
     drainOnCompletion = true,
     manageLifecycle = true,
+    honorBusyMode = false,
   ): Promise<ExecutionOutcome> {
     // Apply onBeforeExecute hook
     let prompt = rawPrompt;
@@ -685,6 +691,36 @@ export class BridgeEngine {
         return "failed";
       }
       if (admission.kind === "queued") {
+        // Commands and internal call sites keep durable FIFO regardless of
+        // BRIDGE_BUSY_MESSAGE_MODE (Issue #177); only the ordinary-prompt
+        // path opts in via honorBusyMode.
+        const busyMode = honorBusyMode ? (this.opts.busyMessageMode ?? "interrupt") : "queue";
+        if (busyMode === "interrupt") {
+          await this.sendText(chatId, {
+            text: `⏹️ Interrupting current work...`,
+            message_thread_id: threadId,
+          }).catch((error) => console.warn(`[${this.kind}] interrupt notice failed`, error));
+          const executionLane = this._executionLane(chatKey);
+          // The message is already durably enqueued above. Suppress the
+          // active turn's own completion-drain (same mechanism /reset uses)
+          // so it can't attempt to hand off this message to itself while
+          // still fenced by abortedChats — that would leave the row claimed
+          // and the lane locked forever. Once the abort fully settles and the
+          // fence is cleared, drain the lane ourselves under a clean check.
+          this.resettingChats.add(executionLane);
+          this.abortedChats.add(executionLane);
+          const abortedHandle = await abortExecutionAndWait(executionLane);
+          this.abortedChats.delete(executionLane);
+          this.resettingChats.delete(executionLane);
+          if (abortedHandle) {
+            await this._drainQueueAndUnlock(abortedHandle);
+          }
+          // else: nothing was actually tracked as active (e.g. the lane lock
+          // is held by something other than a supervised CLI turn, such as
+          // /compact) — there is nothing to abort; the message stays queued
+          // for whatever releases that lock normally.
+          return "queued";
+        }
         await this.sendText(chatId, {
           text: `⏳ Queued (position ${admission.position} of ${MAX_QUEUE_DEPTH}). Will process shortly.`,
           message_thread_id: threadId,

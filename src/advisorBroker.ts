@@ -11,16 +11,19 @@ import { createConnection, createServer, type Server } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { formatAdvisorResult } from "./advisor.js";
+import { AdvisorEvidenceToolBroker, type AdvisorEvidenceAuditEvent } from "./advisorEvidenceTools.js";
 import { AdvisorService } from "./advisorService.js";
 import { assertChainSupportsProfile, chainSupportsProfile } from "./advisorPolicy.js";
-import type { AdvisorConfig, AdvisorRequestMode } from "./advisorTypes.js";
+import type { AdvisorConfig, AdvisorRequestMode, AdvisorResult } from "./advisorTypes.js";
 import type { BridgeDb } from "./db.js";
 import type { BotConfig, BotKind } from "./types.js";
 import { parseAdvisorConfig } from "./advisorConfig.js";
+import { formatWorkerBlockedResult, type WorkerBlockedResult } from "./workerBlockedResult.js";
 
 const CAPABILITY_TTL_MS = 10 * 60_000;
 const ALLOWED_MODES = new Set<AdvisorRequestMode>(["plan", "review", "debug", "risk", "decision"]);
 const LOCAL_SOCKET_PATHS = new Map<string, string>();
+const CONFIGURED_TRUSTED_SERVICES = new WeakMap<BridgeDb, AdvisorService>();
 type RunCli = ConstructorParameters<typeof AdvisorService>[0]["runCli"];
 
 export interface AdvisorCapabilityBinding {
@@ -65,6 +68,7 @@ export class AdvisorBroker implements AdvisorCapabilityIssuer {
     this.socketPath = join(deps.socketDir ?? tmpdir(), `agent-bridge-advisor-${this.brokerId}.sock`);
     this.service = new AdvisorService({ db: deps.db, config: deps.config, bots: deps.bots, runCli: deps.runCli });
     LOCAL_SOCKET_PATHS.set(this.brokerId, this.socketPath);
+    CONFIGURED_TRUSTED_SERVICES.set(deps.db, this.service);
   }
 
   setClockForTest(clock: () => number): void { this.now = clock; }
@@ -106,6 +110,7 @@ export class AdvisorBroker implements AdvisorCapabilityIssuer {
   async close(): Promise<void> {
     const server = this.server;
     this.server = null;
+    CONFIGURED_TRUSTED_SERVICES.delete(this.deps.db);
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
     await new Promise<void>((resolve) => setImmediate(resolve));
     try { unlinkSync(this.socketPath); } catch { /* already removed */ }
@@ -156,6 +161,52 @@ export class AdvisorBroker implements AdvisorCapabilityIssuer {
   }
 }
 
+export async function requestConfiguredWorkerAdvisorDebug(input: {
+  db: BridgeDb;
+  taskKey: string;
+  task: string;
+  repoPath: string;
+  activeProvider: string;
+  acceptanceCriteria: string;
+  plan: string;
+  blocked: WorkerBlockedResult;
+  /** Legacy caller field retained for compatibility; evidence Git is broker-owned and this value is never executed. */
+  runGit?: unknown;
+  audit?: (event: AdvisorEvidenceAuditEvent) => void;
+}): Promise<AdvisorResult> {
+  const service = CONFIGURED_TRUSTED_SERVICES.get(input.db);
+  if (!service) throw new Error("Advisor debug checkpoint unavailable: configured trusted advisor service not running");
+  const attemptSummary = formatWorkerBlockedResult(input.blocked);
+  const evidenceTools = new AdvisorEvidenceToolBroker({
+    repoPath: input.repoPath,
+    evidence: {
+      acceptance: input.acceptanceCriteria,
+      plan: input.plan,
+      testFailures: input.blocked.failingEvidence,
+      attemptSummary,
+    },
+    audit: input.audit,
+  });
+  return service.requestTrusted({
+    origin: "worker",
+    scopeKey: `worker:${input.taskKey}`,
+    taskKey: input.taskKey,
+    mode: "debug",
+    task: input.task,
+    activeProvider: input.activeProvider,
+    activeModel: null,
+    evidence: {
+      acceptanceCriteria: input.acceptanceCriteria,
+      plan: input.plan,
+      attemptSummary,
+      testOutput: input.blocked.failingEvidence,
+      references: input.blocked.relevantFiles,
+    },
+    cwd: input.repoPath,
+    evidenceTools,
+  });
+}
+
 export async function requestAdvisorViaBroker(
   input: BrokerRequest,
   _untrustedEnv: Record<string, string | undefined> = process.env,
@@ -187,7 +238,7 @@ export async function startConfiguredAdvisorBroker(deps: {
   const config = parseAdvisorConfig(deps.env ?? process.env);
   if (!config.enabled || config.chain.length === 0) return null;
   if (!chainSupportsProfile(config.chain, "tool_free")) {
-  console.warn("[advisor] agent-direct access disabled: every target must support tool-free mode");
+    console.warn("[advisor] agent-direct access disabled: every target must support tool-free mode");
     return null;
   }
   const broker = new AdvisorBroker({ db: deps.db, config, bots: deps.bots, runCli: deps.runCli });

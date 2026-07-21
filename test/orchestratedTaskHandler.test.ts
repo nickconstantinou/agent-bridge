@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { rmSync } from "node:fs";
 import { openDb } from "../src/db.js";
 import { createOrchestratedTaskHandler } from "../src/handlers/orchestratedTask.js";
+import { WORKER_BLOCKED_RESULT_MARKER } from "../src/workerBlockedResult.js";
 
 function makeDb() {
   const dbPath = join(tmpdir(), `orchestrated-task-test-${Date.now()}-${Math.random()}.sqlite`);
@@ -20,6 +21,19 @@ function makeStubs() {
     }),
     runTests: vi.fn().mockResolvedValue({ ok: true, output: "Tests passed." }),
   };
+}
+
+function blockedOutput(overrides: Record<string, unknown> = {}): string {
+  return `${WORKER_BLOCKED_RESULT_MARKER} ${JSON.stringify({
+    status: "BLOCKED",
+    reason: "NEEDS_ADVISOR",
+    hypothesis: "The parser ownership is unclear",
+    attempted_steps: ["Read the implementation", "Ran the focused test"],
+    failing_evidence: "expected accepted, received rejected",
+    relevant_files: ["src/parser.ts", "test/parser.test.ts"],
+    decision_needed: "Choose the authoritative parser",
+    ...overrides,
+  })}`;
 }
 
 describe("createOrchestratedTaskHandler", () => {
@@ -119,6 +133,136 @@ describe("createOrchestratedTaskHandler", () => {
       { work_item_id: item.id, repository_path: "/tmp/repo", advisor_required: true },
       { db, workerId: "w", phase: "initial", phaseData: {} },
     )).rejects.toThrow(/advisor required but disabled/i);
+  });
+
+  it("checkpoints a retry recommendation when the executor returns NEEDS_ADVISOR", async () => {
+    const stubs = makeStubs();
+    stubs.runCli.mockResolvedValue(blockedOutput());
+    const advisorDebugCheckpoint = vi.fn().mockResolvedValue({
+      verdict: "retry",
+      advice: "Use the canonical parser in src/parser.ts and preserve the compatibility wrapper.",
+      evidenceIds: ["ev_0123456789abcdef"],
+      verificationSteps: ["Run parser.test.ts"],
+      confidence: "medium",
+    });
+    const item = db.createWorkItem({
+      kind: "feature", source: "telegram", repository: "owner/repo",
+      title: "Fix parser ownership", body: "Keep compatibility behavior", created_by: "worker",
+    });
+
+    const result = await createOrchestratedTaskHandler({ ...stubs, advisorDebugCheckpoint })(
+      { work_item_id: item.id },
+      { db, workerId: "w", phase: "executing", phaseData: {
+        workItemId: item.id, repoPath: "/tmp/repo", branchName: `agent/work-${item.id}`, plan: "Use one parser",
+      } },
+    );
+
+    expect(advisorDebugCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      taskKey: `work-item:${item.id}`,
+      repoPath: "/tmp/repo",
+      acceptanceCriteria: expect.stringContaining("Keep compatibility behavior"),
+      blocked: expect.objectContaining({ reason: "NEEDS_ADVISOR" }),
+    }));
+    expect(result).toMatchObject({ status: "continue", phase: "executing_retry" });
+    expect(result.phaseData).toMatchObject({
+      debugAttempted: true,
+      advisorDebug: { verdict: "retry" },
+      blockedResult: { reason: "NEEDS_ADVISOR" },
+    });
+    expect(stubs.runGit).not.toHaveBeenCalledWith(["add", "-A"], expect.anything());
+  });
+
+  it("resumes the checkpointed retry once and commits successful changes", async () => {
+    const stubs = makeStubs();
+    stubs.runCli.mockResolvedValue("Slice completed after applying the bounded recommendation.");
+    const advisorDebugCheckpoint = vi.fn();
+    const item = db.createWorkItem({
+      kind: "feature", source: "telegram", repository: "owner/repo",
+      title: "Fix parser ownership", created_by: "worker",
+    });
+
+    const result = await createOrchestratedTaskHandler({ ...stubs, advisorDebugCheckpoint })(
+      { work_item_id: item.id },
+      { db, workerId: "w", phase: "executing_retry", phaseData: {
+        workItemId: item.id,
+        repoPath: "/tmp/repo",
+        branchName: `agent/work-${item.id}`,
+        plan: "Use one parser",
+        debugAttempted: true,
+        blockedResult: {
+          status: "BLOCKED", reason: "NEEDS_ADVISOR", hypothesis: "ownership",
+          attemptedSteps: ["read"], failingEvidence: "failure", relevantFiles: ["src/parser.ts"], decisionNeeded: "owner",
+        },
+        advisorDebug: {
+          verdict: "retry", advice: "Use canonical parser", evidenceIds: ["ev_0123456789abcdef"],
+          verificationSteps: ["Run parser test"], confidence: "medium",
+        },
+      } },
+    );
+
+    expect(result).toMatchObject({ status: "continue", phase: "verifying" });
+    expect(stubs.runCli.mock.calls[0][1].at(-1)).toMatch(/only permitted retry/i);
+    expect(advisorDebugCheckpoint).not.toHaveBeenCalled();
+    expect(stubs.runGit.mock.calls.some(([args]: [string[]]) => args[0] === "commit")).toBe(true);
+  });
+
+  it("ends in bounded human-needed state when the retry remains blocked", async () => {
+    const stubs = makeStubs();
+    stubs.runCli.mockResolvedValue(blockedOutput({ hypothesis: "Still blocked after retry" }));
+    const advisorDebugCheckpoint = vi.fn();
+    const item = db.createWorkItem({
+      kind: "feature", source: "telegram", repository: "owner/repo",
+      title: "Fix parser ownership", created_by: "worker",
+    });
+
+    const result = await createOrchestratedTaskHandler({ ...stubs, advisorDebugCheckpoint })(
+      { work_item_id: item.id },
+      { db, workerId: "w", phase: "executing_retry", phaseData: {
+        workItemId: item.id,
+        repoPath: "/tmp/repo",
+        branchName: `agent/work-${item.id}`,
+        plan: "Use one parser",
+        debugAttempted: true,
+        blockedResult: {
+          status: "BLOCKED", reason: "NEEDS_ADVISOR", hypothesis: "ownership",
+          attemptedSteps: ["read"], failingEvidence: "failure", relevantFiles: ["src/parser.ts"], decisionNeeded: "owner",
+        },
+        advisorDebug: {
+          verdict: "retry", advice: "Use canonical parser", evidenceIds: [], verificationSteps: [], confidence: "low",
+        },
+      } },
+    );
+
+    expect(result).toMatchObject({ needsHuman: true });
+    expect(result.summary).toMatch(/needs human attention/i);
+    expect(advisorDebugCheckpoint).not.toHaveBeenCalled();
+    expect(stubs.runGit.mock.calls.some(([args]: [string[]]) => args[0] === "commit")).toBe(false);
+  });
+
+  it("does not retry when the advisor requires human input", async () => {
+    const stubs = makeStubs();
+    stubs.runCli.mockResolvedValue(blockedOutput());
+    const advisorDebugCheckpoint = vi.fn().mockResolvedValue({
+      verdict: "needs_human",
+      advice: "The acceptance criteria conflict and require an owner decision.",
+      evidenceIds: [],
+      verificationSteps: [],
+      confidence: "high",
+    });
+    const item = db.createWorkItem({
+      kind: "feature", source: "telegram", repository: "owner/repo",
+      title: "Resolve conflicting contract", created_by: "worker",
+    });
+
+    const result = await createOrchestratedTaskHandler({ ...stubs, advisorDebugCheckpoint })(
+      { work_item_id: item.id },
+      { db, workerId: "w", phase: "executing", phaseData: {
+        workItemId: item.id, repoPath: "/tmp/repo", branchName: `agent/work-${item.id}`, plan: "Inspect contract",
+      } },
+    );
+
+    expect(result).toMatchObject({ needsHuman: true, advisorDebug: { verdict: "needs_human" } });
+    expect(stubs.runCli).toHaveBeenCalledTimes(1);
   });
 
   it("executes from the stored plan, commits changes, then continues to verifying", async () => {

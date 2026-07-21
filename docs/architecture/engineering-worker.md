@@ -42,6 +42,39 @@ task and each provider attempt is audited. The audit tables do not store
 prompts or raw advice; bounded selected checkpoint advice is intentionally
 carried in resumable job phase/result state so a worker restart does not
 discard it.
+
+### Blocked executor debug escalation
+
+An executor that cannot make safe progress may return the validated
+`BLOCKED / NEEDS_ADVISOR` contract. The executor cannot invoke the advisor
+directly. Agent Bridge may start one bounded debug investigation using the
+already configured trusted `AdvisorService`.
+
+Advisor providers remain `toolMode: none`. The first advisor turn may request
+up to six typed read-only evidence operations. Agent Bridge validates and
+executes those operations through `AdvisorEvidenceToolBroker`, then supplies
+the bounded results for one final advisor response. Initial evidence tools are
+limited to:
+
+- worktree-confined file listing, UTF-8 text reads, and literal search;
+- fixed-shape Git status, diff, show, and log operations;
+- existing acceptance criteria, plan, test-failure, and attempt-summary data.
+
+The evidence broker denies traversal, symlink paths, sensitive files, binary
+content, unsupported Git objects, arbitrary commands, and configured
+call/byte/time limits. Tool audit records contain metadata and stable evidence
+identifiers, not unrestricted file contents or secrets.
+
+Both model turns and any fallback attempts share one logical advisor request
+and task budget. A `retry` verdict is checkpointed into existing job phase data
+and permits exactly one resumable executor retry. A repeated blocked result, a
+`needs_human` verdict, or unavailable advice ends with a bounded human-needed
+result. No advisor loop is permitted.
+
+The advisor has no file/Git write, arbitrary shell, network, SQL, service,
+deployment, approval, merge, or final-message authority. Deterministic
+verification and human gates remain authoritative.
+
 - disposable clones / workspaces
 - work item and job state
 - software planning
@@ -64,6 +97,8 @@ discard it.
 5. SQLite remains the local source of work/job/approval truth.
 6. Worker findings are proposals until accepted or validated through the workflow.
 7. Routine work may proceed inside policy, but policy exceptions must stop and request approval.
+8. Advisor evidence tools are Bridge-owned, read-only, bounded, and never grant mutation authority.
+9. A blocked worker attempt may receive at most one advisor-guided executor retry.
 
 ## Approval Model
 

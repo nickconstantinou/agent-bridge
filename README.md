@@ -127,6 +127,7 @@ Important:
 | `/skills` | List bundled shared skills and install/repair commands |
 | `/stop` | Abort the currently running CLI process |
 | `/cancel` | Same as `/stop` |
+| `/btw <prompt>` | Run a fresh, read-only, one-off side question without disturbing the active session |
 
 All other text is forwarded to the active CLI as a prompt. Discord uses slash-command registration for the same command set where supported.
 
@@ -187,8 +188,8 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `ANTIGRAVITY_PROJECT_DIR` | Antigravity | — | Working dir for CLI execution (overrides `BRIDGE_PROJECT_DIR`) |
 | `CLAUDE_PROJECT_DIR` | Claude | — | Working dir for CLI execution (overrides `BRIDGE_PROJECT_DIR`) |
 | `DB_PATH` | All | `.data-<bot>/bridge.sqlite` | SQLite database path |
-| `CLI_TIMEOUT_MS` | All | `1800000` (30m) | Hard execution timeout (ms). Antigravity defaults to `3600000` (60m) |
-| `CLI_IDLE_TIMEOUT_MS` | All | `1200000` (20m) | Kill CLI after this many ms with no output. Antigravity defaults to `3600000` (60m) |
+| `CLI_TIMEOUT_MS` | All | `0` (disabled) | Optional hard execution timeout (ms) |
+| `CLI_IDLE_TIMEOUT_MS` | All | `0` (disabled) | Optional kill timeout after this many ms with no output |
 | `FETCH_TIMEOUT_MS` | All | `45000` | Telegram API fetch timeout (ms) |
 | `POLL_INTERVAL_MS` | All | `1000` | Telegram long-poll interval (ms) |
 | `AGENT_BRIDGE_SOUL_PATH` | All | `$BRIDGE_PROJECT_DIR/SOUL.md` | Optional SOUL.md persona contract injected into each CLI prompt |
@@ -209,6 +210,7 @@ Each service reads its own `.env` file. Only the token for that service's bot is
 | `WORKER_SCRIBE_CLI_COMMAND` | Worker | `DEFECT_SCAN_CLI_COMMAND` or first `WORKER_SCRIBE_CLI_CHAIN` entry | Primary CLI command for read-only/prose jobs |
 | `BRIDGE_ASYNC_ENABLED` | All | `true` | Enable streaming (disable for sync/plain mode) |
 | `BRIDGE_EXECUTION_MODE` | All | `safe` | `safe` or `trusted` (bypasses CLI approval prompts) |
+| `BRIDGE_BUSY_MESSAGE_MODE` | All | `interrupt` | `interrupt` aborts the active turn for a new ordinary message; `queue` retains durable FIFO behavior |
 | `BRIDGE_WORKSPACE_LOCK_MODE` | All | `on` | `on` protects Git worktree CLI execution; companion/provider services use `off` when intentionally sharing the canonical checkout |
 | `BRIDGE_ADVISOR_ENABLED` | Companion/Worker | `false` | Enable frontier advisor calls; kill switch for the capability |
 | `BRIDGE_ADVISOR_MODE` | Companion/Worker | `manual` | `manual`, `suggest`, or `auto` consultation policy |

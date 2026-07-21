@@ -29,6 +29,7 @@ import {
 } from "./cli.js";
 import { resolveAntigravityConversationId, setAntigravityModel } from "./providers/antigravityRuntime.js";
 import { resolveKimchiSessionId } from "./providers/kimchiRuntime.js";
+import { supportsToolFreeMode } from "./providers/registry.js";
 import { MediaGroupBuffer } from "./telegram.js";
 import type { MessagingPlatform } from "./platform.js";
 import { downloadTelegramAttachment } from "./fileDownload.js";
@@ -484,6 +485,10 @@ export class BridgeEngine {
             }
             return;
           }
+          if (commandResponse.kind === "btw") {
+            await this._executeBtw(commandResponse.prompt, chatId, chatKey, threadId);
+            return;
+          }
           if (commandResponse.kind === "compact") {
             const ck = commandResponse.chatKey;
             const compactHandle = this.db.acquireLock(this.surfaceIdentity, ck);
@@ -643,6 +648,67 @@ export class BridgeEngine {
       activeModel: this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null,
       cwd: getCliWorkingDir(this._executionKind()),
     });
+  }
+
+  private async _executeBtw(prompt: string, chatId: number, chatKey: string, threadId?: number): Promise<void> {
+    const executionKind = this._executionKind();
+    if (!supportsToolFreeMode(executionKind)) {
+      await this.sendText(chatId, {
+        text: `/btw is unavailable for ${executionKind}: this provider cannot be proven tool-free.`,
+        message_thread_id: threadId,
+      });
+      return;
+    }
+
+    const model = isAgentKind(this.kind)
+      ? (this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null)
+      : (this.opts.botConfig.modelPreference[0] || null);
+    const cwd = getCliWorkingDir(executionKind);
+    const logFile = executionKind === "antigravity" ? join(tmpdir(), `antigravity-btw-${randomUUID()}.log`) : null;
+    if (executionKind === "antigravity") setAntigravityModel(model);
+
+    const invocation = buildCliInvocation({
+      bot: executionKind,
+      command: this.opts.botConfig.command,
+      model,
+      effort: resolveEffort(executionKind, this.db),
+      prompt: [
+        "This is a fresh, read-only side question.",
+        "Do not modify files, run write-capable operations, or persist session state.",
+        prompt,
+      ].join("\n\n"),
+      sessionId: null,
+      executionMode: "safe",
+      outputFormat: executionKind === "antigravity" ? undefined : "json",
+      logFile,
+      soulContext: this.opts.soulContext,
+      attachments: [],
+      outputDir: null,
+      toolMode: "none",
+    });
+    const sideExecutionId = `${this._executionLane(chatKey)}:btw:${randomUUID()}`;
+
+    try {
+      const stdout = await this.exec.runCli(invocation.command, invocation.args, cwd, {
+        ...buildExecutionOptions(executionKind),
+        chatId: sideExecutionId,
+        stdin: invocation.stdin,
+        bypassWorkspaceLock: true,
+      });
+      let logContent: string | null = null;
+      if (logFile) {
+        try { logContent = readFileSync(logFile, "utf8"); } catch {}
+      }
+      const result = parseCliResult({ bot: executionKind, stdout, logContent });
+      await this.sendText(chatId, { text: result.text, message_thread_id: threadId });
+    } catch (error) {
+      const userText = toUserMessage(error instanceof Error ? error : new Error(String(error)));
+      await this.sendText(chatId, { text: `Error: ${userText}`, message_thread_id: threadId });
+    } finally {
+      if (logFile) {
+        try { rmSync(logFile, { force: true }); } catch {}
+      }
+    }
   }
 
   private _advisorService(): AdvisorService {

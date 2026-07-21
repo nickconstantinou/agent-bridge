@@ -67,6 +67,16 @@ const KILL_GRACE_MS = 5_000;
 const GROUP_EXIT_POLL_INTERVAL_MS = 25;
 const GROUP_EXIT_POLL_BOUND_MS = 1_000;
 
+export function resolveSupervisorTimeouts(options: Pick<CliOptions, "timeoutMs" | "idleTimeoutMs"> = {}): {
+  timeoutMs: number;
+  idleTimeoutMs: number | null;
+} {
+  return {
+    timeoutMs: options.timeoutMs ?? 0,
+    idleTimeoutMs: options.idleTimeoutMs ?? null,
+  };
+}
+
 /**
  * Sends SIGTERM to the full process group (child spawned with detached:true
  * is the group leader) and escalates to SIGKILL after graceMs — unless a
@@ -274,8 +284,7 @@ export async function runSupervisedProcess(
   options: CliOptions = {},
   onProgress?: (text: string) => void,
 ): Promise<{ stdout: string }> {
-  const timeoutMs = options.timeoutMs ?? 300_000;
-  const idleTimeoutMs = options.idleTimeoutMs ?? null;
+  const { timeoutMs, idleTimeoutMs } = resolveSupervisorTimeouts(options);
   const killGraceMs = options.killGraceMs ?? KILL_GRACE_MS;
   const onEvent = options.onEvent;
   const evtCtx = options.eventContext;

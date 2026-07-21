@@ -179,6 +179,12 @@ the worker workspace is a snapshot and does not automatically include
 uncommitted changes made in the canonical checkout. Overlapping file or branch
 scopes must be coordinated by the operator.
 
+The companion surface also supports `/btw <prompt>` for a fresh, one-off side
+question. It uses the currently selected provider without a session identifier,
+does not acquire the main conversation lane, runs in tool-free safe mode, and
+does not persist conversation or session state. Providers without a verified
+tool-free capability reject `/btw` rather than running an unsafe side process.
+
 ## Compatibility
 
 Current service names such as interactive Telegram and Discord services may remain unchanged for compatibility. The architectural term is Companion Runtime even where legacy file, service, or environment names still say interactive or bot.

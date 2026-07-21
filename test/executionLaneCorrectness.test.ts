@@ -154,6 +154,29 @@ describe("execution lane correctness", () => {
     db.close(); rmSync(path, { force: true });
   });
 
+  it("runs /btw as a fresh tool-free side invocation without the main lane or session", async () => {
+    const path = join(tmpdir(), `btw-${Date.now()}-${Math.random()}.sqlite`);
+    const db = openDb(path);
+    const c = client();
+    const runCli = vi.fn().mockResolvedValue('{"result":"side answer","session_id":"side-session"}');
+    const engine = new BridgeEngine(options("claude"), db, c, { runCli });
+
+    await engine.handleMessages([message("/btw inspect the repository without changing it", 7)]);
+
+    expect(runCli).toHaveBeenCalledOnce();
+    const [, args, , cliOptions] = runCli.mock.calls[0];
+    expect(args).toContain("--print");
+    expect(args).toContain("--tools");
+    expect(args).toContain("");
+    expect(args).not.toContain("--resume");
+    expect(cliOptions.bypassWorkspaceLock).toBe(true);
+    expect(String(cliOptions.chatId)).toMatch(/btw/);
+    expect(db.getSession("100:7", "claude")).toBeNull();
+    expect(c.sendMessage.mock.calls.some((call: any[]) => call[0].text === "side answer")).toBe(true);
+
+    db.close(); rmSync(path, { force: true });
+  });
+
   it("keeps the lane owned until a TERM-resistant child exits after SIGKILL", async () => {
     const path = join(tmpdir(), `stop-grace-${Date.now()}-${Math.random()}.sqlite`);
     const childReady = join(tmpdir(), `stop-grace-ready-${Date.now()}-${Math.random()}`);

@@ -194,6 +194,66 @@ describe("execution lane correctness", () => {
     db.close(); rmSync(path, { force: true }); rmSync(childReady, { force: true });
   }, 8_000);
 
+  it("interrupt mode aborts the active turn and admits the next message immediately instead of waiting in FIFO (Issue #177)", async () => {
+    const path = join(tmpdir(), `interrupt-${Date.now()}-${Math.random()}.sqlite`);
+    const childReady = join(tmpdir(), `interrupt-ready-${Date.now()}-${Math.random()}`);
+    const db = openDb(path);
+    const c = client();
+    const secondTurnRun = vi.fn().mockResolvedValue('{"result":"second turn done","session_id":"s2"}');
+    const engine = new BridgeEngine({ ...options("claude"), busyMessageMode: "interrupt" }, db, c, {
+      runCli: vi.fn()
+        .mockImplementationOnce((_command, _args, cwd, cliOptions) => runCli(
+          process.execPath,
+          ["-e", "process.on('SIGTERM',()=>{}); require('node:fs').writeFileSync(process.argv[1], 'ready'); setTimeout(()=>{},10000)", childReady],
+          cwd,
+          cliOptions,
+        ))
+        .mockImplementationOnce(secondTurnRun),
+    });
+    const startedAt = Date.now();
+    const first = engine.handleMessages([message("long first turn", 7)]);
+    await waitForFile(childReady);
+    const second = engine.handleMessages([message("interrupt with this", 7)]);
+    await Promise.all([first, second]);
+    const elapsedMs = Date.now() - startedAt;
+
+    // Proves the second turn did not wait for the first turn's natural 10s completion.
+    expect(elapsedMs).toBeLessThan(5_000);
+    expect(secondTurnRun).toHaveBeenCalledOnce();
+    // The killed first turn must never commit a session — only the second turn's session lands.
+    expect(db.getSession("100:7", "claude")).toBe("s2");
+    // Exactly one assistant reply was delivered (the second turn's) — the interrupted
+    // first turn must not send a committed final response.
+    const finalReplies = c.sendMessage.mock.calls.filter((call: any[]) => call[0].text === "second turn done");
+    expect(finalReplies).toHaveLength(1);
+    expect(db.acquireLock("telegram:interactive", "100:7")).not.toBeNull();
+    db.close(); rmSync(path, { force: true }); rmSync(childReady, { force: true });
+  }, 8_000);
+
+  it("queue mode (explicit) still waits for the active turn's natural completion before running the next message", async () => {
+    const path = join(tmpdir(), `queue-mode-${Date.now()}-${Math.random()}.sqlite`);
+    const db = openDb(path);
+    const c = client();
+    const codexRun = vi.fn().mockImplementationOnce((_command, _args, cwd, cliOptions) => runCli(
+      process.execPath,
+      ["-e", "setTimeout(()=>console.log('first done'),150)"],
+      cwd,
+      cliOptions,
+    ));
+    const secondRun = vi.fn().mockResolvedValue("second done");
+    const engine = new BridgeEngine({ ...options("claude"), busyMessageMode: "queue" }, db, c, {
+      runCli: vi.fn().mockImplementationOnce(codexRun).mockImplementationOnce(secondRun),
+    });
+    const first = engine.handleMessages([message("first", 7)]);
+    await new Promise((r) => setTimeout(r, 20));
+    const second = engine.handleMessages([message("second", 7)]);
+    await Promise.all([first, second]);
+    expect(codexRun).toHaveBeenCalledOnce();
+    expect(secondRun).toHaveBeenCalledOnce();
+    expect(db.pendingMsgCount("telegram:interactive", "100:7")).toBe(0);
+    db.close(); rmSync(path, { force: true });
+  });
+
   it("keeps /reset fenced through delayed finalisation before allowing a new acquisition", async () => {
     const db = openDb(":memory:", { serviceId: "telegram:interactive", runId: "same-process" });
     const c = client();

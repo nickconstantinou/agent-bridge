@@ -120,6 +120,17 @@ function killChildTree(child: ChildProcess, graceMs: number = KILL_GRACE_MS): Pr
   });
 }
 
+/**
+ * Structured cancellation reason for a configured hard/idle timeout (Issue
+ * #177) — callers must branch on `timeoutKind`, not on Error#message text.
+ */
+export class CliTimeoutError extends Error {
+  constructor(message: string, public readonly timeoutKind: "hard" | "idle") {
+    super(message);
+    this.name = "CliTimeoutError";
+  }
+}
+
 function killChild(child: ChildProcess, graceMs: number = KILL_GRACE_MS): Promise<void> {
   abortedChildren.add(child);
   return killChildTree(child, graceMs);
@@ -325,7 +336,7 @@ export async function runSupervisedProcess(
       if (settled || pendingError) return;
       console.error(`[HARD TIMEOUT] CLI hard timeout after ${timeoutMs}ms - killing process\n${formatSpawnLog(command, args, cwd, options.chatId)}`);
       if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI hard timeout after ${timeoutMs}ms`, category: "timeout" }));
-      pendingError = new Error(`CLI hard timeout after ${timeoutMs}ms`);
+      pendingError = new CliTimeoutError(`CLI hard timeout after ${timeoutMs}ms`, "hard");
       pendingKill = killChildTree(child, killGraceMs);
     }, timeoutMs);
 
@@ -350,7 +361,7 @@ export async function runSupervisedProcess(
         if (settled || pendingError) return;
         console.error(`[IDLE TIMEOUT] CLI idle timeout after ${idleTimeoutMs}ms with no stdout/stderr${options.chatId != null ? ` chatId=${String(options.chatId)}` : ""}`);
         if (evtCtx) emit(evtType.runFailed({ ...evtCtx, error: `CLI idle timeout after ${idleTimeoutMs}ms`, category: "timeout" }));
-        pendingError = new Error(`CLI idle timeout after ${idleTimeoutMs}ms`);
+        pendingError = new CliTimeoutError(`CLI idle timeout after ${idleTimeoutMs}ms`, "idle");
         pendingKill = killChildTree(child, killGraceMs);
       }, idleTimeoutMs);
     };

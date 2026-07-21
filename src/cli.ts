@@ -51,6 +51,7 @@ import {
   shutdownCliProcesses,
   shutdownCliProcessesAndWait,
   redactArgs,
+  CliTimeoutError,
 } from "./cliSupervisor.js";
 import { normalizeCliArgs } from "./cliArgNormalization.js";
 
@@ -66,6 +67,7 @@ export {
   shutdownCliProcessesAndWait,
   redactArgs,
   normalizeCliArgs,
+  CliTimeoutError,
 };
 
 export function scrubOutputDir(text: string, outDir: string | null | undefined): string {

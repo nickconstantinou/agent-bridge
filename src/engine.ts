@@ -25,6 +25,7 @@ import {
   completeExecutionLifecycle,
   toUserMessage,
   scrubOutputDir,
+  CliTimeoutError,
 } from "./cli.js";
 import { resolveAntigravityConversationId, setAntigravityModel } from "./providers/antigravityRuntime.js";
 import { resolveKimchiSessionId } from "./providers/kimchiRuntime.js";
@@ -793,6 +794,18 @@ export class BridgeEngine {
         return "fenced";
       }
       console.error(`[${this.kind}] prompt execution failed`, error);
+      if (error instanceof CliTimeoutError) {
+        // A configured timeout follows the /stop cancellation path: discard
+        // pending work for this lane rather than letting the completion-drain
+        // process it (Issue #177). The timed-out turn itself never reaches
+        // _commitResultState — it rejected, so no session/history is
+        // persisted regardless.
+        const pendingTimeout = this.db.dequeueMsgs(this.surfaceIdentity, chatKey);
+        for (const queued of pendingTimeout) {
+          this._deleteQueuedAttachments(queued.attachments);
+          this.db.deletePendingMsg(queued.id);
+        }
+      }
       if (isCapacityExhaustedError(error instanceof Error ? error : new Error(String(error))) && this.hooks.onCapacityExhausted) {
         await this.hooks.onCapacityExhausted(chatKey);
       } else {

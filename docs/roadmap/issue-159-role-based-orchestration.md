@@ -3,7 +3,7 @@ status: active-roadmap
 type: roadmap
 authority: canonical
 implementation_status: partially-implemented
-last_validated_against: 5279b1b5f49fa18ab5f7697ff294a80d65ee1fcc
+last_validated_against: agent/role-based-worker-orchestration-docs
 ---
 
 # Issue #159 — Role-Based Agentic Orchestration
@@ -22,7 +22,7 @@ Agent Bridge remains authoritative for requirements state, workflow transitions,
 
 ## Delivered prompt foundation — PR #160
 
-PR #160 at exact head `5279b1b5f49fa18ab5f7697ff294a80d65ee1fcc` delivers:
+PR #160 delivers:
 
 - a source-controlled canonical registry for 22 role/mode prompt contracts;
 - separate Technical Lead requirements, issue, decomposition-review, planning, focused repair, guidance, implementation review, operations review, and readiness prompts;
@@ -51,13 +51,13 @@ PR #160 remains the target-state authority for later role routing and orchestrat
 
 ## Slice 0 reconciliation — PR #170
 
-Slice 0 is documented by `docs/implementation-plans/issue-159-slice-0-reconciliation.md`. Its rebased exact head is `52d600ad8d89549b60e72edb6ede1f850a49cad5`, stacked on PR #160 head `b70404304116d3b7a8bc5740a30e22d89ac0cc78`. It records current owners, overlap decisions, concrete target-path classification, actual child issues, cross-repository ownership, human gates, and retrospective.
+Slice 0 is documented by `docs/implementation-plans/issue-159-slice-0-reconciliation.md`. The mutable PR #160/#170 exact heads and comparisons are recorded in their PR and Issue #159 evidence, not frozen in this roadmap. This record covers current owners, overlap decisions, concrete target-path classification, actual child issues, cross-repository ownership, human gates, and retrospective.
 
 Slice 0 creates documentation and issue metadata only. It does not itself merge, deploy, restart services, migrate production databases, mutate Platform runtime state, or activate any role behaviour.
 
 ## Slice 1 dormant role persistence — Issue #161 / merged PR #174
 
-Issue #161 is the sole Slice 1 implementation owner. PR #174 merged the dormant foundation at exact head `e3ddf9768e81505b14a4f93d3d989857766de567`; the rebased Slice 0 branch preserves that content without changing production state:
+Issue #161 is the sole Slice 1 implementation owner. PR #174 merged the dormant foundation; the rebased Slice 0 branch preserves that content without changing production state:
 
 - the exact three-role public domain and canonical mode registry;
 - bounded explicit desired CLI/model assignments with ordered fallbacks;

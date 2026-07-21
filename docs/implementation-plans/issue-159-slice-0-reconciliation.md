@@ -24,12 +24,12 @@ For owners, likely target files, dependencies and overlap decisions, this record
 | OSS repository | `nickconstantinou/agent-bridge` |
 | OSS `main` used by PR #160 | `1ce03d5e22ec44b3b23fef847b273f2bce08303c` |
 | PR #160 branch | `agent/role-based-worker-orchestration-docs` |
-| PR #160 exact head / stacked base | `5279b1b5f49fa18ab5f7697ff294a80d65ee1fcc` |
+| PR #160 exact head / stacked base | Recorded in the PR/Issue evidence for the current head |
 | PR #160 state | open, draft, unmerged |
 | Platform repository | `nickconstantinou/agent-bridge-platform` |
 | Platform `main` used for reconciliation | `31d6b5e42b89eeb433e272816fd6bbb7aced2dce` |
 | Slice 0 branch | `agent/issue-159-slice-0-decomposition` |
-| Slice 0 stacking | created from the exact PR #160 head; PR #170 targets the PR #160 branch |
+| Slice 0 stacking | created from the PR #160 branch; PR #170 targets that branch |
 
 PR #160 is the runtime/schema/prompt/documentation-policy foundation. It supplies source-controlled role/mode prompts, canonical lifecycle-skill composition, the pre-mutation decomposition-review contract, comprehensive red-test and target-path provenance validation, source-only prompt resolution, schema version 2, guarded legacy prompt-table removal, and the current architecture/implementation-plan rewrite. Later slices extend those owners and must not recreate a prompt service, AdvisorService, worker execution stack, CI runner or migration authority.
 

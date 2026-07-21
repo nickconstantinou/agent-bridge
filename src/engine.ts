@@ -242,6 +242,7 @@ export class BridgeEngine {
   private readonly exec: ExecFns;
   private queuedMessageHandler?: (message: PendingMessage) => Promise<ExecutionOutcome>;
   private readonly queueRecoveryTimers = new Map<string, NodeJS.Timeout>();
+  private readonly cancellationOperations = new Map<string, Promise<void>>();
   private readonly abortedChats = new Set<string>();
   private readonly resettingChats = new Set<string>();
   private readonly advisorSuggestions = new Map<string, {
@@ -351,14 +352,7 @@ export class BridgeEngine {
       const chatId = message.chat.id;
       const threadId = message.message_thread_id;
       const chatKey = topicChatKey(chatId, message.chat.type, threadId);
-      const executionLane = this._executionLane(chatKey);
-      this.abortedChats.add(executionLane);
-      await abortExecutionAndWait(executionLane);
-      const pendingStop = this.db.dequeueMsgs(this.surfaceIdentity, chatKey);
-      for (const queued of pendingStop) {
-        this._deleteQueuedAttachments(queued.attachments);
-        this.db.deletePendingMsg(queued.id);
-      }
+      await this._cancelLane(chatKey, "stop");
       await this.sendText(chatId, { text: "🛑 Execution aborted by user.", message_thread_id: threadId });
       return;
     }
@@ -385,7 +379,10 @@ export class BridgeEngine {
     const chatId = primaryMessage.chat.id;
     const userId = primaryMessage.from?.id;
     const chatKey = topicChatKey(chatId, primaryMessage.chat.type, threadId);
-    this.abortedChats.delete(this._executionLane(chatKey));
+    const executionLane = this._executionLane(chatKey);
+    if (!this.resettingChats.has(executionLane) && !this.cancellationOperations.has(executionLane)) {
+      this.abortedChats.delete(executionLane);
+    }
 
     const hookCtx: HookContext = { chatId, chatKey, threadId, userId };
 
@@ -652,9 +649,9 @@ export class BridgeEngine {
 
   private async _executeBtw(prompt: string, chatId: number, chatKey: string, threadId?: number): Promise<void> {
     const executionKind = this._executionKind();
-    if (!supportsToolFreeMode(executionKind)) {
+    if (executionKind === "antigravity" || !supportsToolFreeMode(executionKind)) {
       await this.sendText(chatId, {
-        text: `/btw is unavailable for ${executionKind}: this provider cannot be proven tool-free.`,
+        text: `/btw is unavailable for ${executionKind}: isolated read-only execution cannot be proven without changing shared provider state.`,
         message_thread_id: threadId,
       });
       return;
@@ -774,18 +771,7 @@ export class BridgeEngine {
           // still fenced by abortedChats — that would leave the row claimed
           // and the lane locked forever. Once the abort fully settles and the
           // fence is cleared, drain the lane ourselves under a clean check.
-          this.resettingChats.add(executionLane);
-          this.abortedChats.add(executionLane);
-          const abortedHandle = await abortExecutionAndWait(executionLane);
-          this.abortedChats.delete(executionLane);
-          this.resettingChats.delete(executionLane);
-          if (abortedHandle) {
-            await this._drainQueueAndUnlock(abortedHandle);
-          }
-          // else: nothing was actually tracked as active (e.g. the lane lock
-          // is held by something other than a supervised CLI turn, such as
-          // /compact) — there is nothing to abort; the message stays queued
-          // for whatever releases that lock normally.
+          await this._cancelLane(chatKey, "interrupt");
           return "queued";
         }
         await this.sendText(chatId, {
@@ -932,6 +918,50 @@ export class BridgeEngine {
     };
     const finalize = () => store.finalize();
     return { runId, eventContext, collect, finalize, events };
+  }
+
+  private _discardPendingMessages(chatKey: string): void {
+    const pending = this.db.dequeueMsgs(this.surfaceIdentity, chatKey);
+    for (const queued of pending) {
+      this._deleteQueuedAttachments(queued.attachments);
+      this.db.deletePendingMsg(queued.id);
+    }
+  }
+
+  /**
+   * Own cancellation per execution lane. Every caller observes the same
+   * process-tree/lifecycle fence and only the owner may continue the lane.
+   * Messages received after /stop begins remain queued for the single
+   * continuation; messages already pending at /stop admission are discarded.
+   */
+  private _cancelLane(chatKey: string, mode: "interrupt" | "stop"): Promise<void> {
+    const executionLane = this._executionLane(chatKey);
+    const existing = this.cancellationOperations.get(executionLane);
+    if (existing) return existing;
+
+    const operation = (async () => {
+      this.resettingChats.add(executionLane);
+      this.abortedChats.add(executionLane);
+      let handle: ExecutionLaneHandle | null = null;
+      try {
+        if (mode === "stop") this._discardPendingMessages(chatKey);
+        handle = await abortExecutionAndWait(executionLane);
+
+        // abortExecutionAndWait has confirmed both process-tree termination
+        // and lifecycle completion, so the old turn can no longer commit.
+        this.abortedChats.delete(executionLane);
+        this.resettingChats.delete(executionLane);
+        if (handle) await this._drainQueueAndUnlock(handle);
+      } finally {
+        this.abortedChats.delete(executionLane);
+        this.resettingChats.delete(executionLane);
+        if (handle && this.db.ownsLock(handle)) this.db.unlock(handle);
+        this.cancellationOperations.delete(executionLane);
+      }
+    })();
+
+    this.cancellationOperations.set(executionLane, operation);
+    return operation;
   }
 
   private async _drainQueueAndUnlock(handle: ExecutionLaneHandle, initial?: PendingMessage, recoveryAttempt = 0, lifecycleAlreadyManaged = false): Promise<void> {

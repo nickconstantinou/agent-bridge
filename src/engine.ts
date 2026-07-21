@@ -649,7 +649,14 @@ export class BridgeEngine {
 
   private async _executeBtw(prompt: string, chatId: number, chatKey: string, threadId?: number): Promise<void> {
     const executionKind = this._executionKind();
-    if (executionKind === "antigravity" || !supportsToolFreeMode(executionKind)) {
+    if (executionKind === "antigravity") {
+      await this.sendText(chatId, {
+        text: "/btw is unavailable for antigravity: isolated read-only execution cannot be proven without changing shared provider state.",
+        message_thread_id: threadId,
+      });
+      return;
+    }
+    if (!supportsToolFreeMode(executionKind)) {
       await this.sendText(chatId, {
         text: `/btw is unavailable for ${executionKind}: isolated read-only execution cannot be proven without changing shared provider state.`,
         message_thread_id: threadId,
@@ -661,8 +668,6 @@ export class BridgeEngine {
       ? (this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null)
       : (this.opts.botConfig.modelPreference[0] || null);
     const cwd = getCliWorkingDir(executionKind);
-    const logFile = executionKind === "antigravity" ? join(tmpdir(), `antigravity-btw-${randomUUID()}.log`) : null;
-    if (executionKind === "antigravity") setAntigravityModel(model);
 
     const invocation = buildCliInvocation({
       bot: executionKind,
@@ -676,8 +681,8 @@ export class BridgeEngine {
       ].join("\n\n"),
       sessionId: null,
       executionMode: "safe",
-      outputFormat: executionKind === "antigravity" ? undefined : "json",
-      logFile,
+      outputFormat: "json",
+      logFile: null,
       soulContext: this.opts.soulContext,
       attachments: [],
       outputDir: null,
@@ -692,19 +697,11 @@ export class BridgeEngine {
         stdin: invocation.stdin,
         bypassWorkspaceLock: true,
       });
-      let logContent: string | null = null;
-      if (logFile) {
-        try { logContent = readFileSync(logFile, "utf8"); } catch {}
-      }
-      const result = parseCliResult({ bot: executionKind, stdout, logContent });
+      const result = parseCliResult({ bot: executionKind, stdout });
       await this.sendText(chatId, { text: result.text, message_thread_id: threadId });
     } catch (error) {
       const userText = toUserMessage(error instanceof Error ? error : new Error(String(error)));
       await this.sendText(chatId, { text: `Error: ${userText}`, message_thread_id: threadId });
-    } finally {
-      if (logFile) {
-        try { rmSync(logFile, { force: true }); } catch {}
-      }
     }
   }
 

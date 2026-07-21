@@ -623,6 +623,46 @@ describe("execution lane correctness", () => {
     db.close();
   });
 
+  it.each([
+    { mode: "synchronous", asyncEnabled: false },
+    { mode: "asynchronous", asyncEnabled: true },
+  ])("linearizes /stop behind a claimed $mode final-delivery phase", async ({ mode, asyncEnabled }) => {
+    const db = openDb(":memory:", { serviceId: "telegram:interactive", runId: `delivery-phase-${mode}` });
+    let releaseDelivery!: () => void;
+    let deliveryEntered!: () => void;
+    const delivery = new Promise<void>((resolve) => { releaseDelivery = resolve; });
+    const entered = new Promise<void>((resolve) => { deliveryEntered = resolve; });
+    const c = client();
+    c.sendMessage.mockImplementation(async (body: any) => {
+      if (String(body.text).includes(`delivery winner ${mode}`)) {
+        deliveryEntered();
+        await delivery;
+      }
+      return { ok: true, result: { message_id: 1 } };
+    });
+    db.setSession("100:7", "claude", "previous-session");
+    const result = JSON.stringify({ result: `delivery winner ${mode}`, session_id: "delivered-session" });
+    const engine = new BridgeEngine({ ...options("claude"), asyncEnabled }, db, c, {
+      runCli: vi.fn().mockResolvedValue(result),
+      runCliAsync: vi.fn().mockResolvedValue({ text: result }),
+    });
+
+    const execution = engine.handleMessages([message(`delivery ${mode}`, 7)]);
+    await entered;
+    let stopFinished = false;
+    const stopping = engine.handleUpdate({ update_id: 701, message: message("/stop", 7) }).then(() => { stopFinished = true; });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(stopFinished).toBe(false);
+    expect((engine as any).abortedChats.has(JSON.stringify(["telegram:interactive", "100:7"]))).toBe(false);
+
+    releaseDelivery();
+    await Promise.all([execution, stopping]);
+
+    expect(db.getSession("100:7", "claude")).toBe("delivered-session");
+    expect(c.sendMessage.mock.calls.some((call: any[]) => call[0]?.text === `delivery winner ${mode}`)).toBe(true);
+    db.close();
+  });
+
   it("does not let a displaced run delete its claimed row before the successor reclaims it", () => {
     const path = join(tmpdir(), `claim-fence-${Date.now()}-${Math.random()}.sqlite`);
     let now = Date.parse("2026-07-15T10:00:00.000Z");

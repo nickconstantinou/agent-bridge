@@ -28,6 +28,7 @@ Cover:
 - `automatic`, `recommended`, and `manual` persisted only as desired selection labels;
 - duplicate, missing, unknown, and mode-as-role rejection;
 - bounded scope, CLI, model, and fallback counts;
+- secret-, prompt-, and repository-content-shaped scope values fail before database opening and errors do not echo scope or idempotency keys;
 - unknown-field rejection;
 - credential-, secret-, prompt-, and repository-content-shaped field rejection;
 - credential-shaped value rejection without echoing the value;

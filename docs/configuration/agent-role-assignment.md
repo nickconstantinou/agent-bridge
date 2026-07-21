@@ -16,7 +16,7 @@ The remainder of this document distinguishes the current Slice 1 contract from t
 The worker accepts one optional JSON environment variable and one optional scope variable:
 
 - `WORKER_ROLE_ASSIGNMENTS_JSON` — an array containing exactly one assignment for each public role;
-- `WORKER_ROLE_ASSIGNMENT_SCOPE` — a bounded workspace/scope identifier; defaults to `worker:default`.
+- `WORKER_ROLE_ASSIGNMENT_SCOPE` — a bounded workspace/scope identifier; defaults to `worker:default`. Secret-, prompt-, and repository-content-shaped scope values fail closed before database opening.
 
 Example:
 
@@ -48,7 +48,7 @@ The parser is fail-closed. It rejects:
 - missing, duplicate, or unknown roles;
 - a mode name presented as a role;
 - unknown fields;
-- credential-, prompt-, or repository-content-shaped fields;
+- credential-, prompt-, or repository-content-shaped fields or scope values;
 - credential-shaped values;
 - unbounded or malformed scope, CLI, or model identifiers;
 - duplicate primary/fallback targets;

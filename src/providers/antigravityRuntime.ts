@@ -94,8 +94,13 @@ export function buildInvocation({
   if (logFile) args.push("--log-file", logFile);
   if (toolMode === "none") args.push("--sandbox");
   const timeouts = resolveTimeoutsForKind("antigravity");
-  const timeoutSeconds = Math.floor(timeouts.cliTimeoutMs / 1000);
-  args.push("--print-timeout", `${timeoutSeconds}s`);
+  // Omit the provider flag when the bridge timeout is disabled. Passing 0s
+  // is not equivalent to no timeout for Antigravity and may be interpreted as
+  // an immediate provider-side expiry (Issue #177).
+  if (timeouts.cliTimeoutMs > 0) {
+    const timeoutSeconds = Math.floor(timeouts.cliTimeoutMs / 1000);
+    args.push("--print-timeout", `${timeoutSeconds}s`);
+  }
   const annotatedPrompt = appendAttachmentAnnotations(
     wrapAntigravityPrompt(prompt, soulContext),
     attachments,

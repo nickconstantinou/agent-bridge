@@ -565,6 +565,64 @@ describe("execution lane correctness", () => {
     db.close();
   });
 
+  it.each([
+    { mode: "synchronous", asyncEnabled: false },
+    { mode: "asynchronous", asyncEnabled: true },
+  ])("does not persist a cancelled result during $mode finalisation", async ({ mode, asyncEnabled }) => {
+    const db = openDb(":memory:", { serviceId: "telegram:interactive", runId: `cancelled-finalisation-${mode}` });
+    const c = client();
+    const chatKey = "100:7";
+    const oldSession = "previous-session";
+    const nextSession = "next-session";
+    const oldTurns = [
+      ["user", "previous request"],
+      ["assistant", "previous answer"],
+    ] as const;
+    for (const [role, text] of oldTurns) db.addConvTurn(chatKey, role, text, "claude");
+    db.setSession(chatKey, "claude", oldSession);
+    db.addMemory({ id: "previous-memory", type: "decision", scope: "project", text: "previous durable memory" });
+    const turnsBefore = db.getConvTurnsForCompaction(chatKey).map(({ role, text, cli }) => ({ role, text, cli }));
+    const memoryCountBefore = db.getMemoryCount();
+    let releaseFinalisation!: () => void;
+    let finalisationEntered!: () => void;
+    const finalisation = new Promise<void>((resolve) => { releaseFinalisation = resolve; });
+    const entered = new Promise<void>((resolve) => { finalisationEntered = resolve; });
+    const cancelledResult = JSON.stringify({
+      result: `cancelled ${mode} result\n<!-- agent-bridge-memory [{"type":"decision","scope":"project","text":"must not persist ${mode}"}] -->`,
+      session_id: nextSession,
+    });
+    const nextRun = vi.fn().mockResolvedValue(JSON.stringify({ result: "next result", session_id: "after-cancel" }));
+    const hooks = {
+      onAfterExecute: async (prompt: string) => {
+        if (prompt === `cancelled ${mode}`) {
+          finalisationEntered();
+          await finalisation;
+        }
+      },
+    };
+    const engine = new BridgeEngine({ ...options("claude", hooks), asyncEnabled }, db, c, {
+      runCli: vi.fn().mockResolvedValueOnce(cancelledResult).mockImplementationOnce(nextRun),
+      runCliAsync: vi.fn().mockResolvedValueOnce({ text: cancelledResult }).mockImplementationOnce(async () => ({ text: await nextRun() })),
+    });
+
+    const cancelled = engine.handleMessages([message(`cancelled ${mode}`, 7)]);
+    await entered;
+    const stopping = engine.handleUpdate({ update_id: 700, message: message("/stop", 7) });
+    await waitForCondition(() => db.acquireLock("telegram:interactive", chatKey) === null);
+    releaseFinalisation();
+    await Promise.all([cancelled, stopping]);
+
+    expect(db.getSession(chatKey, "claude")).toBe(oldSession);
+    expect(db.getConvTurnsForCompaction(chatKey).map(({ role, text, cli }) => ({ role, text, cli }))).toEqual(turnsBefore);
+    expect(db.getMemoryCount()).toBe(memoryCountBefore);
+    expect(c.sendMessage.mock.calls.some((call: any[]) => call[0]?.text?.includes(`cancelled ${mode} result`))).toBe(false);
+
+    await engine.handleMessages([message("resume after cancellation", 7)]);
+    expect(nextRun).toHaveBeenCalled();
+    expect(db.getSession(chatKey, "claude")).toBe("after-cancel");
+    db.close();
+  });
+
   it("does not let a displaced run delete its claimed row before the successor reclaims it", () => {
     const path = join(tmpdir(), `claim-fence-${Date.now()}-${Math.random()}.sqlite`);
     let now = Date.parse("2026-07-15T10:00:00.000Z");

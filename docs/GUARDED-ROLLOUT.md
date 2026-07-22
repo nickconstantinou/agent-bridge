@@ -4,6 +4,11 @@ Status: operational contract and installation guide. Installing or merging this 
 
 See `docs/roadmap/issue-135-phase4c-migration-ownership.md` for the schema-migration ownership and gating policy layered on top of this helper (Issue #135 Phase 4C) — the migration/validation steps described below are being brought under that policy's stricter "ordinary startup never auto-migrates" contract.
 
+Issue #183's server-side artifact work begins with the staging-only helper in
+`docs/RELEASE-ARTIFACT-STAGING.md`. It is intentionally separate from this
+rollout helper until pointer activation and the complete guarded state machine
+are implemented and reviewed.
+
 ## Safety model
 
 `rollout-agent-bridge` is a root-owned, narrow orchestration helper. It is separate from `restart-agent-bridge` and accepts only an exact, full Git commit SHA. It never fetches, pulls, checks out, resets, commits, discards queues, or changes its fixed service/database inventory.

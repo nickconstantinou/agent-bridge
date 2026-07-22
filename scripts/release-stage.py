@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+"""Stage and validate one immutable Agent Bridge release artifact.
+
+This command does not stop services, touch databases, switch a pointer, or
+change a Git checkout. Production invocation is root-only; the explicit test
+environment escape is used only by fixture tests.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import stat
+import sys
+import tarfile
+import tempfile
+from pathlib import Path
+
+
+SHA = 40
+
+
+def production_mode() -> bool:
+    return os.environ.get("AGENT_BRIDGE_RELEASE_STAGE_TEST") != "1"
+
+
+def fail(message: str) -> None:
+    raise RuntimeError(message)
+
+
+def safe_relative(name: str) -> str:
+    path = Path(name)
+    if path.is_absolute() or any(part in ("", ".", "..") for part in path.parts):
+        fail(f"unsafe archive path: {name}")
+    return "/".join(path.parts)
+
+
+def safe_target(path: Path, target: str, root: Path) -> None:
+    if os.path.isabs(target):
+        fail(f"absolute symlink target is not allowed: {path} -> {target}")
+    resolved = (path.parent / target).resolve()
+    if resolved != root and root not in resolved.parents:
+        fail(f"symlink escaped release root: {path} -> {target}")
+
+
+def digest(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def load_manifest(root: Path) -> dict:
+    path = root / "manifest.json"
+    if not path.is_file() or path.is_symlink():
+        fail("release artifact is missing a regular manifest.json")
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        fail(f"invalid release manifest: {error}")
+    if manifest.get("schema_version") != 1:
+        fail("unsupported release manifest schema")
+    commit = manifest.get("commit")
+    tree = manifest.get("tree")
+    if not isinstance(commit, str) or len(commit) != SHA or any(c not in "0123456789abcdef" for c in commit):
+        fail("manifest commit is not a full lowercase SHA")
+    if not isinstance(tree, str) or len(tree) != SHA or any(c not in "0123456789abcdef" for c in tree):
+        fail("manifest tree is not a full lowercase SHA")
+    if not isinstance(manifest.get("files"), list):
+        fail("manifest files must be a list")
+    return manifest
+
+
+def verify_manifest(root: Path, manifest: dict) -> None:
+    expected: dict[str, dict] = {}
+    for entry in manifest["files"]:
+        path = entry.get("path") if isinstance(entry, dict) else None
+        if not isinstance(path, str):
+            fail("manifest file path is invalid")
+        path = safe_relative(path)
+        if path == "manifest.json" or path in expected:
+            fail(f"manifest contains duplicate or self-referential file: {path}")
+        expected[path] = entry
+
+    actual: set[str] = set()
+    for current, directories, files in os.walk(root, followlinks=False):
+        current_path = Path(current)
+        directories[:] = sorted(directories)
+        files = sorted(files)
+        for name in files + directories:
+            path = current_path / name
+            relative = path.relative_to(root).as_posix()
+            if relative == "manifest.json":
+                continue
+            if path.is_symlink():
+                actual.add(relative)
+                entry = expected.get(relative)
+                if not entry or entry.get("type") != "symlink" or os.readlink(path) != entry.get("target"):
+                    fail(f"release symlink does not match manifest: {relative}")
+            elif path.is_file():
+                actual.add(relative)
+                entry = expected.get(relative)
+                if not entry or entry.get("type", "file") != "file":
+                    fail(f"release file is not in the manifest: {relative}")
+                if digest(path) != entry.get("sha256") or path.stat().st_size != entry.get("size"):
+                    fail(f"release file hash or size mismatch: {relative}")
+            elif path.is_dir():
+                continue
+            else:
+                fail(f"unsupported release entry: {relative}")
+    if actual != set(expected):
+        fail("release contents do not match the manifest")
+    lock = expected.get("package-lock.json")
+    if not lock or lock.get("sha256") != manifest.get("package_lock_sha256"):
+        fail("package-lock hash binding is invalid")
+
+
+def extract_archive(archive: Path, destination: Path) -> None:
+    if not archive.is_file() or archive.is_symlink():
+        fail("archive must be a regular non-symlink file")
+    seen: set[str] = set()
+    with tarfile.open(archive, "r:gz") as bundle:
+        members = bundle.getmembers()
+        for member in members:
+            if member.name in (".", "./"):
+                continue
+            relative = safe_relative(member.name)
+            if relative in seen:
+                fail(f"duplicate archive member: {relative}")
+            seen.add(relative)
+            target = destination / relative
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if member.issym():
+                safe_target(target, member.linkname, destination)
+                os.symlink(member.linkname, target)
+                continue
+            if not member.isfile():
+                fail(f"unsupported archive member: {relative}")
+            source = bundle.extractfile(member)
+            if source is None:
+                fail(f"unable to read archive member: {relative}")
+            with target.open("xb") as output:
+                shutil.copyfileobj(source, output)
+
+
+def make_immutable(root: Path) -> None:
+    for current, directories, files in os.walk(root, topdown=False, followlinks=False):
+        for name in files:
+            path = Path(current) / name
+            if path.is_symlink():
+                continue
+            mode = path.stat().st_mode
+            os.chmod(path, 0o555 if mode & stat.S_IXUSR else 0o444)
+            if production_mode():
+                os.chown(path, 0, 0)
+        for name in directories:
+            path = Path(current) / name
+            if not path.is_symlink():
+                os.chmod(path, 0o555)
+                if production_mode():
+                    os.chown(path, 0, 0)
+    os.chmod(root, 0o555)
+    if production_mode():
+        os.chown(root, 0, 0)
+
+
+def validate_release_root(release_root: Path) -> Path:
+    if release_root.exists() or release_root.is_symlink():
+        metadata = release_root.lstat()
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            fail("release root must be a regular directory, not a symlink")
+    else:
+        release_root.mkdir(parents=True)
+    metadata = release_root.stat()
+    if production_mode() and (metadata.st_uid != 0 or metadata.st_mode & 0o022):
+        fail("production release root must be root-owned and not group/world writable")
+    return release_root
+
+
+def validate_existing(release: Path, expected_commit: str) -> str:
+    if release.is_symlink() or not release.is_dir():
+        fail(f"existing release path is not a directory: {release}")
+    manifest = load_manifest(release)
+    if manifest["commit"] != expected_commit:
+        fail("existing release commit does not match expected commit")
+    verify_manifest(release, manifest)
+    for current, directories, files in os.walk(release, followlinks=False):
+        for name in directories + files:
+            path = Path(current) / name
+            if not path.is_symlink() and path.stat().st_mode & 0o222:
+                fail("existing release is writable")
+    return f"already staged {expected_commit}"
+
+
+def stage(archive: Path, release_root: Path, expected_commit: str) -> str:
+    if len(expected_commit) != SHA or any(c not in "0123456789abcdef" for c in expected_commit):
+        fail("expected commit must be a full lowercase 40-character SHA")
+    release_root = validate_release_root(release_root)
+    release = release_root / expected_commit
+    if release.exists() or release.is_symlink():
+        return validate_existing(release, expected_commit)
+
+    temporary = Path(tempfile.mkdtemp(prefix=f".staging-{expected_commit}-", dir=release_root))
+    try:
+        extract_archive(archive, temporary)
+        manifest = load_manifest(temporary)
+        if manifest["commit"] != expected_commit:
+            fail("archive manifest commit does not match expected commit")
+        verify_manifest(temporary, manifest)
+        make_immutable(temporary)
+        try:
+            os.rename(temporary, release)
+        except FileExistsError:
+            shutil.rmtree(temporary)
+            return validate_existing(release, expected_commit)
+        return f"staged {expected_commit}"
+    except Exception:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+        raise
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--archive", type=Path, required=True)
+    parser.add_argument("--release-root", type=Path, required=True)
+    parser.add_argument("--expected-commit", required=True)
+    args = parser.parse_args()
+    if os.geteuid() != 0 and os.environ.get("AGENT_BRIDGE_RELEASE_STAGE_TEST") != "1":
+        fail("release staging must run as root")
+    print(stage(args.archive, args.release_root, args.expected_commit))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as error:
+        print(f"release-stage: {error}", file=sys.stderr)
+        raise SystemExit(1)

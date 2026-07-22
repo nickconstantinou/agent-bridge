@@ -1187,6 +1187,34 @@ describe("BridgeEngine", () => {
     });
   });
 
+  describe("Telegram duplicate delivery", () => {
+    it("executes a repeated message only once even when Telegram assigns another update id", async () => {
+      const { BridgeEngine } = await import("../src/engine.js");
+      const client = makeMockClient();
+      const runCli = vi.fn().mockResolvedValue("ok");
+      const engine = new BridgeEngine(
+        {
+          surfaceIdentity: "test",
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: [] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+        },
+        db,
+        client,
+        { runCli },
+      );
+      const message = makeMessage("one prompt");
+
+      await engine.handleUpdate({ update_id: 1, message });
+      await engine.handleUpdate({ update_id: 2, message: { ...message } });
+
+      expect(runCli).toHaveBeenCalledOnce();
+    });
+  });
+
   describe("concurrency lock", () => {
     it("queues a second message when first is still holding the lock", async () => {
       const { BridgeEngine } = await import("../src/engine.js");

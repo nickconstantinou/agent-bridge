@@ -43,6 +43,7 @@ renamed into its final `<commit>` path only after validation and permission
 hardening. A failed or interrupted staging operation leaves no accepted
 release at that commit path.
 
-Pointer activation, service restart, database migration, rollback, and release
-retention are deliberately outside this slice and remain governed by the
-existing guarded rollout contract until their later Issue #183 phases land.
+Pointer activation is now covered by `docs/RELEASE-POINTER-ACTIVATION.md`, but
+this staging helper still does not invoke it. Service restart, database
+migration, rollback, and release retention remain governed by the existing
+guarded rollout contract until their later Issue #183 phases land.

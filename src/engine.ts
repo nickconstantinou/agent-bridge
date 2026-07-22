@@ -262,6 +262,7 @@ export class BridgeEngine {
   private readonly cancellationOperations = new Map<string, LaneCancellation>();
   private readonly laneDrainers = new Map<string, LaneDrainer>();
   private readonly finalDeliveryPhases = new Map<string, FinalDeliveryPhase>();
+  private readonly seenTelegramMessageKeys = new Set<string>();
   private readonly abortedChats = new Set<string>();
   private readonly resettingChats = new Set<string>();
   private readonly advisorSuggestions = new Map<string, {
@@ -365,6 +366,7 @@ export class BridgeEngine {
     const message = update.message;
     if (!message) return;
     if (!isAuthorizedMessage(message, this.opts.allowedUserIds)) return;
+    if (!this.claimTelegramMessage(update)) return;
 
     const rawText = (message.text || message.caption || "").trim().toLowerCase();
     if (rawText === "/stop" || rawText === "/cancel") {
@@ -377,6 +379,29 @@ export class BridgeEngine {
     }
 
     await this.mediaBuffer.push(message);
+  }
+
+  /**
+   * Telegram can replay an update or expose the same message under another
+   * update id. Claim both identities before any asynchronous dispatch starts.
+   * The bounded process-local cache is intentionally a hotfix: the persisted
+   * polling offset remains the restart boundary, so this needs no migration.
+   */
+  private claimTelegramMessage(update: TelegramUpdate): boolean {
+    const message = update.message;
+    if (!message) return true;
+    const keys = [
+      `${this.surfaceIdentity}:update:${update.update_id}`,
+      `${this.surfaceIdentity}:message:${message.chat.id}:${message.message_id}`,
+    ];
+    if (keys.some((key) => this.seenTelegramMessageKeys.has(key))) return false;
+    for (const key of keys) this.seenTelegramMessageKeys.add(key);
+    while (this.seenTelegramMessageKeys.size > 4096) {
+      const oldest = this.seenTelegramMessageKeys.values().next().value;
+      if (oldest === undefined) break;
+      this.seenTelegramMessageKeys.delete(oldest);
+    }
+    return true;
   }
 
   async handleMessages(messages: TelegramMessage[]): Promise<void> {

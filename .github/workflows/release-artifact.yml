@@ -73,13 +73,13 @@ jobs:
             --arch "$(node -p 'process.arch')"
           tar --create --gzip --file "$archive" \
             --directory "$root" --sort=name --owner=0 --group=0 --numeric-owner .
-          sha256sum "$archive" | tee "$archive.sha256"
+          ( cd "$(dirname "$archive")" && sha256sum "$(basename "$archive")" ) | tee "$archive.sha256"
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
 
       - name: Upload non-production release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: agent-bridge-release-${{ github.sha }}
+          name: agent-bridge-release-${{ github.event.pull_request.head.sha || github.sha }}
           if-no-files-found: error
           path: |
             ${{ steps.artifact.outputs.archive }}

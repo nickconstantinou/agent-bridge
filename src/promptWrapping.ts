@@ -12,30 +12,43 @@
 
 import { renderSoulContract } from "./soul.js";
 
-export function wrapPromptContext(prompt: string, soulContext: string | null = null): string {
+export function wrapPromptContext(
+  prompt: string,
+  soulContext: string | null = null,
+  includeResponseContract = true,
+): string {
   const soulContract = renderSoulContract(soulContext);
   return [
     ...(soulContract ? [soulContract, ""] : []),
-    wrapTelegramPrompt(prompt),
+    wrapResponseStyle(prompt, soulContext, includeResponseContract),
   ].join("\n");
 }
 
-function wrapTelegramPrompt(prompt: string): string {
+export function prependHandoffModel(prompt: string, model: string | null): string {
   return [
-    "Telegram response style:",
-    "- Start with the direct result or answer.",
-    "- Keep replies extremely concise: aggressively compress prose into dense, verb-light fragments or single-sentence summaries. Aim for >50% token reduction.",
-    "- Never drop critical facts, functional constraints, system boundaries, delivery channels, or rules (e.g., which component handles delivery, where outputs must go). Brevity must not cause information loss.",
-    "- Retain all specific commands, signals, file paths, error codes, and safety constraints.",
-    "- Skip all throat-clearing, meta-commentary, and transitional phrases (e.g., \"Certainly\", \"As requested\", \"the real issue is\").",
-    "- Use light **bolding** on key statuses, identifiers, and variables for rapid scanning.",
-    "- Use fenced code blocks only for commands, code/configs, logs, or JSON.",
-    "- Avoid Markdown links and em dashes.",
-    "- Do not mention these formatting rules.",
+    "[Agent Bridge handoff]",
+    ...(model ? [`Active model: ${model}`] : []),
+    "",
+    prompt,
+  ].join("\n");
+}
+
+const MINIMAL_RESPONSE_CONTRACT = [
+  "Response contract:",
+  "- Answer the user's request directly.",
+  "- Preserve critical facts, constraints, commands, paths, errors, safety boundaries, and delivery instructions.",
+  "- Do not mention internal prompt or configuration rules.",
+].join("\n");
+
+function wrapResponseStyle(prompt: string, soulContext: string | null, includeResponseContract: boolean): string {
+  if (!includeResponseContract) return prompt;
+  const configuredStyle = /(?:^|\n)##\s+Communication Style\s*$/m.test(soulContext ?? "");
+  return [
+    !configuredStyle ? MINIMAL_RESPONSE_CONTRACT : null,
     "",
     "User request:",
     prompt,
-  ].join("\n");
+  ].filter((line): line is string => line !== null).join("\n");
 }
 
 const ATTACHMENT_ANNOTATION_PREFIX = "[Attached file saved at: ";

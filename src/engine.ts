@@ -53,6 +53,7 @@ import { ExecutionLockLostError, type BridgeDb, type ExecutionLaneHandle } from 
 import { DEFAULT_CONTEXT_MAX_CHARS } from "./db.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { extractProjectMemorySidecars, storeProjectMemoryCandidate, type ProjectMemoryCandidate } from "./projectMemory.js";
+import { prependHandoffModel } from "./promptWrapping.js";
 import { parseAdvisorConfig } from "./advisorConfig.js";
 import { formatAdvisorResult } from "./advisor.js";
 import { AdvisorService } from "./advisorService.js";
@@ -1207,6 +1208,7 @@ export class BridgeEngine {
    * for this chat+CLI (covers first-ever turn, /compact reset, and
    * invalid-session retry, all of which clear the session before retrying
    * with sessionId: null), or a pending handoff mark (manual switch/fallback).
+   * Soul and active-model handoff metadata use the same decision.
    * ctx_suppress (/reset) always wins regardless of policy.
    */
   private _shouldInjectContext(chatKey: string, sessionId: string | null): boolean {
@@ -1337,18 +1339,22 @@ export class BridgeEngine {
     }
   }
 
-  private async _buildPromptForCli(chatKey: string, prompt: string, sessionId: string | null, laneHandle: ExecutionLaneHandle): Promise<{ prompt: string; contextEnv?: Record<string, string> }> {
+  private async _buildPromptForCli(chatKey: string, prompt: string, sessionId: string | null, laneHandle: ExecutionLaneHandle, model: string | null): Promise<{ prompt: string; contextEnv?: Record<string, string>; soulContext: string | null; includeResponseContract: boolean }> {
     await this._maybePreseedCompact(chatKey, sessionId, laneHandle);
     const shouldInject = this._shouldInjectContext(chatKey, sessionId);
     const contextPrompt = this._buildRecentContextPrompt(chatKey, prompt, sessionId);
     const access = this._buildContextAccess(chatKey);
-    if (!access) return { prompt: contextPrompt };
+    const handoffPrompt = shouldInject ? prependHandoffModel(contextPrompt, model) : contextPrompt;
+    const soulContext = shouldInject ? this.opts.soulContext ?? null : null;
+    if (!access) return { prompt: handoffPrompt, soulContext, includeResponseContract: shouldInject };
     // Context env (AGENT_BRIDGE_CONTEXT_COMMAND, etc.) stays available regardless of
     // policy so the CLI can always self-serve query it; only the usage-instructions
     // text block is gated by the same injection decision as the recent-turn preamble.
     return {
-      prompt: shouldInject ? `${access.prompt}${contextPrompt}` : contextPrompt,
+      prompt: shouldInject ? `${access.prompt}${handoffPrompt}` : handoffPrompt,
       contextEnv: access.env,
+      soulContext,
+      includeResponseContract: shouldInject,
     };
   }
 
@@ -1382,7 +1388,7 @@ export class BridgeEngine {
     const cwd = getCliWorkingDir(executionKind);
     const startedAtMs = Date.now();
     if (executionKind === "antigravity") setAntigravityModel(model);
-    const promptForCli = await this._buildPromptForCli(chatKey, prompt, sessionId, laneHandle);
+    const promptForCli = await this._buildPromptForCli(chatKey, prompt, sessionId, laneHandle, model);
     const invocation = buildCliInvocation({
       bot: executionKind,
       command: this.opts.botConfig.command,
@@ -1393,7 +1399,8 @@ export class BridgeEngine {
       executionMode: this.opts.executionMode,
       outputFormat: executionKind === "antigravity" ? undefined : "json",
       logFile,
-      soulContext: this.opts.soulContext,
+      soulContext: promptForCli.soulContext,
+      includeResponseContract: promptForCli.includeResponseContract,
       attachments,
       outputDir: outDir,
     });
@@ -1509,7 +1516,7 @@ export class BridgeEngine {
     const cwd = getCliWorkingDir(executionKind);
     const startedAtMs = Date.now();
     if (executionKind === "antigravity") setAntigravityModel(model);
-    const promptForCli = await this._buildPromptForCli(chatKey, prompt, sessionId, laneHandle);
+    const promptForCli = await this._buildPromptForCli(chatKey, prompt, sessionId, laneHandle, model);
     const invocation = buildCliInvocation({
       bot: executionKind,
       command: this.opts.botConfig.command,
@@ -1521,7 +1528,8 @@ export class BridgeEngine {
       executionMode: this.opts.executionMode,
       outputFormat: executionKind === "antigravity" ? undefined : "json",
       logFile,
-      soulContext: this.opts.soulContext,
+      soulContext: promptForCli.soulContext,
+      includeResponseContract: promptForCli.includeResponseContract,
       attachments,
       outputDir: outDir,
     });
@@ -1618,6 +1626,8 @@ export class BridgeEngine {
     eventContext: CliOptions["eventContext"] = undefined as any,
     runId: string | null = null,
     collect: ((e: BridgeEvent) => void) | null = null,
+    soulContext: string | null = null,
+    includeResponseContract = true,
   ): Promise<StagedCliResult> {
     const executionKind = this._executionKind();
     const model = isAgentKind(this.kind)
@@ -1637,7 +1647,8 @@ export class BridgeEngine {
       executionMode: this.opts.executionMode,
       outputFormat: undefined,
       logFile: retryLogFile,
-      soulContext: this.opts.soulContext,
+      soulContext,
+      includeResponseContract,
       outputDir: outDir,
       attachments,
     });
@@ -1708,13 +1719,16 @@ export class BridgeEngine {
   ): Promise<StagedCliResult> {
     if (isAgentKind(this.kind)) this._runWithFence(laneHandle, () => db_setSession(this.db, chatKey, this.kind as BotKind, null));
     // Fresh-session retry: sessionId is null, so this always injects under handoff_once too.
-    const retryPrompt = this._buildRecentContextPrompt(chatKey, prompt, null);
+    const model = isAgentKind(this.kind)
+      ? (this.db.getSetting(this.kind) || this.opts.botConfig.modelPreference[0] || null)
+      : (this.opts.botConfig.modelPreference[0] || null);
+    const retryPromptForCli = await this._buildPromptForCli(chatKey, prompt, null, laneHandle, model);
     const maxFreshAttempts = 2;
     let retryResult: StagedCliResult | null = null;
     for (let attempt = 1; attempt <= maxFreshAttempts; attempt++) {
       try {
         retryResult = await this._runFreshAntigravityRetry(
-          retryPrompt,
+          retryPromptForCli.prompt,
           chatId,
           chatKey,
           outDir,
@@ -1725,6 +1739,8 @@ export class BridgeEngine {
           eventContext,
           runId,
           collect,
+          retryPromptForCli.soulContext,
+          retryPromptForCli.includeResponseContract,
         );
         break;
       } catch (retryError) {
@@ -1773,19 +1789,21 @@ export class BridgeEngine {
       fallbackLogFile = join(tmpdir(), `antigravity-${randomUUID()}.log`);
     }
     if (executionKind === "antigravity") setAntigravityModel(fallbackModel);
+    const fallbackPromptForCli = await this._buildPromptForCli(chatKey, prompt, null, laneHandle, fallbackModel);
     const fallbackInvocation = buildCliInvocation({
       bot: executionKind,
       command: this.opts.botConfig.command,
       model: fallbackModel,
       effort: resolveEffort(executionKind, this.db),
       // Fresh-session fallback retry: sessionId is null, so this always injects under handoff_once too.
-      prompt: this._buildRecentContextPrompt(chatKey, prompt, null),
+      prompt: fallbackPromptForCli.prompt,
       sessionId: null,
       sessionMode: "resume",
       executionMode: this.opts.executionMode,
       outputFormat: executionKind === "antigravity" ? undefined : "json",
       logFile: fallbackLogFile,
-      soulContext: this.opts.soulContext,
+      soulContext: fallbackPromptForCli.soulContext,
+      includeResponseContract: fallbackPromptForCli.includeResponseContract,
       outputDir: outDir,
       attachments,
     });
@@ -1799,6 +1817,7 @@ export class BridgeEngine {
             onProgress,
             chatId: this._executionLane(chatKey),
             stdin: fallbackInvocation.stdin,
+            contextEnv: fallbackPromptForCli.contextEnv,
             eventContext,
             onEvent: collect ?? undefined,
           })).text
@@ -1806,6 +1825,7 @@ export class BridgeEngine {
             ...buildExecutionOptions(executionKind),
             chatId: this._executionLane(chatKey),
             stdin: fallbackInvocation.stdin,
+            contextEnv: fallbackPromptForCli.contextEnv,
             eventContext,
             onEvent: collect ?? undefined,
           });

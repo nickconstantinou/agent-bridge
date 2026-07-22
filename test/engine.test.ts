@@ -116,11 +116,12 @@ describe("BridgeEngine", () => {
         {
           surfaceIdentity: "test",
           kind: "claude",
-          botConfig: { command: "claude", modelPreference: [] },
+          botConfig: { command: "claude", modelPreference: ["claude-primary"] },
           allowedUserIds: new Set(["42"]),
           executionMode: "safe",
           asyncEnabled: false,
           pollIntervalMs: 1000,
+          soulContext: "Identity: Weaver",
         },
         db,
         client,
@@ -144,11 +145,12 @@ describe("BridgeEngine", () => {
         {
           surfaceIdentity: "test",
           kind: "claude",
-          botConfig: { command: "claude", modelPreference: [] },
+          botConfig: { command: "claude", modelPreference: ["claude-primary"] },
           allowedUserIds: new Set(["42"]),
           executionMode: "safe",
           asyncEnabled: false,
           pollIntervalMs: 1000,
+          soulContext: "Identity: Weaver",
         },
         db,
         client,
@@ -226,6 +228,46 @@ describe("BridgeEngine", () => {
       await engine.handleMessages([makeMessage("hello")]);
 
       expect(capturedPrompt).toContain(MARKER);
+      expect(capturedPrompt).not.toContain("Active model:");
+    });
+
+    it("injects Soul and the active model once on handoff, then sends only the request on continuation", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
+      const { BridgeEngine } = await import("../src/engine.js");
+      db.addConvTurn("100", "user", MARKER);
+
+      const capturedPrompts: string[] = [];
+      const runCli = vi.fn().mockImplementation(async (_cmd: string, args: string[]) => {
+        capturedPrompts.push(args[args.length - 1]);
+        return JSON.stringify({ result: "ok", session_id: "handoff-session" });
+      });
+      const engine = new BridgeEngine(
+        {
+          surfaceIdentity: "test",
+          kind: "claude",
+          botConfig: { command: "claude", modelPreference: ["claude-primary"] },
+          allowedUserIds: new Set(["42"]),
+          executionMode: "safe",
+          asyncEnabled: false,
+          pollIntervalMs: 1000,
+          soulContext: "Identity: Weaver",
+        },
+        db,
+        makeMockClient(),
+        { runCli },
+      );
+
+      await engine.handleMessages([makeMessage("first handoff request")]);
+      await engine.handleMessages([makeMessage("continuation request")]);
+
+      expect(capturedPrompts[0]).toContain("Soul contract:");
+      expect(capturedPrompts[0]).toContain("Active model: claude-primary");
+      expect(capturedPrompts[0]).toContain(MARKER);
+      expect(capturedPrompts[1]).not.toContain("Soul contract:");
+      expect(capturedPrompts[1]).not.toContain("Active model:");
+      expect(capturedPrompts[1]).not.toContain("Response contract:");
+      expect(capturedPrompts[1]).not.toContain(MARKER);
+      expect(capturedPrompts[1]).toContain("continuation request");
     });
 
     it("handoff_once suppresses context on a second same-provider turn once a native session exists (sync path)", async () => {
@@ -1450,11 +1492,12 @@ describe("BridgeEngine", () => {
         {
           surfaceIdentity: "test",
           kind: "claude",
-          botConfig: { command: "claude", modelPreference: [] },
+          botConfig: { command: "claude", modelPreference: ["claude-primary"] },
           allowedUserIds: new Set(["42"]),
           executionMode: "safe",
           asyncEnabled: false,
           pollIntervalMs: 1000,
+          soulContext: "Identity: Weaver",
         },
         db,
         client,
@@ -1498,11 +1541,12 @@ describe("BridgeEngine", () => {
         {
           surfaceIdentity: "test",
           kind: "claude",
-          botConfig: { command: "claude", modelPreference: [] },
+          botConfig: { command: "claude", modelPreference: ["claude-primary"] },
           allowedUserIds: new Set(["42"]),
           executionMode: "safe",
           asyncEnabled: false,
           pollIntervalMs: 1000,
+          soulContext: "Identity: Weaver",
         },
         db,
         client,
@@ -1522,14 +1566,18 @@ describe("BridgeEngine", () => {
       // condition that forces injection, independent of any handoff mark.
       expect(promptArg).toContain("[Context from previous conversation]");
       expect(promptArg).toContain("help me");
+      expect(promptArg.match(/Soul contract:/g) ?? []).toHaveLength(1);
+      expect(promptArg.match(/Active model: claude-primary/g) ?? []).toHaveLength(1);
     });
     it("falls back to the next model in preference list and retries with context and null sessionId on capacity error", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
       const { BridgeEngine } = await import("../src/engine.js");
 
       const runCli = vi.fn()
         .mockResolvedValueOnce("Hello there! I am Claude Sonnet.")
         .mockRejectedValueOnce(new Error("CLI exited with code 1: You've hit your session limit · resets 1pm (Europe/London)"))
-        .mockResolvedValueOnce("Successful fallback model retry result");
+        .mockResolvedValueOnce(JSON.stringify({ result: "Successful fallback model retry result", session_id: "fallback-session" }))
+        .mockResolvedValueOnce("Native continuation result");
 
       const client = makeMockClient();
 
@@ -1545,6 +1593,7 @@ describe("BridgeEngine", () => {
           executionMode: "safe",
           asyncEnabled: false,
           pollIntervalMs: 1000,
+          soulContext: "Identity: Weaver",
         },
         db,
         client,
@@ -1570,6 +1619,16 @@ describe("BridgeEngine", () => {
       expect(promptArg).toContain("User: hello");
       expect(promptArg).toContain("Assistant: Hello there! I am Claude Sonnet.");
       expect(promptArg).toContain("do something");
+      expect(promptArg.match(/Soul contract:/g) ?? []).toHaveLength(1);
+      expect(promptArg.match(/Active model: claude-opus-4-7/g) ?? []).toHaveLength(1);
+
+      await engine.handleMessages([makeMessage("continue after fallback")]);
+      const continuationArgs = runCli.mock.calls[3][1];
+      const continuationPrompt = continuationArgs[continuationArgs.length - 1];
+      expect(continuationPrompt).not.toContain("Soul contract:");
+      expect(continuationPrompt).not.toContain("Active model:");
+      expect(continuationPrompt).not.toContain("[Context from previous conversation]");
+      expect(continuationPrompt).toContain("continue after fallback");
     });
   });
 
@@ -2827,6 +2886,7 @@ describe("BridgeEngine", () => {
     });
 
     it("suppresses context injection on the prompt following a reset", async () => {
+      process.env.BRIDGE_CONTEXT_INJECTION_POLICY = "handoff_once";
       const { BridgeEngine } = await import("../src/engine.js");
       const client = makeMockClient();
 
@@ -2843,11 +2903,12 @@ describe("BridgeEngine", () => {
         {
           surfaceIdentity: "test",
           kind: "claude",
-          botConfig: { command: "claude", modelPreference: [] },
+          botConfig: { command: "claude", modelPreference: ["claude-primary"] },
           allowedUserIds: new Set(["42"]),
           executionMode: "safe",
           asyncEnabled: false,
           pollIntervalMs: 1000,
+          soulContext: "Identity: Weaver",
         },
         db,
         client,
@@ -2859,6 +2920,8 @@ describe("BridgeEngine", () => {
 
       // Summary must NOT be injected into the first prompt after reset
       expect(capturedPrompt).not.toContain("Current objective:");
+      expect(capturedPrompt).not.toContain("Soul contract:");
+      expect(capturedPrompt).not.toContain("Active model:");
       expect(capturedPrompt).toContain("hello after reset");
     });
   });

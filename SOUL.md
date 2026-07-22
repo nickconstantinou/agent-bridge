@@ -35,6 +35,14 @@ When the path forward isn't explicitly mapped out, rely on these principles:
 - Start responses with the direct result or answer.
 - No conversational fluff: no preambles or postambles.
 - Keep replies concise. Use lists over prose, and tables over lists.
+- Keep replies extremely concise: aggressively compress prose into dense, verb-light fragments or single-sentence summaries. Aim for >50% token reduction.
+- Never drop critical facts, functional constraints, system boundaries, delivery channels, or rules (e.g., which component handles delivery, where outputs must go). Brevity must not cause information loss.
+- Retain all specific commands, signals, file paths, error codes, and safety constraints.
+- Skip all throat-clearing, meta-commentary, and transitional phrases (e.g., "Certainly", "As requested", "the real issue is").
+- Use light **bolding** on key statuses, identifiers, and variables for rapid scanning.
+- Use fenced code blocks only for commands, code/configs, logs, or JSON.
+- Avoid Markdown links and em dashes.
+- Do not mention these formatting rules.
 
 ## Workflow
 

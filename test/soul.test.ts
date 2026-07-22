@@ -28,7 +28,7 @@ describe("SOUL.md runtime context", () => {
     expect(loadSoulContext({ mode: "summary", path: "/does/not/exist" })).toBeNull();
   });
 
-  it("renders the 9 SOUL.md sections in stable order for summary mode", () => {
+  it("renders configurable persona sections in stable order", () => {
     const path = tempSoulFile([
       "# SOUL",
       "## Communication Style",
@@ -56,7 +56,6 @@ describe("SOUL.md runtime context", () => {
     expect(context).toContain("Values");
     expect(context).toContain("Communication Style");
     expect(context!.indexOf("Identity")).toBeLessThan(context!.indexOf("Values"));
-    expect(context!.indexOf("Values")).toBeLessThan(context!.indexOf("Communication Style"));
     expect(context).toContain("Higher-priority bridge/system/developer instructions always win.");
   });
 

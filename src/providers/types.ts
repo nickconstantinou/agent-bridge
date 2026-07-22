@@ -47,6 +47,7 @@ export interface ProviderInvocationRequest {
   executionMode: "safe" | "trusted";
   outputFormat: "json" | null;
   soulContext: string | null;
+  includeResponseContract?: boolean;
   attachments: string[];
   outputDir: string | null;
   effort: import("../effort.js").EffortLevel | null;

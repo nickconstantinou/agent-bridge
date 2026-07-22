@@ -29,6 +29,7 @@ export function buildInvocation({
   model,
   executionMode,
   soulContext,
+  includeResponseContract,
   attachments,
   outputDir,
   effort,
@@ -51,7 +52,7 @@ export function buildInvocation({
     ? appendAttachmentAnnotations(prompt, attachments)
     : prompt;
   const finalPrompt = appendOutputDirInstruction(
-    wrapPromptContext(annotatedPrompt, soulContext),
+    wrapPromptContext(annotatedPrompt, soulContext, includeResponseContract),
     outputDir,
   );
   args.push(finalPrompt);

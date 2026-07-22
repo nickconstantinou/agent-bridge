@@ -661,18 +661,16 @@ describe("buildCliInvocation — attachment injection", () => {
     }
   });
 
-  it("wraps prompts with optimized Telegram response style constraints", () => {
+  it("wraps prompts with the minimum response contract when Soul is absent", () => {
     const { args } = buildCliInvocation({
       ...base,
       bot: "codex",
       command: "codex",
     });
     const prompt = args[args.length - 1];
-    expect(prompt).toContain("Telegram response style:");
-    expect(prompt).toContain("Never drop critical facts");
-    expect(prompt).toContain("Retain all specific commands, signals, file paths, error codes");
-    expect(prompt).toContain("Skip all throat-clearing");
-    expect(prompt).toContain("Avoid Markdown links and em dashes");
+    expect(prompt).toContain("Response contract:");
+    expect(prompt).toContain("Preserve critical facts");
+    expect(prompt).not.toContain("Keep replies extremely concise");
   });
 });
 
@@ -946,7 +944,7 @@ describe("wrapAntigravityPrompt — liveness and narration", () => {
   it("contains a JSON output instruction instead of STATUS narration", () => {
     const prompt = getAgyPrompt();
     expect(prompt).toContain('"response"');
-    expect(prompt).toContain('"reasoning"');
+    expect(prompt).not.toContain('"reasoning"');
     expect(prompt).not.toContain("STATUS:");
   });
 });

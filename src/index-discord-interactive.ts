@@ -21,7 +21,7 @@
 import dotenv from "dotenv";
 import { getBridgeProjectDir } from "./bridge.js";
 import { openProductionDb } from "./db.js";
-import { shutdownCliProcesses } from "./cliSupervisor.js";
+import { isExecutionActive, shutdownCliProcesses } from "./cliSupervisor.js";
 import { loadBotsConfig, resolveBusyMessageMode, validateBusyMessageModeEnv } from "./config.js";
 import { DiscordClient, type DiscordUpdate } from "./discord.js";
 import { BridgeEngine } from "./engine.js";
@@ -178,12 +178,16 @@ const client = new DiscordClient({
     registerCommands().catch((err) =>
       console.warn("[discord-interactive] command registration failed", err),
     );
-    db.cleanupOrphanedRuns(async (run) => {
-      await client.sendMessage({
-        chat_id: run.chat_id,
-        text: "⚠️ **Agent bridge restarted.** The active task was interrupted. You can reply with `provide update` or `continue` to resume.",
-      }).catch((err) => console.error(`Failed to send restart notification to Discord channel ${run.chat_id}`, err));
-    });
+    db.reconcileOrphanedRuns({
+      minAgeMs: Number(process.env.ORPHAN_RECONCILIATION_MIN_AGE_MS || 10 * 60 * 1000),
+      processState: (run) => isExecutionActive(run.run_id) ? "live" : "absent",
+      onReconciled: async (run) => {
+        await client.sendMessage({
+          chat_id: run.chat_id,
+          text: "⚠️ **Agent bridge restarted.** The active task was interrupted. You can reply with `provide update` or `continue` to resume.",
+        }).catch((err) => console.error(`Failed to send restart notification to Discord channel ${run.chat_id}`, err));
+      },
+    }).catch((err) => console.error("[discord-interactive] orphan reconciliation failed", err));
   },
   onError: (err) => console.error("[discord-interactive] gateway error", err),
 });

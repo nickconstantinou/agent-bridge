@@ -191,6 +191,14 @@ export function completeExecutionLifecycle(chatId: number | string, token: strin
   if (!active.child) activeExecutions.delete(chatId);
 }
 
+/** Returns whether this process still owns a live execution for a durable run ID. */
+export function isExecutionActive(runId: string): boolean {
+  for (const active of activeExecutions.values()) {
+    if (active.lifecycleHandle?.runId === runId) return true;
+  }
+  return false;
+}
+
 export function abortCliProcess(chatId: number | string): boolean {
   const child = activeExecutions.get(chatId)?.child;
   if (!child) return false;

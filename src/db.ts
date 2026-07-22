@@ -14,7 +14,7 @@ import type { RoleAssignmentConfig } from "./agentRoles.js";
 import { LockRepository, type ExecutionLaneHandle } from "./repositories/lockRepository.js";
 export type { ExecutionLaneHandle } from "./repositories/lockRepository.js";
 import { MemoryRepository } from "./repositories/memoryRepository.js";
-import { RunRepository } from "./repositories/runRepository.js";
+import { RunRepository, type RunningRun } from "./repositories/runRepository.js";
 import { SessionRepository } from "./repositories/sessionRepository.js";
 import { SettingsRepository } from "./repositories/settingsRepository.js";
 import { WorkQueueRepository } from "./repositories/workQueueRepository.js";
@@ -29,6 +29,15 @@ import {
   type RoleAssignmentRevisionRecord,
 } from "./repositories/roleAssignmentRepository.js";
 export type { RoleAssignmentRevisionRecord } from "./repositories/roleAssignmentRepository.js";
+
+type OrphanProcessState = "live" | "absent" | "ambiguous";
+
+export interface OrphanReconciliationOptions {
+  nowMs?: number;
+  minAgeMs: number;
+  processState: (run: RunningRun) => OrphanProcessState;
+  onReconciled?: (run: RunningRun & { ended_at: string }) => void | Promise<void>;
+}
 import { ConversationRepository, DEFAULT_CONTEXT_MAX_CHARS } from "./repositories/conversationRepository.js";
 export { DEFAULT_CONTEXT_MAX_CHARS, DEFAULT_CONTEXT_RECENT_TURN_LIMIT } from "./repositories/conversationRepository.js";
 import { applyMigrations, CURRENT_SCHEMA_VERSION, MigrationRequiredError, UnsupportedSchemaVersionError } from "./db/schema.js";
@@ -615,8 +624,36 @@ export class BridgeDb {
     ).get(workItemId) as WorkItemPlan | undefined) ?? null;
   }
 
-  cleanupOrphanedRuns(onOrphan: (run: { run_id: string; chat_id: string; bot: string }) => void | Promise<void>): void {
-    this.runs.cleanupOrphanedRuns(onOrphan);
+  async reconcileOrphanedRuns(options: OrphanReconciliationOptions): Promise<Array<RunningRun & { ended_at: string }>> {
+    if (!Number.isFinite(options.minAgeMs) || options.minAgeMs < 0) {
+      throw new Error("minAgeMs must be a finite non-negative number");
+    }
+    const nowMs = options.nowMs ?? Date.now();
+    const reconciled: Array<RunningRun & { ended_at: string }> = [];
+    for (const run of this.runs.listRunningRuns()) {
+      const startedMs = Date.parse(run.started_at);
+      if (!Number.isFinite(startedMs) || nowMs - startedMs < options.minAgeMs) continue;
+      const processState = options.processState(run);
+      if (processState !== "absent" || this.locks.hasRunLock(run.run_id)) continue;
+      const endedAt = new Date(nowMs).toISOString();
+      const evidence = {
+        reason: "Process interrupted by bridge restart",
+        reconciledAt: endedAt,
+        processState,
+        lockState: "absent" as const,
+        cutoffMs: options.minAgeMs,
+      };
+      const transitioned = this.runInTransaction(() => this.runs.reconcileOrphanedRun(run.run_id, endedAt, evidence));
+      if (!transitioned) continue;
+      const result = { ...run, ended_at: endedAt };
+      reconciled.push(result);
+      try {
+        await options.onReconciled?.(result);
+      } catch (error) {
+        console.error(`Failed to handle reconciled run ${run.run_id}`, error);
+      }
+    }
+    return reconciled;
   }
 
   // ── Conversation turns ──────────────────────────────────────────────────

@@ -12,8 +12,28 @@ describe("systemd templates", () => {
     expect(antigravity).toContain("User=BRIDGE_USER");
     expect(codex).toContain('export PATH="$(dirname "${NODE_BIN:?}"):$PATH"');
     expect(antigravity).toContain('export PATH="$(dirname "${NODE_BIN:?}"):$PATH"');
-    expect(codex).toContain('cd "${BRIDGE_PROJECT_DIR:?}" && exec "${NODE_BIN:?}" ./node_modules/tsx/dist/cli.mjs src/index.ts');
-    expect(antigravity).toContain('cd "${BRIDGE_PROJECT_DIR:?}" && exec "${NODE_BIN:?}" ./node_modules/tsx/dist/cli.mjs src/index.ts');
+    expect(codex).toContain('cd "${BRIDGE_CURRENT_RELEASE_DIR:?}"');
+    expect(antigravity).toContain('cd "${BRIDGE_CURRENT_RELEASE_DIR:?}"');
+  });
+
+  it("requires every service to resolve code through the controlled current pointer", () => {
+    const units = [
+      "agent-bridge-antigravity.service",
+      "agent-bridge-claude.service",
+      "agent-bridge-codex.service",
+      "agent-bridge-discord-interactive.service",
+      "agent-bridge-health.service",
+      "agent-bridge-interactive.service",
+      "agent-bridge-worker-bot.service",
+    ];
+
+    for (const unit of units) {
+      const content = readFileSync(new URL(`../systemd/${unit}`, import.meta.url), "utf8");
+      expect(content, unit).toContain("EnvironmentFile=/etc/default/agent-bridge-release");
+      expect(content, unit).toContain('[[ -L "${BRIDGE_CURRENT_RELEASE_DIR:?}" ]]');
+      expect(content, unit).toContain('export BRIDGE_PROJECT_DIR="${BRIDGE_CURRENT_RELEASE_DIR:?}"');
+      expect(content, unit).toContain('cd "${BRIDGE_CURRENT_RELEASE_DIR:?}"');
+    }
   });
 
   it("all service templates load shared env file before bot-specific", () => {
@@ -66,6 +86,16 @@ describe("systemd templates", () => {
     expect(install).toContain("NODE_MIN_MAJOR=24");
     expect(install).toContain("NODE_BIN=${NODE_BIN}");
     expect(install).toContain('"${NODE_BIN}" ./node_modules/tsx/dist/cli.mjs');
+  });
+
+  it("installs an explicit active-release pointer configuration", () => {
+    const install = readFileSync(new URL("../scripts/install.sh", import.meta.url), "utf8");
+    const example = readFileSync(new URL("../systemd/agent-bridge-release.conf.example", import.meta.url), "utf8");
+
+    expect(install).toContain("BRIDGE_CURRENT_RELEASE_DIR");
+    expect(install).toContain('local dest="${DEFAULTS_DIR}/agent-bridge-release"');
+    expect(example).toContain("BRIDGE_CURRENT_RELEASE_DIR=/opt/agent-bridge/releases/current");
+    expect(example).not.toContain("/agent-bridge/.git");
   });
 
   it("install script does not write retired Telegram Markdown IR defaults", () => {

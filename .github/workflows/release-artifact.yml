@@ -1,0 +1,86 @@
+name: Release Artifact
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-artifact-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build immutable release artifact
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the exact event head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify the exact event head
+        run: test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Architecture lint
+        run: bash scripts/arch-lint.sh src
+
+      - name: Compile runtime
+        run: npm run build
+
+      - name: Retain production dependencies only
+        run: npm prune --omit=dev
+
+      - name: Assemble and hash release artifact
+        id: artifact
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          commit="$(git rev-parse HEAD)"
+          tree="$(git rev-parse HEAD^{tree})"
+          root="$RUNNER_TEMP/agent-bridge-release"
+          archive="$RUNNER_TEMP/agent-bridge-${commit}.tar.gz"
+          mkdir -p "$root"
+          cp -a dist package.json package-lock.json node_modules "$root/"
+          node scripts/releaseManifest.mjs \
+            --root "$root" \
+            --output "$root/manifest.json" \
+            --commit "$commit" \
+            --tree "$tree" \
+            --node-version "$(node --version)" \
+            --platform "$(node -p 'process.platform')" \
+            --arch "$(node -p 'process.arch')"
+          tar --create --gzip --file "$archive" \
+            --directory "$root" --sort=name --owner=0 --group=0 --numeric-owner .
+          sha256sum "$archive" | tee "$archive.sha256"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Upload non-production release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-bridge-release-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            ${{ steps.artifact.outputs.archive }}
+            ${{ steps.artifact.outputs.archive }}.sha256

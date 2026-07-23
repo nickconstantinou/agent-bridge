@@ -38,6 +38,7 @@ export function buildAdvisorContext(db: BridgeDb, input: {
   const envelope = evidence?.envelope ? reconcileAdvisorEvidence(evidence.envelope) : undefined;
   return boundedParts([
     `Task: ${input.task}`,
+    ...(envelope ? [`Freshness-aware evidence envelope:\n${formatAdvisorEvidenceEnvelope(envelope)}`] : []),
     ...(summary ? [`Conversation summary:\n${summary.summary_md}`] : []),
     ...[...turns].reverse().map((turn) => `${turn.role}: ${turn.text}`),
     ...(evidence?.acceptanceCriteria ? [`Acceptance criteria:\n${evidence.acceptanceCriteria}`] : []),
@@ -47,7 +48,6 @@ export function buildAdvisorContext(db: BridgeDb, input: {
     ...(evidence?.testOutput ? [`Test output:\n${evidence.testOutput}`] : []),
     ...(evidence?.constraints?.length ? [`Constraints:\n${evidence.constraints.join("\n")}`] : []),
     ...(evidence?.references?.length ? [`References:\n${evidence.references.join("\n")}`] : []),
-    ...(envelope ? [`Freshness-aware evidence envelope:\n${formatAdvisorEvidenceEnvelope(envelope)}`] : []),
   ], input.maxChars);
 }
 

@@ -41,6 +41,16 @@ describe("advisor evidence envelope", () => {
     expect(constrainAdvisorConfidence("medium", { ...envelope, unavailableEvidence: [], staleEvidence: [], conflicts: [] })).toBe("medium");
   });
 
+  it("does not allow inferred load-bearing state to claim high confidence", () => {
+    const envelope = reconcileAdvisorEvidence({
+      ...base,
+      currentState: [{ id: "inferred", claim: "The host is healthy", source: "operator", observedAt: "2026-07-20T10:00:00Z", authority: "inferred" }],
+      unavailableEvidence: [],
+      staleEvidence: [],
+    });
+    expect(constrainAdvisorConfidence("high", envelope)).toBe("medium");
+  });
+
   it("rejects malformed evidence timestamps and oversized claims", () => {
     expect(() => reconcileAdvisorEvidence({
       ...base,

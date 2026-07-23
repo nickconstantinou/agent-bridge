@@ -45,6 +45,7 @@ interface AdvisorEvidenceEnvelope extends AdvisorEvidenceEnvelopeInput {
   currentState: AdvisorEvidenceItemInput[];
   supersededFindings: AdvisorSupersededFinding[];
   staleEvidence: string[];
+  inferredEvidence: string[];
   conflicts: string[];
   evidenceIds: string[];
 }
@@ -149,6 +150,7 @@ export function reconcileAdvisorEvidence(input: AdvisorEvidenceEnvelopeInput): A
       .filter((other) => other.id !== state.id && other.source === state.source && other.authority === "deterministic")
       .filter((other) => Date.parse(other.observedAt) >= Date.parse(state.observedAt))
       .map((other) => `${state.id} conflicts with newer deterministic evidence ${other.id}`));
+  const inferredEvidence = currentState.filter((state) => state.authority === "inferred").map((state) => state.id);
 
   return {
     assessmentGoal,
@@ -160,6 +162,7 @@ export function reconcileAdvisorEvidence(input: AdvisorEvidenceEnvelopeInput): A
     unresolvedRisks,
     unavailableEvidence,
     staleEvidence,
+    inferredEvidence,
     explicitQuestion,
     conflicts,
     evidenceIds: [...currentState, ...(latestBlocker ? [latestBlocker] : []), ...completedActions.map((action) => ({ id: action.evidenceId }))]
@@ -168,8 +171,8 @@ export function reconcileAdvisorEvidence(input: AdvisorEvidenceEnvelopeInput): A
   };
 }
 
-export function constrainAdvisorConfidence(confidence: AdvisorConfidence, envelope: Pick<AdvisorEvidenceEnvelope, "unavailableEvidence" | "staleEvidence" | "conflicts">): AdvisorConfidence {
-  if (confidence === "high" && (envelope.unavailableEvidence.length > 0 || envelope.staleEvidence.length > 0 || envelope.conflicts.length > 0)) return "medium";
+export function constrainAdvisorConfidence(confidence: AdvisorConfidence, envelope: Pick<AdvisorEvidenceEnvelope, "unavailableEvidence" | "staleEvidence" | "inferredEvidence" | "conflicts">): AdvisorConfidence {
+  if (confidence === "high" && (envelope.unavailableEvidence.length > 0 || envelope.staleEvidence.length > 0 || envelope.inferredEvidence.length > 0 || envelope.conflicts.length > 0)) return "medium";
   return confidence;
 }
 
@@ -184,6 +187,7 @@ export function formatAdvisorEvidenceEnvelope(envelope: AdvisorEvidenceEnvelope)
     unresolved_risks: envelope.unresolvedRisks,
     unavailable_evidence: envelope.unavailableEvidence,
     stale_evidence: envelope.staleEvidence,
+    inferred_evidence: envelope.inferredEvidence,
     explicit_question: envelope.explicitQuestion,
     conflicts: envelope.conflicts,
   });

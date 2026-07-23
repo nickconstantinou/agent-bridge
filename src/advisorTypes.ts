@@ -1,4 +1,5 @@
 import type { ProviderId } from "./providers/types.js";
+import type { AdvisorEvidenceEnvelopeInput } from "./advisorEvidenceEnvelope.js";
 
 export type AdvisorPolicyMode = "manual" | "suggest" | "auto";
 export type AdvisorRequestMode = "plan" | "review" | "debug" | "risk" | "decision" | "pr_ready";
@@ -19,6 +20,8 @@ export interface AdvisorEvidenceInput {
   acceptanceCriteria?: string;
   plan?: string;
   attemptSummary?: string;
+  /** Bridge-owned freshness, authority and supersession metadata. */
+  envelope?: AdvisorEvidenceEnvelopeInput;
 }
 export interface AdvisorRequest {
   requestId: string; scopeKey: string; turnKey?: string; taskKey?: string;

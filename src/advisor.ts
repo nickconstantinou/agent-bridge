@@ -16,6 +16,7 @@ import {
 } from "./advisorPrompt.js";
 import { parseAdvisorEvidenceToolRequest, type AdvisorEvidenceToolBroker } from "./advisorEvidenceTools.js";
 import type { AdvisorConfig, AdvisorRequest, AdvisorResult } from "./advisorTypes.js";
+import { constrainAdvisorConfidence, reconcileAdvisorEvidence } from "./advisorEvidenceEnvelope.js";
 
 type RunCli = (command: string, args: string[], cwd: string, options: Record<string, unknown>) => Promise<string>;
 const botKindFor = (provider: ProviderId): BotKind => provider === "agy" ? "antigravity" : provider;
@@ -185,8 +186,11 @@ export async function executeAdvisorRequest(deps: AdvisorExecutionDeps): Promise
       context,
     });
     const completed = await executeAdvisorPrompt(deps, prompt, parseAdvisorOutput, 1);
-    db.completeAdvisorCall(request.requestId, completed.provider, completed.model, completed.value.confidence);
-    return { ...completed.value, provider: completed.provider, model: completed.model, requestId: request.requestId };
+    const confidence = request.evidence?.envelope
+      ? constrainAdvisorConfidence(completed.value.confidence, reconcileAdvisorEvidence(request.evidence.envelope))
+      : completed.value.confidence;
+    db.completeAdvisorCall(request.requestId, completed.provider, completed.model, confidence);
+    return { ...completed.value, confidence, provider: completed.provider, model: completed.model, requestId: request.requestId };
   } catch (error) {
     return failAdvisorRequest(deps, error);
   }
@@ -273,12 +277,13 @@ export async function executeAdvisorInvestigation(
       },
       selection.nextOrdinal,
     );
+    const envelope = request.evidence?.envelope ? reconcileAdvisorEvidence(request.evidence.envelope) : undefined;
     const hasLimitedEvidence = selection.value.missingEvidence.length > 0
       || completed.value.unresolvedConflicts.length > 0
       || toolResults.some((result) => result.status !== "ok" || result.truncated);
     const confidence = hasLimitedEvidence && completed.value.confidence === "high"
       ? "medium"
-      : completed.value.confidence;
+      : envelope ? constrainAdvisorConfidence(completed.value.confidence, envelope) : completed.value.confidence;
     db.completeAdvisorCall(request.requestId, completed.provider, completed.model, confidence);
     return {
       ...completed.value,

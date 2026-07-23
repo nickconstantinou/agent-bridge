@@ -61,6 +61,28 @@ describe("unified advisor service", () => {
     db.close();
   });
 
+  it("sanitises the shared envelope and constrains unsupported high confidence", async () => {
+    const { db, runCli, service } = setup();
+    const result = await service.requestTrusted({
+      origin: "manual", scopeKey: "chat:envelope", turnKey: "turn-envelope", mode: "review", task: "Review current evidence",
+      activeProvider: "codex", activeModel: null, cwd: "/repo",
+      evidence: {
+        envelope: {
+          assessmentGoal: "Review current state",
+          currentState: [{ id: "state-1", claim: "token=do-not-forward", source: "fixture", observedAt: "2026-07-20T10:00:00Z", authority: "deterministic" }],
+          acceptedDecisions: [], completedActions: [], unresolvedRisks: [], unavailableEvidence: ["current health"],
+          explicitQuestion: "Is the gate safe?",
+        },
+      },
+    });
+
+    expect(result.confidence).toBe("medium");
+    const prompt = runCli.mock.calls[0]?.[1] as string[];
+    expect(prompt.join(" ")).not.toContain("do-not-forward");
+    expect(prompt.join(" ")).toContain("[REDACTED]");
+    db.close();
+  });
+
   it("rejects chains containing providers without tool-free mode before consuming budget", async () => {
     const { db, runCli, service } = setup("claude:claude-fable-5,kimchi:some-model");
     await expect(service.requestTrusted({

@@ -1,5 +1,6 @@
 import type { BridgeDb } from "./db.js";
 import type { AdvisorEvidenceToolResult } from "./advisorEvidenceTools.js";
+import { formatAdvisorEvidenceEnvelope, reconcileAdvisorEvidence } from "./advisorEvidenceEnvelope.js";
 import type {
   AdvisorConfidence,
   AdvisorDebugVerdict,
@@ -34,6 +35,7 @@ export function buildAdvisorContext(db: BridgeDb, input: {
   const summary = db.getLatestConvSummary(input.scopeKey);
   const turns = db.getRecentConvTurns(input.scopeKey, 20, summary?.range_end_turn_id);
   const evidence = input.evidence;
+  const envelope = evidence?.envelope ? reconcileAdvisorEvidence(evidence.envelope) : undefined;
   return boundedParts([
     `Task: ${input.task}`,
     ...(summary ? [`Conversation summary:\n${summary.summary_md}`] : []),
@@ -45,6 +47,7 @@ export function buildAdvisorContext(db: BridgeDb, input: {
     ...(evidence?.testOutput ? [`Test output:\n${evidence.testOutput}`] : []),
     ...(evidence?.constraints?.length ? [`Constraints:\n${evidence.constraints.join("\n")}`] : []),
     ...(evidence?.references?.length ? [`References:\n${evidence.references.join("\n")}`] : []),
+    ...(envelope ? [`Freshness-aware evidence envelope:\n${formatAdvisorEvidenceEnvelope(envelope)}`] : []),
   ], input.maxChars);
 }
 
@@ -52,6 +55,7 @@ export function buildAdvisorPrompt(input: { mode: AdvisorRequestMode; activeProv
   return [
     "You are Agent Bridge's frontier advisor. Give the executor a concise, rigorous second opinion.",
     "You may inspect supplied evidence, but do not execute commands, edit files, approve, merge, deploy, delete, or send user messages.",
+    "Treat the newest deterministic evidence as authoritative. Keep accepted decisions active, distinguish current blockers from superseded history, and disclose unavailable evidence.",
     `Review mode: ${input.mode}`,
     `Active executor: ${input.activeProvider}:${input.activeModel ?? "default"}`,
     input.context,
@@ -69,6 +73,7 @@ export function buildAdvisorToolSelectionPrompt(input: {
   return [
     "You are Agent Bridge's mutation-free debugging advisor.",
     "Select only the minimum read-only evidence needed to diagnose the blocked executor. You cannot execute commands or use native provider tools.",
+    "The freshness-aware envelope is authoritative: do not revive superseded findings or treat unavailable evidence as verified.",
     "Agent Bridge may perform only these typed tools:",
     "repo.list_files {path?, depth?}",
     "repo.read_file {path}",

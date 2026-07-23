@@ -54,6 +54,37 @@ describe("advisor context and output", () => {
     db.close();
   });
 
+  it("renders the shared freshness envelope instead of presenting superseded state as current", () => {
+    const db = openDb(":memory:");
+    const context = buildAdvisorContext(db, {
+      scopeKey: "chat",
+      task: "Assess the current gate",
+      maxChars: 5_000,
+      evidence: {
+        envelope: {
+          assessmentGoal: "Assess rollout",
+          currentState: [
+            { id: "old", claim: "preflight passed", source: "preflight", observedAt: "2026-07-20T10:00:00Z", authority: "deterministic" },
+            { id: "new", claim: "legacy queue count is nonzero: 2", source: "preflight", observedAt: "2026-07-20T10:05:00Z", authority: "deterministic", supersedes: ["old"] },
+          ],
+          latestBlocker: { id: "blocker", claim: "legacy queue count is nonzero: 2", source: "preflight", observedAt: "2026-07-20T10:05:00Z", authority: "deterministic" },
+          acceptedDecisions: [{ decision: "Keep sudo membership as accepted risk", decidedAt: "2026-07-19T09:00:00Z" }],
+          completedActions: [],
+          unresolvedRisks: [],
+          unavailableEvidence: ["post-start health"],
+          explicitQuestion: "What is safe next?",
+        },
+      },
+    });
+
+    expect(context).toContain("Freshness-aware evidence envelope");
+    expect(context).toContain("legacy queue count is nonzero: 2");
+    expect(context).toMatch(/current_state.*legacy queue count is nonzero: 2/);
+    expect(context).toContain("accepted risk");
+    expect(context).toContain("post-start health");
+    db.close();
+  });
+
   it("accepts strict structured output and rejects malformed output", () => {
     expect(parseAdvisorOutput(JSON.stringify({
       advice_md: "Use the smaller change.",

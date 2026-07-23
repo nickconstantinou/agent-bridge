@@ -66,7 +66,7 @@ else
   test_mode=0
 fi
 
-for command_path in "$systemctl_cmd" "$runuser_cmd" "$journalctl_cmd" "$cp_cmd" "$restore_cmd" /usr/bin/find /usr/bin/flock /usr/bin/git /usr/bin/sha256sum /usr/bin/tee /usr/bin/realpath /usr/bin/stat /usr/bin/id /usr/bin/mv /usr/bin/rm /usr/bin/cut /usr/bin/sleep /usr/bin/mkdir /usr/bin/chmod /usr/bin/dirname /usr/bin/date /usr/bin/mktemp /usr/bin/ln /usr/bin/hostname /usr/bin/sed; do
+for command_path in "$systemctl_cmd" "$runuser_cmd" "$journalctl_cmd" "$cp_cmd" "$restore_cmd" /usr/bin/find /usr/bin/flock /usr/bin/git /usr/bin/sha256sum /usr/bin/tee /usr/bin/realpath /usr/bin/stat /usr/bin/id /usr/bin/mv /usr/bin/rm /usr/bin/cut /usr/bin/sleep /usr/bin/mkdir /usr/bin/chmod /usr/bin/dirname /usr/bin/date /usr/bin/mktemp /usr/bin/ln /usr/bin/hostname /usr/bin/sed /usr/bin/grep /usr/bin/readlink; do
   [[ -x "$command_path" ]] || die "required command is unavailable: $command_path"
 done
 [[ -f "$config_file" && ! -L "$config_file" ]] || die "missing fixed rollout config: $config_file"
@@ -77,6 +77,8 @@ if (( test_mode == 0 )); then
 fi
 
 project_dir=""
+release_root=""
+current_pointer=""
 runtime_user=""
 node_bin=""
 backup_dir=""
@@ -88,6 +90,8 @@ while IFS='=' read -r key value || [[ -n "$key$value" ]]; do
   [[ -n "$value" ]] || die "empty rollout config value for $key"
   case "$key" in
     project_dir) [[ -z "$project_dir" ]] || die "duplicate project_dir"; project_dir="$value" ;;
+    release_root) [[ -z "$release_root" ]] || die "duplicate release_root"; release_root="$value" ;;
+    current_pointer) [[ -z "$current_pointer" ]] || die "duplicate current_pointer"; current_pointer="$value" ;;
     runtime_user) [[ -z "$runtime_user" ]] || die "duplicate runtime_user"; runtime_user="$value" ;;
     node_bin) [[ -z "$node_bin" ]] || die "duplicate node_bin"; node_bin="$value" ;;
     backup_dir) [[ -z "$backup_dir" ]] || die "duplicate backup_dir"; backup_dir="$value" ;;
@@ -98,14 +102,23 @@ while IFS='=' read -r key value || [[ -n "$key$value" ]]; do
   esac
 done < "$config_file"
 
-for value_name in project_dir runtime_user node_bin backup_dir log_dir; do
+release_mode=0
+if [[ -n "$release_root" || -n "$current_pointer" ]]; then
+  [[ -n "$release_root" && -n "$current_pointer" ]] || die "release_root and current_pointer must be configured together"
+  release_mode=1
+fi
+for value_name in runtime_user node_bin backup_dir log_dir; do
   [[ -n "${!value_name}" ]] || die "missing rollout config key: $value_name"
 done
+if (( release_mode == 0 )); then
+  [[ -n "$project_dir" ]] || die "missing rollout config key: project_dir"
+  [[ "$project_dir" == /* ]] || die "configured project_dir must be absolute"
+  [[ -d "$project_dir" && ! -L "$project_dir" ]] || die "project directory is missing or symlinked"
+  [[ "$(/usr/bin/realpath -e "$project_dir")" == "$project_dir" ]] || die "project directory is not canonical"
+fi
 (( ${#units[@]} > 0 )) || die "fixed unit allowlist must select at least one service"
 (( ${#databases[@]} > 0 )) || die "fixed database allowlist must contain at least one entry"
-[[ "$project_dir" == /* && "$node_bin" == /* && "$backup_dir" == /* && "$log_dir" == /* ]] || die "configured paths must be absolute"
-[[ -d "$project_dir" && ! -L "$project_dir" ]] || die "project directory is missing or symlinked"
-[[ "$(/usr/bin/realpath -e "$project_dir")" == "$project_dir" ]] || die "project directory is not canonical"
+[[ "$node_bin" == /* && "$backup_dir" == /* && "$log_dir" == /* ]] || die "configured paths must be absolute"
 [[ -x "$node_bin" && ! -L "$node_bin" ]] || die "configured Node binary is missing or symlinked"
 [[ "$runtime_user" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]] || die "invalid runtime user"
 if (( test_mode == 0 )); then /usr/bin/id -u "$runtime_user" >/dev/null || die "runtime user does not exist"; fi
@@ -126,6 +139,27 @@ validate_secure_path() {
 }
 validate_secure_path "$backup_dir" directory
 validate_secure_path "$log_dir" directory
+
+if [[ -n "$release_root" || -n "$current_pointer" ]]; then
+  [[ "$release_root" == /* && "$current_pointer" == /* ]] || die "release paths must be absolute"
+  validate_secure_path "$release_root" directory
+  [[ "$current_pointer" == "$release_root/current" ]] || die "current pointer must be release_root/current"
+  [[ -L "$current_pointer" ]] || die "current pointer must be a valid symlink"
+  pointer_target="$(/usr/bin/readlink -- "$current_pointer")"
+  [[ "$pointer_target" == "$expected_commit" ]] || die "current pointer target does not match expected commit"
+  release_dir="$(/usr/bin/realpath -e "$current_pointer")"
+  [[ "$release_dir" == "$release_root/$expected_commit" && -d "$release_dir" && ! -L "$release_dir" ]] || die "current pointer resolves outside the expected release"
+  [[ -f "$release_dir/manifest.json" && ! -L "$release_dir/manifest.json" ]] || die "active release manifest is missing"
+  manifest_commit="$(/usr/bin/grep -m1 -oE '"commit"[[:space:]]*:[[:space:]]*"[0-9a-f]{40}"' "$release_dir/manifest.json" | /usr/bin/sed -E 's/.*"([0-9a-f]{40})"/\1/')"
+  [[ "$manifest_commit" == "$expected_commit" ]] || die "active release manifest commit does not match expected commit"
+  unsafe_release_entry="$(/usr/bin/find "$release_dir" \( -type f -o -type d \) -perm /022 -print -quit)"
+  [[ -z "$unsafe_release_entry" ]] || die "active release contains a group/world-writable entry: $unsafe_release_entry"
+  unsafe_release_owner="$(/usr/bin/find "$release_dir" \( -type f -o -type d \) ! -uid "$secure_owner_uid" -print -quit)"
+  [[ -z "$unsafe_release_owner" ]] || die "active release contains an entry with unsafe ownership: $unsafe_release_owner"
+  [[ "$(/usr/bin/stat -c %u "$current_pointer")" == "$secure_owner_uid" ]] || die "current pointer has unsafe ownership"
+  project_dir="$release_dir"
+  release_mode=1
+fi
 
 declare -A selected_units=()
 for unit in "${units[@]}"; do
@@ -196,6 +230,14 @@ git_check() {
   actual_commit="$(run_as_runtime /usr/bin/git -C "$project_dir" rev-parse HEAD)"
   [[ "$actual_commit" == "$expected_commit" ]] || die "expected commit $expected_commit but found $actual_commit"
   [[ -z "$(run_as_runtime /usr/bin/git -C "$project_dir" status --porcelain --untracked-files=normal)" ]] || die "project must have a clean working tree"
+}
+code_check() {
+  if (( release_mode == 1 )); then
+    [[ -f "$project_dir/scripts/rollout-db.ts" ]] || die "migration helper is missing from active release"
+    [[ -f "$project_dir/node_modules/tsx/dist/cli.mjs" ]] || die "tsx runtime is missing from active release"
+  else
+    git_check
+  fi
 }
 assert_service_active() {
   local unit="$1" active_state sub_state
@@ -593,7 +635,7 @@ echo "rollout start timestamp=$timestamp expected_commit=$expected_commit"
 echo "units=${units[*]}"
 echo "database_count=${#databases[@]}"
 
-git_check
+code_check
 [[ -f "$project_dir/scripts/rollout-db.ts" ]] || die "migration helper is missing from expected commit"
 [[ -f "$project_dir/node_modules/tsx/dist/cli.mjs" ]] || die "tsx runtime is missing"
 
@@ -620,7 +662,7 @@ echo "stopping all services"
 stop_attempted=1
 stop_and_verify_all_services || die "CONTAINMENT INCOMPLETE during primary stop"
 
-git_check
+code_check
 run_db_tool inspect --evidence - "${db_args[@]}" > "$artifact_dir/stopped-evidence.json"
 validate_sqlite_sidecars
 echo "draining SQLite WAL sidecars offline"
@@ -634,7 +676,7 @@ backup_completed=1
 /usr/bin/sha256sum "$manifest" > "$artifact_dir/backup-manifest.sha256"
 
 echo "migrating databases using pre-staged commit $expected_commit"
-git_check
+code_check
 run_db_tool migrate --evidence - "${db_args[@]}" > "$artifact_dir/migration-evidence.json"
 echo "validating migrated databases"
 run_db_tool validate --evidence - "${db_args[@]}" > "$artifact_dir/validation-evidence.json"

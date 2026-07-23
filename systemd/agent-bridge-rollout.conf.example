@@ -1,6 +1,9 @@
 # Install as /etc/agent-bridge/rollout.conf with root:root ownership and mode 0600.
 # This is a fixed allowlist, not a shell file. Values cannot contain newlines.
-project_dir=/home/content-crawler/agent-bridge
+# Immutable release mode: project_dir is not required when these two values
+# are present. The current pointer must resolve to the expected staged SHA.
+release_root=/opt/agent-bridge/releases
+current_pointer=/opt/agent-bridge/releases/current
 runtime_user=content-crawler
 node_bin=/home/content-crawler/.nvm/versions/node/v24.15.0/bin/node
 backup_dir=/var/backups/agent-bridge

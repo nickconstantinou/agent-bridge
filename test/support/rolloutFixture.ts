@@ -64,7 +64,10 @@ export interface Fixture {
 export const roots: string[] = [];
 
 export function cleanupRoots(): void {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    execFileSync("chmod", ["-R", "u+w", root], { stdio: "ignore" });
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 export function executable(path: string, body: string): void {
@@ -158,6 +161,24 @@ if [ "\${FAKE_RESTORE_FAIL:-}" = 1 ]; then
   exit 1
 fi
 exec sudo -n env AGENT_BRIDGE_RESTORE_TEST_MODE=1 "${restoreHelperPath}" "$@"
+`);
+  executable(join(bin, "release-activate"), `#!/usr/bin/env bash
+set -euo pipefail
+echo "release-activate:$*" >> "${fixture.actionLog}"
+current=""
+expected=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --current) current="$2"; shift 2 ;;
+    --expected-commit) expected="$2"; shift 2 ;;
+    --release-root) shift 2 ;;
+    *) echo "unknown release activation argument: $1" >&2; exit 2 ;;
+  esac
+done
+tmp="\${current}.test-new"
+rm -f -- "$tmp"
+ln -s "$expected" "$tmp"
+mv -Tf -- "$tmp" "$current"
 `);
   executable(join(bin, "systemctl"), `#!/usr/bin/env bash
 set -euo pipefail

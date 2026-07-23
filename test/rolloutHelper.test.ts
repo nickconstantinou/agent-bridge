@@ -5,6 +5,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readlinkSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -48,16 +49,19 @@ import {
 
 afterEach(cleanupRoots);
 
-function prepareImmutableRelease(fixture: Fixture): { currentPointer: string; releaseDir: string } {
+function prepareImmutableRelease(fixture: Fixture, activeCommit = fixture.expectedCommit): { currentPointer: string; releaseDir: string } {
   const releaseRoot = join(fixture.root, "releases");
   const releaseDir = join(releaseRoot, fixture.expectedCommit);
   mkdirSync(releaseRoot, { recursive: true, mode: 0o755 });
-  execFileSync("cp", ["-a", `${fixture.project}/.`, releaseDir]);
-  writeFileSync(join(releaseDir, "manifest.json"), JSON.stringify({ schema_version: 1, commit: fixture.expectedCommit }));
-  execFileSync("find", [releaseDir, "-type", "f", "-exec", "chmod", "a-w", "{}", "+"]);
-  execFileSync("find", [releaseDir, "-type", "d", "-exec", "chmod", "a-w", "{}", "+"]);
+  for (const commit of new Set([fixture.previousCommit, fixture.expectedCommit])) {
+    const directory = join(releaseRoot, commit);
+    execFileSync("cp", ["-a", `${fixture.project}/.`, directory]);
+    writeFileSync(join(directory, "manifest.json"), JSON.stringify({ schema_version: 1, commit }));
+    execFileSync("find", [directory, "-type", "f", "-exec", "chmod", "a-w", "{}", "+"]);
+    execFileSync("find", [directory, "-type", "d", "-exec", "chmod", "a-w", "{}", "+"]);
+  }
   const currentPointer = join(releaseRoot, "current");
-  symlinkSync(fixture.expectedCommit, currentPointer);
+  symlinkSync(activeCommit, currentPointer);
   rewriteConfig(fixture, (lines) => [
     ...lines.filter((line) => !line.startsWith("project_dir=")),
     `release_root=${releaseRoot}`,
@@ -140,6 +144,63 @@ describe("guarded rollout helper", () => {
     expect(log.indexOf("systemctl:stop")).toBeGreaterThanOrEqual(0);
     expect(log.indexOf("systemctl:stop")).toBeLessThan(log.indexOf(" backup "));
     expect(existsSync(join(artifacts, "containment-evidence.json"))).toBe(true);
+  });
+
+  it("atomically activates the staged release after migration and before service start", () => {
+    const fixture = createFixture();
+    const { currentPointer } = prepareImmutableRelease(fixture, fixture.previousCommit);
+
+    const result = runRollout(fixture);
+
+    execFileSync("find", [join(fixture.root, "releases"), "-type", "d", "-exec", "chmod", "u+w", "{}", "+"]);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const log = actions(fixture);
+    expect(log.indexOf(" migrate ")).toBeLessThan(log.indexOf("release-activate:"));
+    expect(log.indexOf("release-activate:")).toBeLessThan(log.indexOf("systemctl:start"));
+    expect(readlinkSync(currentPointer)).toBe(fixture.expectedCommit);
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+    expect(JSON.parse(readFileSync(join(artifacts, "pointer-switch-evidence.json"), "utf8"))).toEqual(expect.objectContaining({
+      previousCommit: fixture.previousCommit,
+      activeCommit: fixture.expectedCommit,
+      pointer: currentPointer,
+    }));
+    const beforeQueue = JSON.parse(readFileSync(join(artifacts, "preflight-evidence.json"), "utf8")).databases
+      .map((entry: { path: string; pendingQueueCount: number }) => [entry.path, entry.pendingQueueCount]);
+    const afterQueue = JSON.parse(readFileSync(join(artifacts, "post-start-evidence.json"), "utf8")).databases
+      .map((entry: { path: string; pendingQueueCount: number }) => [entry.path, entry.pendingQueueCount]);
+    expect(afterQueue).toEqual(beforeQueue);
+  });
+
+  it("restores the verified databases and previous release after a pre-start migration failure", () => {
+    const fixture = createFixture();
+    const { currentPointer } = prepareImmutableRelease(fixture, fixture.previousCommit);
+    const before = fixture.dbPaths.map(sha256);
+
+    const result = runRollout(fixture, "migrate");
+
+    execFileSync("find", [join(fixture.root, "releases"), "-type", "d", "-exec", "chmod", "u+w", "{}", "+"]);
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/FAILED_RESTORED/);
+    expect(fixture.dbPaths.map(sha256)).toEqual(before);
+    expect(readlinkSync(currentPointer)).toBe(fixture.previousCommit);
+    expect(readFileSync(fixture.stateFile, "utf8").trim().split("\n")).toEqual(units);
+  });
+
+  it("preserves the activated release and migrated state after a post-start failure", () => {
+    const fixture = createFixture();
+    const { currentPointer } = prepareImmutableRelease(fixture, fixture.previousCommit);
+    const before = fixture.dbPaths.map(sha256);
+
+    const result = runRollout(fixture, "start");
+
+    execFileSync("find", [join(fixture.root, "releases"), "-type", "d", "-exec", "chmod", "u+w", "{}", "+"]);
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/STOPPED_PRESERVED/);
+    expect(fixture.dbPaths.map(sha256)).not.toEqual(before);
+    expect(readlinkSync(currentPointer)).toBe(fixture.expectedCommit);
+    expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
   });
 
   it("resets historical service failure counters before capturing smoke baselines", () => {

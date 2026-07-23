@@ -343,13 +343,41 @@ restore_backups() {
 restore_previous_release_and_start() {
   (( release_mode == 1 )) || return 0
   [[ "$previous_pointer_target" =~ ^[0-9a-f]{40}$ ]] || { echo "previous release pointer target is unavailable" >&2; return 1; }
-  "$activation_cmd" --release-root "$release_root" --current "$current_pointer" --expected-commit "$previous_pointer_target" || return 1
-  [[ "$(/usr/bin/readlink -- "$current_pointer")" == "$previous_pointer_target" ]] || { echo "previous release pointer verification failed" >&2; return 1; }
+  "$activation_cmd" --release-root "$release_root" --current "$current_pointer" --expected-commit "$previous_pointer_target" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
+  [[ "$(/usr/bin/readlink -- "$current_pointer")" == "$previous_pointer_target" ]] || { echo "previous release pointer verification failed" >&2; stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
   echo "restarting verified previous release commit=$previous_pointer_target"
-  "$systemctl_cmd" reset-failed "${units[@]}" || return 1
-  "$systemctl_cmd" start "${units[@]}" || return 1
-  for unit in "${units[@]}"; do assert_service_active "$unit" || return 1; done
+  "$systemctl_cmd" reset-failed "${units[@]}" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
+  declare -A recovery_restart_baseline=()
+  for unit in "${units[@]}"; do recovery_restart_baseline[$unit]="$($systemctl_cmd show "$unit" --property=NRestarts --value)"; done
+  "$systemctl_cmd" start "${units[@]}" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
+  for unit in "${units[@]}"; do assert_service_active "$unit" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }; done
+  (( smoke_delay > 0 )) && /usr/bin/sleep "$smoke_delay"
+  local recovery_since startup_errors current_restarts recovery_evidence
+  local -a recovery_journal_args=()
+  for unit in "${units[@]}"; do recovery_journal_args+=(-u "$unit"); done
+  recovery_since="$(/usr/bin/date -u '+%Y-%m-%d %H:%M:%S UTC')"
+  startup_errors="$($journalctl_cmd --since "$recovery_since" --priority err --no-pager "${recovery_journal_args[@]}" 2>&1)" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
+  [[ -z "$startup_errors" || "$startup_errors" == "-- No entries --" ]] || { echo "previous release journal smoke failed" >&2; stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
+  for unit in "${units[@]}"; do
+    current_restarts="$($systemctl_cmd show "$unit" --property=NRestarts --value)"
+    [[ "$current_restarts" == "${recovery_restart_baseline[$unit]}" ]] || { echo "previous release restart stability failed" >&2; stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
+  done
+  recovery_evidence="$artifact_dir/recovery-acceptance-evidence.json"
+  run_db_tool inspect --evidence - "${db_args[@]}" > "$recovery_evidence" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
+  hash_evidence_file "$recovery_evidence"
+  run_db_tool inspect --evidence - "${db_args[@]}" > "$artifact_dir/recovery-queue-evidence.json" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
+  hash_evidence_file "$artifact_dir/recovery-queue-evidence.json"
   return 0
+}
+
+hash_evidence_file() {
+  /usr/bin/sha256sum "$1" > "${1%.json}.sha256"
+}
+
+record_phase() {
+  local phase_name="$1"
+  printf 'phase=%s timestamp=%s\n' "$phase_name" "$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$phase_ledger"
+  /usr/bin/sha256sum "$phase_ledger" > "$phase_ledger.sha256"
 }
 
 stop_and_verify_all_services() {
@@ -357,7 +385,7 @@ stop_and_verify_all_services() {
   local main_pid control_pid control_group cgroup_path cgroup_file pid pair_ok value index
   local cgroup_list_file procs_content
   local -a cgroup_files=()
-  local evidence_file="$artifact_dir/containment-evidence.json" first_unit=1
+  local evidence_name="${1:-containment-evidence.json}" evidence_file="$artifact_dir/${1:-containment-evidence.json}" first_unit=1
   local -a remaining_pids=()
   if ! "$systemctl_cmd" stop "${units[@]}"; then stop_ok=0; fi
   printf '{\n  "createdAt": "%s",\n  "stopCommandSucceeded": %s,\n  "units": [\n' \
@@ -429,7 +457,7 @@ stop_and_verify_all_services() {
     printf ']}' >> "$evidence_file"
   done
   printf '\n  ]\n}\n' >> "$evidence_file"
-  /usr/bin/sha256sum "$evidence_file" > "$artifact_dir/containment-evidence.sha256"
+  /usr/bin/sha256sum "$evidence_file" > "$artifact_dir/${evidence_name%.json}.sha256"
   if (( verify_ok == 0 )); then
     echo "CONTAINMENT INCOMPLETE: stop_ok=$stop_ok verify_ok=$verify_ok" >&2
     return 1
@@ -608,6 +636,7 @@ artifact_dir="$log_dir/$timestamp-$expected_commit"
 manifest="$artifact_dir/backup-manifest.tsv"
 backup_set="$backup_dir/$timestamp-$expected_commit"
 sentinel_path="$log_dir/.rollout-in-progress"
+phase_ledger="$artifact_dir/phase-ledger.log"
 
 start_attempted=0
 services_started=0
@@ -650,6 +679,7 @@ sentinel_tmp="$(/usr/bin/mktemp --tmpdir="$log_dir" .rollout-in-progress.XXXXXX)
   printf 'created_at=%s\n' "$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')"
   printf 'hostname=%s\n' "$(/usr/bin/hostname)"
   printf 'pid=%s\n' "$$"
+  printf 'phase_ledger=%s\n' "$phase_ledger"
 } > "$sentinel_tmp"
 /usr/bin/chmod 0600 "$sentinel_tmp"
 # ln (hard link) is the atomic create-if-not-exists primitive here — it
@@ -663,6 +693,9 @@ sentinel_identity="$(/usr/bin/stat -c '%d:%i' "$sentinel_path")"
 [[ ! -e "$artifact_dir" ]] || die "rollout artifact directory already exists: $artifact_dir"
 /usr/bin/mkdir --mode=0700 -- "$artifact_dir"
 /usr/bin/chmod 0700 "$artifact_dir"
+touch "$phase_ledger"
+chmod 0600 "$phase_ledger"
+record_phase PRECHECK
 log_file="$artifact_dir/rollout.log"
 latest_tmp="$(/usr/bin/mktemp --tmpdir="$log_dir" .latest.XXXXXX)"
 printf '%s\n' "$artifact_dir" > "$latest_tmp"
@@ -705,40 +738,48 @@ for unit in "${units[@]}"; do
   [[ "${restart_baseline[$unit]}" =~ ^[0-9]+$ ]] || die "invalid NRestarts for $unit"
 done
 run_db_tool inspect --evidence - "${db_args[@]}" > "$artifact_dir/preflight-evidence.json"
-/usr/bin/sha256sum "$artifact_dir/preflight-evidence.json" > "$artifact_dir/preflight-evidence.sha256"
+hash_evidence_file "$artifact_dir/preflight-evidence.json"
+record_phase PREFLIGHT
 
 echo "stopping all services"
 stop_attempted=1
 stop_and_verify_all_services || die "CONTAINMENT INCOMPLETE during primary stop"
+record_phase CONTAINED
 
 code_check
 run_db_tool inspect --evidence - "${db_args[@]}" > "$artifact_dir/stopped-evidence.json"
+hash_evidence_file "$artifact_dir/stopped-evidence.json"
 validate_sqlite_sidecars
 echo "draining SQLite WAL sidecars offline"
 run_db_tool checkpoint --evidence - "${db_args[@]}" > "$artifact_dir/checkpoint-evidence.json"
-/usr/bin/sha256sum "$artifact_dir/checkpoint-evidence.json" > "$artifact_dir/checkpoint-evidence.sha256"
+hash_evidence_file "$artifact_dir/checkpoint-evidence.json"
 clear_stale_sqlite_sidecars
+record_phase WAL_DRAINED
 
 echo "backing up all databases"
 backup_databases
 backup_completed=1
 /usr/bin/sha256sum "$manifest" > "$artifact_dir/backup-manifest.sha256"
+record_phase BACKED_UP
 
 echo "migrating databases using pre-staged commit $expected_commit"
 code_check
 run_db_tool migrate --evidence - "${db_args[@]}" > "$artifact_dir/migration-evidence.json"
 echo "validating migrated databases"
 run_db_tool validate --evidence - "${db_args[@]}" > "$artifact_dir/validation-evidence.json"
-/usr/bin/sha256sum "$artifact_dir/migration-evidence.json" "$artifact_dir/validation-evidence.json" > "$artifact_dir/migration-evidence.sha256"
+hash_evidence_file "$artifact_dir/migration-evidence.json"
+hash_evidence_file "$artifact_dir/validation-evidence.json"
+record_phase MIGRATED
 
 if (( release_mode == 1 )); then
   echo "activating immutable release commit=$expected_commit previous=$previous_pointer_target"
   "$activation_cmd" --release-root "$release_root" --current "$current_pointer" --expected-commit "$expected_commit"
   [[ "$(/usr/bin/readlink -- "$current_pointer")" == "$expected_commit" ]] || die "active release pointer did not switch to expected commit"
   pointer_switched=1
-  printf '{\n  "previousCommit": "%s",\n  "activeCommit": "%s",\n  "pointer": "%s"\n}\n' \
-    "$previous_pointer_target" "$expected_commit" "$current_pointer" > "$artifact_dir/pointer-switch-evidence.json"
-  /usr/bin/sha256sum "$artifact_dir/pointer-switch-evidence.json" > "$artifact_dir/pointer-switch-evidence.sha256"
+  printf '{\n  "previousCommit": "%s",\n  "activeCommit": "%s",\n  "pointer": "%s",\n  "transitionAt": "%s"\n}\n' \
+    "$previous_pointer_target" "$expected_commit" "$current_pointer" "$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$artifact_dir/pointer-switch-evidence.json"
+  hash_evidence_file "$artifact_dir/pointer-switch-evidence.json"
+  record_phase POINTER_SWITCHED
 fi
 
 echo "starting all services"
@@ -758,6 +799,9 @@ for unit in "${units[@]}"; do
   [[ "$current_restarts" =~ ^[0-9]+$ && "$current_restarts" == "${restart_baseline[$unit]}" ]] || die "service restarted or crash-looped during smoke: $unit"
 done
 run_db_tool validate --evidence - "${db_args[@]}" > "$artifact_dir/post-start-evidence.json"
+hash_evidence_file "$artifact_dir/post-start-evidence.json"
+record_phase ACCEPTED
 
 completed=1
+record_phase COMPLETE
 echo "rollout completed commit=$expected_commit artifacts=$artifact_dir"

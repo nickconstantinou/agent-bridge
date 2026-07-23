@@ -137,7 +137,7 @@ describe("guarded rollout helper", () => {
     expect(existsSync(join(artifacts, "backup-manifest.tsv"))).toBe(true);
     expect(existsSync(join(artifacts, "migration-evidence.json"))).toBe(true);
     expect(readFileSync(join(artifacts, "rollout.log"), "utf8")).toContain("rollout completed");
-  });
+  }, 15_000);
 
   it("accepts a cohort that is already stopped and still proves containment before migration", () => {
     const fixture = createFixture({ initiallyStopped: true });

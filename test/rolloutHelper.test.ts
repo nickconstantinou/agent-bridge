@@ -48,6 +48,25 @@ import {
 
 afterEach(cleanupRoots);
 
+function prepareImmutableRelease(fixture: Fixture): { currentPointer: string; releaseDir: string } {
+  const releaseRoot = join(fixture.root, "releases");
+  const releaseDir = join(releaseRoot, fixture.expectedCommit);
+  mkdirSync(releaseRoot, { recursive: true, mode: 0o755 });
+  execFileSync("cp", ["-a", `${fixture.project}/.`, releaseDir]);
+  writeFileSync(join(releaseDir, "manifest.json"), JSON.stringify({ schema_version: 1, commit: fixture.expectedCommit }));
+  execFileSync("find", [releaseDir, "-type", "f", "-exec", "chmod", "a-w", "{}", "+"]);
+  execFileSync("find", [releaseDir, "-type", "d", "-exec", "chmod", "a-w", "{}", "+"]);
+  const currentPointer = join(releaseRoot, "current");
+  symlinkSync(fixture.expectedCommit, currentPointer);
+  rewriteConfig(fixture, (lines) => [
+    ...lines.filter((line) => !line.startsWith("project_dir=")),
+    `release_root=${releaseRoot}`,
+    `current_pointer=${currentPointer}`,
+  ]);
+  writeFileSync(join(fixture.envDir, "agent-bridge-shared"), `DB_PATH=${fixture.dbPaths[0]}\nBRIDGE_CURRENT_RELEASE_DIR=${currentPointer}\n`, { mode: 0o600 });
+  return { currentPointer, releaseDir };
+}
+
 describe("guarded rollout helper", () => {
   it("requires a validated immutable current pointer before stopping services", () => {
     const fixture = createFixture();
@@ -86,22 +105,23 @@ describe("guarded rollout helper", () => {
     expect(actions(fixture)).not.toContain("systemctl:stop");
   });
 
+  it("rejects a rollout pointer that differs from the pointer loaded by systemd services", () => {
+    const fixture = createFixture();
+    const { currentPointer, releaseDir } = prepareImmutableRelease(fixture);
+    writeFileSync(join(fixture.envDir, "agent-bridge-shared"), `DB_PATH=${fixture.dbPaths[0]}\nBRIDGE_CURRENT_RELEASE_DIR=${join(fixture.root, "wrong-current")}\n`, { mode: 0o600 });
+
+    const result = runRollout(fixture);
+    execFileSync("find", [releaseDir, "-type", "d", "-exec", "chmod", "u+w", "{}", "+"]);
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/active release pointer mismatch/i);
+    expect(currentPointer).not.toBe(join(fixture.root, "wrong-current"));
+    expect(actions(fixture)).not.toContain("systemctl:stop");
+  });
+
   it("runs immutable release mode through containment and records release evidence", () => {
     const fixture = createFixture();
-    const releaseRoot = join(fixture.root, "releases");
-    const releaseDir = join(releaseRoot, fixture.expectedCommit);
-    mkdirSync(releaseRoot, { recursive: true, mode: 0o755 });
-    execFileSync("cp", ["-a", `${fixture.project}/.`, releaseDir]);
-    writeFileSync(join(releaseDir, "manifest.json"), JSON.stringify({ schema_version: 1, commit: fixture.expectedCommit }));
-    execFileSync("find", [releaseDir, "-type", "f", "-exec", "chmod", "a-w", "{}", "+"]);
-    execFileSync("find", [releaseDir, "-type", "d", "-exec", "chmod", "a-w", "{}", "+"]);
-    const currentPointer = join(releaseRoot, "current");
-    symlinkSync(fixture.expectedCommit, currentPointer);
-    rewriteConfig(fixture, (lines) => [
-      ...lines.filter((line) => !line.startsWith("project_dir=")),
-      `release_root=${releaseRoot}`,
-      `current_pointer=${currentPointer}`,
-    ]);
+    const { currentPointer, releaseDir } = prepareImmutableRelease(fixture);
 
     const result = runRollout(fixture);
     execFileSync("find", [releaseDir, "-type", "d", "-exec", "chmod", "u+w", "{}", "+"]);
@@ -109,12 +129,30 @@ describe("guarded rollout helper", () => {
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
     const releaseEvidence = JSON.parse(readFileSync(join(artifacts, "release-evidence.json"), "utf8"));
-    expect(releaseEvidence).toEqual(expect.objectContaining({ expectedCommit: fixture.expectedCommit, currentPointer, releaseDir }));
+    expect(releaseEvidence).toEqual(expect.objectContaining({
+      expectedCommit: fixture.expectedCommit,
+      currentPointer,
+      releaseDir,
+      rolloutHelperSha256: sha256(helperPath),
+    }));
+    expect(readFileSync(join(artifacts, "release-evidence.sha256"), "utf8")).toContain("release-evidence.json");
     const log = actions(fixture);
     expect(log.indexOf("systemctl:stop")).toBeGreaterThanOrEqual(0);
     expect(log.indexOf("systemctl:stop")).toBeLessThan(log.indexOf(" backup "));
     expect(existsSync(join(artifacts, "containment-evidence.json"))).toBe(true);
   });
+
+  it("resets historical service failure counters before capturing smoke baselines", () => {
+    const fixture = createFixture();
+    const result = runRollout(fixture, undefined, undefined, { FAKE_RESTART_COUNTER_HISTORY: "7" });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const log = actions(fixture);
+    const resetIndex = log.indexOf("systemctl:reset-failed");
+    const baselineIndex = log.indexOf(`systemctl:show ${units[0]} --property=NRestarts --value`);
+    expect(resetIndex).toBeGreaterThanOrEqual(0);
+    expect(resetIndex).toBeLessThan(baselineIndex);
+  }, 15_000);
 
   it("runs the full fixed-unit rollout sequence and writes durable evidence", () => {
     const fixture = createFixture();
@@ -1039,7 +1077,7 @@ describe("interrupted-rollout sentinel (Phase 4C.4, issue #135)", () => {
 
       // The winner (first) must have actually cleared it.
       expect(existsSync(sentinelPath(fixture))).toBe(false);
-    });
+    }, 30_000);
 
     it("refuses to acquire the lock — and leaves the sentinel completely untouched — while a rollout is actively running", async () => {
       const fixture = useMinimalInventory(createFixture());

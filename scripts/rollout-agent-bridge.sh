@@ -196,6 +196,14 @@ for unit in "${units[@]}"; do
   [[ "$unit" == "agent-bridge-health.service" ]] && db_key=HEALTH_DB_PATH
   explicit_environment="$("$systemctl_cmd" show "$unit" --property=Environment --value)"
   [[ " $explicit_environment " != *" $db_key="* ]] || die "explicit systemd $db_key override is unsupported for $unit"
+  if (( release_mode == 1 )); then
+    [[ " $explicit_environment " != *" BRIDGE_CURRENT_RELEASE_DIR="* ]] || die "explicit systemd BRIDGE_CURRENT_RELEASE_DIR override is unsupported for $unit"
+    resolved_env_value=""
+    read_env_key "$shared_env" BRIDGE_CURRENT_RELEASE_DIR ""
+    inherited_release_pointer="$resolved_env_value"
+    read_env_key "$unit_env" BRIDGE_CURRENT_RELEASE_DIR "$inherited_release_pointer"
+    [[ "$resolved_env_value" == "$current_pointer" ]] || die "active release pointer mismatch for $unit"
+  fi
   resolved_env_value=""
   read_env_key "$shared_env" "$db_key" ""
   inherited_value="$resolved_env_value"
@@ -638,9 +646,10 @@ echo "database_count=${#databases[@]}"
 
 code_check
 if (( release_mode == 1 )); then
+  rollout_helper_sha256="$(/usr/bin/sha256sum "$0" | /usr/bin/cut -d ' ' -f1)"
   {
-    printf '{\n  "expectedCommit": "%s",\n  "currentPointer": "%s",\n  "releaseRoot": "%s",\n  "releaseDir": "%s"\n}\n' \
-      "$expected_commit" "$current_pointer" "$release_root" "$release_dir"
+    printf '{\n  "expectedCommit": "%s",\n  "currentPointer": "%s",\n  "releaseRoot": "%s",\n  "releaseDir": "%s",\n  "rolloutHelperSha256": "%s"\n}\n' \
+      "$expected_commit" "$current_pointer" "$release_root" "$release_dir" "$rollout_helper_sha256"
   } > "$artifact_dir/release-evidence.json"
   /usr/bin/sha256sum "$artifact_dir/release-evidence.json" > "$artifact_dir/release-evidence.sha256"
 fi
@@ -658,6 +667,7 @@ run_db_tool() {
 }
 
 declare -A restart_baseline=()
+"$systemctl_cmd" reset-failed "${units[@]}"
 for unit in "${units[@]}"; do
   assert_service_ready_for_rollout "$unit"
   restart_baseline[$unit]="$("$systemctl_cmd" show "$unit" --property=NRestarts --value)"
@@ -693,7 +703,6 @@ run_db_tool validate --evidence - "${db_args[@]}" > "$artifact_dir/validation-ev
 echo "starting all services"
 journal_since="$(/usr/bin/date -u '+%Y-%m-%d %H:%M:%S UTC')"
 start_attempted=1
-"$systemctl_cmd" reset-failed "${units[@]}"
 "$systemctl_cmd" start "${units[@]}"
 for unit in "${units[@]}"; do assert_service_active "$unit"; done
 services_started=1

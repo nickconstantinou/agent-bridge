@@ -49,6 +49,43 @@ import {
 afterEach(cleanupRoots);
 
 describe("guarded rollout helper", () => {
+  it("requires a validated immutable current pointer before stopping services", () => {
+    const fixture = createFixture();
+    const releaseRoot = join(fixture.root, "releases");
+    mkdirSync(releaseRoot, { recursive: true, mode: 0o755 });
+    const currentPointer = join(releaseRoot, "current");
+    rewriteConfig(fixture, (lines) => [
+      ...lines,
+      `release_root=${releaseRoot}`,
+      `current_pointer=${currentPointer}`,
+    ]);
+
+    const result = runRollout(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/current pointer must be a valid symlink/i);
+    expect(actions(fixture)).not.toContain("systemctl:stop");
+  });
+
+  it("rejects a current pointer targeting a different commit before stopping services", () => {
+    const fixture = createFixture();
+    const releaseRoot = join(fixture.root, "releases");
+    mkdirSync(releaseRoot, { recursive: true, mode: 0o755 });
+    const currentPointer = join(releaseRoot, "current");
+    symlinkSync("0".repeat(40), currentPointer);
+    rewriteConfig(fixture, (lines) => [
+      ...lines,
+      `release_root=${releaseRoot}`,
+      `current_pointer=${currentPointer}`,
+    ]);
+
+    const result = runRollout(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(/current pointer target does not match expected commit/i);
+    expect(actions(fixture)).not.toContain("systemctl:stop");
+  });
+
   it("runs the full fixed-unit rollout sequence and writes durable evidence", () => {
     const fixture = createFixture();
     const result = runRollout(fixture);

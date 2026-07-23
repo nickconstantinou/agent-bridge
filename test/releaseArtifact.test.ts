@@ -74,4 +74,21 @@ describe("release artifact manifest", () => {
     expect(workflow).toContain("name: agent-bridge-release-${{ github.event.pull_request.head.sha || github.sha }}");
     expect(workflow).toContain('( cd "$(dirname "$archive")" && sha256sum "$(basename "$archive")" )');
   });
+
+  it("packages the source entrypoints and guarded migration scripts required by the service contract", () => {
+    const workflow = readFileSync(join(process.cwd(), ".github/workflows/release-artifact.yml"), "utf8");
+
+    expect(workflow).toContain("cp -a dist src scripts/rollout-db.ts scripts/rollout-db-impl.ts package.json package-lock.json node_modules");
+    for (const entrypoint of [
+      "src/index.ts",
+      "src/index-interactive.ts",
+      "src/index-discord-interactive.ts",
+      "src/index-health.ts",
+      "src/index-worker.ts",
+      "scripts/rollout-db.ts",
+      "scripts/rollout-db-impl.ts",
+    ]) {
+      expect(readFileSync(join(process.cwd(), entrypoint), "utf8")).not.toHaveLength(0);
+    }
+  });
 });

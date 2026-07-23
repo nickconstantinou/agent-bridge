@@ -103,7 +103,7 @@ sudo -n /usr/local/sbin/rollout-bootstrap-agent-bridge --role <shared|discord|he
 
 ## Interrupted-rollout sentinel (Phase 4C.4, issue #135)
 
-`rollout-agent-bridge` writes a fixed, root-owned regular file, `$log_dir/.rollout-in-progress`, mode `0600`, immediately after acquiring the exclusive rollout lock and before any precondition check runs — including the artifact-directory-uniqueness check. Its purpose is a hard stop: if a rollout is interrupted mid-flight (the process killed, the machine rebooted), the *next* invocation must never silently proceed as if nothing happened. It refuses instead, citing the sentinel's own recorded `expected_commit` and `artifact_dir` as evidence for what needs manual review.
+`rollout-agent-bridge` writes a fixed, root-owned regular file, `$log_dir/.rollout-in-progress`, mode `0600`, immediately after acquiring the exclusive rollout lock and before any precondition check runs — including the artifact-directory-uniqueness check. Its purpose is a hard stop: if a rollout is interrupted mid-flight (the process killed, the machine rebooted), the *next* invocation must never silently proceed as if nothing happened. It refuses instead, citing the sentinel's own recorded `expected_commit`, `artifact_dir`, and append-only phase ledger as evidence for what needs manual review.
 
 Creation is atomic — a `mktemp`'d temp file in the same directory, `chmod 0600`, then a hard link (`ln`) from the temp name to the fixed sentinel path. `ln` fails if the destination already exists rather than replacing it, giving `O_CREAT|O_EXCL` create-if-absent semantics without a custom syscall wrapper. An existing sentinel that is a symlink, not a regular file, or has the wrong owner/mode is never trusted or silently overwritten — that is its own containment-uncertain failure, refused with instructions to inspect it manually and clear it with the separate `rollout-sentinel-clear` tool rather than retry.
 
@@ -111,7 +111,7 @@ The sentinel is removed automatically in exactly three cases, gated by an intern
 
 - The rollout completes successfully end to end.
 - A precondition fails strictly before any service stop is attempted — nothing was touched, so there is nothing to review.
-- The automatic post-failure restore (`FAILED_RESTORED`) both succeeds and is verified — every database's SHA-256 matches the pre-migration manifest. Sentinel removal here means only "safe to hand to the documented recovery flow below," never "safe to bare-retry": services remain stopped and the checked-out code is still the new commit.
+- The automatic post-failure restore (`FAILED_RESTORED`) both succeeds and is verified — every database's SHA-256 matches the pre-migration manifest, and the previous release passes bounded pointer, service-stability, journal-smoke, restart-counter, database, and queue/claim acceptance. Sentinel removal here means only "safe to hand to the documented recovery flow below," never "safe to bare-retry": services remain stopped and the checked-out code is still the new commit.
 
 In every other failure shape the sentinel is retained and the failure is labeled with one of four states, so an operator can pick the correct recovery path without having to reconstruct what happened from logs alone:
 

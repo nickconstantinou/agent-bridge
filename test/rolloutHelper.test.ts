@@ -144,6 +144,10 @@ describe("guarded rollout helper", () => {
     expect(log.indexOf("systemctl:stop")).toBeGreaterThanOrEqual(0);
     expect(log.indexOf("systemctl:stop")).toBeLessThan(log.indexOf(" backup "));
     expect(existsSync(join(artifacts, "containment-evidence.json"))).toBe(true);
+    expect(existsSync(join(artifacts, "stopped-evidence.sha256"))).toBe(true);
+    expect(existsSync(join(artifacts, "post-start-evidence.sha256"))).toBe(true);
+    expect(existsSync(join(artifacts, "phase-ledger.log"))).toBe(true);
+    expect(readFileSync(join(artifacts, "phase-ledger.log"), "utf8")).toMatch(/phase=COMPLETE/);
   });
 
   it("atomically activates the staged release after migration and before service start", () => {
@@ -163,12 +167,23 @@ describe("guarded rollout helper", () => {
       previousCommit: fixture.previousCommit,
       activeCommit: fixture.expectedCommit,
       pointer: currentPointer,
+      transitionAt: expect.any(String),
     }));
     const beforeQueue = JSON.parse(readFileSync(join(artifacts, "preflight-evidence.json"), "utf8")).databases
       .map((entry: { path: string; pendingQueueCount: number }) => [entry.path, entry.pendingQueueCount]);
     const afterQueue = JSON.parse(readFileSync(join(artifacts, "post-start-evidence.json"), "utf8")).databases
       .map((entry: { path: string; pendingQueueCount: number }) => [entry.path, entry.pendingQueueCount]);
     expect(afterQueue).toEqual(beforeQueue);
+    const beforeEvidence = JSON.parse(readFileSync(join(artifacts, "preflight-evidence.json"), "utf8"));
+    expect(beforeEvidence.databases[0]).toEqual(expect.objectContaining({
+      queueStateCounts: expect.any(Object),
+      claimStateCounts: expect.any(Object),
+      executionLockState: expect.any(Object),
+      claimRunAcquisitionCorrelation: expect.any(String),
+      deliveryState: expect.any(Object),
+    }));
+    expect(JSON.parse(readFileSync(join(artifacts, "post-start-evidence.json"), "utf8")).databases[0].claimRunAcquisitionCorrelation)
+      .toBe(beforeEvidence.databases[0].claimRunAcquisitionCorrelation);
   });
 
   it("restores the verified databases and previous release after a pre-start migration failure", () => {
@@ -185,6 +200,21 @@ describe("guarded rollout helper", () => {
     expect(fixture.dbPaths.map(sha256)).toEqual(before);
     expect(readlinkSync(currentPointer)).toBe(fixture.previousCommit);
     expect(readFileSync(fixture.stateFile, "utf8").trim().split("\n")).toEqual(units);
+    expect(output).toMatch(/FAILED_RESTORED/);
+  });
+
+  it("recontains the cohort when previous-release recovery start fails", () => {
+    const fixture = createFixture();
+    prepareImmutableRelease(fixture, fixture.previousCommit);
+    const result = runRollout(fixture, "migrate", undefined, { FAKE_FAIL_RECOVERY_START: "1" });
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/RESTORE_INCOMPLETE/);
+    expect(output).not.toMatch(/FAILED_RESTORED/);
+    expect(actions(fixture).match(/systemctl:stop/g)?.length).toBeGreaterThanOrEqual(2);
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+    expect(existsSync(join(artifacts, "rollback-containment-evidence.json"))).toBe(true);
+    expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
   });
 
   it("preserves the activated release and migrated state after a post-start failure", () => {

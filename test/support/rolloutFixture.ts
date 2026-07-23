@@ -212,6 +212,10 @@ case "$cmd" in
     }; then exit 1; fi
     ;;
   start)
+    if [ "\${FAKE_FAIL_RECOVERY_START:-}" = 1 ] && [ ! -e "${fixture.root}/recovery-start-failed" ]; then
+      : > "${fixture.root}/recovery-start-failed"
+      exit 1
+    fi
     if [ "\${FAKE_FAIL_PHASE:-}" = start ]; then exit 1; fi
     printf '%s\n' "$@" > "${fixture.stateFile}"
     : > "${fixture.root}/started"

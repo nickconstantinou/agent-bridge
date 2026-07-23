@@ -93,6 +93,8 @@ describe("systemd templates", () => {
     const example = readFileSync(new URL("../systemd/agent-bridge-release.conf.example", import.meta.url), "utf8");
 
     expect(install).toContain("BRIDGE_CURRENT_RELEASE_DIR");
+    expect(install).toContain('"/opt/agent-bridge/releases/current"');
+    expect(install).not.toContain("systemctl enable --now");
     expect(install).toContain('local dest="${DEFAULTS_DIR}/agent-bridge-release"');
     expect(example).toContain("BRIDGE_CURRENT_RELEASE_DIR=/opt/agent-bridge/releases/current");
     expect(example).not.toContain("/agent-bridge/.git");

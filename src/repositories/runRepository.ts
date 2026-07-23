@@ -1,5 +1,20 @@
 import Database from "better-sqlite3";
 
+export interface RunningRun {
+  run_id: string;
+  chat_id: string;
+  bot: string;
+  started_at: string;
+}
+
+export interface ReconciliationEvidence {
+  reason: string;
+  reconciledAt: string;
+  processState: "absent";
+  lockState: "absent";
+  cutoffMs: number;
+}
+
 export class RunRepository {
   constructor(private readonly db: Database.Database) {}
 
@@ -69,26 +84,28 @@ export class RunRepository {
       .all(runId);
   }
 
-  cleanupOrphanedRuns(onOrphan: (run: { run_id: string; chat_id: string; bot: string }) => void | Promise<void>): void {
-    const endedAt = new Date().toISOString();
-    const orphans = this.db
-      .prepare(`SELECT run_id, chat_id, bot FROM bridge_runs WHERE status = 'running'`)
-      .all() as Array<{ run_id: string; chat_id: string; bot: string }>;
+  listRunningRuns(): RunningRun[] {
+    return this.db
+      .prepare(`SELECT run_id, chat_id, bot, started_at FROM bridge_runs WHERE status = 'running' ORDER BY started_at ASC`)
+      .all() as RunningRun[];
+  }
 
-    for (const run of orphans) {
-      this.db
-        .prepare(
-          `UPDATE bridge_runs
-           SET status = 'failed', ended_at = ?, error = 'Process interrupted by bridge restart'
-           WHERE run_id = ?`
-        )
-        .run(endedAt, run.run_id);
+  reconcileOrphanedRun(runId: string, endedAt: string, evidence: ReconciliationEvidence): boolean {
+    const result = this.db.prepare(
+      `UPDATE bridge_runs
+       SET status = 'failed', ended_at = ?, error = ?
+       WHERE run_id = ? AND status = 'running'`
+    ).run(endedAt, evidence.reason, runId);
+    if (result.changes !== 1) return false;
 
-      try {
-        onOrphan(run);
-      } catch (err) {
-        console.error(`Failed to handle orphaned run ${run.run_id}`, err);
-      }
-    }
+    const seq = (this.db.prepare(
+      `SELECT COALESCE(MAX(seq), 0) + 1 AS next_seq FROM bridge_events WHERE run_id = ?`
+    ).get(runId) as { next_seq: number }).next_seq;
+    const timestamp = evidence.reconciledAt;
+    this.db.prepare(
+      `INSERT INTO bridge_events (id, run_id, seq, type, timestamp, payload_json)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(`${runId}:${seq}`, runId, seq, "run.reconciled", timestamp, JSON.stringify(evidence));
+    return true;
   }
 }

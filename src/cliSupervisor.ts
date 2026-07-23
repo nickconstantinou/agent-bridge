@@ -12,7 +12,7 @@
  * cancellation/timeout/registry guarantee they previously provided.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import type { CliOptions } from "./types.js";
 import { type as evtType } from "./events/types.js";
@@ -66,6 +66,9 @@ function buildChildEnv(extraEnv?: Record<string, string>, advisorChild = false):
 const KILL_GRACE_MS = 5_000;
 const GROUP_EXIT_POLL_INTERVAL_MS = 25;
 const GROUP_EXIT_POLL_BOUND_MS = 1_000;
+const RUN_MARKER_ENV = "AGENT_BRIDGE_RUN_ID";
+
+export type ExecutionProcessState = "live" | "absent" | "ambiguous";
 
 export function resolveSupervisorTimeouts(options: Pick<CliOptions, "timeoutMs" | "idleTimeoutMs"> = {}): {
   timeoutMs: number;
@@ -189,6 +192,27 @@ export function completeExecutionLifecycle(chatId: number | string, token: strin
   active.lifecycleDone = null;
   active.finishLifecycle = null;
   if (!active.child) activeExecutions.delete(chatId);
+}
+
+/** Returns whether this process still owns a live execution for a durable run ID. */
+export function getExecutionProcessState(runId: string): ExecutionProcessState {
+  for (const active of activeExecutions.values()) {
+    if (active.lifecycleHandle?.runId === runId) return "live";
+  }
+
+  try {
+    const processTable = execFileSync("/usr/bin/ps", ["eww", "-eo", "pid=,args="], {
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+    });
+    return processTable.includes(RUN_MARKER_ENV + "=" + runId) ? "live" : "absent";
+  } catch {
+    return "ambiguous";
+  }
+}
+
+export function isExecutionActive(runId: string): boolean {
+  return getExecutionProcessState(runId) === "live";
 }
 
 export function abortCliProcess(chatId: number | string): boolean {
@@ -315,7 +339,9 @@ export async function runSupervisedProcess(
     // detached:true puts the child in its own process group so timeout kills
     // can signal the whole subtree (process.kill(-pid)) instead of stranding
     // grandchildren.
-    const child = spawn(spawnInvocation.command, spawnInvocation.args, { cwd, shell: false, detached: true, env: buildChildEnv(options.contextEnv, options.advisorChild) });
+    const childEnv = buildChildEnv(options.contextEnv, options.advisorChild);
+    if (options.eventContext?.runId) childEnv[RUN_MARKER_ENV] = options.eventContext.runId;
+    const child = spawn(spawnInvocation.command, spawnInvocation.args, { cwd, shell: false, detached: true, env: childEnv });
     if (options.stdin) {
       child.stdin?.write(options.stdin);
     }

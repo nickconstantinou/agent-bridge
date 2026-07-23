@@ -40,6 +40,7 @@ import {
   type CliKind,
 } from "./interactiveBot.js";
 import { runCli } from "./cli.js";
+import { getExecutionProcessState } from "./cliSupervisor.js";
 import { parseCompactionProviderChain, runCapacityFallbackCompaction } from "./fallbackCompaction.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 import { startConfiguredAdvisorBroker } from "./advisorBroker.js";
@@ -89,21 +90,25 @@ const db = openProductionDb(dbPath, { serviceId: "telegram:interactive" });
 const advisorBroker = await startConfiguredAdvisorBroker({ db, bots: config.bots, runCli });
 const client = new TelegramClient(token, fetch, 45_000);
 
-db.cleanupOrphanedRuns(async (run) => {
-  const parts = run.chat_id.split(":");
-  const chatId = Number(parts[0]);
-  const threadId = parts.length > 1 ? Number(parts[1]) : undefined;
-  if (!Number.isNaN(chatId)) {
-    await sendTelegramMessage({
-      client,
-      kind: "interactive",
-      chatId,
-      body: {
-        text: "⚠️ **Agent bridge restarted.** The active task was interrupted. You can reply with `provide update` or `continue` to resume.",
-        message_thread_id: threadId,
-      },
-    }).catch((err) => console.error(`Failed to send restart notification to ${run.chat_id}`, err));
-  }
+await db.reconcileOrphanedRuns({
+  minAgeMs: Number(process.env.ORPHAN_RECONCILIATION_MIN_AGE_MS || 10 * 60 * 1000),
+  processState: (run) => getExecutionProcessState(run.run_id),
+  onReconciled: async (run) => {
+    const parts = run.chat_id.split(":");
+    const chatId = Number(parts[0]);
+    const threadId = parts.length > 1 ? Number(parts[1]) : undefined;
+    if (!Number.isNaN(chatId)) {
+      await sendTelegramMessage({
+        client,
+        kind: "interactive",
+        chatId,
+        body: {
+          text: "⚠️ **Agent bridge restarted.** The active task was interrupted. You can reply with `provide update` or `continue` to resume.",
+          message_thread_id: threadId,
+        },
+      }).catch((err) => console.error(`Failed to send restart notification to ${run.chat_id}`, err));
+    }
+  },
 });
 let botUsername = process.env.TELEGRAM_BOT_USERNAME || null;
 if (!botUsername) {

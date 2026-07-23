@@ -74,6 +74,12 @@ export class LockRepository {
     return this.options.serviceId;
   }
 
+  hasRunLock(runId: string): boolean {
+    return !!this.db.prepare(`
+      SELECT 1 FROM execution_locks WHERE run_id = ? LIMIT 1
+    `).get(runId);
+  }
+
   unlock(handle: ExecutionLaneHandle): boolean {
     if (!this.belongsToRun(handle)) return false;
     return this.db.prepare(`

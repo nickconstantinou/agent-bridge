@@ -343,15 +343,27 @@ describe("RunRepository", () => {
     ).toThrow();
   });
 
-  it("cleanupOrphanedRuns marks running runs as failed and invokes callback", () => {
+  it("lists and atomically reconciles a running run", () => {
     const repo = new RunRepository(raw);
     repo.insertRun("run-orphan", "chat-123", "codex");
     repo.insertRun("run-done", "chat-123", "codex");
     repo.updateRunCompleted("run-done", "ok", null);
-    const orphans: any[] = [];
-    repo.cleanupOrphanedRuns(run => orphans.push(run));
-    expect(orphans).toHaveLength(1);
-    expect(orphans[0].run_id).toBe("run-orphan");
+    expect(repo.listRunningRuns().map((run) => run.run_id)).toEqual(["run-orphan"]);
+    const endedAt = new Date().toISOString();
+    expect(repo.reconcileOrphanedRun("run-orphan", endedAt, {
+      reason: "Process interrupted by bridge restart",
+      reconciledAt: endedAt,
+      processState: "absent",
+      lockState: "absent",
+      cutoffMs: 600_000,
+    })).toBe(true);
+    expect(repo.reconcileOrphanedRun("run-orphan", endedAt, {
+      reason: "Process interrupted by bridge restart",
+      reconciledAt: endedAt,
+      processState: "absent",
+      lockState: "absent",
+      cutoffMs: 600_000,
+    })).toBe(false);
     expect(repo.getRun("run-orphan").status).toBe("failed");
     expect(repo.getRun("run-orphan").error).toBe("Process interrupted by bridge restart");
     expect(repo.getRun("run-done").status).toBe("done");

@@ -610,15 +610,20 @@ describe("BridgeDb runs and events persistence", () => {
     ).toThrow();
   });
 
-  describe("cleanupOrphanedRuns", () => {
-    it("marks running runs as failed and invokes callback", () => {
+  describe("reconcileOrphanedRuns", () => {
+    it("marks only running runs as failed and invokes callback", async () => {
       db.insertRun("run-orphan-1", "chat-123", "codex");
       db.insertRun("run-done-1", "chat-123", "codex");
       db.updateRunCompleted("run-done-1", "done", null);
 
       const orphanedRuns: any[] = [];
-      db.cleanupOrphanedRuns((run) => {
+      await db.reconcileOrphanedRuns({
+        nowMs: Date.now(),
+        minAgeMs: 0,
+        processState: () => "absent",
+        onReconciled: (run) => {
         orphanedRuns.push(run);
+        },
       });
 
       expect(orphanedRuns.length).toBe(1);

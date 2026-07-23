@@ -9,7 +9,7 @@ import { basename } from "node:path";
 import { getBridgeProjectDir } from "./bridge.js";
 import { validateBridgeConfig } from "./config.js";
 import { openProductionDb } from "./db.js";
-import { shutdownCliProcesses } from "./cliSupervisor.js";
+import { getExecutionProcessState, shutdownCliProcesses } from "./cliSupervisor.js";
 import { TelegramClient } from "./telegram.js";
 import { BridgeEngine } from "./engine.js";
 import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
@@ -72,6 +72,12 @@ if (soulContext) console.log(`[bridge] loaded SOUL.md context (${soulContext.len
 
 const db = openProductionDb(config.dbPath, { serviceId: standaloneServiceId() });
 const advisorBroker = await startConfiguredAdvisorBroker({ db, bots: config.bots, runCli });
+
+await db.reconcileOrphanedRuns({
+  minAgeMs: Number(process.env.ORPHAN_RECONCILIATION_MIN_AGE_MS || 10 * 60 * 1000),
+  processState: (run) => getExecutionProcessState(run.run_id),
+  onReconciled: (run) => console.warn(`[bridge] reconciled orphaned run ${run.run_id}`),
+});
 
 console.log("[bridge] starting bots...");
 

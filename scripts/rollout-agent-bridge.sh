@@ -47,6 +47,7 @@ if [[ -n "$test_root" ]]; then
   journalctl_cmd="$test_root/bin/journalctl"
   cp_cmd="$test_root/bin/cp"
   restore_cmd="$test_root/bin/rollout-restore"
+  activation_cmd="$test_root/bin/release-activate"
   defaults_dir="$test_root/etc/default"
   cgroup_root="$test_root/sys/fs/cgroup"
   smoke_delay=0
@@ -60,6 +61,7 @@ else
   journalctl_cmd="/usr/bin/journalctl"
   cp_cmd="/usr/bin/cp"
   restore_cmd="/usr/local/libexec/agent-bridge-rollout-restore"
+  activation_cmd="/usr/local/libexec/agent-bridge-release-activate"
   defaults_dir="/etc/default"
   cgroup_root="/sys/fs/cgroup"
   smoke_delay=5
@@ -107,6 +109,9 @@ if [[ -n "$release_root" || -n "$current_pointer" ]]; then
   [[ -n "$release_root" && -n "$current_pointer" ]] || die "release_root and current_pointer must be configured together"
   release_mode=1
 fi
+if (( release_mode == 1 )); then
+  [[ -x "$activation_cmd" ]] || die "release activation helper is unavailable: $activation_cmd"
+fi
 for value_name in runtime_user node_bin backup_dir log_dir; do
   [[ -n "${!value_name}" ]] || die "missing rollout config key: $value_name"
 done
@@ -147,9 +152,15 @@ if [[ -n "$release_root" || -n "$current_pointer" ]]; then
   [[ "$current_pointer" == "$release_root/current" ]] || die "current pointer must be release_root/current"
   [[ -L "$current_pointer" ]] || die "current pointer must be a valid symlink"
   pointer_target="$(/usr/bin/readlink -- "$current_pointer")"
-  [[ "$pointer_target" == "$expected_commit" ]] || die "current pointer target does not match expected commit"
-  release_dir="$(/usr/bin/realpath -e "$current_pointer")"
-  [[ "$release_dir" == "$release_root/$expected_commit" && -d "$release_dir" && ! -L "$release_dir" ]] || die "current pointer resolves outside the expected release"
+  [[ "$pointer_target" =~ ^[0-9a-f]{40}$ ]] || die "current pointer target is not a release commit"
+  [[ -d "$release_root/$pointer_target" && ! -L "$release_root/$pointer_target" ]] || die "current pointer target does not match expected commit or an installed release"
+  active_release_dir="$(/usr/bin/realpath -e "$current_pointer")"
+  [[ "$active_release_dir" == "$release_root/$pointer_target" && -d "$active_release_dir" && ! -L "$active_release_dir" ]] || die "current pointer resolves outside a release"
+  release_dir="$release_root/$expected_commit"
+  [[ -d "$release_dir" && ! -L "$release_dir" ]] || die "expected release directory is missing"
+  [[ -f "$active_release_dir/manifest.json" && ! -L "$active_release_dir/manifest.json" ]] || die "active release manifest is missing"
+  active_manifest_commit="$(/usr/bin/grep -m1 -oE '"commit"[[:space:]]*:[[:space:]]*"[0-9a-f]{40}"' "$active_release_dir/manifest.json" | /usr/bin/sed -E 's/.*"([0-9a-f]{40})"/\1/')"
+  [[ "$active_manifest_commit" == "$pointer_target" ]] || die "active release manifest commit does not match pointer"
   [[ -f "$release_dir/manifest.json" && ! -L "$release_dir/manifest.json" ]] || die "active release manifest is missing"
   manifest_commit="$(/usr/bin/grep -m1 -oE '"commit"[[:space:]]*:[[:space:]]*"[0-9a-f]{40}"' "$release_dir/manifest.json" | /usr/bin/sed -E 's/.*"([0-9a-f]{40})"/\1/')"
   [[ "$manifest_commit" == "$expected_commit" ]] || die "active release manifest commit does not match expected commit"
@@ -327,6 +338,18 @@ restore_backups() {
   (( restored_count == ${#databases[@]} )) || restore_failed=1
   (( restore_failed == 0 )) || { echo "ROLLBACK INCOMPLETE; services remain stopped" >&2; return 1; }
   echo "database rollback completed with metadata and hashes verified"
+}
+
+restore_previous_release_and_start() {
+  (( release_mode == 1 )) || return 0
+  [[ "$previous_pointer_target" =~ ^[0-9a-f]{40}$ ]] || { echo "previous release pointer target is unavailable" >&2; return 1; }
+  "$activation_cmd" --release-root "$release_root" --current "$current_pointer" --expected-commit "$previous_pointer_target" || return 1
+  [[ "$(/usr/bin/readlink -- "$current_pointer")" == "$previous_pointer_target" ]] || { echo "previous release pointer verification failed" >&2; return 1; }
+  echo "restarting verified previous release commit=$previous_pointer_target"
+  "$systemctl_cmd" reset-failed "${units[@]}" || return 1
+  "$systemctl_cmd" start "${units[@]}" || return 1
+  for unit in "${units[@]}"; do assert_service_active "$unit" || return 1; done
+  return 0
 }
 
 stop_and_verify_all_services() {
@@ -535,8 +558,13 @@ on_exit() {
           # SHA-256 has been independently re-verified against the backup
           # manifest — "restored" and "verified" are the same check here,
           # not two separate steps that could disagree.
-          echo "STATE: FAILED_RESTORED — cohort restored and verified; sentinel will be removed, but this is 'safe to hand to the documented recovery flow,' not 'safe to bare-retry' — services remain stopped and code is still on the new commit" >&2
-          sentinel_removable=1
+          if (( release_mode == 1 )) && ! restore_previous_release_and_start; then
+            status=1
+            echo "STATE: RESTORE_INCOMPLETE — databases restored but previous release pointer/service recovery failed; manual review required; sentinel retained" >&2
+          else
+            echo "STATE: FAILED_RESTORED — cohort restored and verified; previous release restored and healthy; sentinel will be removed, but this is 'safe to hand to the documented recovery flow,' not 'safe to bare-retry'" >&2
+            sentinel_removable=1
+          fi
         else
           status=1
           echo "STATE: RESTORE_INCOMPLETE — automatic restore failed or could not be fully verified for every database; manual restoration required; sentinel retained" >&2
@@ -585,9 +613,11 @@ start_attempted=0
 services_started=0
 stop_attempted=0
 backup_completed=0
+pointer_switched=0
 completed=0
 sentinel_removable=0
 sentinel_identity=""
+previous_pointer_target=""
 declare -a expected_backups=()
 
 trap on_exit EXIT
@@ -646,10 +676,11 @@ echo "database_count=${#databases[@]}"
 
 code_check
 if (( release_mode == 1 )); then
+  previous_pointer_target="$pointer_target"
   rollout_helper_sha256="$(/usr/bin/sha256sum "$0" | /usr/bin/cut -d ' ' -f1)"
   {
-    printf '{\n  "expectedCommit": "%s",\n  "currentPointer": "%s",\n  "releaseRoot": "%s",\n  "releaseDir": "%s",\n  "rolloutHelperSha256": "%s"\n}\n' \
-      "$expected_commit" "$current_pointer" "$release_root" "$release_dir" "$rollout_helper_sha256"
+    printf '{\n  "expectedCommit": "%s",\n  "previousCommit": "%s",\n  "currentPointer": "%s",\n  "releaseRoot": "%s",\n  "releaseDir": "%s",\n  "rolloutHelperSha256": "%s"\n}\n' \
+      "$expected_commit" "$previous_pointer_target" "$current_pointer" "$release_root" "$release_dir" "$rollout_helper_sha256"
   } > "$artifact_dir/release-evidence.json"
   /usr/bin/sha256sum "$artifact_dir/release-evidence.json" > "$artifact_dir/release-evidence.sha256"
 fi
@@ -699,6 +730,16 @@ run_db_tool migrate --evidence - "${db_args[@]}" > "$artifact_dir/migration-evid
 echo "validating migrated databases"
 run_db_tool validate --evidence - "${db_args[@]}" > "$artifact_dir/validation-evidence.json"
 /usr/bin/sha256sum "$artifact_dir/migration-evidence.json" "$artifact_dir/validation-evidence.json" > "$artifact_dir/migration-evidence.sha256"
+
+if (( release_mode == 1 )); then
+  echo "activating immutable release commit=$expected_commit previous=$previous_pointer_target"
+  "$activation_cmd" --release-root "$release_root" --current "$current_pointer" --expected-commit "$expected_commit"
+  [[ "$(/usr/bin/readlink -- "$current_pointer")" == "$expected_commit" ]] || die "active release pointer did not switch to expected commit"
+  pointer_switched=1
+  printf '{\n  "previousCommit": "%s",\n  "activeCommit": "%s",\n  "pointer": "%s"\n}\n' \
+    "$previous_pointer_target" "$expected_commit" "$current_pointer" > "$artifact_dir/pointer-switch-evidence.json"
+  /usr/bin/sha256sum "$artifact_dir/pointer-switch-evidence.json" > "$artifact_dir/pointer-switch-evidence.sha256"
+fi
 
 echo "starting all services"
 journal_since="$(/usr/bin/date -u '+%Y-%m-%d %H:%M:%S UTC')"

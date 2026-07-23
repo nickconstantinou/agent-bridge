@@ -6,9 +6,10 @@ See `docs/roadmap/issue-135-phase4c-migration-ownership.md` for the schema-migra
 
 Issue #183's server-side artifact work begins with the staging-only helper in
 `docs/RELEASE-ARTIFACT-STAGING.md`, followed by the controlled pointer boundary
-in `docs/RELEASE-POINTER-ACTIVATION.md`. These remain separate from this
-rollout helper until the complete guarded state machine is implemented and
-reviewed.
+in `docs/RELEASE-POINTER-ACTIVATION.md`. In immutable release mode this rollout
+helper now owns the complete stop-and-switch boundary: it validates the active
+and target releases, drains WALs, backs up and migrates databases, atomically
+activates `current`, and starts the selected services from that pointer.
 
 ## Safety model
 
@@ -25,9 +26,10 @@ The enforced sequence is:
 7. Recheck Git and database preconditions.
 8. Create byte-exact SQLite backups after proving no WAL/SHM sidecars remain. Record and verify source/backup UID, GID, mode, size, canonical path, and SHA-256.
 9. Run the repository's additive migrations and validate the current schema.
-10. Reset failed state for every selected unit before capturing the `NRestarts` baselines, then start every service, verify active state, inspect startup error logs, and revalidate databases. The systemd journal's benign `-- No entries --` response is accepted; actual error output remains fatal.
+10. In immutable release mode, atomically switch `current` to the target release and record the old/new pointer identity before any service start.
+11. Reset failed state for every selected unit before capturing the `NRestarts` baselines, then start every service, verify active state, inspect startup error logs, and revalidate databases. The systemd journal's benign `-- No entries --` response is accepted; actual error output remains fatal.
 
-Every phase writes a timestamped log plus JSON evidence and SHA-256 manifests beneath pre-existing, canonical, root-owned directories. Immutable release evidence records the expected commit, active pointer, release directory, and the SHA-256 of the exact rollout helper used. Containment evidence records each unit's active/sub states, result, main exit code/status, main/control PIDs, cgroup path, and remaining cgroup PIDs. The manifest records each database parent directory's device, inode, ownership, and mode before migration. A failure before the first start attempt restores every database only after all services are proven stopped. The fixed root-owned restore helper opens the expected parent with `O_DIRECTORY|O_NOFOLLOW`, verifies its descriptor identity, removes every directory write bit for the critical section, and restores the exact original mode in `finally`. Restore files use `O_CREAT|O_EXCL|O_NOFOLLOW`; copying, metadata changes, verification, and final destination inode checks stay descriptor-relative through the atomic rename. A containment failure skips rollback and reports `CONTAINMENT INCOMPLETE`. A failure during or after a start attempt stops and verifies all services, preserves migrated databases and evidence, and requires operator review. The helper deliberately does not attempt an automatic post-start code/database rollback.
+Every phase writes a timestamped log plus JSON evidence and SHA-256 manifests beneath pre-existing, canonical, root-owned directories. Immutable release evidence records the expected and previous commits, active pointer, target release directory, and the SHA-256 of the exact rollout helper used. Pointer-switch evidence records the old and new targets. Containment evidence records each unit's active/sub states, result, main exit code/status, main/control PIDs, cgroup path, and remaining cgroup PIDs. The manifest records each database parent directory's device, inode, ownership, and mode before migration. A failure before the first start attempt restores every database only after all services are proven stopped; in immutable release mode it then reactivates the verified previous release and proves the previous services healthy. The fixed root-owned restore helper opens the expected parent with `O_DIRECTORY|O_NOFOLLOW`, verifies its descriptor identity, removes every directory write bit for the critical section, and restores the exact original mode in `finally`. Restore files use `O_CREAT|O_EXCL|O_NOFOLLOW`; copying, metadata changes, verification, and final destination inode checks stay descriptor-relative through the atomic rename. A containment failure skips rollback and reports `CONTAINMENT INCOMPLETE`. A failure during or after a start attempt stops and verifies all services, preserves migrated databases and evidence, and requires operator review. The helper deliberately does not attempt an automatic post-start code/database rollback.
 
 ## Installation
 

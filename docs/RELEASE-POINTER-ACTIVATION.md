@@ -37,15 +37,18 @@ sudo -n /usr/local/libexec/agent-bridge-release-activate \
   --expected-commit <full-40-character-commit-sha>
 ```
 
-This helper does not stop or start services, touch SQLite databases or queues,
-run migrations, or perform rollback. It is safe to stage and test without
-production activation.
+This helper only publishes the pointer; it does not independently stop or
+start services, touch SQLite databases or queues, run migrations, or perform
+rollback. The immutable mode of `rollout-agent-bridge` invokes it only after
+containment, WAL drain, backup, migration, and validation, and invokes it
+again for the verified previous release on a proven pre-start rollback.
 
 The guarded rollout helper accepts `release_root` and `current_pointer` in its
 root-owned rollout configuration. When both are present it validates the
-pointer and active release before any service stop, and uses that immutable
-release for migration tooling. A mutable `project_dir` is retained only for
-the legacy checkout mode and is not required in release mode.
+active and target immutable releases before any service stop, uses the target
+release for migration tooling, and atomically switches the pointer before
+starting services. A mutable `project_dir` is retained only for the legacy
+checkout mode and is not required in release mode.
 
 ## systemd boundary
 

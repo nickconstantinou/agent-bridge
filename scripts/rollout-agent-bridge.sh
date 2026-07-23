@@ -142,6 +142,7 @@ validate_secure_path "$log_dir" directory
 
 if [[ -n "$release_root" || -n "$current_pointer" ]]; then
   [[ "$release_root" == /* && "$current_pointer" == /* ]] || die "release paths must be absolute"
+  [[ "$release_root" != *[[:space:]\"\\]* && "$current_pointer" != *[[:space:]\"\\]* ]] || die "release paths must not contain whitespace or shell metacharacters"
   validate_secure_path "$release_root" directory
   [[ "$current_pointer" == "$release_root/current" ]] || die "current pointer must be release_root/current"
   [[ -L "$current_pointer" ]] || die "current pointer must be a valid symlink"
@@ -152,8 +153,8 @@ if [[ -n "$release_root" || -n "$current_pointer" ]]; then
   [[ -f "$release_dir/manifest.json" && ! -L "$release_dir/manifest.json" ]] || die "active release manifest is missing"
   manifest_commit="$(/usr/bin/grep -m1 -oE '"commit"[[:space:]]*:[[:space:]]*"[0-9a-f]{40}"' "$release_dir/manifest.json" | /usr/bin/sed -E 's/.*"([0-9a-f]{40})"/\1/')"
   [[ "$manifest_commit" == "$expected_commit" ]] || die "active release manifest commit does not match expected commit"
-  unsafe_release_entry="$(/usr/bin/find "$release_dir" \( -type f -o -type d \) -perm /022 -print -quit)"
-  [[ -z "$unsafe_release_entry" ]] || die "active release contains a group/world-writable entry: $unsafe_release_entry"
+  unsafe_release_entry="$(/usr/bin/find "$release_dir" \( -type f -o -type d \) -perm /222 -print -quit)"
+  [[ -z "$unsafe_release_entry" ]] || die "active release contains a writable entry: $unsafe_release_entry"
   unsafe_release_owner="$(/usr/bin/find "$release_dir" \( -type f -o -type d \) ! -uid "$secure_owner_uid" -print -quit)"
   [[ -z "$unsafe_release_owner" ]] || die "active release contains an entry with unsafe ownership: $unsafe_release_owner"
   [[ "$(/usr/bin/stat -c %u "$current_pointer")" == "$secure_owner_uid" ]] || die "current pointer has unsafe ownership"
@@ -636,6 +637,13 @@ echo "units=${units[*]}"
 echo "database_count=${#databases[@]}"
 
 code_check
+if (( release_mode == 1 )); then
+  {
+    printf '{\n  "expectedCommit": "%s",\n  "currentPointer": "%s",\n  "releaseRoot": "%s",\n  "releaseDir": "%s"\n}\n' \
+      "$expected_commit" "$current_pointer" "$release_root" "$release_dir"
+  } > "$artifact_dir/release-evidence.json"
+  /usr/bin/sha256sum "$artifact_dir/release-evidence.json" > "$artifact_dir/release-evidence.sha256"
+fi
 [[ -f "$project_dir/scripts/rollout-db.ts" ]] || die "migration helper is missing from expected commit"
 [[ -f "$project_dir/node_modules/tsx/dist/cli.mjs" ]] || die "tsx runtime is missing"
 

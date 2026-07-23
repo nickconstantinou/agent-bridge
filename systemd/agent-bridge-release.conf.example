@@ -1,0 +1,4 @@
+# Install as /etc/default/agent-bridge-release with root:root ownership and mode 0644.
+# This must be the controlled current symlink, never a Git checkout or release
+# directory directly. The activation helper publishes this path atomically.
+BRIDGE_CURRENT_RELEASE_DIR=/opt/agent-bridge/releases/current

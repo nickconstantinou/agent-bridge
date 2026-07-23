@@ -5,9 +5,10 @@ Status: operational contract and installation guide. Installing or merging this 
 See `docs/roadmap/issue-135-phase4c-migration-ownership.md` for the schema-migration ownership and gating policy layered on top of this helper (Issue #135 Phase 4C) — the migration/validation steps described below are being brought under that policy's stricter "ordinary startup never auto-migrates" contract.
 
 Issue #183's server-side artifact work begins with the staging-only helper in
-`docs/RELEASE-ARTIFACT-STAGING.md`. It is intentionally separate from this
-rollout helper until pointer activation and the complete guarded state machine
-are implemented and reviewed.
+`docs/RELEASE-ARTIFACT-STAGING.md`, followed by the controlled pointer boundary
+in `docs/RELEASE-POINTER-ACTIVATION.md`. These remain separate from this
+rollout helper until the complete guarded state machine is implemented and
+reviewed.
 
 ## Safety model
 

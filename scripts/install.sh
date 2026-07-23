@@ -86,7 +86,7 @@ env_file_has_key() {
 seed_from_env_file() {
   local file="$1"
   local key value
-  for key in BRIDGE_ROOT_DIR BRIDGE_PROJECT_DIR \
+  for key in BRIDGE_ROOT_DIR BRIDGE_PROJECT_DIR BRIDGE_CURRENT_RELEASE_DIR \
               TELEGRAM_ALLOWED_USER_IDS TELEGRAM_ALLOWED_USER_ID \
               TELEGRAM_BOT_TOKEN_CODEX TELEGRAM_BOT_TOKEN_ANTIGRAVITY TELEGRAM_BOT_TOKEN_CLAUDE TELEGRAM_BOT_TOKEN_HEALTH \
               CODEX_COMMAND ANTIGRAVITY_COMMAND CLAUDE_COMMAND \
@@ -189,6 +189,7 @@ ensure_var() {
 
 prompt BRIDGE_ROOT_DIR    "Bridge root directory"    "${TARGET_HOME}"
 prompt BRIDGE_PROJECT_DIR "Bridge project directory" "${REPO_DIR}"
+prompt BRIDGE_CURRENT_RELEASE_DIR "Active release pointer" "${BRIDGE_ROOT_DIR}/runtime/agent-bridge/current"
 prompt TELEGRAM_ALLOWED_USER_IDS  "Telegram allowed user IDs (comma-separated)"
 prompt TELEGRAM_BOT_TOKEN_CODEX       "Codex bot token"
 prompt TELEGRAM_BOT_TOKEN_ANTIGRAVITY "Antigravity bot token"
@@ -220,6 +221,7 @@ prompt HEALTH_SUGGEST_BOT             "Bot to use for suggestions (claude|antigr
 
 ensure_var BRIDGE_ROOT_DIR           "Bridge root directory"
 ensure_var BRIDGE_PROJECT_DIR        "Bridge project directory"
+ensure_var BRIDGE_CURRENT_RELEASE_DIR "Active release pointer"
 ensure_var TELEGRAM_ALLOWED_USER_IDS "Telegram allowed user IDs"
 ensure_var TELEGRAM_BOT_TOKEN_CODEX        "Codex bot token"
 ensure_var TELEGRAM_BOT_TOKEN_ANTIGRAVITY  "Antigravity bot token"
@@ -377,6 +379,16 @@ _write_systemd_defaults() {
   echo "  wrote ${dest}"
 }
 
+_write_release_defaults() {
+  local dest="${DEFAULTS_DIR}/agent-bridge-release"
+  {
+    echo "BRIDGE_CURRENT_RELEASE_DIR=${BRIDGE_CURRENT_RELEASE_DIR}"
+  } | sudo tee "${dest}" > /dev/null
+  sudo chmod 0644 "${dest}"
+  echo "  wrote ${dest}"
+}
+
+_write_release_defaults
 _write_shared_defaults
 _write_systemd_defaults codex       TELEGRAM_BOT_TOKEN_CODEX       CODEX_COMMAND       CODEX_PROJECT_DIR
 _write_systemd_defaults antigravity TELEGRAM_BOT_TOKEN_ANTIGRAVITY ANTIGRAVITY_COMMAND ANTIGRAVITY_PROJECT_DIR

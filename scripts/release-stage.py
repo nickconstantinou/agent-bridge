@@ -141,18 +141,6 @@ def extract_archive(archive: Path, destination: Path) -> None:
                 safe_target(target, member.linkname, destination)
                 os.symlink(member.linkname, target)
                 continue
-            if member.islnk():
-                linkname = member.linkname
-                while linkname.startswith("./"):
-                    linkname = linkname[2:]
-                link_relative = safe_relative(linkname)
-                if link_relative not in seen:
-                    fail(f"hardlink target must precede link: {relative} -> {linkname}")
-                source = destination / link_relative
-                if source.is_symlink() or not source.is_file():
-                    fail(f"hardlink target is not a regular file: {relative} -> {linkname}")
-                os.link(source, target)
-                continue
             if not member.isfile():
                 fail(f"unsupported archive member: {relative}")
             source = bundle.extractfile(member)

@@ -40,7 +40,7 @@ import {
   type CliKind,
 } from "./interactiveBot.js";
 import { runCli } from "./cli.js";
-import { isExecutionActive } from "./cliSupervisor.js";
+import { getExecutionProcessState } from "./cliSupervisor.js";
 import { parseCompactionProviderChain, runCapacityFallbackCompaction } from "./fallbackCompaction.js";
 import type { BridgeConfig, BotKind, TelegramUpdate } from "./types.js";
 import { startConfiguredAdvisorBroker } from "./advisorBroker.js";
@@ -92,7 +92,7 @@ const client = new TelegramClient(token, fetch, 45_000);
 
 await db.reconcileOrphanedRuns({
   minAgeMs: Number(process.env.ORPHAN_RECONCILIATION_MIN_AGE_MS || 10 * 60 * 1000),
-  processState: (run) => isExecutionActive(run.run_id) ? "live" : "absent",
+  processState: (run) => getExecutionProcessState(run.run_id),
   onReconciled: async (run) => {
     const parts = run.chat_id.split(":");
     const chatId = Number(parts[0]);

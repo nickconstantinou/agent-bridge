@@ -21,7 +21,7 @@
 import dotenv from "dotenv";
 import { getBridgeProjectDir } from "./bridge.js";
 import { openProductionDb } from "./db.js";
-import { isExecutionActive, shutdownCliProcesses } from "./cliSupervisor.js";
+import { getExecutionProcessState, shutdownCliProcesses } from "./cliSupervisor.js";
 import { loadBotsConfig, resolveBusyMessageMode, validateBusyMessageModeEnv } from "./config.js";
 import { DiscordClient, type DiscordUpdate } from "./discord.js";
 import { BridgeEngine } from "./engine.js";
@@ -164,30 +164,34 @@ class DiscordEngineClient implements MessagingPlatform {
 
 // ── DiscordClient ─────────────────────────────────────────────────────────────
 
+let reconciliationReady: Promise<void> = new Promise(() => {});
 const client = new DiscordClient({
   token,
   applicationId,
   guildId: process.env.DISCORD_GUILD_ID,
   onUpdate: (update: DiscordUpdate) => {
-    handleDiscordUpdate(update).catch((err) =>
-      console.error("[discord-interactive] update error", err),
-    );
+    reconciliationReady
+      .then(() => handleDiscordUpdate(update))
+      .catch((err) => console.error("[discord-interactive] update blocked during startup recovery", err));
   },
   onReady: () => {
     console.log("[discord-interactive] gateway ready");
     registerCommands().catch((err) =>
       console.warn("[discord-interactive] command registration failed", err),
     );
-    db.reconcileOrphanedRuns({
+    reconciliationReady = db.reconcileOrphanedRuns({
       minAgeMs: Number(process.env.ORPHAN_RECONCILIATION_MIN_AGE_MS || 10 * 60 * 1000),
-      processState: (run) => isExecutionActive(run.run_id) ? "live" : "absent",
+      processState: (run) => getExecutionProcessState(run.run_id),
       onReconciled: async (run) => {
         await client.sendMessage({
           chat_id: run.chat_id,
           text: "⚠️ **Agent bridge restarted.** The active task was interrupted. You can reply with `provide update` or `continue` to resume.",
         }).catch((err) => console.error(`Failed to send restart notification to Discord channel ${run.chat_id}`, err));
       },
-    }).catch((err) => console.error("[discord-interactive] orphan reconciliation failed", err));
+     }).then(() => undefined).catch((err) => {
+       console.error("[discord-interactive] orphan reconciliation failed", err);
+       throw err;
+     });
   },
   onError: (err) => console.error("[discord-interactive] gateway error", err),
 });

@@ -21,7 +21,10 @@ describe("startup orphan reconciliation", () => {
       expect(source, `${entrypoint} should rely on service-scoped cleanup`).not.toContain("pkill");
       expect(source, `${entrypoint} should not kill CLI processes by global pattern`).not.toContain("killOrphanedCli");
       expect(source, `${entrypoint} should invoke guarded reconciliation`).toContain("reconcileOrphanedRuns");
-      expect(source, `${entrypoint} should provide a process-liveness proof`).toContain("isExecutionActive");
+      expect(source, `${entrypoint} should provide a process-liveness proof`).toContain("getExecutionProcessState");
     }
+    const discord = readSource("src/index-discord-interactive.ts");
+    expect(discord).toContain("reconciliationReady");
+    expect(discord).toMatch(/reconciliationReady\s*\.then/);
   });
 });

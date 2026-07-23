@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   abortCliProcess,
   abortCliProcessAndWait,
+  getExecutionProcessState,
   runCli,
   runCliAsync,
   resolveSupervisorTimeouts,
@@ -25,6 +26,24 @@ const cliTestCwd = mkdtempSync(join(tmpdir(), "agent-bridge-supervisor-matrix-")
 describe("supervisor timeout defaults", () => {
   it("disables hard and idle timeouts when callers omit options", () => {
     expect(resolveSupervisorTimeouts({})).toEqual({ timeoutMs: 0, idleTimeoutMs: null });
+  });
+});
+
+describe("durable execution liveness", () => {
+  it("detects a marked CLI process without relying on this process registry", async () => {
+    const runId = `orphan-process-${Date.now()}-${Math.random()}`;
+    const execution = runCli(process.execPath, ["-e", "setTimeout(() => {}, 5000)"], cliTestCwd, {
+      chatId: "liveness-test",
+      eventContext: { runId, bot: "codex", chatId: "chat-1" },
+    });
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(getExecutionProcessState(runId)).toBe("live");
+    } finally {
+      await abortCliProcessAndWait("liveness-test");
+      await execution.catch(() => undefined);
+      expect(getExecutionProcessState(runId)).toBe("absent");
+    }
   });
 });
 

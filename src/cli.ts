@@ -41,6 +41,7 @@ import { isProviderFallbackEligibleError } from "./providers/fallbackEligibility
 import { getProcessWatchForCommand, supportsToolFreeMode } from "./providers/registry.js";
 import {
   runSupervisedProcess,
+  getExecutionProcessState,
   buildSafeChildEnv,
   buildAdvisorChildEnv,
   beginExecutionLifecycle,
@@ -57,6 +58,7 @@ import {
 import { normalizeCliArgs } from "./cliArgNormalization.js";
 
 export {
+  getExecutionProcessState,
   buildSafeChildEnv,
   buildAdvisorChildEnv,
   beginExecutionLifecycle,

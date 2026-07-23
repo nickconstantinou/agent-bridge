@@ -23,6 +23,8 @@ describe("orphaned run reconciliation", () => {
     const bridge = open();
     insertRunning(bridge, "stale", "2026-07-22T11:00:00.000Z");
     const queued = bridge.createWorkJob({ task_type: "ops_check", idempotency_key: "queue-1" });
+    bridge.enqueueMsg("telegram:interactive", "chat-1", { prompt: "queued prompt", chatId: 1, chatType: "private" });
+    const pendingBefore = bridge.dequeueMsgs("telegram:interactive", "chat-1");
     const notified: string[] = [];
 
     const reconciled = await bridge.reconcileOrphanedRuns({
@@ -47,6 +49,7 @@ describe("orphaned run reconciliation", () => {
       lockState: "absent",
     });
     expect(bridge.getWorkJob(queued.id)).toMatchObject({ status: "pending", idempotency_key: "queue-1" });
+    expect(bridge.dequeueMsgs("telegram:interactive", "chat-1")).toEqual(pendingBefore);
   });
 
   it("leaves recent, locked, live, and ambiguous runs unchanged", async () => {

@@ -255,6 +255,18 @@ describe("guarded rollout helper", () => {
     expect(output).not.toContain("services remain stopped");
   }, 15_000);
 
+  it("recontains the running previous release when terminal recovery evidence cannot be recorded", () => {
+    const fixture = createFixture();
+    prepareImmutableRelease(fixture, fixture.previousCommit);
+    const result = runRollout(fixture, "migrate", undefined, { FAKE_FAIL_TERMINAL_RECOVERY_LEDGER: "1" });
+    const output = [result.stdout, result.stderr].join("\n");
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/RESTORE_INCOMPLETE/);
+    expect(output).not.toMatch(/FAILED_RESTORED/);
+    expect(output).not.toContain("previous release services running and recovery health verified");
+    expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+  }, 15_000);
+
   it("fails closed when the previous release reports a startup journal error", () => {
     const fixture = createFixture();
     prepareImmutableRelease(fixture, fixture.previousCommit);

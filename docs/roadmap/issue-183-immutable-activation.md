@@ -25,6 +25,9 @@ start-attempt or ambiguous failure -> stop and contain ->
   containment, WAL checkpointing, backup, migration, and validation.
 - A proven pre-start failure restores the byte-verified database cohort,
   reactivates the previous immutable release, and verifies service health.
+- If terminal recovery evidence cannot be recorded after that restart, the
+  previous release is re-contained and the outcome remains
+  `RESTORE_INCOMPLETE`; it is never reported as `FAILED_RESTORED`.
 - Any start attempt, uncertain containment, pointer ambiguity, or possible
   write acceptance remains fail-closed and requires manual review.
 - SQLite WALs are drained with `wal_checkpoint(TRUNCATE)`; rollout code does

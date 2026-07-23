@@ -429,6 +429,9 @@ hash_evidence_file() {
 
 record_phase() {
   local phase_name="$1"
+  if (( test_mode == 1 )) && [[ "$phase_name" == FAILED_RESTORED && "${FAKE_FAIL_TERMINAL_RECOVERY_LEDGER:-}" == 1 ]]; then
+    return 1
+  fi
   printf 'phase=%s timestamp=%s\n' "$phase_name" "$(/usr/bin/date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "$phase_ledger"
   /usr/bin/sha256sum "$phase_ledger" > "$phase_ledger.sha256"
 }
@@ -668,6 +671,8 @@ on_exit() {
             echo "STATE: RESTORE_INCOMPLETE — databases restored but previous release pointer/service recovery failed; manual review required; sentinel retained" >&2
           elif ! record_phase FAILED_RESTORED; then
             status=1
+            recovery_running=0
+            recontain_after_recovery_failure
             echo "STATE: RESTORE_INCOMPLETE — previous release recovery completed but its terminal phase could not be recorded; manual review required; sentinel retained" >&2
           else
             echo "STATE: FAILED_RESTORED — cohort restored and verified; previous release restored and healthy; sentinel will be removed, but this is 'safe to hand to the documented recovery flow,' not 'safe to bare-retry'" >&2

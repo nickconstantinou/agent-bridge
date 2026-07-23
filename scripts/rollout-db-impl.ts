@@ -38,6 +38,11 @@ interface DbEvidence {
   pendingColumns: string[];
   lockColumns: string[];
   resolvingUnits: string[];
+  queueStateCounts: Record<string, number>;
+  claimStateCounts: Record<string, number>;
+  executionLockState: { total: number; active: number };
+  claimRunAcquisitionCorrelation: string;
+  deliveryState: Record<string, number>;
   role?: string;
 }
 
@@ -168,6 +173,17 @@ function sameSet(values: string[], expected: Set<string>): boolean {
   return values.length === expected.size && values.every((value) => expected.has(value));
 }
 
+function countBy<T extends string>(values: T[]): Record<string, number> {
+  return values.reduce<Record<string, number>>((counts, value) => {
+    counts[value] = (counts[value] ?? 0) + 1;
+    return counts;
+  }, {});
+}
+
+function digestRows(rows: unknown[]): string {
+  return createHash("sha256").update(JSON.stringify(rows)).digest("hex");
+}
+
 function inspectDatabase(path: string, requireCurrent: boolean, resolvingUnits: string[] = []): DbEvidence {
   const db = new Database(path, { readonly: true, fileMustExist: true });
   try {
@@ -217,7 +233,27 @@ function inspectDatabase(path: string, requireCurrent: boolean, resolvingUnits: 
       ? Number((db.prepare("SELECT COUNT(*) AS count FROM pending_messages WHERE surface = 'legacy'").get() as { count: number }).count)
       : Number((db.prepare("SELECT COUNT(*) AS count FROM pending_messages").get() as { count: number }).count);
     const pendingQueueCount = Number((db.prepare("SELECT COUNT(*) AS count FROM pending_messages").get() as { count: number }).count);
-    return { path, sha256: hashFile(path), integrity, schemaVersion: userVersion, schema, legacyQueueCount, pendingQueueCount, tables, pendingColumns, lockColumns, resolvingUnits };
+    const queueRows = pendingColumns.includes("state")
+      ? db.prepare("SELECT id, state, claim_run_id, claim_acquisition_id FROM pending_messages ORDER BY id").all() as Array<Record<string, unknown>>
+      : db.prepare("SELECT id FROM pending_messages ORDER BY id").all() as Array<Record<string, unknown>>;
+    const queueStateCounts = pendingColumns.includes("state")
+      ? countBy((queueRows as Array<{ state: string }>).map((row) => row.state))
+      : { legacy: pendingQueueCount };
+    const claimStateCounts = pendingColumns.includes("state")
+      ? countBy((queueRows as Array<{ state: string }>).filter((row) => row.state === "claimed").map((row) => row.state))
+      : {};
+    const lockRows = currentLocks
+      ? db.prepare("SELECT surface, service_id, run_id, acquisition_id, acquired_at, lease_expires_at FROM execution_locks ORDER BY surface, service_id, run_id, acquisition_id").all()
+      : [];
+    const executionLockState = { total: lockRows.length, active: lockRows.filter((row) => new Date(String((row as { lease_expires_at: string }).lease_expires_at)).getTime() > Date.now()).length };
+    const deliveryState = tables.includes("bridge_runs")
+      ? countBy((db.prepare("SELECT status FROM bridge_runs ORDER BY run_id").all() as Array<{ status: string }>).map((row) => row.status))
+      : {};
+    return {
+      path, sha256: hashFile(path), integrity, schemaVersion: userVersion, schema, legacyQueueCount, pendingQueueCount,
+      tables, pendingColumns, lockColumns, resolvingUnits, queueStateCounts, claimStateCounts, executionLockState,
+      claimRunAcquisitionCorrelation: digestRows({ queueRows, lockRows }), deliveryState,
+    };
   } finally {
     db.close();
   }

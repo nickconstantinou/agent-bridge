@@ -37,15 +37,36 @@ sudo -n /usr/local/libexec/agent-bridge-release-activate \
   --expected-commit <full-40-character-commit-sha>
 ```
 
-This helper does not stop or start services, touch SQLite databases or queues,
-run migrations, or perform rollback. It is safe to stage and test without
-production activation.
+This helper only publishes the pointer; it does not independently stop or
+start services, touch SQLite databases or queues, run migrations, or perform
+rollback. The immutable mode of `rollout-agent-bridge` invokes it only after
+containment, WAL drain, backup, migration, and validation, and invokes it
+again for the verified previous release on a proven pre-start rollback.
+
+The installer enables pointer-dependent units but deliberately does not start
+them. Services may start only after the canonical pointer and active release
+manifest have been validated by the guarded rollout path. The canonical path
+is `/opt/agent-bridge/releases/current` in installer defaults, systemd
+examples, rollout configuration, and this documentation.
+
+Every JSON phase artifact has its own SHA-256 sidecar. The rollout sentinel
+also records an append-only phase ledger, so an interruption remains tied to
+the last completed phase. Queue evidence records state counts, claim/run /
+acquisition correlation, execution-lock state, and delivery-run state without
+payload contents.
+
+`FAILED_RESTORED` is emitted and the sentinel is removable only after bounded
+previous-release recovery acceptance: pointer identity, stable active state,
+journal smoke, restart-counter stability, database inspection, and queue/claim
+evidence. Any failed recovery start or health check triggers a second full
+cohort containment proof and retains the sentinel for manual review.
 
 The guarded rollout helper accepts `release_root` and `current_pointer` in its
 root-owned rollout configuration. When both are present it validates the
-pointer and active release before any service stop, and uses that immutable
-release for migration tooling. A mutable `project_dir` is retained only for
-the legacy checkout mode and is not required in release mode.
+active and target immutable releases before any service stop, uses the target
+release for migration tooling, and atomically switches the pointer before
+starting services. A mutable `project_dir` is retained only for the legacy
+checkout mode and is not required in release mode.
 
 ## systemd boundary
 

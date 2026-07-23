@@ -63,6 +63,7 @@ describe("DiscordGateway", () => {
   afterEach(() => {
     (globalThis as any).WebSocket = origWebSocket;
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("sends IDENTIFY after receiving HELLO", () => {
@@ -145,6 +146,9 @@ describe("DiscordGateway", () => {
 
   it("tracks sequence numbers from DISPATCH events", () => {
     vi.useFakeTimers();
+    // Keep the first jittered heartbeat strictly before the first interval
+    // tick, so the ACK is delivered before the zombie guard can run.
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     const gateway = makeGateway();
     gateway.connect();
 

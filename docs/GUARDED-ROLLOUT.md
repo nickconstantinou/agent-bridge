@@ -6,9 +6,10 @@ See `docs/roadmap/issue-135-phase4c-migration-ownership.md` for the schema-migra
 
 Issue #183's server-side artifact work begins with the staging-only helper in
 `docs/RELEASE-ARTIFACT-STAGING.md`, followed by the controlled pointer boundary
-in `docs/RELEASE-POINTER-ACTIVATION.md`. These remain separate from this
-rollout helper until the complete guarded state machine is implemented and
-reviewed.
+in `docs/RELEASE-POINTER-ACTIVATION.md`. In immutable release mode this rollout
+helper now owns the complete stop-and-switch boundary: it validates the active
+and target releases, drains WALs, backs up and migrates databases, atomically
+activates `current`, and starts the selected services from that pointer.
 
 ## Safety model
 
@@ -25,9 +26,10 @@ The enforced sequence is:
 7. Recheck Git and database preconditions.
 8. Create byte-exact SQLite backups after proving no WAL/SHM sidecars remain. Record and verify source/backup UID, GID, mode, size, canonical path, and SHA-256.
 9. Run the repository's additive migrations and validate the current schema.
-10. Reset failed state for every selected unit before capturing the `NRestarts` baselines, then start every service, verify active state, inspect startup error logs, and revalidate databases. The systemd journal's benign `-- No entries --` response is accepted; actual error output remains fatal.
+10. In immutable release mode, atomically switch `current` to the target release and record the old/new pointer identity before any service start.
+11. Reset failed state for every selected unit before capturing the `NRestarts` baselines, then start every service, verify active state, inspect startup error logs, and revalidate databases. The systemd journal's benign `-- No entries --` response is accepted; actual error output remains fatal.
 
-Every phase writes a timestamped log plus JSON evidence and SHA-256 manifests beneath pre-existing, canonical, root-owned directories. Immutable release evidence records the expected commit, active pointer, release directory, and the SHA-256 of the exact rollout helper used. Containment evidence records each unit's active/sub states, result, main exit code/status, main/control PIDs, cgroup path, and remaining cgroup PIDs. The manifest records each database parent directory's device, inode, ownership, and mode before migration. A failure before the first start attempt restores every database only after all services are proven stopped. The fixed root-owned restore helper opens the expected parent with `O_DIRECTORY|O_NOFOLLOW`, verifies its descriptor identity, removes every directory write bit for the critical section, and restores the exact original mode in `finally`. Restore files use `O_CREAT|O_EXCL|O_NOFOLLOW`; copying, metadata changes, verification, and final destination inode checks stay descriptor-relative through the atomic rename. A containment failure skips rollback and reports `CONTAINMENT INCOMPLETE`. A failure during or after a start attempt stops and verifies all services, preserves migrated databases and evidence, and requires operator review. The helper deliberately does not attempt an automatic post-start code/database rollback.
+Every phase writes a timestamped log plus JSON evidence and SHA-256 manifests beneath pre-existing, canonical, root-owned directories. Immutable release evidence records the expected and previous commits, active pointer, target release directory, and the SHA-256 of the exact rollout helper used. Pointer-switch evidence records the old and new targets. Containment evidence records each unit's active/sub states, result, main exit code/status, main/control PIDs, cgroup path, and remaining cgroup PIDs. The manifest records each database parent directory's device, inode, ownership, and mode before migration. A failure before the first start attempt restores every database only after all services are proven stopped; in immutable release mode it then reactivates the verified previous release and proves the previous services healthy. The fixed root-owned restore helper opens the expected parent with `O_DIRECTORY|O_NOFOLLOW`, verifies its descriptor identity, removes every directory write bit for the critical section, and restores the exact original mode in `finally`. Restore files use `O_CREAT|O_EXCL|O_NOFOLLOW`; copying, metadata changes, verification, and final destination inode checks stay descriptor-relative through the atomic rename. A containment failure skips rollback and reports `CONTAINMENT INCOMPLETE`. A failure during or after a start attempt stops and verifies all services, preserves migrated databases and evidence, and requires operator review. The helper deliberately does not attempt an automatic post-start code/database rollback.
 
 ## Installation
 
@@ -101,7 +103,7 @@ sudo -n /usr/local/sbin/rollout-bootstrap-agent-bridge --role <shared|discord|he
 
 ## Interrupted-rollout sentinel (Phase 4C.4, issue #135)
 
-`rollout-agent-bridge` writes a fixed, root-owned regular file, `$log_dir/.rollout-in-progress`, mode `0600`, immediately after acquiring the exclusive rollout lock and before any precondition check runs — including the artifact-directory-uniqueness check. Its purpose is a hard stop: if a rollout is interrupted mid-flight (the process killed, the machine rebooted), the *next* invocation must never silently proceed as if nothing happened. It refuses instead, citing the sentinel's own recorded `expected_commit` and `artifact_dir` as evidence for what needs manual review.
+`rollout-agent-bridge` writes a fixed, root-owned regular file, `$log_dir/.rollout-in-progress`, mode `0600`, immediately after acquiring the exclusive rollout lock and before any precondition check runs — including the artifact-directory-uniqueness check. Its purpose is a hard stop: if a rollout is interrupted mid-flight (the process killed, the machine rebooted), the *next* invocation must never silently proceed as if nothing happened. It refuses instead, citing the sentinel's own recorded `expected_commit`, `artifact_dir`, and append-only phase ledger as evidence for what needs manual review.
 
 Creation is atomic — a `mktemp`'d temp file in the same directory, `chmod 0600`, then a hard link (`ln`) from the temp name to the fixed sentinel path. `ln` fails if the destination already exists rather than replacing it, giving `O_CREAT|O_EXCL` create-if-absent semantics without a custom syscall wrapper. An existing sentinel that is a symlink, not a regular file, or has the wrong owner/mode is never trusted or silently overwritten — that is its own containment-uncertain failure, refused with instructions to inspect it manually and clear it with the separate `rollout-sentinel-clear` tool rather than retry.
 
@@ -109,14 +111,14 @@ The sentinel is removed automatically in exactly three cases, gated by an intern
 
 - The rollout completes successfully end to end.
 - A precondition fails strictly before any service stop is attempted — nothing was touched, so there is nothing to review.
-- The automatic post-failure restore (`FAILED_RESTORED`) both succeeds and is verified — every database's SHA-256 matches the pre-migration manifest. Sentinel removal here means only "safe to hand to the documented recovery flow below," never "safe to bare-retry": services remain stopped and the checked-out code is still the new commit.
+- The automatic post-failure restore (`FAILED_RESTORED`) both succeeds and is verified — every database's SHA-256 matches the pre-migration manifest, and the previous release passes bounded pointer, service-stability, journal-smoke captured from immediately before recovery start, post-smoke service rechecks, restart-counter, database, and queue/claim acceptance. The previous release is running when this state is reported; sentinel removal means only "safe to hand to the documented recovery flow below," never "safe to bare-retry."
 
 In every other failure shape the sentinel is retained and the failure is labeled with one of four states, so an operator can pick the correct recovery path without having to reconstruct what happened from logs alone:
 
 | State | Meaning | Recovery |
 |---|---|---|
 | `STOPPED_UNCHANGED` | Services stopped, containment re-proven, but the cohort backup did not complete and verify. The source databases remain on the OLD schema; the offline WAL phase may already have incorporated committed pages into a main file, but no migration ran. `backup_completed=0` only means the *whole cohort* wasn't verified; a partial, unmanifested backup artifact may exist under the run's `backup_set` directory and must never be treated as a valid backup or used for restore. The checked-out code is still the NEW commit. | **Not** bare-retryable — services are stopped and `assert_service_active` rejects a re-invocation until they're active again. Review the sentinel's recorded evidence, discard any partial backup artifact, revert the working tree to the previous commit (old schema + new code is not a supported pairing), restart the previous services, confirm they're active, then start a fresh rollout. |
-| `FAILED_RESTORED` | A genuine restore attempt ran and every database verified against the manifest. | Not a bare-retry case — review why migration failed before starting services again. |
+| `FAILED_RESTORED` | A genuine restore attempt ran, every database verified against the manifest, and the previous release passed recovery acceptance. | Not a bare-retry case — review why migration failed before retrying. |
 | `RESTORE_INCOMPLETE` | The automatic restore itself failed, or could not be fully verified for every database. State is unknown/mixed. | Manual restoration required before anything else; do not start services. |
 | `STOPPED_PRESERVED` | Services stopped after a post-start failure. Database IS on the NEW schema — migration and validation already succeeded, and services were briefly started against this pairing before failing. | Always requires operator judgment; no automatic action is safe with services possibly having accepted live writes. |
 

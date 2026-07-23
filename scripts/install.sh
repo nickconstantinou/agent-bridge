@@ -189,7 +189,7 @@ ensure_var() {
 
 prompt BRIDGE_ROOT_DIR    "Bridge root directory"    "${TARGET_HOME}"
 prompt BRIDGE_PROJECT_DIR "Bridge project directory" "${REPO_DIR}"
-prompt BRIDGE_CURRENT_RELEASE_DIR "Active release pointer" "${BRIDGE_ROOT_DIR}/runtime/agent-bridge/current"
+prompt BRIDGE_CURRENT_RELEASE_DIR "Active release pointer" "/opt/agent-bridge/releases/current"
 prompt TELEGRAM_ALLOWED_USER_IDS  "Telegram allowed user IDs (comma-separated)"
 prompt TELEGRAM_BOT_TOKEN_CODEX       "Codex bot token"
 prompt TELEGRAM_BOT_TOKEN_ANTIGRAVITY "Antigravity bot token"
@@ -472,10 +472,13 @@ if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
 fi
 
 sudo systemctl daemon-reload
+# Enable only. Pointer activation is a separate guarded operation and service
+# startup must not happen until the canonical pointer and its manifest have
+# been validated by the rollout helper.
 # shellcheck disable=SC2086
-sudo systemctl enable --now ${UNITS_TO_ENABLE}
+sudo systemctl enable ${UNITS_TO_ENABLE}
 
-echo "Installed and started: ${UNITS_TO_ENABLE}"
+echo "Installed and enabled, not started: ${UNITS_TO_ENABLE}"
 echo "Defaults written to ${DEFAULTS_DIR}/"
 if [[ -n "${AGENT_BRIDGE_SKILLS:-}" && "${AGENT_BRIDGE_SKILLS}" != "none" && "${AGENT_BRIDGE_SKILLS}" != "skip" ]]; then
   echo "Shared skills installed: ${AGENT_BRIDGE_SKILLS}"

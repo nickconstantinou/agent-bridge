@@ -5,6 +5,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readlinkSync,
   readdirSync,
   readFileSync,
   renameSync,
@@ -48,16 +49,19 @@ import {
 
 afterEach(cleanupRoots);
 
-function prepareImmutableRelease(fixture: Fixture): { currentPointer: string; releaseDir: string } {
+function prepareImmutableRelease(fixture: Fixture, activeCommit = fixture.expectedCommit): { currentPointer: string; releaseDir: string } {
   const releaseRoot = join(fixture.root, "releases");
   const releaseDir = join(releaseRoot, fixture.expectedCommit);
   mkdirSync(releaseRoot, { recursive: true, mode: 0o755 });
-  execFileSync("cp", ["-a", `${fixture.project}/.`, releaseDir]);
-  writeFileSync(join(releaseDir, "manifest.json"), JSON.stringify({ schema_version: 1, commit: fixture.expectedCommit }));
-  execFileSync("find", [releaseDir, "-type", "f", "-exec", "chmod", "a-w", "{}", "+"]);
-  execFileSync("find", [releaseDir, "-type", "d", "-exec", "chmod", "a-w", "{}", "+"]);
+  for (const commit of new Set([fixture.previousCommit, fixture.expectedCommit])) {
+    const directory = join(releaseRoot, commit);
+    execFileSync("cp", ["-a", `${fixture.project}/.`, directory]);
+    writeFileSync(join(directory, "manifest.json"), JSON.stringify({ schema_version: 1, commit }));
+    execFileSync("find", [directory, "-type", "f", "-exec", "chmod", "a-w", "{}", "+"]);
+    execFileSync("find", [directory, "-type", "d", "-exec", "chmod", "a-w", "{}", "+"]);
+  }
   const currentPointer = join(releaseRoot, "current");
-  symlinkSync(fixture.expectedCommit, currentPointer);
+  symlinkSync(activeCommit, currentPointer);
   rewriteConfig(fixture, (lines) => [
     ...lines.filter((line) => !line.startsWith("project_dir=")),
     `release_root=${releaseRoot}`,
@@ -140,6 +144,190 @@ describe("guarded rollout helper", () => {
     expect(log.indexOf("systemctl:stop")).toBeGreaterThanOrEqual(0);
     expect(log.indexOf("systemctl:stop")).toBeLessThan(log.indexOf(" backup "));
     expect(existsSync(join(artifacts, "containment-evidence.json"))).toBe(true);
+    expect(existsSync(join(artifacts, "stopped-evidence.sha256"))).toBe(true);
+    expect(existsSync(join(artifacts, "post-start-evidence.sha256"))).toBe(true);
+    expect(existsSync(join(artifacts, "phase-ledger.log"))).toBe(true);
+    const ledger = readFileSync(join(artifacts, "phase-ledger.log"), "utf8");
+    expect(ledger).toMatch(/phase=PRECHECK_STARTED/);
+    expect(ledger).toMatch(/phase=SERVICES_STARTING/);
+    expect(ledger).toMatch(/phase=COMPLETE/);
+    expect(ledger.indexOf("phase=SERVICES_STARTING")).toBeLessThan(ledger.indexOf("phase=ACCEPTED"));
+  });
+
+  it("atomically activates the staged release after migration and before service start", () => {
+    const fixture = createFixture();
+    const { currentPointer } = prepareImmutableRelease(fixture, fixture.previousCommit);
+
+    const result = runRollout(fixture);
+
+    execFileSync("find", [join(fixture.root, "releases"), "-type", "d", "-exec", "chmod", "u+w", "{}", "+"]);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const log = actions(fixture);
+    expect(log.indexOf(" migrate ")).toBeLessThan(log.indexOf("release-activate:"));
+    expect(log.indexOf("release-activate:")).toBeLessThan(log.indexOf("systemctl:start"));
+    expect(readlinkSync(currentPointer)).toBe(fixture.expectedCommit);
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+    expect(JSON.parse(readFileSync(join(artifacts, "pointer-switch-evidence.json"), "utf8"))).toEqual(expect.objectContaining({
+      previousCommit: fixture.previousCommit,
+      activeCommit: fixture.expectedCommit,
+      pointer: currentPointer,
+      transitionAt: expect.any(String),
+    }));
+    const beforeQueue = JSON.parse(readFileSync(join(artifacts, "preflight-evidence.json"), "utf8")).databases
+      .map((entry: { path: string; pendingQueueCount: number }) => [entry.path, entry.pendingQueueCount]);
+    const afterQueue = JSON.parse(readFileSync(join(artifacts, "post-start-evidence.json"), "utf8")).databases
+      .map((entry: { path: string; pendingQueueCount: number }) => [entry.path, entry.pendingQueueCount]);
+    expect(afterQueue).toEqual(beforeQueue);
+    const beforeEvidence = JSON.parse(readFileSync(join(artifacts, "preflight-evidence.json"), "utf8"));
+    expect(beforeEvidence.databases[0]).toEqual(expect.objectContaining({
+      queueStateCounts: expect.any(Object),
+      claimStateCounts: expect.any(Object),
+      executionLockState: expect.any(Object),
+      claimRunAcquisitionCorrelation: expect.any(String),
+      deliveryState: expect.any(Object),
+    }));
+    expect(JSON.parse(readFileSync(join(artifacts, "post-start-evidence.json"), "utf8")).databases[0].claimRunAcquisitionCorrelation)
+      .toBe(beforeEvidence.databases[0].claimRunAcquisitionCorrelation);
+  });
+
+  it("restores the verified databases and previous release after a pre-start migration failure", () => {
+    const fixture = createFixture();
+    const { currentPointer } = prepareImmutableRelease(fixture, fixture.previousCommit);
+    const before = fixture.dbPaths.map(sha256);
+
+    const result = runRollout(fixture, "migrate");
+
+    execFileSync("find", [join(fixture.root, "releases"), "-type", "d", "-exec", "chmod", "u+w", "{}", "+"]);
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/FAILED_RESTORED/);
+    expect(fixture.dbPaths.map(sha256)).toEqual(before);
+    expect(readlinkSync(currentPointer)).toBe(fixture.previousCommit);
+    expect(readFileSync(fixture.stateFile, "utf8").trim().split("\n")).toEqual(units);
+    expect(output).not.toContain("services remain stopped");
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+    const ledger = readFileSync(join(artifacts, "phase-ledger.log"), "utf8");
+    for (const phase of [
+      "DATABASES_RESTORED",
+      "POINTER_ROLLBACK_STARTED",
+      "POINTER_ROLLED_BACK",
+      "PREVIOUS_RELEASE_STARTING",
+      "PREVIOUS_RELEASE_ACCEPTED",
+      "FAILED_RESTORED",
+    ]) expect(ledger).toContain("phase=" + phase);
+    expect(ledger.indexOf("phase=DATABASES_RESTORED")).toBeLessThan(ledger.indexOf("phase=POINTER_ROLLBACK_STARTED"));
+    expect(ledger.indexOf("phase=POINTER_ROLLED_BACK")).toBeLessThan(ledger.indexOf("phase=PREVIOUS_RELEASE_STARTING"));
+    expect(ledger.indexOf("phase=PREVIOUS_RELEASE_ACCEPTED")).toBeLessThan(ledger.indexOf("phase=FAILED_RESTORED"));
+  });
+
+  it("recontains the cohort when previous-release recovery start fails", () => {
+    const fixture = createFixture();
+    prepareImmutableRelease(fixture, fixture.previousCommit);
+    const result = runRollout(fixture, "migrate", undefined, { FAKE_FAIL_RECOVERY_START: "1" });
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/RESTORE_INCOMPLETE/);
+    expect(output).not.toMatch(/FAILED_RESTORED/);
+    expect(actions(fixture).match(/systemctl:stop/g)?.length).toBeGreaterThanOrEqual(2);
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+    expect(existsSync(join(artifacts, "rollback-containment-evidence.json"))).toBe(true);
+    expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+  });
+
+  it("fails closed when recovery restart-counter reads are empty", () => {
+    const fixture = createFixture();
+    prepareImmutableRelease(fixture, fixture.previousCommit);
+    const result = runRollout(fixture, "migrate", undefined, { FAKE_RECOVERY_RESTART_COUNTER_EMPTY: "1" });
+    const output = [result.stdout, result.stderr].join("\n");
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/RESTORE_INCOMPLETE/);
+    expect(output).not.toMatch(/FAILED_RESTORED/);
+    expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+  }, 15_000);
+
+  it("does not claim stopped services when recovery containment cannot be re-proven", () => {
+    const fixture = createFixture();
+    prepareImmutableRelease(fixture, fixture.previousCommit);
+    const result = runRollout(fixture, "migrate", "active", { FAKE_FAIL_RECOVERY_START: "1" });
+    const output = [result.stdout, result.stderr].join("\n");
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/RESTORE_INCOMPLETE|containment could not be re-proven/i);
+    expect(output).not.toContain("services remain stopped");
+  }, 15_000);
+
+  it("recontains the running previous release when terminal recovery evidence cannot be recorded", () => {
+    const fixture = createFixture();
+    prepareImmutableRelease(fixture, fixture.previousCommit);
+    const result = runRollout(fixture, "migrate", undefined, { FAKE_FAIL_TERMINAL_RECOVERY_LEDGER: "1" });
+    const output = [result.stdout, result.stderr].join("\n");
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/RESTORE_INCOMPLETE/);
+    expect(output).not.toMatch(/FAILED_RESTORED/);
+    expect(output).not.toContain("previous release services running and recovery health verified");
+    expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+  }, 15_000);
+
+  it("fails closed when the previous release reports a startup journal error", () => {
+    const fixture = createFixture();
+    prepareImmutableRelease(fixture, fixture.previousCommit);
+    const result = runRollout(fixture, "migrate", undefined, { FAKE_RECOVERY_JOURNAL_ERROR: "1" });
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/RESTORE_INCOMPLETE/);
+    expect(output).not.toMatch(/FAILED_RESTORED/);
+    expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+  }, 15_000);
+
+  it("rechecks the previous release after smoke and recontains a service that exits", () => {
+    const fixture = createFixture();
+    prepareImmutableRelease(fixture, fixture.previousCommit);
+    const result = runRollout(fixture, "migrate", undefined, { FAKE_RECOVERY_EXIT_DURING_SMOKE: "1" });
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/RESTORE_INCOMPLETE/);
+    expect(output).not.toMatch(/FAILED_RESTORED/);
+    expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+    expect(actions(fixture).match(/systemctl:stop/g)?.length).toBeGreaterThanOrEqual(2);
+  }, 15_000);
+
+  it("fails closed when recovery evidence hashing fails", () => {
+    const fixture = createFixture();
+    prepareImmutableRelease(fixture, fixture.previousCommit);
+    const result = runRollout(fixture, "migrate", undefined, { FAKE_FAIL_RECOVERY_EVIDENCE_HASH: "1" });
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/RESTORE_INCOMPLETE/);
+    expect(output).not.toMatch(/FAILED_RESTORED/);
+    expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+  }, 15_000);
+
+  it("preserves the activated release and migrated state after a post-start failure", () => {
+    const fixture = createFixture();
+    const { currentPointer } = prepareImmutableRelease(fixture, fixture.previousCommit);
+    const before = fixture.dbPaths.map(sha256);
+
+    const result = runRollout(fixture, "start");
+
+    execFileSync("find", [join(fixture.root, "releases"), "-type", "d", "-exec", "chmod", "u+w", "{}", "+"]);
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/STOPPED_PRESERVED/);
+    expect(fixture.dbPaths.map(sha256)).not.toEqual(before);
+    expect(readlinkSync(currentPointer)).toBe(fixture.expectedCommit);
+    expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+  });
+
+  it("durably records the start boundary before a start command fails", () => {
+    const fixture = createFixture();
+    const result = runRollout(fixture, "start");
+    const output = `${result.stdout}\n${result.stderr}`;
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+    const ledger = readFileSync(join(artifacts, "phase-ledger.log"), "utf8");
+
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/STOPPED_PRESERVED/);
+    expect(ledger).toMatch(/phase=SERVICES_STARTING/);
+    expect(ledger).not.toMatch(/phase=ACCEPTED/);
   });
 
   it("resets historical service failure counters before capturing smoke baselines", () => {

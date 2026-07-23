@@ -64,7 +64,10 @@ export interface Fixture {
 export const roots: string[] = [];
 
 export function cleanupRoots(): void {
-  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  for (const root of roots.splice(0)) {
+    execFileSync("chmod", ["-R", "u+w", root], { stdio: "ignore" });
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 export function executable(path: string, body: string): void {
@@ -159,6 +162,27 @@ if [ "\${FAKE_RESTORE_FAIL:-}" = 1 ]; then
 fi
 exec sudo -n env AGENT_BRIDGE_RESTORE_TEST_MODE=1 "${restoreHelperPath}" "$@"
 `);
+  executable(join(bin, "release-activate"), `#!/usr/bin/env bash
+set -euo pipefail
+echo "release-activate:$*" >> "${fixture.actionLog}"
+current=""
+expected=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --current) current="$2"; shift 2 ;;
+    --expected-commit) expected="$2"; shift 2 ;;
+    --release-root) shift 2 ;;
+    *) echo "unknown release activation argument: $1" >&2; exit 2 ;;
+  esac
+done
+tmp="\${current}.test-new"
+rm -f -- "$tmp"
+ln -s "$expected" "$tmp"
+mv -Tf -- "$tmp" "$current"
+if [ "\${FAKE_RECOVERY_RESTART_COUNTER_EMPTY:-}" = 1 ]; then
+  : > "${fixture.root}/recovery-pointer-activated"
+fi
+`);
   executable(join(bin, "systemctl"), `#!/usr/bin/env bash
 set -euo pipefail
 echo "systemctl:$*" >> "${fixture.actionLog}"
@@ -191,12 +215,27 @@ case "$cmd" in
     }; then exit 1; fi
     ;;
   start)
+    if [ "\${FAKE_FAIL_RECOVERY_START:-}" = 1 ] && [ ! -e "${fixture.root}/recovery-start-failed" ]; then
+      : > "${fixture.root}/recovery-start-failed"
+      exit 1
+    fi
     if [ "\${FAKE_FAIL_PHASE:-}" = start ]; then exit 1; fi
     printf '%s\n' "$@" > "${fixture.stateFile}"
     : > "${fixture.root}/started"
+    if [ "\${FAKE_RECOVERY_JOURNAL_ERROR:-}" = 1 ] || [ "\${FAKE_RECOVERY_EXIT_DURING_SMOKE:-}" = 1 ]; then
+      /usr/bin/date -u '+%Y-%m-%d %H:%M:%S UTC' > "${fixture.root}/recovery-started-at"
+      : > "${fixture.root}/recovery-started"
+    fi
     ;;
   is-active)
     if [ "\${1:-}" = --quiet ]; then shift; fi
+    if [ "\${FAKE_RECOVERY_EXIT_DURING_SMOKE:-}" = 1 ] && [ -e "${fixture.root}/recovery-started" ]; then
+      checks=0
+      [ ! -f "${fixture.root}/recovery-active-checks" ] || checks="$(cat "${fixture.root}/recovery-active-checks")"
+      checks=$((checks + 1))
+      printf '%s\n' "$checks" > "${fixture.root}/recovery-active-checks"
+      if [ "$checks" -gt 7 ]; then exit 1; fi
+    fi
     grep -Fxq "\${1:-}" "${fixture.stateFile}"
     ;;
   is-failed) exit 1 ;;
@@ -231,7 +270,8 @@ case "$cmd" in
           esac
           ;;
         NRestarts)
-          if [ "\${FAKE_RESTART_COUNTER_HISTORY:-}" ] && [ ! -f "${fixture.root}/restart-counters-reset" ]; then echo "\${FAKE_RESTART_COUNTER_HISTORY}";
+          if [ "\${FAKE_RECOVERY_RESTART_COUNTER_EMPTY:-}" = 1 ] && [ -e "${fixture.root}/recovery-pointer-activated" ]; then :;
+          elif [ "\${FAKE_RESTART_COUNTER_HISTORY:-}" ] && [ ! -f "${fixture.root}/restart-counters-reset" ]; then echo "\${FAKE_RESTART_COUNTER_HISTORY}";
           elif [ "\${FAKE_FAIL_PHASE:-}" = delayed ] && [ -f "${fixture.root}/started" ]; then echo 1; else echo 0; fi
           ;;
         *) exit 2 ;;
@@ -281,6 +321,18 @@ if [ -n "\${FAKE_TAMPER_SENTINEL_DELETE:-}" ]; then
   rm -f -- "\${FAKE_TAMPER_SENTINEL_DELETE}"
 fi
 if [ "\${FAKE_FAIL_PHASE:-}" = smoke ]; then echo 'simulated startup error'; fi
+if [ "\${FAKE_RECOVERY_JOURNAL_ERROR:-}" = 1 ] && [ -e "${fixture.root}/recovery-started" ]; then
+  since=""
+  previous=""
+  for arg in "$@"; do
+    if [ "$previous" = --since ]; then since="$arg"; fi
+    previous="$arg"
+  done
+  recovery_started="$(cat "${fixture.root}/recovery-started-at")"
+  if [ -n "$since" ] && [ "$(/usr/bin/date -u -d "$since" +%s)" -le "$(/usr/bin/date -u -d "$recovery_started" +%s)" ]; then
+    echo 'simulated recovery startup error'
+  fi
+fi
 if [ "\${FAKE_NO_JOURNAL_ENTRIES:-}" = 1 ]; then echo '-- No entries --'; fi
 `);
 }

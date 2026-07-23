@@ -261,11 +261,23 @@ code_check() {
 }
 assert_service_active() {
   local unit="$1" active_state sub_state
-  "$systemctl_cmd" is-active --quiet "$unit" || die "service is not active: $unit"
-  if "$systemctl_cmd" is-failed --quiet "$unit"; then die "service is failed: $unit"; fi
-  active_state="$("$systemctl_cmd" show "$unit" --property=ActiveState --value)"
-  sub_state="$("$systemctl_cmd" show "$unit" --property=SubState --value)"
-  [[ "$active_state" == active && "$sub_state" == running ]] || die "service is not stably running: $unit state=$active_state/$sub_state"
+  if ! "$systemctl_cmd" is-active --quiet "$unit"; then
+    echo "service is not active: $unit" >&2
+    return 1
+  fi
+  if "$systemctl_cmd" is-failed --quiet "$unit"; then
+    echo "service is failed: $unit" >&2
+    return 1
+  fi
+  if ! active_state="$("$systemctl_cmd" show "$unit" --property=ActiveState --value)" \
+    || ! sub_state="$("$systemctl_cmd" show "$unit" --property=SubState --value)"; then
+    echo "service state could not be read: $unit" >&2
+    return 1
+  fi
+  if [[ "$active_state" != active || "$sub_state" != running ]]; then
+    echo "service is not stably running: $unit state=$active_state/$sub_state" >&2
+    return 1
+  fi
 }
 assert_service_ready_for_rollout() {
   local unit="$1" active_state sub_state
@@ -349,13 +361,14 @@ restore_previous_release_and_start() {
   "$systemctl_cmd" reset-failed "${units[@]}" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
   declare -A recovery_restart_baseline=()
   for unit in "${units[@]}"; do recovery_restart_baseline[$unit]="$($systemctl_cmd show "$unit" --property=NRestarts --value)"; done
-  "$systemctl_cmd" start "${units[@]}" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
-  for unit in "${units[@]}"; do assert_service_active "$unit" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }; done
-  (( smoke_delay > 0 )) && /usr/bin/sleep "$smoke_delay"
-  local recovery_since startup_errors current_restarts recovery_evidence
+  local recovery_since startup_errors current_restarts recovery_evidence recovery_queue_evidence
   local -a recovery_journal_args=()
   for unit in "${units[@]}"; do recovery_journal_args+=(-u "$unit"); done
   recovery_since="$(/usr/bin/date -u '+%Y-%m-%d %H:%M:%S UTC')"
+  "$systemctl_cmd" start "${units[@]}" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
+  for unit in "${units[@]}"; do assert_service_active "$unit" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }; done
+  (( smoke_delay > 0 )) && /usr/bin/sleep "$smoke_delay"
+  for unit in "${units[@]}"; do assert_service_active "$unit" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }; done
   startup_errors="$($journalctl_cmd --since "$recovery_since" --priority err --no-pager "${recovery_journal_args[@]}" 2>&1)" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
   [[ -z "$startup_errors" || "$startup_errors" == "-- No entries --" ]] || { echo "previous release journal smoke failed" >&2; stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
   for unit in "${units[@]}"; do
@@ -364,14 +377,30 @@ restore_previous_release_and_start() {
   done
   recovery_evidence="$artifact_dir/recovery-acceptance-evidence.json"
   run_db_tool inspect --evidence - "${db_args[@]}" > "$recovery_evidence" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
-  hash_evidence_file "$recovery_evidence"
-  run_db_tool inspect --evidence - "${db_args[@]}" > "$artifact_dir/recovery-queue-evidence.json" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
-  hash_evidence_file "$artifact_dir/recovery-queue-evidence.json"
+  if ! hash_evidence_file "$recovery_evidence"; then
+    echo "recovery acceptance evidence hashing failed" >&2
+    stop_and_verify_all_services rollback-containment-evidence.json
+    return 1
+  fi
+  recovery_queue_evidence="$artifact_dir/recovery-queue-evidence.json"
+  run_db_tool inspect --evidence - "${db_args[@]}" > "$recovery_queue_evidence" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
+  if ! hash_evidence_file "$recovery_queue_evidence"; then
+    echo "recovery queue evidence hashing failed" >&2
+    stop_and_verify_all_services rollback-containment-evidence.json
+    return 1
+  fi
+  recovery_running=1
   return 0
 }
 
 hash_evidence_file() {
-  /usr/bin/sha256sum "$1" > "${1%.json}.sha256"
+  local evidence_file="$1" sidecar="${1%.json}.sha256"
+  [[ -f "$evidence_file" && ! -L "$evidence_file" ]] || return 1
+  if (( test_mode == 1 )) && [[ "${FAKE_FAIL_RECOVERY_EVIDENCE_HASH:-}" == 1 && "$evidence_file" == *recovery-* ]]; then
+    return 1
+  fi
+  /usr/bin/sha256sum "$evidence_file" > "$sidecar" || return 1
+  [[ -f "$sidecar" && ! -L "$sidecar" && -s "$sidecar" ]]
 }
 
 record_phase() {
@@ -457,7 +486,9 @@ stop_and_verify_all_services() {
     printf ']}' >> "$evidence_file"
   done
   printf '\n  ]\n}\n' >> "$evidence_file"
-  /usr/bin/sha256sum "$evidence_file" > "$artifact_dir/${evidence_name%.json}.sha256"
+  if ! /usr/bin/sha256sum "$evidence_file" > "$artifact_dir/${evidence_name%.json}.sha256"; then
+    verify_ok=0
+  fi
   if (( verify_ok == 0 )); then
     echo "CONTAINMENT INCOMPLETE: stop_ok=$stop_ok verify_ok=$verify_ok" >&2
     return 1
@@ -610,7 +641,11 @@ on_exit() {
       fi
     fi
   fi
-  if (( containment_verified == 1 )); then echo "services remain stopped; operator review required"; fi
+  if (( containment_verified == 1 && recovery_running == 0 )); then
+    echo "services remain stopped; operator review required"
+  elif (( recovery_running == 1 )); then
+    echo "previous release services running and recovery health verified"
+  fi
   if ! remove_sentinel_if_removable; then
     echo "automatic sentinel cleanup also failed; manual review required in addition to the failure above" >&2
     status=1
@@ -640,6 +675,7 @@ phase_ledger="$artifact_dir/phase-ledger.log"
 
 start_attempted=0
 services_started=0
+recovery_running=0
 stop_attempted=0
 backup_completed=0
 pointer_switched=0
@@ -695,7 +731,7 @@ sentinel_identity="$(/usr/bin/stat -c '%d:%i' "$sentinel_path")"
 /usr/bin/chmod 0700 "$artifact_dir"
 touch "$phase_ledger"
 chmod 0600 "$phase_ledger"
-record_phase PRECHECK
+record_phase PRECHECK_STARTED
 log_file="$artifact_dir/rollout.log"
 latest_tmp="$(/usr/bin/mktemp --tmpdir="$log_dir" .latest.XXXXXX)"
 printf '%s\n' "$artifact_dir" > "$latest_tmp"
@@ -785,6 +821,7 @@ fi
 echo "starting all services"
 journal_since="$(/usr/bin/date -u '+%Y-%m-%d %H:%M:%S UTC')"
 start_attempted=1
+record_phase SERVICES_STARTING
 "$systemctl_cmd" start "${units[@]}"
 for unit in "${units[@]}"; do assert_service_active "$unit"; done
 services_started=1

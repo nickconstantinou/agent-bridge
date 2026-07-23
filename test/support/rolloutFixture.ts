@@ -219,9 +219,20 @@ case "$cmd" in
     if [ "\${FAKE_FAIL_PHASE:-}" = start ]; then exit 1; fi
     printf '%s\n' "$@" > "${fixture.stateFile}"
     : > "${fixture.root}/started"
+    if [ "\${FAKE_RECOVERY_JOURNAL_ERROR:-}" = 1 ] || [ "\${FAKE_RECOVERY_EXIT_DURING_SMOKE:-}" = 1 ]; then
+      /usr/bin/date -u '+%Y-%m-%d %H:%M:%S UTC' > "${fixture.root}/recovery-started-at"
+      : > "${fixture.root}/recovery-started"
+    fi
     ;;
   is-active)
     if [ "\${1:-}" = --quiet ]; then shift; fi
+    if [ "\${FAKE_RECOVERY_EXIT_DURING_SMOKE:-}" = 1 ] && [ -e "${fixture.root}/recovery-started" ]; then
+      checks=0
+      [ ! -f "${fixture.root}/recovery-active-checks" ] || checks="$(cat "${fixture.root}/recovery-active-checks")"
+      checks=$((checks + 1))
+      printf '%s\n' "$checks" > "${fixture.root}/recovery-active-checks"
+      if [ "$checks" -gt 7 ]; then exit 1; fi
+    fi
     grep -Fxq "\${1:-}" "${fixture.stateFile}"
     ;;
   is-failed) exit 1 ;;
@@ -306,6 +317,18 @@ if [ -n "\${FAKE_TAMPER_SENTINEL_DELETE:-}" ]; then
   rm -f -- "\${FAKE_TAMPER_SENTINEL_DELETE}"
 fi
 if [ "\${FAKE_FAIL_PHASE:-}" = smoke ]; then echo 'simulated startup error'; fi
+if [ "\${FAKE_RECOVERY_JOURNAL_ERROR:-}" = 1 ] && [ -e "${fixture.root}/recovery-started" ]; then
+  since=""
+  previous=""
+  for arg in "$@"; do
+    if [ "$previous" = --since ]; then since="$arg"; fi
+    previous="$arg"
+  done
+  recovery_started="$(cat "${fixture.root}/recovery-started-at")"
+  if [ -n "$since" ] && [ "$(/usr/bin/date -u -d "$since" +%s)" -le "$(/usr/bin/date -u -d "$recovery_started" +%s)" ]; then
+    echo 'simulated recovery startup error'
+  fi
+fi
 if [ "\${FAKE_NO_JOURNAL_ENTRIES:-}" = 1 ]; then echo '-- No entries --'; fi
 `);
 }

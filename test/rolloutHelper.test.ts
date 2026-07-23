@@ -147,7 +147,11 @@ describe("guarded rollout helper", () => {
     expect(existsSync(join(artifacts, "stopped-evidence.sha256"))).toBe(true);
     expect(existsSync(join(artifacts, "post-start-evidence.sha256"))).toBe(true);
     expect(existsSync(join(artifacts, "phase-ledger.log"))).toBe(true);
-    expect(readFileSync(join(artifacts, "phase-ledger.log"), "utf8")).toMatch(/phase=COMPLETE/);
+    const ledger = readFileSync(join(artifacts, "phase-ledger.log"), "utf8");
+    expect(ledger).toMatch(/phase=PRECHECK_STARTED/);
+    expect(ledger).toMatch(/phase=SERVICES_STARTING/);
+    expect(ledger).toMatch(/phase=COMPLETE/);
+    expect(ledger.indexOf("phase=SERVICES_STARTING")).toBeLessThan(ledger.indexOf("phase=ACCEPTED"));
   });
 
   it("atomically activates the staged release after migration and before service start", () => {
@@ -200,7 +204,7 @@ describe("guarded rollout helper", () => {
     expect(fixture.dbPaths.map(sha256)).toEqual(before);
     expect(readlinkSync(currentPointer)).toBe(fixture.previousCommit);
     expect(readFileSync(fixture.stateFile, "utf8").trim().split("\n")).toEqual(units);
-    expect(output).toMatch(/FAILED_RESTORED/);
+    expect(output).not.toContain("services remain stopped");
   });
 
   it("recontains the cohort when previous-release recovery start fails", () => {
@@ -217,6 +221,40 @@ describe("guarded rollout helper", () => {
     expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
   });
 
+  it("fails closed when the previous release reports a startup journal error", () => {
+    const fixture = createFixture();
+    prepareImmutableRelease(fixture, fixture.previousCommit);
+    const result = runRollout(fixture, "migrate", undefined, { FAKE_RECOVERY_JOURNAL_ERROR: "1" });
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/RESTORE_INCOMPLETE/);
+    expect(output).not.toMatch(/FAILED_RESTORED/);
+    expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+  }, 15_000);
+
+  it("rechecks the previous release after smoke and recontains a service that exits", () => {
+    const fixture = createFixture();
+    prepareImmutableRelease(fixture, fixture.previousCommit);
+    const result = runRollout(fixture, "migrate", undefined, { FAKE_RECOVERY_EXIT_DURING_SMOKE: "1" });
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/RESTORE_INCOMPLETE/);
+    expect(output).not.toMatch(/FAILED_RESTORED/);
+    expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+    expect(actions(fixture).match(/systemctl:stop/g)?.length).toBeGreaterThanOrEqual(2);
+  }, 15_000);
+
+  it("fails closed when recovery evidence hashing fails", () => {
+    const fixture = createFixture();
+    prepareImmutableRelease(fixture, fixture.previousCommit);
+    const result = runRollout(fixture, "migrate", undefined, { FAKE_FAIL_RECOVERY_EVIDENCE_HASH: "1" });
+    const output = `${result.stdout}\n${result.stderr}`;
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/RESTORE_INCOMPLETE/);
+    expect(output).not.toMatch(/FAILED_RESTORED/);
+    expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+  }, 15_000);
+
   it("preserves the activated release and migrated state after a post-start failure", () => {
     const fixture = createFixture();
     const { currentPointer } = prepareImmutableRelease(fixture, fixture.previousCommit);
@@ -231,6 +269,19 @@ describe("guarded rollout helper", () => {
     expect(fixture.dbPaths.map(sha256)).not.toEqual(before);
     expect(readlinkSync(currentPointer)).toBe(fixture.expectedCommit);
     expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+  });
+
+  it("durably records the start boundary before a start command fails", () => {
+    const fixture = createFixture();
+    const result = runRollout(fixture, "start");
+    const output = `${result.stdout}\n${result.stderr}`;
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+    const ledger = readFileSync(join(artifacts, "phase-ledger.log"), "utf8");
+
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/STOPPED_PRESERVED/);
+    expect(ledger).toMatch(/phase=SERVICES_STARTING/);
+    expect(ledger).not.toMatch(/phase=ACCEPTED/);
   });
 
   it("resets historical service failure counters before capturing smoke baselines", () => {

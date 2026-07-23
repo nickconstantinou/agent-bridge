@@ -111,7 +111,7 @@ The sentinel is removed automatically in exactly three cases, gated by an intern
 
 - The rollout completes successfully end to end.
 - A precondition fails strictly before any service stop is attempted — nothing was touched, so there is nothing to review.
-- The automatic post-failure restore (`FAILED_RESTORED`) both succeeds and is verified — every database's SHA-256 matches the pre-migration manifest, and the previous release passes bounded pointer, service-stability, journal-smoke, restart-counter, database, and queue/claim acceptance. Sentinel removal here means only "safe to hand to the documented recovery flow below," never "safe to bare-retry": services remain stopped and the checked-out code is still the new commit.
+- The automatic post-failure restore (`FAILED_RESTORED`) both succeeds and is verified — every database's SHA-256 matches the pre-migration manifest, and the previous release passes bounded pointer, service-stability, journal-smoke captured from immediately before recovery start, post-smoke service rechecks, restart-counter, database, and queue/claim acceptance. The previous release is running when this state is reported; sentinel removal means only "safe to hand to the documented recovery flow below," never "safe to bare-retry."
 
 In every other failure shape the sentinel is retained and the failure is labeled with one of four states, so an operator can pick the correct recovery path without having to reconstruct what happened from logs alone:
 

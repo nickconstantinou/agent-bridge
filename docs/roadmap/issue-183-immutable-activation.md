@@ -7,8 +7,8 @@ databases, queues, or workspaces.
 ## State machine
 
 ```text
-PRECHECK -> CONTAINED -> WAL_DRAINED -> BACKED_UP -> MIGRATED
-  -> POINTER_SWITCHED -> SERVICES_STARTED -> ACCEPTED -> COMPLETE
+PRECHECK_STARTED -> PREFLIGHT -> CONTAINED -> WAL_DRAINED -> BACKED_UP -> MIGRATED
+  -> POINTER_SWITCHED -> SERVICES_STARTING -> ACCEPTED -> COMPLETE
 
 pre-start failure -> verified database restore -> previous pointer
   -> previous release restart -> health verification -> FAILED_RESTORED

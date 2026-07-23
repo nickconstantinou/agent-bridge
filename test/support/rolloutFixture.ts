@@ -200,7 +200,9 @@ case "$cmd" in
     grep -Fxq "\${1:-}" "${fixture.stateFile}"
     ;;
   is-failed) exit 1 ;;
-  reset-failed) ;;
+  reset-failed)
+    : > "${fixture.root}/restart-counters-reset"
+    ;;
   show)
     unit="$1"; shift
     properties=()
@@ -229,7 +231,8 @@ case "$cmd" in
           esac
           ;;
         NRestarts)
-          if [ "\${FAKE_FAIL_PHASE:-}" = delayed ] && [ -f "${fixture.root}/started" ]; then echo 1; else echo 0; fi
+          if [ "\${FAKE_RESTART_COUNTER_HISTORY:-}" ] && [ ! -f "${fixture.root}/restart-counters-reset" ]; then echo "\${FAKE_RESTART_COUNTER_HISTORY}";
+          elif [ "\${FAKE_FAIL_PHASE:-}" = delayed ] && [ -f "${fixture.root}/started" ]; then echo 1; else echo 0; fi
           ;;
         *) exit 2 ;;
       esac

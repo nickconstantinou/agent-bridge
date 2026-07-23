@@ -38,6 +38,12 @@ The helper validates that:
 - archive paths and symlink targets remain inside the release directory;
 - an existing release is already valid and immutable before it is reused.
 
+The CI-produced artifact includes both the compiled `dist/` output and the
+source entrypoints plus guarded migration scripts required by the current
+systemd and rollout contracts. This keeps service startup and offline
+migration on the same release identity until a separately reviewed compiled
+migration entrypoint replaces those TypeScript paths.
+
 The publication directory is created under the configured release root and is
 renamed into its final `<commit>` path only after validation and permission
 hardening. A failed or interrupted staging operation leaves no accepted

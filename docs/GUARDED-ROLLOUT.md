@@ -12,7 +12,7 @@ reviewed.
 
 ## Safety model
 
-`rollout-agent-bridge` is a root-owned, narrow orchestration helper. It is separate from `restart-agent-bridge` and accepts only an exact, full Git commit SHA. It never fetches, pulls, checks out, resets, commits, discards queues, or changes its fixed service/database inventory.
+`rollout-agent-bridge` is a root-owned, narrow orchestration helper. It is separate from `restart-agent-bridge` and accepts only an exact, full Git commit SHA. In immutable release mode, `release_root` and `current_pointer` must identify the validated staged release before any service stop. It never fetches, pulls, checks out, resets, commits, discards queues, or changes its fixed service/database inventory.
 
 The enforced sequence is:
 

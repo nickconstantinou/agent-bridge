@@ -41,6 +41,12 @@ This helper does not stop or start services, touch SQLite databases or queues,
 run migrations, or perform rollback. It is safe to stage and test without
 production activation.
 
+The guarded rollout helper accepts `release_root` and `current_pointer` in its
+root-owned rollout configuration. When both are present it validates the
+pointer and active release before any service stop, and uses that immutable
+release for migration tooling. A mutable `project_dir` is retained only for
+the legacy checkout mode and is not required in release mode.
+
 ## systemd boundary
 
 All Agent Bridge service templates load the release pointer environment and

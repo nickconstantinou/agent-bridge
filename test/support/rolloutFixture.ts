@@ -179,6 +179,9 @@ tmp="\${current}.test-new"
 rm -f -- "$tmp"
 ln -s "$expected" "$tmp"
 mv -Tf -- "$tmp" "$current"
+if [ "\${FAKE_RECOVERY_RESTART_COUNTER_EMPTY:-}" = 1 ]; then
+  : > "${fixture.root}/recovery-pointer-activated"
+fi
 `);
   executable(join(bin, "systemctl"), `#!/usr/bin/env bash
 set -euo pipefail
@@ -267,7 +270,8 @@ case "$cmd" in
           esac
           ;;
         NRestarts)
-          if [ "\${FAKE_RESTART_COUNTER_HISTORY:-}" ] && [ ! -f "${fixture.root}/restart-counters-reset" ]; then echo "\${FAKE_RESTART_COUNTER_HISTORY}";
+          if [ "\${FAKE_RECOVERY_RESTART_COUNTER_EMPTY:-}" = 1 ] && [ -e "${fixture.root}/recovery-pointer-activated" ]; then :;
+          elif [ "\${FAKE_RESTART_COUNTER_HISTORY:-}" ] && [ ! -f "${fixture.root}/restart-counters-reset" ]; then echo "\${FAKE_RESTART_COUNTER_HISTORY}";
           elif [ "\${FAKE_FAIL_PHASE:-}" = delayed ] && [ -f "${fixture.root}/started" ]; then echo 1; else echo 0; fi
           ;;
         *) exit 2 ;;

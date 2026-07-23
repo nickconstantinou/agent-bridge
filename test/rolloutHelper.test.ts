@@ -205,6 +205,19 @@ describe("guarded rollout helper", () => {
     expect(readlinkSync(currentPointer)).toBe(fixture.previousCommit);
     expect(readFileSync(fixture.stateFile, "utf8").trim().split("\n")).toEqual(units);
     expect(output).not.toContain("services remain stopped");
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+    const ledger = readFileSync(join(artifacts, "phase-ledger.log"), "utf8");
+    for (const phase of [
+      "DATABASES_RESTORED",
+      "POINTER_ROLLBACK_STARTED",
+      "POINTER_ROLLED_BACK",
+      "PREVIOUS_RELEASE_STARTING",
+      "PREVIOUS_RELEASE_ACCEPTED",
+      "FAILED_RESTORED",
+    ]) expect(ledger).toContain("phase=" + phase);
+    expect(ledger.indexOf("phase=DATABASES_RESTORED")).toBeLessThan(ledger.indexOf("phase=POINTER_ROLLBACK_STARTED"));
+    expect(ledger.indexOf("phase=POINTER_ROLLED_BACK")).toBeLessThan(ledger.indexOf("phase=PREVIOUS_RELEASE_STARTING"));
+    expect(ledger.indexOf("phase=PREVIOUS_RELEASE_ACCEPTED")).toBeLessThan(ledger.indexOf("phase=FAILED_RESTORED"));
   });
 
   it("recontains the cohort when previous-release recovery start fails", () => {
@@ -220,6 +233,27 @@ describe("guarded rollout helper", () => {
     expect(existsSync(join(artifacts, "rollback-containment-evidence.json"))).toBe(true);
     expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
   });
+
+  it("fails closed when recovery restart-counter reads are empty", () => {
+    const fixture = createFixture();
+    prepareImmutableRelease(fixture, fixture.previousCommit);
+    const result = runRollout(fixture, "migrate", undefined, { FAKE_RECOVERY_RESTART_COUNTER_EMPTY: "1" });
+    const output = [result.stdout, result.stderr].join("\n");
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/RESTORE_INCOMPLETE/);
+    expect(output).not.toMatch(/FAILED_RESTORED/);
+    expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+  }, 15_000);
+
+  it("does not claim stopped services when recovery containment cannot be re-proven", () => {
+    const fixture = createFixture();
+    prepareImmutableRelease(fixture, fixture.previousCommit);
+    const result = runRollout(fixture, "migrate", "active", { FAKE_FAIL_RECOVERY_START: "1" });
+    const output = [result.stdout, result.stderr].join("\n");
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/RESTORE_INCOMPLETE|containment could not be re-proven/i);
+    expect(output).not.toContain("services remain stopped");
+  }, 15_000);
 
   it("fails closed when the previous release reports a startup journal error", () => {
     const fixture = createFixture();

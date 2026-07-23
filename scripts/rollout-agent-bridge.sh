@@ -355,40 +355,64 @@ restore_backups() {
 restore_previous_release_and_start() {
   (( release_mode == 1 )) || return 0
   [[ "$previous_pointer_target" =~ ^[0-9a-f]{40}$ ]] || { echo "previous release pointer target is unavailable" >&2; return 1; }
-  "$activation_cmd" --release-root "$release_root" --current "$current_pointer" --expected-commit "$previous_pointer_target" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
-  [[ "$(/usr/bin/readlink -- "$current_pointer")" == "$previous_pointer_target" ]] || { echo "previous release pointer verification failed" >&2; stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
+  record_recovery_phase POINTER_ROLLBACK_STARTED || return 1
+  "$activation_cmd" --release-root "$release_root" --current "$current_pointer" --expected-commit "$previous_pointer_target" || { recontain_after_recovery_failure; return 1; }
+  if [[ "$(/usr/bin/readlink -- "$current_pointer")" != "$previous_pointer_target" ]]; then
+    echo "previous release pointer verification failed" >&2
+    recontain_after_recovery_failure
+    return 1
+  fi
+  record_recovery_phase POINTER_ROLLED_BACK || return 1
   echo "restarting verified previous release commit=$previous_pointer_target"
-  "$systemctl_cmd" reset-failed "${units[@]}" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
+  "$systemctl_cmd" reset-failed "${units[@]}" || { recontain_after_recovery_failure; return 1; }
   declare -A recovery_restart_baseline=()
-  for unit in "${units[@]}"; do recovery_restart_baseline[$unit]="$($systemctl_cmd show "$unit" --property=NRestarts --value)"; done
+  for unit in "${units[@]}"; do
+    if ! recovery_restart_baseline[$unit]="$( "$systemctl_cmd" show "$unit" --property=NRestarts --value )" \
+      || [[ ! "${recovery_restart_baseline[$unit]}" =~ ^[0-9]+$ ]]; then
+      echo "invalid recovery NRestarts baseline for $unit" >&2
+      recontain_after_recovery_failure
+      return 1
+    fi
+  done
   local recovery_since startup_errors current_restarts recovery_evidence recovery_queue_evidence
   local -a recovery_journal_args=()
   for unit in "${units[@]}"; do recovery_journal_args+=(-u "$unit"); done
   recovery_since="$(/usr/bin/date -u '+%Y-%m-%d %H:%M:%S UTC')"
-  "$systemctl_cmd" start "${units[@]}" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
-  for unit in "${units[@]}"; do assert_service_active "$unit" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }; done
+  record_recovery_phase PREVIOUS_RELEASE_STARTING || return 1
+  "$systemctl_cmd" start "${units[@]}" || { recontain_after_recovery_failure; return 1; }
+  for unit in "${units[@]}"; do assert_service_active "$unit" || { recontain_after_recovery_failure; return 1; }; done
   (( smoke_delay > 0 )) && /usr/bin/sleep "$smoke_delay"
-  for unit in "${units[@]}"; do assert_service_active "$unit" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }; done
-  startup_errors="$($journalctl_cmd --since "$recovery_since" --priority err --no-pager "${recovery_journal_args[@]}" 2>&1)" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
-  [[ -z "$startup_errors" || "$startup_errors" == "-- No entries --" ]] || { echo "previous release journal smoke failed" >&2; stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
+  for unit in "${units[@]}"; do assert_service_active "$unit" || { recontain_after_recovery_failure; return 1; }; done
+  startup_errors="$($journalctl_cmd --since "$recovery_since" --priority err --no-pager "${recovery_journal_args[@]}" 2>&1)" || { recontain_after_recovery_failure; return 1; }
+  [[ -z "$startup_errors" || "$startup_errors" == "-- No entries --" ]] || { echo "previous release journal smoke failed" >&2; recontain_after_recovery_failure; return 1; }
   for unit in "${units[@]}"; do
-    current_restarts="$($systemctl_cmd show "$unit" --property=NRestarts --value)"
-    [[ "$current_restarts" == "${recovery_restart_baseline[$unit]}" ]] || { echo "previous release restart stability failed" >&2; stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
+    if ! current_restarts="$($systemctl_cmd show "$unit" --property=NRestarts --value)" \
+      || [[ ! "$current_restarts" =~ ^[0-9]+$ ]]; then
+      echo "invalid recovery NRestarts reading for $unit" >&2
+      recontain_after_recovery_failure
+      return 1
+    fi
+    if [[ "$current_restarts" != "${recovery_restart_baseline[$unit]}" ]]; then
+      echo "previous release restart stability failed" >&2
+      recontain_after_recovery_failure
+      return 1
+    fi
   done
   recovery_evidence="$artifact_dir/recovery-acceptance-evidence.json"
-  run_db_tool inspect --evidence - "${db_args[@]}" > "$recovery_evidence" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
+  run_db_tool inspect --evidence - "${db_args[@]}" > "$recovery_evidence" || { recontain_after_recovery_failure; return 1; }
   if ! hash_evidence_file "$recovery_evidence"; then
     echo "recovery acceptance evidence hashing failed" >&2
-    stop_and_verify_all_services rollback-containment-evidence.json
+    recontain_after_recovery_failure
     return 1
   fi
   recovery_queue_evidence="$artifact_dir/recovery-queue-evidence.json"
-  run_db_tool inspect --evidence - "${db_args[@]}" > "$recovery_queue_evidence" || { stop_and_verify_all_services rollback-containment-evidence.json; return 1; }
+  run_db_tool inspect --evidence - "${db_args[@]}" > "$recovery_queue_evidence" || { recontain_after_recovery_failure; return 1; }
   if ! hash_evidence_file "$recovery_queue_evidence"; then
     echo "recovery queue evidence hashing failed" >&2
-    stop_and_verify_all_services rollback-containment-evidence.json
+    recontain_after_recovery_failure
     return 1
   fi
+  record_recovery_phase PREVIOUS_RELEASE_ACCEPTED || return 1
   recovery_running=1
   return 0
 }
@@ -495,6 +519,25 @@ stop_and_verify_all_services() {
   fi
   (( stop_ok == 1 )) || echo "systemctl stop returned nonzero; containment independently verified" >&2
   echo "all selected services verified stopped"
+}
+
+recontain_after_recovery_failure() {
+  containment_verified=0
+  if stop_and_verify_all_services rollback-containment-evidence.json; then
+    containment_verified=1
+  else
+    echo "recovery containment could not be re-proven; services remain in an uncertain state" >&2
+  fi
+  return 1
+}
+
+record_recovery_phase() {
+  local phase_name="$1"
+  if ! record_phase "$phase_name"; then
+    echo "failed to durably record recovery phase=$phase_name" >&2
+    recontain_after_recovery_failure
+    return 1
+  fi
 }
 
 validate_sqlite_sidecars() {
@@ -617,9 +660,15 @@ on_exit() {
           # SHA-256 has been independently re-verified against the backup
           # manifest — "restored" and "verified" are the same check here,
           # not two separate steps that could disagree.
-          if (( release_mode == 1 )) && ! restore_previous_release_and_start; then
+          if ! record_phase DATABASES_RESTORED; then
+            status=1
+            echo "STATE: RESTORE_INCOMPLETE — database restoration completed but its durable recovery phase could not be recorded; manual review required; sentinel retained" >&2
+          elif (( release_mode == 1 )) && ! restore_previous_release_and_start; then
             status=1
             echo "STATE: RESTORE_INCOMPLETE — databases restored but previous release pointer/service recovery failed; manual review required; sentinel retained" >&2
+          elif ! record_phase FAILED_RESTORED; then
+            status=1
+            echo "STATE: RESTORE_INCOMPLETE — previous release recovery completed but its terminal phase could not be recorded; manual review required; sentinel retained" >&2
           else
             echo "STATE: FAILED_RESTORED — cohort restored and verified; previous release restored and healthy; sentinel will be removed, but this is 'safe to hand to the documented recovery flow,' not 'safe to bare-retry'" >&2
             sentinel_removable=1

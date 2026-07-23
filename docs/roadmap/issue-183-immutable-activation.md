@@ -10,8 +10,9 @@ databases, queues, or workspaces.
 PRECHECK_STARTED -> PREFLIGHT -> CONTAINED -> WAL_DRAINED -> BACKED_UP -> MIGRATED
   -> POINTER_SWITCHED -> SERVICES_STARTING -> ACCEPTED -> COMPLETE
 
-pre-start failure -> verified database restore -> previous pointer
-  -> previous release restart -> health verification -> FAILED_RESTORED
+pre-start failure -> DATABASES_RESTORED -> POINTER_ROLLBACK_STARTED
+  -> POINTER_ROLLED_BACK -> PREVIOUS_RELEASE_STARTING
+  -> PREVIOUS_RELEASE_ACCEPTED -> FAILED_RESTORED
 
 start-attempt or ambiguous failure -> stop and contain ->
   preserve new state/evidence -> STOPPED_PRESERVED / manual review

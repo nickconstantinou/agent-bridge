@@ -86,6 +86,36 @@ describe("guarded rollout helper", () => {
     expect(actions(fixture)).not.toContain("systemctl:stop");
   });
 
+  it("runs immutable release mode through containment and records release evidence", () => {
+    const fixture = createFixture();
+    const releaseRoot = join(fixture.root, "releases");
+    const releaseDir = join(releaseRoot, fixture.expectedCommit);
+    mkdirSync(releaseRoot, { recursive: true, mode: 0o755 });
+    execFileSync("cp", ["-a", `${fixture.project}/.`, releaseDir]);
+    writeFileSync(join(releaseDir, "manifest.json"), JSON.stringify({ schema_version: 1, commit: fixture.expectedCommit }));
+    execFileSync("find", [releaseDir, "-type", "f", "-exec", "chmod", "a-w", "{}", "+"]);
+    execFileSync("find", [releaseDir, "-type", "d", "-exec", "chmod", "a-w", "{}", "+"]);
+    const currentPointer = join(releaseRoot, "current");
+    symlinkSync(fixture.expectedCommit, currentPointer);
+    rewriteConfig(fixture, (lines) => [
+      ...lines.filter((line) => !line.startsWith("project_dir=")),
+      `release_root=${releaseRoot}`,
+      `current_pointer=${currentPointer}`,
+    ]);
+
+    const result = runRollout(fixture);
+    execFileSync("find", [releaseDir, "-type", "d", "-exec", "chmod", "u+w", "{}", "+"]);
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const artifacts = readFileSync(join(fixture.logDir, "latest"), "utf8").trim();
+    const releaseEvidence = JSON.parse(readFileSync(join(artifacts, "release-evidence.json"), "utf8"));
+    expect(releaseEvidence).toEqual(expect.objectContaining({ expectedCommit: fixture.expectedCommit, currentPointer, releaseDir }));
+    const log = actions(fixture);
+    expect(log.indexOf("systemctl:stop")).toBeGreaterThanOrEqual(0);
+    expect(log.indexOf("systemctl:stop")).toBeLessThan(log.indexOf(" backup "));
+    expect(existsSync(join(artifacts, "containment-evidence.json"))).toBe(true);
+  });
+
   it("runs the full fixed-unit rollout sequence and writes durable evidence", () => {
     const fixture = createFixture();
     const result = runRollout(fixture);

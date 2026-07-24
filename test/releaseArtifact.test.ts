@@ -138,11 +138,39 @@ describe("release artifact manifest", () => {
   it("hashes the manifest and provenance tool and derives evidence from archived-not-staged content", () => {
     const workflow = readFileSync(join(process.cwd(), ".github/workflows/historical-release-artifact.yml"), "utf8");
 
-    expect(workflow).toContain("--manifest \"$root/manifest.json\"");
     expect(workflow).toContain("--provenance-tool trusted-builder/scripts/releaseProvenance.mjs");
     // No --root argument to releaseProvenance.mjs: evidence must not be derived from re-stating
     // the mutable staging directory after the archive has already been created.
     const proveStep = workflow.slice(workflow.indexOf("releaseProvenance.mjs \\"));
     expect(proveStep).not.toContain("--root \"$root\"");
+  });
+
+  it("extracts the manifest from the completed archive rather than hashing the staging copy", () => {
+    const workflow = readFileSync(join(process.cwd(), ".github/workflows/historical-release-artifact.yml"), "utf8");
+
+    // The manifest fed to releaseProvenance.mjs must be read back out of the archive tar
+    // already produced, proving manifestSha256 reflects the archived bytes, not a staging
+    // file that could have drifted between manifest generation and tar creation.
+    expect(workflow).toContain('tar --extract --gzip --to-stdout --file "$archive" ./manifest.json > "$RUNNER_TEMP/manifest-from-archive.json"');
+    expect(workflow).toContain('--manifest "$RUNNER_TEMP/manifest-from-archive.json"');
+    expect(workflow).not.toContain('--manifest "$root/manifest.json"');
+    // The extraction must happen after the archive exists.
+    expect(workflow.indexOf("tar --create --gzip")).toBeLessThan(workflow.indexOf("manifest-from-archive.json"));
+  });
+
+  it("re-verifies target tracked source is unmodified after target-controlled scripts run", () => {
+    const workflow = readFileSync(join(process.cwd(), ".github/workflows/historical-release-artifact.yml"), "utf8");
+    const [, buildTargetJob] = workflow.split(/^  (?=build-target:|prove:)/m);
+
+    expect(buildTargetJob).toContain("git diff --quiet HEAD -- src scripts/rollout-db.ts scripts/rollout-db-impl.ts package.json package-lock.json");
+    expect(buildTargetJob).toContain("git status --porcelain -- src scripts/rollout-db.ts scripts/rollout-db-impl.ts package.json package-lock.json");
+    // The re-check must run after the build/prune steps (which execute target-controlled
+    // scripts) and before packaging, so a script that rewrites tracked source post-verification
+    // is caught before those files are shipped under the original commit's identity.
+    const pruneIndex = buildTargetJob.indexOf("Retain target production dependencies only");
+    const recheckIndex = buildTargetJob.indexOf("git status --porcelain -- src");
+    const packageIndex = buildTargetJob.indexOf("Package raw target materials");
+    expect(pruneIndex).toBeLessThan(recheckIndex);
+    expect(recheckIndex).toBeLessThan(packageIndex);
   });
 });

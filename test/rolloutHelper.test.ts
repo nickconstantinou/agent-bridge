@@ -490,6 +490,18 @@ describe("guarded rollout helper", () => {
     expect(actions(fixture)).not.toContain("systemctl:stop");
   });
 
+  it("fails closed before stopping when the installed helper hash is not pinned", () => {
+    const fixture = useMinimalInventory(createFixture());
+    rewriteConfig(fixture, (lines) => [...lines, `rollout_helper_sha256=${"0".repeat(64)}`]);
+
+    const result = runRollout(fixture);
+    const output = `${result.stdout}\n${result.stderr}`;
+
+    expect(result.status).not.toBe(0);
+    expect(output).toMatch(/rollout helper sha-256 mismatch/i);
+    expect(actions(fixture)).not.toContain("systemctl:stop");
+  });
+
   it("fails preflight when main is dirty or the expected commit differs", () => {
     const dirty = createFixture();
     writeFileSync(join(dirty.project, "untracked"), "dirty");
@@ -974,6 +986,33 @@ fi
     expect(second.status).not.toBe(0);
     await new Promise<void>((resolve) => first.once("close", () => resolve()));
   });
+
+  it("runs fail-closed recovery when its caller hangs up after service stop begins", async () => {
+    const fixture = useMinimalInventory(createFixture());
+    const rollout: ChildProcess = spawn("bash", [helperPath, "--expected-commit", fixture.expectedCommit], {
+      env: {
+        ...process.env,
+        AGENT_BRIDGE_ROLLOUT_TEST_ROOT: fixture.root,
+        FAKE_SYSTEMCTL_STOP_DELAY: "2",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    rollout.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
+    rollout.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+
+    await waitForAction(fixture, /systemctl:stop/);
+    rollout.kill("SIGHUP");
+    const status = await new Promise<number | null>((resolve) => rollout.once("close", (code, signal) => resolve(code ?? (signal ? 143 : null))));
+    const output = `${stdout}\n${stderr}`;
+
+    expect(status).not.toBe(0);
+    expect(output).toMatch(/STATE: STOPPED_UNCHANGED/);
+    expect(output).toMatch(/services remain stopped/);
+    expect(existsSync(join(fixture.logDir, ".rollout-in-progress")), "interrupted rollout must retain its sentinel for review").toBe(true);
+    expect(readFileSync(fixture.stateFile, "utf8")).toBe("");
+  }, 10_000);
 
   it("keeps the legacy restart helper unchanged", () => {
     const restart = readFileSync(fileURLToPath(new URL("../scripts/restart-agent-bridge.sh", import.meta.url)), "utf8");

@@ -1,0 +1,153 @@
+name: Historical Release Artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_commit:
+        description: Full source commit to build
+        required: true
+        type: string
+      expected_tree:
+        description: Expected target commit tree SHA
+        required: true
+        type: string
+      builder_commit:
+        description: Reviewed builder/workflow/tooling commit
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: historical-release-artifact-${{ inputs.target_commit }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build historical immutable release artifact
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout trusted builder identity
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.builder_commit }}
+          fetch-depth: 0
+          path: trusted-builder
+
+      - name: Checkout target source identity
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_commit }}
+          fetch-depth: 0
+          path: target-source
+
+      - name: Verify both identities before building
+        shell: bash
+        env:
+          BUILDER_COMMIT: ${{ inputs.builder_commit }}
+          TARGET_COMMIT: ${{ inputs.target_commit }}
+          EXPECTED_TREE: ${{ inputs.expected_tree }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$BUILDER_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EXPECTED_TREE" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C trusted-builder rev-parse HEAD)" = "$BUILDER_COMMIT"
+          test "$(git -C target-source rev-parse HEAD)" = "$TARGET_COMMIT"
+          test "$(git -C target-source rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
+          test -f trusted-builder/scripts/releaseManifest.mjs
+          test -f trusted-builder/scripts/releaseProvenance.mjs
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+          cache-dependency-path: target-source/package-lock.json
+
+      - name: Install target dependencies
+        working-directory: target-source
+        run: npm ci
+
+      - name: Run target tests
+        working-directory: target-source
+        run: npm test
+
+      - name: Typecheck target
+        working-directory: target-source
+        run: npm run typecheck
+
+      - name: Architecture lint target
+        working-directory: target-source
+        run: bash scripts/arch-lint.sh src
+
+      - name: Compile target runtime
+        working-directory: target-source
+        run: npm run build
+
+      - name: Retain target production dependencies only
+        working-directory: target-source
+        run: npm prune --omit=dev
+
+      - name: Assemble and prove historical release
+        id: artifact
+        shell: bash
+        env:
+          BUILDER_COMMIT: ${{ inputs.builder_commit }}
+          TARGET_COMMIT: ${{ inputs.target_commit }}
+          EXPECTED_TREE: ${{ inputs.expected_tree }}
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/agent-bridge-historical-release"
+          archive="$RUNNER_TEMP/agent-bridge-${TARGET_COMMIT}.tar.gz"
+          mkdir -p "$root"
+          cp -a target-source/dist target-source/src target-source/scripts/rollout-db.ts target-source/scripts/rollout-db-impl.ts target-source/package.json target-source/package-lock.json target-source/node_modules "$root/"
+
+          node trusted-builder/scripts/releaseManifest.mjs \
+            --root "$root" \
+            --output "$root/manifest.json" \
+            --commit "$TARGET_COMMIT" \
+            --tree "$EXPECTED_TREE" \
+            --node-version "$(node --version)" \
+            --platform "$(node -p 'process.platform')" \
+            --arch "$(node -p 'process.arch')"
+
+          tar --create --gzip --file "$archive" \
+            --directory "$root" --sort=name --owner=0 --group=0 --numeric-owner .
+          ( cd "$(dirname "$archive")" && sha256sum "$(basename "$archive")" ) > "$archive.sha256"
+          tar --list --verbose --numeric-owner --file "$archive" > "$archive.members.txt"
+
+          workflow="trusted-builder/.github/workflows/historical-release-artifact.yml"
+          workflow_blob="$(git -C trusted-builder rev-parse HEAD:.github/workflows/historical-release-artifact.yml)"
+          workflow_sha256="$(sha256sum "$workflow" | cut -d' ' -f1)"
+          manifest_tool_sha256="$(sha256sum trusted-builder/scripts/releaseManifest.mjs | cut -d' ' -f1)"
+          node trusted-builder/scripts/releaseProvenance.mjs \
+            --root "$root" \
+            --output "$RUNNER_TEMP/provenance.json" \
+            --target-commit "$TARGET_COMMIT" \
+            --target-tree "$EXPECTED_TREE" \
+            --builder-commit "$BUILDER_COMMIT" \
+            --workflow-blob "$workflow_blob" \
+            --workflow-sha256 "$workflow_sha256" \
+            --manifest-tool-sha256 "$manifest_tool_sha256" \
+            --archive "$archive" \
+            --archive-members "$archive.members.txt" \
+            --node-version "$(node --version)" \
+            --platform "$(node -p 'process.platform')" \
+            --arch "$(node -p 'process.arch')"
+          sha256sum "$RUNNER_TEMP/provenance.json" > "$RUNNER_TEMP/provenance.json.sha256"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Upload non-production historical artifact and evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-bridge-historical-release-${{ inputs.target_commit }}
+          if-no-files-found: error
+          path: |
+            ${{ steps.artifact.outputs.archive }}
+            ${{ steps.artifact.outputs.archive }}.sha256
+            ${{ steps.artifact.outputs.archive }}.members.txt
+            ${{ runner.temp }}/provenance.json
+            ${{ runner.temp }}/provenance.json.sha256
+            ${{ runner.temp }}/agent-bridge-historical-release/manifest.json

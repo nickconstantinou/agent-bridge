@@ -78,6 +78,16 @@ jobs:
         working-directory: target-source
         run: npm prune --omit=dev
 
+      - name: Verify target tracked source is unmodified after build
+        working-directory: target-source
+        env:
+          TARGET_COMMIT: ${{ inputs.target_commit }}
+        run: |
+          set -Eeuo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_COMMIT"
+          git diff --quiet HEAD -- src scripts/rollout-db.ts scripts/rollout-db-impl.ts package.json package-lock.json
+          test -z "$(git status --porcelain -- src scripts/rollout-db.ts scripts/rollout-db-impl.ts package.json package-lock.json)"
+
       - name: Package raw target materials
         shell: bash
         run: |
@@ -166,6 +176,7 @@ jobs:
             --directory "$root" --sort=name --owner=0 --group=0 --numeric-owner .
           ( cd "$(dirname "$archive")" && sha256sum "$(basename "$archive")" ) > "$archive.sha256"
           tar --list --verbose --numeric-owner --file "$archive" > "$archive.members.txt"
+          tar --extract --gzip --to-stdout --file "$archive" ./manifest.json > "$RUNNER_TEMP/manifest-from-archive.json"
 
           workflow="trusted-builder/.github/workflows/historical-release-artifact.yml"
           workflow_blob="$(git -C trusted-builder rev-parse HEAD:.github/workflows/historical-release-artifact.yml)"
@@ -179,7 +190,7 @@ jobs:
             --workflow-blob "$workflow_blob" \
             --workflow-sha256 "$workflow_sha256" \
             --manifest-tool-sha256 "$manifest_tool_sha256" \
-            --manifest "$root/manifest.json" \
+            --manifest "$RUNNER_TEMP/manifest-from-archive.json" \
             --archive "$archive" \
             --archive-members "$archive.members.txt" \
             --provenance-tool trusted-builder/scripts/releaseProvenance.mjs \

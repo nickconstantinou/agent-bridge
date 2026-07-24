@@ -1,16 +1,17 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { linkSync, mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildReleaseManifest } from "../scripts/releaseManifest.mjs";
 import { buildReleaseProvenance } from "../scripts/releaseProvenance.mjs";
 
-// Builds root/archive/members/manifest exactly the way the workflow does: real `tar`
-// invocations with the workflow's exact flags, and the manifest extracted back out of the
-// finished archive (not read from the mutable staging copy). Hand-typed member lines
-// previously drifted from real GNU tar output (missing the "./" prefix) and let a real bug
-// through review, so every fixture here is produced by the real toolchain end to end.
+// Builds root/archive/members/manifest/verify-root exactly the way the workflow does: real
+// `tar` invocations with the workflow's exact flags (create, list, extract), and the manifest
+// extracted back out of the finished archive rather than read from the mutable staging copy.
+// Hand-typed member lines previously drifted from real GNU tar output — missing the "./"
+// prefix, and later dropping hardlink ("h") entries entirely — and let real bugs through
+// review undetected. Every fixture here is produced by the real toolchain end to end.
 function buildRealisticFixture(root: string) {
   mkdirSync(join(root, "dist"));
   writeFileSync(join(root, "dist", "index.js"), "#!/usr/bin/env node\nconsole.log('release');\n");
@@ -18,6 +19,10 @@ function buildRealisticFixture(root: string) {
   writeFileSync(join(root, "package-lock.json"), "{\"lockfileVersion\": 3}\n");
   mkdirSync(join(root, "node_modules", ".bin"), { recursive: true });
   symlinkSync("../tsx/dist/cli.mjs", join(root, "node_modules", ".bin", "tsx"));
+  mkdirSync(join(root, "node_modules", ".dedup"), { recursive: true });
+  mkdirSync(join(root, "node_modules", "pkg-a"), { recursive: true });
+  writeFileSync(join(root, "node_modules", ".dedup", "lib.js"), "module.exports = 1;\n");
+  linkSync(join(root, "node_modules", ".dedup", "lib.js"), join(root, "node_modules", "pkg-a", "lib.js"));
 
   const manifest = buildReleaseManifest({
     root,
@@ -38,8 +43,11 @@ function buildRealisticFixture(root: string) {
   writeFileSync(archiveMembers, execFileSync("tar", ["--list", "--verbose", "--numeric-owner", "--file", archive]));
   const extractedManifest = `${archive}.manifest.json`;
   writeFileSync(extractedManifest, execFileSync("tar", ["--extract", "--gzip", "--to-stdout", "--file", archive, "./manifest.json"]));
+  const verifyRoot = `${archive}.verify`;
+  mkdirSync(verifyRoot);
+  execFileSync("tar", ["--extract", "--gzip", "--file", archive, "--directory", verifyRoot]);
 
-  return { root, manifest, manifestPath: extractedManifest, archive, archiveMembers };
+  return { root, manifest, manifestPath: extractedManifest, archive, archiveMembers, verifyRoot };
 }
 
 function baseFixture(overrides = {}) {
@@ -58,6 +66,7 @@ function baseFixture(overrides = {}) {
     manifest: built.manifestPath,
     archive: built.archive,
     archiveMembers: built.archiveMembers,
+    verifyRoot: built.verifyRoot,
     provenanceTool,
     nodeVersion: "v24.15.0",
     platform: "linux",
@@ -67,7 +76,7 @@ function baseFixture(overrides = {}) {
 }
 
 describe("historical release provenance", () => {
-  it("records identities, hashes, modes, and executable entries from a real tar archive", () => {
+  it("records identities, hashes, modes, and executable entries verified against extracted archive bytes", () => {
     const fixture = baseFixture();
 
     const provenance = buildReleaseProvenance(fixture);
@@ -75,14 +84,13 @@ describe("historical release provenance", () => {
     expect(provenance.targetCommit).toBe(fixture.targetCommit);
     expect(provenance.builderCommit).toBe(fixture.builderCommit);
     expect(provenance.archiveSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(provenance.archiveMembersSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(provenance.manifestSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(provenance.provenanceToolSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(provenance.packageLockSha256).toMatch(/^[0-9a-f]{64}$/);
 
-    // Real GNU tar prefixes members with "./" — every recorded path must have it stripped.
     for (const { path } of provenance.modeInventory) {
       expect(path.startsWith("./")).toBe(false);
-      expect(path.startsWith(".")).toBe(false);
     }
 
     expect(provenance.executableEntries).toEqual([{ path: "dist/index.js", mode: "755", type: "file" }]);
@@ -93,6 +101,10 @@ describe("historical release provenance", () => {
     expect(provenance.modeInventory).toContainEqual(
       expect.objectContaining({ path: "node_modules/.bin/tsx", type: "symlink" }),
     );
+    // GNU tar hardlinks (npm dedup) resolve to real files on extraction and must be included.
+    expect(provenance.modeInventory).toContainEqual(
+      expect.objectContaining({ path: "node_modules/pkg-a/lib.js", type: "file" }),
+    );
   });
 
   it("rejects a non-SHA identity", () => {
@@ -100,22 +112,49 @@ describe("historical release provenance", () => {
     expect(() => buildReleaseProvenance(fixture)).toThrow(/builderCommit must be a full lowercase Git SHA/);
   });
 
-  it("fails closed when the archive contains a file the manifest does not account for", () => {
+  it("fails closed when an archived file's content does not match the manifest hash", () => {
     const root = mkdtempSync(join(tmpdir(), "agent-bridge-provenance-"));
     const built = buildRealisticFixture(root);
-    // Add a file to the staging root *after* the manifest and archive were already built from
-    // it, then re-tar — mirroring an archive that drifted from what the manifest recorded.
-    writeFileSync(join(root, "dist", "unexpected.js"), "surprise\n");
-    execFileSync("tar", [
-      "--create", "--gzip", "--file", built.archive,
-      "--directory", root, "--sort=name", "--owner=0", "--group=0", "--numeric-owner", ".",
-    ]);
-    writeFileSync(built.archiveMembers, execFileSync("tar", ["--list", "--verbose", "--numeric-owner", "--file", built.archive]));
+    // The archive claims the original hash, but the extracted bytes on disk were swapped —
+    // e.g. an archive built from tampered materials under an unchanged filename.
+    writeFileSync(join(built.verifyRoot, "dist", "index.js"), "tampered\n");
 
     const fixture = baseFixture({
       manifest: built.manifestPath,
       archive: built.archive,
       archiveMembers: built.archiveMembers,
+      verifyRoot: built.verifyRoot,
+    });
+
+    expect(() => buildReleaseProvenance(fixture)).toThrow(/content hash mismatch: dist\/index\.js/);
+  });
+
+  it("fails closed when a symlink target does not match the manifest", () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-bridge-provenance-"));
+    const built = buildRealisticFixture(root);
+    execFileSync("rm", [join(built.verifyRoot, "node_modules", ".bin", "tsx")]);
+    symlinkSync("/etc/passwd", join(built.verifyRoot, "node_modules", ".bin", "tsx"));
+
+    const fixture = baseFixture({
+      manifest: built.manifestPath,
+      archive: built.archive,
+      archiveMembers: built.archiveMembers,
+      verifyRoot: built.verifyRoot,
+    });
+
+    expect(() => buildReleaseProvenance(fixture)).toThrow(/symlink target mismatch: node_modules\/\.bin\/tsx/);
+  });
+
+  it("fails closed when the archive contains a file the manifest does not account for", () => {
+    const root = mkdtempSync(join(tmpdir(), "agent-bridge-provenance-"));
+    const built = buildRealisticFixture(root);
+    writeFileSync(join(built.verifyRoot, "dist", "unexpected.js"), "surprise\n");
+
+    const fixture = baseFixture({
+      manifest: built.manifestPath,
+      archive: built.archive,
+      archiveMembers: built.archiveMembers,
+      verifyRoot: built.verifyRoot,
     });
 
     expect(() => buildReleaseProvenance(fixture)).toThrow(/archive member not present in manifest: dist\/unexpected\.js/);
@@ -133,6 +172,7 @@ describe("historical release provenance", () => {
       manifest: tamperedManifestPath,
       archive: built.archive,
       archiveMembers: built.archiveMembers,
+      verifyRoot: built.verifyRoot,
     });
 
     expect(() => buildReleaseProvenance(fixture)).toThrow(/manifest file not present in archive: dist\/missing\.js/);

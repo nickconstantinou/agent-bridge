@@ -26,14 +26,16 @@ function parseArchiveMembers(archiveMembers) {
     .flatMap((line) => {
       const match = MEMBER_LINE.exec(line);
       if (!match) return [];
-      const [, permissions, path] = match;
-      if (permissions[0] !== "-") return []; // only regular files
+      const [, permissions, rawPath] = match;
+      const type = permissions[0] === "-" ? "file" : permissions[0] === "l" ? "symlink" : null;
+      if (!type) return []; // directories and other special types carry no file identity to verify
+      const path = (type === "symlink" ? rawPath.split(" -> ")[0] : rawPath).replace(/^\.\//, "");
       const mode = [
         permissionDigit(permissions[1], permissions[2], permissions[3]),
         permissionDigit(permissions[4], permissions[5], permissions[6]),
         permissionDigit(permissions[7], permissions[8], permissions[9]),
       ].join("");
-      return [{ path, mode }];
+      return [{ path, mode, type }];
     });
 }
 
@@ -87,7 +89,7 @@ export function buildReleaseProvenance({
     manifestSha256: sha256File(manifest),
     provenanceToolSha256: sha256File(provenanceTool),
     modeInventory: modes,
-    executableEntries: modes.filter(({ mode }) => Number.parseInt(mode, 8) & 0o111),
+    executableEntries: modes.filter(({ mode, type }) => type === "file" && Number.parseInt(mode, 8) & 0o111),
   };
 }
 

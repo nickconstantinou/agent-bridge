@@ -173,4 +173,28 @@ describe("release artifact manifest", () => {
     expect(pruneIndex).toBeLessThan(recheckIndex);
     expect(recheckIndex).toBeLessThan(packageIndex);
   });
+
+  it("verifies provenance against bytes extracted from the completed archive, not tar listing text", () => {
+    const workflow = readFileSync(join(process.cwd(), ".github/workflows/historical-release-artifact.yml"), "utf8");
+
+    // The archive is extracted into a dedicated verify root after archiveSha256 is already
+    // computed, and releaseProvenance.mjs walks real extracted bytes/symlink targets rather
+    // than trusting `tar --list --verbose` text (which has repeatedly drifted from tar's
+    // actual output format: missing "./" prefixes, and dropping hardlink "h" entries).
+    expect(workflow).toContain('tar --extract --gzip --file "$archive" --directory "$verify"');
+    expect(workflow).toContain('--verify-root "$verify"');
+    const archiveShaIndex = workflow.indexOf('sha256sum "$(basename "$archive")"');
+    const verifyExtractIndex = workflow.indexOf('--directory "$verify"');
+    expect(archiveShaIndex).toBeLessThan(verifyExtractIndex);
+  });
+
+  it("uploads the archive-extracted manifest, not the mutable staging copy", () => {
+    const workflow = readFileSync(join(process.cwd(), ".github/workflows/historical-release-artifact.yml"), "utf8");
+    const uploadStep = workflow.slice(workflow.indexOf("Upload non-production historical artifact"));
+
+    // The delivered manifest.json must be byte-identical to what manifestSha256 was computed
+    // from, so a consumer hashing the downloaded manifest actually matches provenance.json.
+    expect(uploadStep).toContain("${{ runner.temp }}/manifest-from-archive.json");
+    expect(uploadStep).not.toContain("agent-bridge-historical-release/manifest.json");
+  });
 });

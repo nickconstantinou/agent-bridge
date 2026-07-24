@@ -105,4 +105,44 @@ describe("release artifact manifest", () => {
     expect(workflow).toContain("archive.members.txt");
     expect(workflow).not.toContain("secrets.");
   });
+
+  it("isolates target execution from trusted proving in separate jobs", () => {
+    const workflow = readFileSync(join(process.cwd(), ".github/workflows/historical-release-artifact.yml"), "utf8");
+    const [, buildTargetJob, proveJob] = workflow.split(/^  (?=build-target:|prove:)/m);
+
+    expect(buildTargetJob).toBeDefined();
+    expect(proveJob).toBeDefined();
+    // The target-executing job never checks out or references trusted builder tooling.
+    expect(buildTargetJob).not.toContain("trusted-builder");
+    expect(buildTargetJob).not.toContain("releaseManifest.mjs");
+    expect(buildTargetJob).not.toContain("releaseProvenance.mjs");
+    // The proving job never checks out target source or runs target-controlled scripts.
+    expect(proveJob).not.toContain("path: target-source");
+    expect(proveJob).not.toContain("npm ci");
+    expect(proveJob).not.toContain("npm test");
+    expect(proveJob).not.toContain("npm run build");
+    expect(proveJob).not.toContain("arch-lint.sh");
+    expect(proveJob).toContain("needs: build-target");
+    // Materials cross the job boundary only as an opaque uploaded/downloaded artifact.
+    expect(buildTargetJob).toContain("upload-artifact");
+    expect(proveJob).toContain("download-artifact");
+  });
+
+  it("binds the reviewed builder commit to the workflow revision GitHub actually executed", () => {
+    const workflow = readFileSync(join(process.cwd(), ".github/workflows/historical-release-artifact.yml"), "utf8");
+
+    expect(workflow).toContain("WORKFLOW_SHA: ${{ github.workflow_sha }}");
+    expect(workflow).toContain('test "$BUILDER_COMMIT" = "$WORKFLOW_SHA"');
+  });
+
+  it("hashes the manifest and provenance tool and derives evidence from archived-not-staged content", () => {
+    const workflow = readFileSync(join(process.cwd(), ".github/workflows/historical-release-artifact.yml"), "utf8");
+
+    expect(workflow).toContain("--manifest \"$root/manifest.json\"");
+    expect(workflow).toContain("--provenance-tool trusted-builder/scripts/releaseProvenance.mjs");
+    // No --root argument to releaseProvenance.mjs: evidence must not be derived from re-stating
+    // the mutable staging directory after the archive has already been created.
+    const proveStep = workflow.slice(workflow.indexOf("releaseProvenance.mjs \\"));
+    expect(proveStep).not.toContain("--root \"$root\"");
+  });
 });

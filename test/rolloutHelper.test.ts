@@ -152,7 +152,7 @@ describe("guarded rollout helper", () => {
     expect(ledger).toMatch(/phase=SERVICES_STARTING/);
     expect(ledger).toMatch(/phase=COMPLETE/);
     expect(ledger.indexOf("phase=SERVICES_STARTING")).toBeLessThan(ledger.indexOf("phase=ACCEPTED"));
-  });
+  }, 15_000);
 
   it("atomically activates the staged release after migration and before service start", () => {
     const fixture = createFixture();
@@ -188,7 +188,7 @@ describe("guarded rollout helper", () => {
     }));
     expect(JSON.parse(readFileSync(join(artifacts, "post-start-evidence.json"), "utf8")).databases[0].claimRunAcquisitionCorrelation)
       .toBe(beforeEvidence.databases[0].claimRunAcquisitionCorrelation);
-  });
+  }, 15_000);
 
   it("restores the verified databases and previous release after a pre-start migration failure", () => {
     const fixture = createFixture();

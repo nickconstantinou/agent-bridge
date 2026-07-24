@@ -8,6 +8,7 @@
 import { randomUUID } from "node:crypto";
 import { executeAdvisorInvestigation, executeAdvisorRequest } from "./advisor.js";
 import { redactAdvisorEvidenceText } from "./advisorEvidenceRedaction.js";
+import { reconcileAdvisorEvidence, type AdvisorEvidenceEnvelopeInput } from "./advisorEvidenceEnvelope.js";
 import type { AdvisorEvidenceToolBroker } from "./advisorEvidenceTools.js";
 import type { AdvisorExecutionProfile } from "./advisorPolicy.js";
 import type { AdvisorConfig, AdvisorOrigin, AdvisorRequest, AdvisorRequestMode, AdvisorResult } from "./advisorTypes.js";
@@ -34,6 +35,26 @@ export interface TrustedAdvisorRequest {
 
 function scrubEvidence(evidence: AdvisorRequest["evidence"]): AdvisorRequest["evidence"] {
   if (!evidence) return undefined;
+  const scrubEnvelope = (input: AdvisorEvidenceEnvelopeInput): AdvisorEvidenceEnvelopeInput => {
+    const envelope = reconcileAdvisorEvidence(input);
+    const scrubItem = (item: ReturnType<typeof reconcileAdvisorEvidence>["currentState"][number]) => ({
+      ...item,
+      claim: redactAdvisorEvidenceText(item.claim),
+      source: redactAdvisorEvidenceText(item.source),
+    });
+    return {
+      assessmentGoal: redactAdvisorEvidenceText(envelope.assessmentGoal),
+      currentState: envelope.currentState.map(scrubItem),
+      ...(envelope.latestBlocker ? { latestBlocker: scrubItem(envelope.latestBlocker) } : {}),
+      acceptedDecisions: envelope.acceptedDecisions.map((item) => ({ ...item, decision: redactAdvisorEvidenceText(item.decision) })),
+      completedActions: envelope.completedActions.map((item) => ({ ...item, action: redactAdvisorEvidenceText(item.action) })),
+      supersededFindings: envelope.supersededFindings.map((item) => ({ ...item, finding: redactAdvisorEvidenceText(item.finding) })),
+      unresolvedRisks: envelope.unresolvedRisks.map(redactAdvisorEvidenceText),
+      unavailableEvidence: envelope.unavailableEvidence.map(redactAdvisorEvidenceText),
+      staleEvidence: envelope.staleEvidence.map(redactAdvisorEvidenceText),
+      explicitQuestion: redactAdvisorEvidenceText(envelope.explicitQuestion),
+    };
+  };
   return {
     ...(evidence.diffSummary != null ? { diffSummary: redactAdvisorEvidenceText(evidence.diffSummary) } : {}),
     ...(evidence.testOutput != null ? { testOutput: redactAdvisorEvidenceText(evidence.testOutput) } : {}),
@@ -42,6 +63,7 @@ function scrubEvidence(evidence: AdvisorRequest["evidence"]): AdvisorRequest["ev
     ...(evidence.acceptanceCriteria != null ? { acceptanceCriteria: redactAdvisorEvidenceText(evidence.acceptanceCriteria) } : {}),
     ...(evidence.plan != null ? { plan: redactAdvisorEvidenceText(evidence.plan) } : {}),
     ...(evidence.attemptSummary != null ? { attemptSummary: redactAdvisorEvidenceText(evidence.attemptSummary) } : {}),
+    ...(evidence.envelope != null ? { envelope: scrubEnvelope(evidence.envelope) } : {}),
   };
 }
 

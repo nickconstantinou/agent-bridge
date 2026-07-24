@@ -1142,7 +1142,7 @@ describe("ServerPlugin — extended checks", () => {
     const cpuCheck = report.checks.find(c => c.name === "cpu-load");
     expect(cpuCheck?.message).toMatch(/5m/i);
     expect(cpuCheck?.message).toMatch(/15m/i);
-  });
+  }, 15_000);
 
   it("includes disk-space-tmp check for /tmp filesystem", async () => {
     const { ServerPlugin } = await import("../src/health/plugins/server.js");

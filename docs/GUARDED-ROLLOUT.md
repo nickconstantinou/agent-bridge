@@ -40,9 +40,15 @@ sudo install -D -m 0750 -o root -g root scripts/rollout-agent-bridge.sh /usr/loc
 sudo install -D -m 0750 -o root -g root scripts/rollout-restore.py /usr/local/libexec/agent-bridge-rollout-restore
 sudo install -d -m 0700 -o root -g root /var/backups/agent-bridge /var/log/agent-bridge-rollouts
 sudo install -D -m 0600 -o root -g root systemd/agent-bridge-rollout.conf.example /etc/agent-bridge/rollout.conf
+sudo sha256sum /usr/local/sbin/rollout-agent-bridge
 sudoedit /etc/agent-bridge/rollout.conf
 sudo visudo -f /etc/sudoers.d/agent-bridge-rollout
 ```
+
+Write the displayed digest as `rollout_helper_sha256=` in the root-owned
+config. Production execution fails closed when this pin is missing, malformed,
+or does not match the installed helper bytes, preventing a stale legacy helper
+from stopping services under an immutable-release configuration.
 
 Sudoers content:
 

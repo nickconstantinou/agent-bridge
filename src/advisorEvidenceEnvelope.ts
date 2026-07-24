@@ -9,6 +9,7 @@ interface AdvisorEvidenceItemInput {
   observedAt: string;
   authority: AdvisorEvidenceAuthority;
   supersedes?: string[];
+  conflictsWith?: string[];
 }
 
 interface AdvisorDecisionInput {
@@ -78,6 +79,9 @@ function evidenceItem(value: unknown, index: number): AdvisorEvidenceItemInput {
   const supersedes = item.supersedes == null
     ? undefined
     : list(item.supersedes, `current_state[${index}].supersedes`, (entry, childIndex) => boundedText(entry, `current_state[${index}].supersedes[${childIndex}]`));
+  const conflictsWith = item.conflictsWith == null
+    ? undefined
+    : list(item.conflictsWith, `current_state[${index}].conflicts_with`, (entry, childIndex) => boundedText(entry, `current_state[${index}].conflicts_with[${childIndex}]`));
   if (!["deterministic", "reported", "inferred"].includes(String(item.authority))) {
     throw new Error(`current_state[${index}].authority is invalid`);
   }
@@ -88,6 +92,7 @@ function evidenceItem(value: unknown, index: number): AdvisorEvidenceItemInput {
     observedAt: timestamp(item.observedAt, `current_state[${index}].observed_at`),
     authority: item.authority as AdvisorEvidenceAuthority,
     ...(supersedes?.length ? { supersedes } : {}),
+    ...(conflictsWith?.length ? { conflictsWith } : {}),
   };
 }
 
@@ -124,7 +129,7 @@ export function reconcileAdvisorEvidence(input: AdvisorEvidenceEnvelopeInput): A
   const staleEvidence = textList(input.staleEvidence ?? [], "stale_evidence");
   const explicitQuestion = boundedText(input.explicitQuestion, "explicit_question");
   const latestBlocker = input.latestBlocker == null ? undefined : evidenceItem(input.latestBlocker, 0);
-  const explicitSuperseded = [...(input.supersededFindings ?? [])].map((finding, index) => {
+  const explicitSuperseded = list(input.supersededFindings ?? [], "superseded_findings", (finding, index) => {
     if (!finding || typeof finding !== "object") throw new Error(`superseded_findings[${index}] must be an object`);
     const item = finding as unknown as Record<string, unknown>;
     return {
@@ -134,8 +139,26 @@ export function reconcileAdvisorEvidence(input: AdvisorEvidenceEnvelopeInput): A
     };
   });
 
+  const stateById = new Map<string, AdvisorEvidenceItemInput>();
+  for (const state of states) {
+    if (stateById.has(state.id)) throw new Error(`current_state contains duplicate evidence id: ${state.id}`);
+    stateById.set(state.id, state);
+  }
+  const authorityRank: Record<AdvisorEvidenceAuthority, number> = { inferred: 0, reported: 1, deterministic: 2 };
   const supersededIds = new Map<string, string>();
-  for (const state of states) for (const id of state.supersedes ?? []) supersededIds.set(id, state.id);
+  for (const state of states) {
+    for (const id of state.supersedes ?? []) {
+      const target = stateById.get(id);
+      if (!target) throw new Error(`current_state item ${state.id} supersedes unknown evidence id ${id}`);
+      if (Date.parse(state.observedAt) <= Date.parse(target.observedAt)) {
+        throw new Error(`supersedence requires a newer observed_at timestamp: ${state.id} -> ${id}`);
+      }
+      if (authorityRank[state.authority] < authorityRank[target.authority]) {
+        throw new Error(`supersedence cannot weaken evidence authority: ${state.id} -> ${id}`);
+      }
+      supersededIds.set(id, state.id);
+    }
+  }
   const currentState = states.filter((state) => !supersededIds.has(state.id));
   const supersededFindings = [
     ...explicitSuperseded,
@@ -144,18 +167,32 @@ export function reconcileAdvisorEvidence(input: AdvisorEvidenceEnvelopeInput): A
       return old ? [{ finding: old.claim, supersededBy: state.id, supersededAt: state.observedAt }] : [];
     })),
   ];
-  const conflicts = currentState
-    .filter((state) => state.authority !== "deterministic")
-    .flatMap((state) => currentState
-      .filter((other) => other.id !== state.id && other.source === state.source && other.authority === "deterministic")
-      .filter((other) => Date.parse(other.observedAt) >= Date.parse(state.observedAt))
-      .map((other) => `${state.id} conflicts with newer deterministic evidence ${other.id}`));
+  const conflicts: string[] = [];
+  for (const state of currentState) {
+    for (const id of state.conflictsWith ?? []) {
+      if (!stateById.has(id)) throw new Error(`current_state item ${state.id} conflicts with unknown evidence id ${id}`);
+      if (supersededIds.has(id)) throw new Error(`current_state item ${state.id} conflicts with superseded evidence id ${id}`);
+      const conflict = `${state.id} conflicts with ${id}`;
+      if (!conflicts.includes(conflict)) conflicts.push(conflict);
+    }
+  }
+  const canonicalLatestBlocker = latestBlocker == null ? undefined : currentState.find((state) => state.id === latestBlocker.id);
+  if (latestBlocker) {
+    if (!canonicalLatestBlocker || canonicalLatestBlocker.authority !== "deterministic") {
+      throw new Error("latest_blocker must name current deterministic evidence");
+    }
+    if (canonicalLatestBlocker.claim !== latestBlocker.claim
+      || canonicalLatestBlocker.source !== latestBlocker.source
+      || canonicalLatestBlocker.observedAt !== latestBlocker.observedAt) {
+      throw new Error("latest_blocker must match the current evidence item it names");
+    }
+  }
   const inferredEvidence = currentState.filter((state) => state.authority === "inferred").map((state) => state.id);
 
   return {
     assessmentGoal,
     currentState,
-    ...(latestBlocker ? { latestBlocker } : {}),
+    ...(canonicalLatestBlocker ? { latestBlocker: canonicalLatestBlocker } : {}),
     acceptedDecisions,
     completedActions,
     supersededFindings,
@@ -165,7 +202,7 @@ export function reconcileAdvisorEvidence(input: AdvisorEvidenceEnvelopeInput): A
     inferredEvidence,
     explicitQuestion,
     conflicts,
-    evidenceIds: [...currentState, ...(latestBlocker ? [latestBlocker] : []), ...completedActions.map((action) => ({ id: action.evidenceId }))]
+    evidenceIds: [...currentState, ...(canonicalLatestBlocker ? [canonicalLatestBlocker] : []), ...completedActions.map((action) => ({ id: action.evidenceId }))]
       .map((item) => item.id)
       .filter((id, index, all) => all.indexOf(id) === index),
   };

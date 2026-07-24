@@ -19,9 +19,16 @@ claim, source, ISO-8601 `observedAt` timestamp and an authority of
 
 `reconcileAdvisorEvidence()` validates and bounds the envelope before it is
 used. Findings explicitly named by a newer item in `supersedes` are removed
-from current state and retained as supersession history. Conflicts between
-reported/inferred state and newer deterministic state are disclosed; they are
-not silently merged.
+from current state only when the replacement has a strictly newer observation
+time and equal or stronger authority; a reported/inferred item cannot erase
+deterministic state. Supersession targets must exist.
+
+Claims do not conflict merely because they share a source. A caller must name
+the semantic relationship with `conflictsWith` evidence IDs. Unknown,
+superseded or otherwise invalid conflict targets fail closed. `latestBlocker`
+must name the matching current deterministic state item, so stale or inferred
+items cannot be promoted by labelling them a blocker. Superseded-history items
+are subject to the same bounded-list limit as every other envelope list.
 
 The same envelope is rendered into both ordinary advisor prompts and the
 worker-debug selection/final prompts. This prevents manual and worker

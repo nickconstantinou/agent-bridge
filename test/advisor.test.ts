@@ -67,7 +67,7 @@ describe("advisor context and output", () => {
             { id: "old", claim: "preflight passed", source: "preflight", observedAt: "2026-07-20T10:00:00Z", authority: "deterministic" },
             { id: "new", claim: "legacy queue count is nonzero: 2", source: "preflight", observedAt: "2026-07-20T10:05:00Z", authority: "deterministic", supersedes: ["old"] },
           ],
-          latestBlocker: { id: "blocker", claim: "legacy queue count is nonzero: 2", source: "preflight", observedAt: "2026-07-20T10:05:00Z", authority: "deterministic" },
+          latestBlocker: { id: "new", claim: "legacy queue count is nonzero: 2", source: "preflight", observedAt: "2026-07-20T10:05:00Z", authority: "deterministic" },
           acceptedDecisions: [{ decision: "Keep sudo membership as accepted risk", decidedAt: "2026-07-19T09:00:00Z" }],
           completedActions: [],
           unresolvedRisks: [],

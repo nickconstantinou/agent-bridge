@@ -11,7 +11,7 @@ const base: AdvisorEvidenceEnvelopeInput = {
     { id: "state-old", claim: "The rollout preflight passed", source: "preflight", observedAt: "2026-07-20T10:00:00Z", authority: "deterministic" },
     { id: "state-new", claim: "The rollout preflight is blocked by two legacy rows", source: "preflight", observedAt: "2026-07-20T10:05:00Z", authority: "deterministic", supersedes: ["state-old"] },
   ],
-  latestBlocker: { id: "blocker-1", claim: "legacy queue count is nonzero: 2", source: "preflight", observedAt: "2026-07-20T10:05:00Z", authority: "deterministic" },
+  latestBlocker: { id: "state-new", claim: "The rollout preflight is blocked by two legacy rows", source: "preflight", observedAt: "2026-07-20T10:05:00Z", authority: "deterministic" },
   acceptedDecisions: [{ decision: "Retain the existing sudo membership as accepted risk", decidedAt: "2026-07-19T09:00:00Z" }],
   completedActions: [{ action: "Removed broad NOPASSWD access", evidenceId: "action-1", observedAt: "2026-07-19T08:00:00Z" }],
   unresolvedRisks: ["The host-side queue disposition is not yet verified"],
@@ -28,7 +28,7 @@ describe("advisor evidence envelope", () => {
     expect(envelope.supersededFindings).toEqual(expect.arrayContaining([
       expect.objectContaining({ finding: "The rollout preflight passed", supersededBy: "state-new" }),
     ]));
-    expect(envelope.latestBlocker?.id).toBe("blocker-1");
+    expect(envelope.latestBlocker?.id).toBe("state-new");
     expect(envelope.acceptedDecisions[0]?.decision).toContain("accepted risk");
     expect(envelope.completedActions[0]?.evidenceId).toBe("action-1");
   });
@@ -45,6 +45,7 @@ describe("advisor evidence envelope", () => {
     const envelope = reconcileAdvisorEvidence({
       ...base,
       currentState: [{ id: "inferred", claim: "The host is healthy", source: "operator", observedAt: "2026-07-20T10:00:00Z", authority: "inferred" }],
+      latestBlocker: undefined,
       unavailableEvidence: [],
       staleEvidence: [],
     });
@@ -60,5 +61,59 @@ describe("advisor evidence envelope", () => {
       ...base,
       explicitQuestion: "x".repeat(2_001),
     })).toThrow(/bounded/i);
+  });
+
+  it("refuses an older or weaker item from superseding newer deterministic state", () => {
+    expect(() => reconcileAdvisorEvidence({
+      ...base,
+      currentState: [
+        { id: "deterministic", claim: "queue is clear", source: "preflight", observedAt: "2026-07-20T10:05:00Z", authority: "deterministic" },
+        { id: "reported", claim: "queue is clear", source: "operator", observedAt: "2026-07-20T10:04:00Z", authority: "reported", supersedes: ["deterministic"] },
+      ],
+    })).toThrow(/supersed/i);
+  });
+
+  it("requires explicit semantic conflict links instead of guessing from source names", () => {
+    const unrelated = reconcileAdvisorEvidence({
+      ...base,
+      currentState: [
+        { id: "a", claim: "service is active", source: "snapshot", observedAt: "2026-07-20T10:00:00Z", authority: "reported" },
+        { id: "b", claim: "queue has two rows", source: "snapshot", observedAt: "2026-07-20T10:01:00Z", authority: "deterministic" },
+      ],
+      latestBlocker: undefined,
+      unavailableEvidence: [], staleEvidence: [],
+    });
+    expect(unrelated.conflicts).toEqual([]);
+
+    const conflicting = reconcileAdvisorEvidence({
+      ...base,
+      currentState: [
+        { id: "a", claim: "service is active", source: "service-check", observedAt: "2026-07-20T10:00:00Z", authority: "reported", conflictsWith: ["b"] },
+        { id: "b", claim: "service is stopped", source: "preflight", observedAt: "2026-07-20T10:01:00Z", authority: "deterministic" },
+      ],
+      latestBlocker: undefined,
+      unavailableEvidence: [], staleEvidence: [],
+    });
+    expect(conflicting.conflicts).toEqual(["a conflicts with b"]);
+  });
+
+  it("accepts latestBlocker only when it names current deterministic state", () => {
+    expect(() => reconcileAdvisorEvidence({
+      ...base,
+      latestBlocker: { id: "old", claim: "old blocker", source: "preflight", observedAt: "2026-07-19T10:00:00Z", authority: "deterministic" },
+    })).toThrow(/latest_blocker/i);
+    expect(() => reconcileAdvisorEvidence({
+      ...base,
+      latestBlocker: { ...base.currentState[0], authority: "reported" },
+    })).toThrow(/latest_blocker/i);
+  });
+
+  it("bounds superseded finding history", () => {
+    expect(() => reconcileAdvisorEvidence({
+      ...base,
+      supersededFindings: Array.from({ length: 33 }, (_, index) => ({
+        finding: `old-${index}`, supersededBy: "state-new", supersededAt: "2026-07-20T10:05:00Z",
+      })),
+    })).toThrow(/superseded_findings.*bounded/i);
   });
 });

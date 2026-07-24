@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, linkSync, mkdtempSync, readFileSync, symlinkSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, statSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,12 +8,18 @@ import { buildReleaseManifest } from "../scripts/releaseManifest.mjs";
 const COMMIT = "1".repeat(40);
 const TREE = "2".repeat(40);
 
-function makeArchive(withHardlink = false): { archive: string; root: string } {
+function makeArchive(withHardlink = false, withExecutable = false): { archive: string; root: string } {
   const root = mkdtempSync(join(tmpdir(), "agent-bridge-stage-input-"));
   writeFileSync(join(root, "package-lock.json"), "lock\n");
   writeFileSync(join(root, "package.json"), "package\n");
   if (withHardlink) {
     linkSync(join(root, "package.json"), join(root, "package-copy.json"));
+  }
+  if (withExecutable) {
+    mkdirSync(join(root, "bin"));
+    const executable = join(root, "bin", "runtime-entry");
+    writeFileSync(executable, "#!/bin/sh\n");
+    chmodSync(executable, 0o755);
   }
   const manifest = buildReleaseManifest({
     root,
@@ -56,8 +62,17 @@ describe("immutable release staging", () => {
     expect(statSync(release).mode & 0o222).toBe(0);
   });
 
+  it("preserves executable mode bits for runtime entries", () => {
+    const { archive } = makeArchive(false, true);
+    const releaseRoot = mkdtempSync(join(tmpdir(), "agent-bridge-releases-"));
+
+    runStage(archive, releaseRoot);
+
+    expect(statSync(join(releaseRoot, COMMIT, "bin", "runtime-entry")).mode & 0o111).toBe(0o111);
+  });
+
   it("stages GNU tar hardlinks without weakening manifest validation", () => {
-    const { archive } = makeArchive(true);
+    const { archive } = makeArchive(true, false);
     const releaseRoot = mkdtempSync(join(tmpdir(), "agent-bridge-releases-"));
 
     expect(runStage(archive, releaseRoot)).toMatch(new RegExp(`staged ${COMMIT}`));

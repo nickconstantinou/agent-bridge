@@ -24,17 +24,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build historical immutable release artifact
+  build-target:
+    name: Build target source (no trusted builder access)
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout trusted builder identity
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.builder_commit }}
-          fetch-depth: 0
-          path: trusted-builder
-
       - name: Checkout target source identity
         uses: actions/checkout@v4
         with:
@@ -42,22 +35,17 @@ jobs:
           fetch-depth: 0
           path: target-source
 
-      - name: Verify both identities before building
+      - name: Verify target identity before building
         shell: bash
         env:
-          BUILDER_COMMIT: ${{ inputs.builder_commit }}
           TARGET_COMMIT: ${{ inputs.target_commit }}
           EXPECTED_TREE: ${{ inputs.expected_tree }}
         run: |
           set -Eeuo pipefail
-          [[ "$BUILDER_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           [[ "$TARGET_COMMIT" =~ ^[0-9a-f]{40}$ ]]
           [[ "$EXPECTED_TREE" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git -C trusted-builder rev-parse HEAD)" = "$BUILDER_COMMIT"
           test "$(git -C target-source rev-parse HEAD)" = "$TARGET_COMMIT"
           test "$(git -C target-source rev-parse HEAD^{tree})" = "$EXPECTED_TREE"
-          test -f trusted-builder/scripts/releaseManifest.mjs
-          test -f trusted-builder/scripts/releaseProvenance.mjs
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -90,6 +78,69 @@ jobs:
         working-directory: target-source
         run: npm prune --omit=dev
 
+      - name: Package raw target materials
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          materials="$RUNNER_TEMP/target-materials.tar.gz"
+          tar --create --gzip --file "$materials" \
+            --directory target-source --sort=name --owner=0 --group=0 --numeric-owner \
+            dist src scripts/rollout-db.ts scripts/rollout-db-impl.ts package.json package-lock.json node_modules
+          echo "materials=$materials" >> "$GITHUB_OUTPUT"
+        id: materials
+
+      - name: Upload raw target materials (no manifest, no provenance)
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-target-materials-${{ inputs.target_commit }}
+          if-no-files-found: error
+          retention-days: 1
+          path: ${{ steps.materials.outputs.materials }}
+
+  prove:
+    name: Assemble and prove historical release (trusted tooling only)
+    needs: build-target
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout trusted builder identity
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.builder_commit }}
+          fetch-depth: 0
+          path: trusted-builder
+
+      - name: Verify builder identity matches the executed workflow
+        shell: bash
+        env:
+          BUILDER_COMMIT: ${{ inputs.builder_commit }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$BUILDER_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git -C trusted-builder rev-parse HEAD)" = "$BUILDER_COMMIT"
+          test "$BUILDER_COMMIT" = "$WORKFLOW_SHA"
+          test -f trusted-builder/scripts/releaseManifest.mjs
+          test -f trusted-builder/scripts/releaseProvenance.mjs
+
+      - name: Download raw target materials
+        uses: actions/download-artifact@v4
+        with:
+          name: historical-target-materials-${{ inputs.target_commit }}
+          path: ${{ runner.temp }}/materials
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+
+      - name: Extract target materials into the release root
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          root="$RUNNER_TEMP/agent-bridge-historical-release"
+          mkdir -p "$root"
+          tar --extract --gzip --file "$RUNNER_TEMP/materials/target-materials.tar.gz" --directory "$root"
+
       - name: Assemble and prove historical release
         id: artifact
         shell: bash
@@ -101,8 +152,6 @@ jobs:
           set -Eeuo pipefail
           root="$RUNNER_TEMP/agent-bridge-historical-release"
           archive="$RUNNER_TEMP/agent-bridge-${TARGET_COMMIT}.tar.gz"
-          mkdir -p "$root"
-          cp -a target-source/dist target-source/src target-source/scripts/rollout-db.ts target-source/scripts/rollout-db-impl.ts target-source/package.json target-source/package-lock.json target-source/node_modules "$root/"
 
           node trusted-builder/scripts/releaseManifest.mjs \
             --root "$root" \
@@ -123,7 +172,6 @@ jobs:
           workflow_sha256="$(sha256sum "$workflow" | cut -d' ' -f1)"
           manifest_tool_sha256="$(sha256sum trusted-builder/scripts/releaseManifest.mjs | cut -d' ' -f1)"
           node trusted-builder/scripts/releaseProvenance.mjs \
-            --root "$root" \
             --output "$RUNNER_TEMP/provenance.json" \
             --target-commit "$TARGET_COMMIT" \
             --target-tree "$EXPECTED_TREE" \
@@ -131,8 +179,10 @@ jobs:
             --workflow-blob "$workflow_blob" \
             --workflow-sha256 "$workflow_sha256" \
             --manifest-tool-sha256 "$manifest_tool_sha256" \
+            --manifest "$root/manifest.json" \
             --archive "$archive" \
             --archive-members "$archive.members.txt" \
+            --provenance-tool trusted-builder/scripts/releaseProvenance.mjs \
             --node-version "$(node --version)" \
             --platform "$(node -p 'process.platform')" \
             --arch "$(node -p 'process.arch')"

@@ -1,41 +1,32 @@
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { lstatSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SHA = /^[0-9a-f]{40}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
-const MEMBER_LINE = /^(\S{10})\s+\S+\s+\d+\s+\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}\s+(.+)$/;
 
 function sha256File(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-function permissionDigit(r, w, x) {
-  const readBit = r === "-" ? 0 : 4;
-  const writeBit = w === "-" ? 0 : 2;
-  const execBit = x === "x" || x === "s" || x === "t" ? 1 : 0;
-  return readBit + writeBit + execBit;
-}
-
-function parseArchiveMembers(archiveMembers) {
-  const content = readFileSync(archiveMembers, "utf8");
-  return content
-    .split("\n")
-    .filter((line) => line.length > 0)
-    .flatMap((line) => {
-      const match = MEMBER_LINE.exec(line);
-      if (!match) return [];
-      const [, permissions, rawPath] = match;
-      const type = permissions[0] === "-" ? "file" : permissions[0] === "l" ? "symlink" : null;
-      if (!type) return []; // directories and other special types carry no file identity to verify
-      const path = (type === "symlink" ? rawPath.split(" -> ")[0] : rawPath).replace(/^\.\//, "");
-      const mode = [
-        permissionDigit(permissions[1], permissions[2], permissions[3]),
-        permissionDigit(permissions[4], permissions[5], permissions[6]),
-        permissionDigit(permissions[7], permissions[8], permissions[9]),
-      ].join("");
-      return [{ path, mode, type }];
+// Walks the archive already extracted from the completed, already-hashed release tarball.
+// GNU tar hardlinks (npm's node_modules dedup layout) are materialized as ordinary regular
+// files on extraction, so they need no special handling here — the filesystem resolves them
+// for us. This replaces parsing `tar --list --verbose` text, which cannot see real file
+// content or symlink targets and has repeatedly drifted from tar's actual output format.
+function walk(root, current = root) {
+  return readdirSync(current, { withFileTypes: true })
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .flatMap((entry) => {
+      const absolute = join(current, entry.name);
+      const path = relative(root, absolute).split(sep).join("/");
+      const stat = lstatSync(absolute);
+      const mode = (stat.mode & 0o7777).toString(8);
+      if (stat.isDirectory()) return walk(root, absolute);
+      if (stat.isSymbolicLink()) return [{ path, mode, type: "symlink", target: readlinkSync(absolute) }];
+      if (stat.isFile()) return [{ path, mode, type: "file", sha256: sha256File(absolute), size: stat.size }];
+      throw new Error(`unsupported archive entry type: ${path}`);
     });
 }
 
@@ -49,6 +40,7 @@ export function buildReleaseProvenance({
   manifest,
   archive,
   archiveMembers,
+  verifyRoot,
   provenanceTool,
   nodeVersion,
   platform,
@@ -62,16 +54,26 @@ export function buildReleaseProvenance({
   }
 
   const manifestData = JSON.parse(readFileSync(manifest, "utf8"));
-  const manifestPaths = new Set(manifestData.files.map((file) => file.path));
-  const modes = parseArchiveMembers(resolve(archiveMembers));
-  const archivePaths = new Set(modes.map(({ path }) => path));
+  const manifestByPath = new Map(manifestData.files.map((file) => [file.path, file]));
+  const extracted = walk(resolve(verifyRoot));
+  const extractedByPath = new Map(extracted.map((entry) => [entry.path, entry]));
 
-  for (const { path } of modes) {
-    if (path === "manifest.json") continue;
-    if (!manifestPaths.has(path)) throw new Error(`archive member not present in manifest: ${path}`);
+  for (const entry of extracted) {
+    if (entry.path === "manifest.json") continue;
+    const expected = manifestByPath.get(entry.path);
+    if (!expected) throw new Error(`archive member not present in manifest: ${entry.path}`);
+    if (entry.type === "symlink") {
+      if (expected.type !== "symlink") throw new Error(`entry type mismatch: ${entry.path}`);
+      if (expected.target !== entry.target) throw new Error(`symlink target mismatch: ${entry.path}`);
+    } else {
+      if (expected.type === "symlink") throw new Error(`entry type mismatch: ${entry.path}`);
+      if (expected.sha256 !== entry.sha256 || expected.size !== entry.size) {
+        throw new Error(`content hash mismatch: ${entry.path}`);
+      }
+    }
   }
-  for (const path of manifestPaths) {
-    if (!archivePaths.has(path)) throw new Error(`manifest file not present in archive: ${path}`);
+  for (const path of manifestByPath.keys()) {
+    if (!extractedByPath.has(path)) throw new Error(`manifest file not present in archive: ${path}`);
   }
 
   return {
@@ -88,8 +90,10 @@ export function buildReleaseProvenance({
     archiveMembersSha256: sha256File(archiveMembers),
     manifestSha256: sha256File(manifest),
     provenanceToolSha256: sha256File(provenanceTool),
-    modeInventory: modes,
-    executableEntries: modes.filter(({ mode, type }) => type === "file" && Number.parseInt(mode, 8) & 0o111),
+    modeInventory: extracted.map(({ path, mode, type }) => ({ path, mode, type })),
+    executableEntries: extracted
+      .filter(({ type, mode }) => type === "file" && Number.parseInt(mode, 8) & 0o111)
+      .map(({ path, mode, type }) => ({ path, mode, type })),
   };
 }
 
@@ -111,6 +115,7 @@ if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
     "--manifest",
     "--archive",
     "--archive-members",
+    "--verify-root",
     "--provenance-tool",
   ];
   if (required.some((name) => !argument(name))) throw new Error(`usage: releaseProvenance.mjs ${required.join(" VALUE ")} VALUE`);
@@ -124,6 +129,7 @@ if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
     manifest: argument("--manifest"),
     archive: argument("--archive"),
     archiveMembers: argument("--archive-members"),
+    verifyRoot: argument("--verify-root"),
     provenanceTool: argument("--provenance-tool"),
     nodeVersion: argument("--node-version") ?? process.version,
     platform: argument("--platform") ?? process.platform,

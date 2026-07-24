@@ -148,6 +148,7 @@ def extract_archive(archive: Path, destination: Path) -> None:
                 fail(f"unable to read archive member: {relative}")
             with target.open("xb") as output:
                 shutil.copyfileobj(source, output)
+            os.chmod(target, member.mode & 0o777)
 
 
 def make_immutable(root: Path) -> None:

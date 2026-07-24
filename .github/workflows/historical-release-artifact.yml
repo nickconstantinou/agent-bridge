@@ -178,6 +178,10 @@ jobs:
           tar --list --verbose --numeric-owner --file "$archive" > "$archive.members.txt"
           tar --extract --gzip --to-stdout --file "$archive" ./manifest.json > "$RUNNER_TEMP/manifest-from-archive.json"
 
+          verify="$RUNNER_TEMP/agent-bridge-historical-release-verify"
+          mkdir -p "$verify"
+          tar --extract --gzip --file "$archive" --directory "$verify"
+
           workflow="trusted-builder/.github/workflows/historical-release-artifact.yml"
           workflow_blob="$(git -C trusted-builder rev-parse HEAD:.github/workflows/historical-release-artifact.yml)"
           workflow_sha256="$(sha256sum "$workflow" | cut -d' ' -f1)"
@@ -193,6 +197,7 @@ jobs:
             --manifest "$RUNNER_TEMP/manifest-from-archive.json" \
             --archive "$archive" \
             --archive-members "$archive.members.txt" \
+            --verify-root "$verify" \
             --provenance-tool trusted-builder/scripts/releaseProvenance.mjs \
             --node-version "$(node --version)" \
             --platform "$(node -p 'process.platform')" \
@@ -211,4 +216,4 @@ jobs:
             ${{ steps.artifact.outputs.archive }}.members.txt
             ${{ runner.temp }}/provenance.json
             ${{ runner.temp }}/provenance.json.sha256
-            ${{ runner.temp }}/agent-bridge-historical-release/manifest.json
+            ${{ runner.temp }}/manifest-from-archive.json

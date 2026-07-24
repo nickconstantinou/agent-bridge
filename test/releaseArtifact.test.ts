@@ -91,4 +91,18 @@ describe("release artifact manifest", () => {
       expect(readFileSync(join(process.cwd(), entrypoint), "utf8")).not.toHaveLength(0);
     }
   });
+
+  it("defines the historical two-identity artifact builder as read-only CI", () => {
+    const workflow = readFileSync(join(process.cwd(), ".github/workflows/historical-release-artifact.yml"), "utf8");
+
+    expect(workflow).toContain("target_commit:");
+    expect(workflow).toContain("expected_tree:");
+    expect(workflow).toContain("builder_commit:");
+    expect(workflow).toContain("path: trusted-builder");
+    expect(workflow).toContain("path: target-source");
+    expect(workflow).toContain("contents: read");
+    expect(workflow).toContain("releaseProvenance.mjs");
+    expect(workflow).toContain("archive.members.txt");
+    expect(workflow).not.toContain("secrets.");
+  });
 });

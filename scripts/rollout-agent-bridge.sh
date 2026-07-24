@@ -81,6 +81,7 @@ fi
 project_dir=""
 release_root=""
 current_pointer=""
+rollout_helper_sha256=""
 runtime_user=""
 node_bin=""
 backup_dir=""
@@ -94,6 +95,7 @@ while IFS='=' read -r key value || [[ -n "$key$value" ]]; do
     project_dir) [[ -z "$project_dir" ]] || die "duplicate project_dir"; project_dir="$value" ;;
     release_root) [[ -z "$release_root" ]] || die "duplicate release_root"; release_root="$value" ;;
     current_pointer) [[ -z "$current_pointer" ]] || die "duplicate current_pointer"; current_pointer="$value" ;;
+    rollout_helper_sha256) [[ -z "$rollout_helper_sha256" ]] || die "duplicate rollout_helper_sha256"; rollout_helper_sha256="$value" ;;
     runtime_user) [[ -z "$runtime_user" ]] || die "duplicate runtime_user"; runtime_user="$value" ;;
     node_bin) [[ -z "$node_bin" ]] || die "duplicate node_bin"; node_bin="$value" ;;
     backup_dir) [[ -z "$backup_dir" ]] || die "duplicate backup_dir"; backup_dir="$value" ;;
@@ -171,6 +173,11 @@ if [[ -n "$release_root" || -n "$current_pointer" ]]; then
   [[ "$(/usr/bin/stat -c %u "$current_pointer")" == "$secure_owner_uid" ]] || die "current pointer has unsafe ownership"
   project_dir="$release_dir"
   release_mode=1
+fi
+if (( test_mode == 0 )) || [[ -n "$rollout_helper_sha256" ]]; then
+  [[ "$rollout_helper_sha256" =~ ^[0-9a-f]{64}$ ]] || die "rollout_helper_sha256 must be a full lowercase SHA-256 pin"
+  installed_helper_sha256="$(/usr/bin/sha256sum "$0" | /usr/bin/cut -d' ' -f1)"
+  [[ "$installed_helper_sha256" == "$rollout_helper_sha256" ]] || die "rollout helper SHA-256 mismatch: configured=$rollout_helper_sha256 installed=$installed_helper_sha256"
 fi
 
 declare -A selected_units=()

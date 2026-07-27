@@ -680,7 +680,7 @@ fi
     expect(existsSync(ledgerFile)).toBe(false);
   });
 
-  it("regards rollback as successful and clears recovery records if service-stopped is pending but restart fails during rollback", async () => {
+  it("regards recovery/rollback as failed and retains recovery records if service-stopped is pending but restart fails during rollback", async () => {
     seedDb(resolvedOldPath);
 
     const originalEnvContent = readFileSync(resolvedEnvFilePath, "utf8");
@@ -718,7 +718,7 @@ exit 0
 `, { mode: 0o755 });
 
     // Rerun relocation in recover mode
-    await relocateHealthDb({
+    await expect(relocateHealthDb({
       oldPath,
       newPath,
       envFilePath,
@@ -726,11 +726,11 @@ exit 0
       serviceName,
       expectedInstallationId: "test-install-id-123",
       recover: true
-    });
+    })).rejects.toThrow(/Recovery failed to restore complete original state/);
 
-    // The recovery should still succeed, and clear both sentinel and ledger!
-    expect(existsSync(sentinelFile)).toBe(false);
-    expect(existsSync(ledgerFile)).toBe(false);
+    // The recovery should have failed, retaining both sentinel and ledger!
+    expect(existsSync(sentinelFile)).toBe(true);
+    expect(existsSync(ledgerFile)).toBe(true);
   });
 
   it("fails when lock process terminates unexpectedly during execution", async () => {

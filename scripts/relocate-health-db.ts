@@ -44,6 +44,39 @@ interface LedgerData {
   }[];
 }
 
+function checkFileNotOpen(filePath: string) {
+  const TEST_ROOT = process.env.AGENT_BRIDGE_ROLLOUT_TEST_ROOT || "";
+  const fuserBin = "/usr/bin/fuser";
+  const lsofBin = "/usr/bin/lsof";
+  if (!TEST_ROOT && !existsSync(fuserBin) && !existsSync(lsofBin)) {
+    throw new Error("Security check failed: neither fuser nor lsof is available on the system");
+  }
+
+  for (const suffix of ["", "-wal", "-shm"]) {
+    const targetFile = filePath + suffix;
+    if (!existsSync(targetFile)) continue;
+    if (existsSync(fuserBin)) {
+      try {
+        execFileSync(fuserBin, [targetFile], { stdio: "ignore" });
+        throw new Error(`Database file ${targetFile} is held open by an active process`);
+      } catch (err: any) {
+        if (err.status !== 1) {
+          throw new Error(`fuser inspection failed operationally (exit code ${err.status}): ${err.message}`);
+        }
+      }
+    } else if (existsSync(lsofBin)) {
+      try {
+        execFileSync(lsofBin, [targetFile], { stdio: "ignore" });
+        throw new Error(`Database file ${targetFile} is held open by an active process`);
+      } catch (err: any) {
+        if (err.status !== 1) {
+          throw new Error(`lsof inspection failed operationally (exit code ${err.status}): ${err.message}`);
+        }
+      }
+    }
+  }
+}
+
 async function restartServiceWithAcceptanceGate(
   systemctl: string, 
   serviceName: string, 
@@ -106,8 +139,10 @@ async function performRecovery(
   resolvedEnvFilePath: string,
   resolvedRolloutConfigPath: string,
   finalExpectedCommit: string,
-  expectedInstallationId: string
+  expectedInstallationId: string,
+  checkLock: () => void
 ) {
+  checkLock();
   if (!existsSync(ledgerFile)) {
     throw new Error(`Sentinel file exists but ledger file is missing at ${ledgerFile}. Inconsistent state, manual recovery required.`);
   }
@@ -268,6 +303,9 @@ async function performRecovery(
         throw new Error(`Recovery aborted: failed to prove service is inactive: ${stdout || err.message}`);
       }
     }
+    checkLock();
+    checkFileNotOpen(resolvedOldPath);
+    checkFileNotOpen(resolvedNewPath);
   }
 
   // Helper: safe atomic write via tmp file
@@ -284,17 +322,14 @@ async function performRecovery(
     renameSync(tmpPath, targetPath);
 
     // durable directory fsync
-    try {
-      const dirFd = openSync(dirname(targetPath), "r");
-      fsyncSync(dirFd);
-      closeSync(dirFd);
-    } catch {
-      // ignore
-    }
+    const dirFd = openSync(dirname(targetPath), "r");
+    fsyncSync(dirFd);
+    closeSync(dirFd);
   };
 
   // 2. Revert other steps in reverse order
   for (let i = steps.length - 1; i >= 0; i--) {
+    checkLock();
     const step = steps[i];
     
     if (step.name === "rollout-config-updated") {
@@ -351,9 +386,7 @@ async function performRecovery(
       await restartServiceWithAcceptanceGate(systemctl, serviceName, hasMutations);
     } catch (err: any) {
       console.error(`Recovery error: failed to restart original service state: ${err.message}`);
-      if (hasMutations) {
-        rollbackSuccess = false;
-      }
+      rollbackSuccess = false;
     }
   }
 
@@ -440,13 +473,9 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     renameSync(tmpPath, targetPath);
 
     // durable directory fsync
-    try {
-      const dirFd = openSync(dirname(targetPath), "r");
-      fsyncSync(dirFd);
-      closeSync(dirFd);
-    } catch {
-      // ignore
-    }
+    const dirFd = openSync(dirname(targetPath), "r");
+    fsyncSync(dirFd);
+    closeSync(dirFd);
   };
 
   // 1. Rollout Lock: spawn flock to hold lock for entire process execution
@@ -570,7 +599,8 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
           resolvedEnvFilePath, 
           resolvedRolloutConfigPath,
           finalExpectedCommit,
-          expectedInstallationId
+          expectedInstallationId,
+          checkLock
         );
       } finally {
         if (lockProcess) lockProcess.kill();
@@ -731,8 +761,15 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
       }
     }
 
+    if (hasMutations) {
+      checkLock();
+      checkFileNotOpen(resolvedOldPath);
+      checkFileNotOpen(resolvedNewPath);
+    }
+
     // Revert steps in reverse order
     for (let i = stepsToRollback.length - 1; i >= 0; i--) {
+      checkLock();
       const step = stepsToRollback[i];
       if (step.name === "rollout-config-updated") {
         try {
@@ -789,9 +826,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
             await restartServiceWithAcceptanceGate(systemctl, serviceName, hasMutations);
           } catch (err: any) {
             console.error(`[relocate-health-db] Failed to restart service during rollback: ${err.message}`);
-            if (hasMutations) {
-              rollbackSuccess = false;
-            }
+            rollbackSuccess = false;
           }
         }
       }
@@ -875,37 +910,6 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
 
     // Prove no database-owning processes remain
     checkLock();
-    const checkFileNotOpen = (filePath: string) => {
-      const fuserBin = "/usr/bin/fuser";
-      const lsofBin = "/usr/bin/lsof";
-      if (!existsSync(fuserBin) && !existsSync(lsofBin)) {
-        throw new Error("Security check failed: neither fuser nor lsof is available on the system");
-      }
-
-      for (const suffix of ["", "-wal", "-shm"]) {
-        const targetFile = filePath + suffix;
-        if (!existsSync(targetFile)) continue;
-        if (existsSync(fuserBin)) {
-          try {
-            execFileSync(fuserBin, [targetFile], { stdio: "ignore" });
-            throw new Error(`Database file ${targetFile} is held open by an active process`);
-          } catch (err: any) {
-            if (err.status !== 1) {
-              throw new Error(`fuser inspection failed operationally (exit code ${err.status}): ${err.message}`);
-            }
-          }
-        } else if (existsSync(lsofBin)) {
-          try {
-            execFileSync(lsofBin, [targetFile], { stdio: "ignore" });
-            throw new Error(`Database file ${targetFile} is held open by an active process`);
-          } catch (err: any) {
-            if (err.status !== 1) {
-              throw new Error(`lsof inspection failed operationally (exit code ${err.status}): ${err.message}`);
-            }
-          }
-        }
-      }
-    };
     checkFileNotOpen(resolvedOldPath);
 
     // Ensure target directory exists
@@ -1100,12 +1104,15 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     }
     console.log("[relocate-health-db] Health database relocation completed successfully!");
   } catch (error) {
-    await rollback();
-    if (lockProcess) {
-      try {
-        lockProcess.kill();
-      } catch {
-        // ignore
+    try {
+      await rollback();
+    } finally {
+      if (lockProcess) {
+        try {
+          lockProcess.kill();
+        } catch {
+          // ignore
+        }
       }
     }
     throw error;

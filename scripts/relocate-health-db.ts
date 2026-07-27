@@ -4,7 +4,7 @@
  * OUTPUTS: Explicit WAL-safe backup, verification of schema/integrity/provenance, atomic installation, environment update, and rollback.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, chmodSync, statSync, lstatSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, chmodSync, statSync, lstatSync, realpathSync, openSync, closeSync, fsyncSync } from "node:fs";
 import { dirname, join, basename } from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -31,6 +31,7 @@ interface LedgerData {
   originalEnvFileContent: string;
   originalRolloutConfigContent: string;
   serviceWasRunning: boolean;
+  serviceName: string;
   resolvedOldPath: string;
   resolvedNewPath: string;
   resolvedEnvFilePath: string;
@@ -42,12 +43,91 @@ interface LedgerData {
   }[];
 }
 
-async function performRecovery(ledgerFile: string, sentinelFile: string, systemctl: string, serviceName: string) {
+async function restartServiceWithAcceptanceGate(
+  systemctl: string, 
+  serviceName: string, 
+  hasMutations: boolean
+): Promise<void> {
+  console.log(`[relocate-health-db] Restarting service ${serviceName}...`);
+  
+  let baselineRestarts = 0;
+  try {
+    const restartsVal = execFileSync(systemctl, ["show", serviceName, "--property=NRestarts", "--value"], { encoding: "utf8" }).trim();
+    baselineRestarts = parseInt(restartsVal, 10) || 0;
+  } catch {
+    // ignore
+  }
+
+  execFileSync(systemctl, ["start", serviceName]);
+
+  // Rollback/Recovery Acceptance Gate
+  if (hasMutations) {
+    let attempts = 0;
+    const maxVerifyAttempts = 10;
+    let isHealthy = false;
+    while (attempts < maxVerifyAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      attempts++;
+      try {
+        const activeState = execFileSync(systemctl, ["show", serviceName, "--property=ActiveState", "--value"], { encoding: "utf8" }).trim();
+        const subState = execFileSync(systemctl, ["show", serviceName, "--property=SubState", "--value"], { encoding: "utf8" }).trim();
+        const restartsVal = execFileSync(systemctl, ["show", serviceName, "--property=NRestarts", "--value"], { encoding: "utf8" }).trim();
+        const currentRestarts = parseInt(restartsVal, 10) || 0;
+
+        if (currentRestarts > baselineRestarts) {
+          throw new Error(`Service crashed and restarted (restarts increased)`);
+        }
+
+        if (activeState === "active" && subState === "running") {
+          isHealthy = true;
+          break;
+        }
+        if (activeState === "failed") {
+          throw new Error(`Service failed to start`);
+        }
+      } catch (err: any) {
+        throw new Error(`Service restart acceptance check failed: ${err.message}`);
+      }
+    }
+    if (!isHealthy) {
+      throw new Error(`Service failed to stabilize within active/running state during restart`);
+    }
+  }
+}
+
+async function performRecovery(
+  ledgerFile: string, 
+  sentinelFile: string, 
+  systemctl: string, 
+  serviceName: string,
+  resolvedOldPath: string,
+  resolvedNewPath: string,
+  resolvedEnvFilePath: string,
+  resolvedRolloutConfigPath: string
+) {
   if (!existsSync(ledgerFile)) {
     rmSync(sentinelFile, { force: true });
     console.log(`[relocate-health-db] No ledger found. Cleaned up sentinel.`);
     return;
   }
+
+  // Validate ownership and mode of sentinel and ledger files
+  const validateOwnershipAndMode = (filePath: string) => {
+    const stat = statSync(filePath);
+    const mode = stat.mode & 0o777;
+    if (mode !== 0o600) {
+      throw new Error(`File ${filePath} has insecure permissions: ${mode.toString(8)} (expected 0600)`);
+    }
+    if (typeof process.getuid === "function") {
+      if (stat.uid !== process.getuid()) {
+        throw new Error(`File ${filePath} is not owned by the current process user (UID: ${process.getuid()}, file UID: ${stat.uid})`);
+      }
+    }
+  };
+
+  validateOwnershipAndMode(sentinelFile);
+  validateOwnershipAndMode(ledgerFile);
+
   const ledgerContent = readFileSync(ledgerFile, "utf8");
   let ledger: LedgerData;
   try {
@@ -55,6 +135,72 @@ async function performRecovery(ledgerFile: string, sentinelFile: string, systemc
   } catch (err) {
     throw new Error(`Failed to parse ledger file for recovery: ${ledgerFile}`);
   }
+
+  // Ledger Schema Validation
+  if (
+    !ledger ||
+    typeof ledger !== "object" ||
+    typeof ledger.resolvedOldPath !== "string" ||
+    typeof ledger.resolvedNewPath !== "string" ||
+    typeof ledger.resolvedEnvFilePath !== "string" ||
+    typeof ledger.resolvedRolloutConfigPath !== "string" ||
+    typeof ledger.tempBackupPath !== "string" ||
+    typeof ledger.serviceName !== "string" ||
+    !Array.isArray(ledger.steps)
+  ) {
+    throw new Error("Ledger validation failed: missing or invalid fields in ledger schema");
+  }
+
+  // Canonical Path Comparison
+  if (ledger.resolvedOldPath !== resolvedOldPath) {
+    throw new Error(`Ledger path mismatch: resolvedOldPath in ledger does not match active resolved path`);
+  }
+  if (ledger.resolvedNewPath !== resolvedNewPath) {
+    throw new Error(`Ledger path mismatch: resolvedNewPath in ledger does not match active resolved path`);
+  }
+  if (ledger.resolvedEnvFilePath !== resolvedEnvFilePath) {
+    throw new Error(`Ledger path mismatch: resolvedEnvFilePath in ledger does not match active resolved path`);
+  }
+  if (ledger.resolvedRolloutConfigPath !== resolvedRolloutConfigPath) {
+    throw new Error(`Ledger path mismatch: resolvedRolloutConfigPath in ledger does not match active resolved path`);
+  }
+  if (ledger.serviceName !== serviceName) {
+    throw new Error(`Ledger service name mismatch: expected ${serviceName}, got ${ledger.serviceName}`);
+  }
+
+  // Symlink check on all ledger paths to prevent path traversal
+  const ensureNotSymlink = (pathToCheck: string) => {
+    try {
+      if (existsSync(pathToCheck)) {
+        const stat = lstatSync(pathToCheck);
+        if (stat.isSymbolicLink()) {
+          throw new Error(`Path ${pathToCheck} is a symbolic link, which is forbidden.`);
+        }
+      }
+      let current = pathToCheck;
+      while (true) {
+        const parent = dirname(current);
+        if (!parent || parent === current || parent === "/" || parent === ".") {
+          break;
+        }
+        if (existsSync(parent)) {
+          const stat = lstatSync(parent);
+          if (stat.isSymbolicLink()) {
+            throw new Error(`Ancestor directory ${parent} is a symbolic link, which is forbidden.`);
+          }
+        }
+        current = parent;
+      }
+    } catch (err: any) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+  };
+
+  ensureNotSymlink(ledger.resolvedOldPath);
+  ensureNotSymlink(ledger.resolvedNewPath);
+  ensureNotSymlink(ledger.resolvedEnvFilePath);
+  ensureNotSymlink(ledger.resolvedRolloutConfigPath);
+  ensureNotSymlink(ledger.tempBackupPath);
 
   console.log(`[relocate-health-db] Reverting steps recorded in ledger...`);
   let rollbackSuccess = true;
@@ -70,23 +216,68 @@ async function performRecovery(ledgerFile: string, sentinelFile: string, systemc
   );
 
   // 1. Quiesce the service first (if running/started)
-  let isActive = false;
-  try {
-    const stdout = execFileSync(systemctl, ["is-active", serviceName], { encoding: "utf8" }).trim();
-    isActive = stdout === "active";
-  } catch {
-    // ignore
-  }
-  if (isActive) {
+  if (hasMutations && existsSync(systemctl)) {
+    let isActive = false;
     try {
-      execFileSync(systemctl, ["stop", serviceName]);
+      const stdout = execFileSync(systemctl, ["is-active", serviceName], { encoding: "utf8" }).trim();
+      isActive = stdout === "active";
     } catch (err: any) {
-      console.error(`Recovery error: failed to stop active service: ${err.message}`);
-      if (hasMutations) {
-        rollbackSuccess = false;
+      const stdout = (err.stdout || "").toString().trim();
+      const stderr = (err.stderr || "").toString().trim();
+      const status = stdout || stderr;
+      const normalInactiveStates = ["inactive", "failed", "unknown", "activating", "deactivating"];
+      if (normalInactiveStates.includes(status)) {
+        isActive = false;
+      } else {
+        throw new Error(`Recovery aborted: failed to query service active state: ${status || err.message}`);
+      }
+    }
+    if (isActive) {
+      try {
+        execFileSync(systemctl, ["stop", serviceName]);
+      } catch (err: any) {
+        throw new Error(`Recovery aborted: failed to stop active service: ${err.message}`);
+      }
+    }
+
+    // Prove the unit is inactive
+    try {
+      const state = execFileSync(systemctl, ["is-active", serviceName], { encoding: "utf8" }).trim();
+      const normalInactiveStates = ["inactive", "failed", "unknown"];
+      if (!normalInactiveStates.includes(state)) {
+        throw new Error(`Recovery aborted: service in active state post-stop: ${state}`);
+      }
+    } catch (err: any) {
+      const stdout = (err.stdout || "").toString().trim();
+      const normalInactiveStates = ["inactive", "failed", "unknown"];
+      if (!normalInactiveStates.includes(stdout)) {
+        throw new Error(`Recovery aborted: failed to prove service is inactive: ${stdout || err.message}`);
       }
     }
   }
+
+  // Helper: safe atomic write via tmp file
+  const safeWriteFile = (targetPath: string, content: string, mode = 0o600) => {
+    ensureNotSymlink(targetPath);
+    const tmpPath = targetPath + `.tmp-${randomBytes(8).toString("hex")}`;
+    writeFileSync(tmpPath, content, { mode });
+    
+    // durable file fsync
+    const fd = openSync(tmpPath, "r+");
+    fsyncSync(fd);
+    closeSync(fd);
+    
+    renameSync(tmpPath, targetPath);
+
+    // durable directory fsync
+    try {
+      const dirFd = openSync(dirname(targetPath), "r");
+      fsyncSync(dirFd);
+      closeSync(dirFd);
+    } catch {
+      // ignore
+    }
+  };
 
   // 2. Revert other steps in reverse order
   for (let i = steps.length - 1; i >= 0; i--) {
@@ -94,7 +285,7 @@ async function performRecovery(ledgerFile: string, sentinelFile: string, systemc
     
     if (step.name === "rollout-config-updated") {
       try {
-        writeFileSync(ledger.resolvedRolloutConfigPath, ledger.originalRolloutConfigContent);
+        safeWriteFile(ledger.resolvedRolloutConfigPath, ledger.originalRolloutConfigContent);
       } catch (err: any) {
         console.error(`Recovery error: failed to restore rollout config: ${err.message}`);
         rollbackSuccess = false;
@@ -102,7 +293,7 @@ async function performRecovery(ledgerFile: string, sentinelFile: string, systemc
     }
     if (step.name === "env-file-updated") {
       try {
-        writeFileSync(ledger.resolvedEnvFilePath, ledger.originalEnvFileContent);
+        safeWriteFile(ledger.resolvedEnvFilePath, ledger.originalEnvFileContent);
       } catch (err: any) {
         console.error(`Recovery error: failed to restore env file: ${err.message}`);
         rollbackSuccess = false;
@@ -141,9 +332,9 @@ async function performRecovery(ledgerFile: string, sentinelFile: string, systemc
   }
 
   // 3. Restart original service state if it was running initially
-  if (ledger.serviceWasRunning) {
+  if (ledger.serviceWasRunning && existsSync(systemctl)) {
     try {
-      execFileSync(systemctl, ["start", serviceName]);
+      await restartServiceWithAcceptanceGate(systemctl, serviceName, hasMutations);
     } catch (err: any) {
       console.error(`Recovery error: failed to restart original service state: ${err.message}`);
       if (hasMutations) {
@@ -222,11 +413,26 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
   ensureNotSymlink(resolvedRolloutConfigPath);
 
   // Helper: safe atomic write via tmp file
-  const safeWriteFile = (targetPath: string, content: string, mode?: number) => {
+  const safeWriteFile = (targetPath: string, content: string, mode = 0o600) => {
     ensureNotSymlink(targetPath);
     const tmpPath = targetPath + `.tmp-${randomBytes(8).toString("hex")}`;
-    writeFileSync(tmpPath, content, mode ? { mode } : undefined);
+    writeFileSync(tmpPath, content, { mode });
+
+    // durable file fsync
+    const fd = openSync(tmpPath, "r+");
+    fsyncSync(fd);
+    closeSync(fd);
+
     renameSync(tmpPath, targetPath);
+
+    // durable directory fsync
+    try {
+      const dirFd = openSync(dirname(targetPath), "r");
+      fsyncSync(dirFd);
+      closeSync(dirFd);
+    } catch {
+      // ignore
+    }
   };
 
   // 1. Rollout Lock: spawn flock to hold lock for entire process execution
@@ -236,10 +442,11 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
   }
 
   let lockProcess: any = null;
+  let lockReleased = false;
   if (existsSync(flockBin)) {
     mkdirSync(dirname(lockFile), { recursive: true });
     if (!existsSync(lockFile)) writeFileSync(lockFile, "");
-    lockProcess = spawn(flockBin, ["--exclusive", "--nonblock", lockFile, "sleep", "3600"]);
+    lockProcess = spawn(flockBin, ["--exclusive", "--nonblock", "--close", lockFile, "sleep", "31536000"]);
 
     // Ensure it doesn't exit immediately (exit implies lock conflict)
     await new Promise((resolve, reject) => {
@@ -249,36 +456,30 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
 
       lockProcess.on("exit", (code: number | null) => {
         clearTimeout(timer);
+        lockReleased = true;
         reject(new Error(`Another rollout is already active (could not acquire rollout lock: ${lockFile})`));
       });
 
       lockProcess.on("error", (err: any) => {
         clearTimeout(timer);
+        lockReleased = true;
         reject(new Error(`Failed to execute flock: ${err.message}`));
       });
     });
+
+    // Continuous exit monitoring:
+    lockProcess.removeAllListeners("exit");
+    lockProcess.on("exit", (code: number | null) => {
+      lockReleased = true;
+      console.error("[relocate-health-db] Lock process terminated unexpectedly!");
+    });
   }
 
-  // 2. Sentinel checks & Recovery
-  const hasSentinel = existsSync(sentinelFile);
-  if (hasSentinel) {
-    if (options.recover) {
-      console.log(`[relocate-health-db] Recovery mode requested. Reconciling previous relocation attempt...`);
-      try {
-        await performRecovery(ledgerFile, sentinelFile, systemctl, serviceName);
-      } finally {
-        if (lockProcess) lockProcess.kill();
-      }
-      return;
-    } else {
-      if (lockProcess) lockProcess.kill();
-      throw new Error(`Relocation sentinel file exists: ${sentinelFile}. A previous relocation attempt may have been interrupted. Run with --recover to reconcile.`);
+  const checkLock = () => {
+    if (lockReleased || (lockProcess && lockProcess.exitCode !== null)) {
+      throw new Error("Rollout lock was lost or flock process terminated unexpectedly during relocation");
     }
-  }
-
-  // Create sentinel file atomically
-  mkdirSync(dirname(sentinelFile), { recursive: true });
-  safeWriteFile(sentinelFile, `${Date.now()}\n`);
+  };
 
   // Target commit binding and authorization validation
   const isProduction = !TEST_ROOT;
@@ -288,7 +489,6 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
 
   if (isProduction && (!finalExpectedCommit || !finalAuthFile || !finalAuthValidatorSha)) {
     if (lockProcess) lockProcess.kill();
-    rmSync(sentinelFile, { force: true });
     throw new Error("Production relocation requires expectedCommit, authorizationFile, and authorizationValidatorSha256 parameters (or environment variables)");
   }
 
@@ -298,12 +498,10 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
       gitHead = execFileSync("/usr/bin/git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
     } catch (err: any) {
       if (lockProcess) lockProcess.kill();
-      rmSync(sentinelFile, { force: true });
       throw new Error(`Failed to read active git HEAD: ${err.message}`);
     }
     if (gitHead !== finalExpectedCommit) {
       if (lockProcess) lockProcess.kill();
-      rmSync(sentinelFile, { force: true });
       throw new Error(`Target commit mismatch: active git HEAD is ${gitHead}, expected ${finalExpectedCommit}`);
     }
   }
@@ -315,7 +513,6 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     
     if (!existsSync(authValidator)) {
       if (lockProcess) lockProcess.kill();
-      rmSync(sentinelFile, { force: true });
       throw new Error(`Rollout authorization validator not found at ${authValidator}`);
     }
 
@@ -324,7 +521,6 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
       const sha = createHash("sha256").update(fileBytes).digest("hex");
       if (sha !== finalAuthValidatorSha) {
         if (lockProcess) lockProcess.kill();
-        rmSync(sentinelFile, { force: true });
         throw new Error(`Authorization validator hash mismatch: expected ${finalAuthValidatorSha}, got ${sha}`);
       }
     }
@@ -334,7 +530,6 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
       console.log(`[relocate-health-db] Rollout authorization verified successfully!`);
     } catch (err: any) {
       if (lockProcess) lockProcess.kill();
-      rmSync(sentinelFile, { force: true });
       throw new Error(`Rollout authorization validation failed: ${err.message}`);
     }
   }
@@ -342,9 +537,38 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
   const expectedInstallationId = options.expectedInstallationId || process.env.AGENT_BRIDGE_INSTALLATION_ID || "";
   if (isProduction && !expectedInstallationId) {
     if (lockProcess) lockProcess.kill();
-    rmSync(sentinelFile, { force: true });
     throw new Error("Expected installation ID is required for verification (set AGENT_BRIDGE_INSTALLATION_ID)");
   }
+
+  // Check if sentinel exists, handle recovery after authorization validation
+  const hasSentinel = existsSync(sentinelFile);
+  if (hasSentinel) {
+    if (options.recover) {
+      console.log(`[relocate-health-db] Recovery mode requested. Reconciling previous relocation attempt...`);
+      try {
+        await performRecovery(
+          ledgerFile, 
+          sentinelFile, 
+          systemctl, 
+          serviceName, 
+          resolvedOldPath, 
+          resolvedNewPath, 
+          resolvedEnvFilePath, 
+          resolvedRolloutConfigPath
+        );
+      } finally {
+        if (lockProcess) lockProcess.kill();
+      }
+      return;
+    } else {
+      if (lockProcess) lockProcess.kill();
+      throw new Error(`Relocation sentinel file exists: ${sentinelFile}. A previous relocation attempt may have been interrupted. Run with --recover to reconcile.`);
+    }
+  }
+
+  // Create sentinel file atomically with 0600 mode
+  mkdirSync(dirname(sentinelFile), { recursive: true });
+  safeWriteFile(sentinelFile, `${Date.now()}\n`, 0o600);
 
   // Check if old database exists, support stale-backup recovery
   if (!existsSync(resolvedOldPath)) {
@@ -396,6 +620,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     originalEnvFileContent,
     originalRolloutConfigContent,
     serviceWasRunning,
+    serviceName,
     resolvedOldPath,
     resolvedNewPath,
     resolvedEnvFilePath,
@@ -405,7 +630,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
   };
 
   const writeLedger = () => {
-    safeWriteFile(ledgerFile, JSON.stringify(ledgerData, null, 2));
+    safeWriteFile(ledgerFile, JSON.stringify(ledgerData, null, 2), 0o600);
   };
   writeLedger();
 
@@ -450,16 +675,23 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
       try {
         const stdout = execFileSync(systemctl, ["is-active", serviceName], { encoding: "utf8" }).trim();
         isServiceActive = stdout === "active";
-      } catch {
-        // ignore
+      } catch (err: any) {
+        const stdout = (err.stdout || "").toString().trim();
+        const stderr = (err.stderr || "").toString().trim();
+        const status = stdout || stderr;
+        const normalInactiveStates = ["inactive", "failed", "unknown", "activating", "deactivating"];
+        if (normalInactiveStates.includes(status)) {
+          isServiceActive = false;
+        } else {
+          throw new Error(`Rollback aborted: failed to query service active state: ${status || err.message}`);
+        }
       }
       if (isServiceActive) {
         try {
           console.log(`[relocate-health-db] Stopping active service before restoring files...`);
           execFileSync(systemctl, ["stop", serviceName]);
         } catch (err: any) {
-          console.error(`[relocate-health-db] Rollback error: failed to stop service: ${err.message}`);
-          rollbackSuccess = false;
+          throw new Error(`Rollback aborted: failed to stop service: ${err.message}`);
         }
       }
 
@@ -468,15 +700,13 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
         const state = execFileSync(systemctl, ["is-active", serviceName], { encoding: "utf8" }).trim();
         const normalInactiveStates = ["inactive", "failed", "unknown"];
         if (!normalInactiveStates.includes(state)) {
-          console.error(`[relocate-health-db] Rollback error: service in active state post-stop: ${state}`);
-          rollbackSuccess = false;
+          throw new Error(`Rollback aborted: service in active state post-stop: ${state}`);
         }
       } catch (err: any) {
         const stdout = (err.stdout || "").toString().trim();
         const normalInactiveStates = ["inactive", "failed", "unknown"];
         if (!normalInactiveStates.includes(stdout)) {
-          console.error(`[relocate-health-db] Rollback error: failed to prove service is inactive: ${stdout || err.message}`);
-          rollbackSuccess = false;
+          throw new Error(`Rollback aborted: failed to prove service is inactive: ${stdout || err.message}`);
         }
       }
     }
@@ -535,51 +765,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
       }
       if (step.name === "service-stopped" && serviceWasRunning && (step.status === "completed" || step.status === "pending") && existsSync(systemctl)) {
         try {
-          console.log(`[relocate-health-db] Restarting service ${serviceName}...`);
-          
-          let baselineRestarts = 0;
-          try {
-            const restartsVal = execFileSync(systemctl, ["show", serviceName, "--property=NRestarts", "--value"], { encoding: "utf8" }).trim();
-            baselineRestarts = parseInt(restartsVal, 10) || 0;
-          } catch {
-            // ignore
-          }
-
-          execFileSync(systemctl, ["start", serviceName]);
-
-          // Rollback Acceptance Gate
-          if (hasMutations) {
-            let attempts = 0;
-            const maxVerifyAttempts = 10;
-            let isHealthy = false;
-            while (attempts < maxVerifyAttempts) {
-              await new Promise((resolve) => setTimeout(resolve, 500));
-              attempts++;
-              try {
-                const activeState = execFileSync(systemctl, ["show", serviceName, "--property=ActiveState", "--value"], { encoding: "utf8" }).trim();
-                const subState = execFileSync(systemctl, ["show", serviceName, "--property=SubState", "--value"], { encoding: "utf8" }).trim();
-                const restartsVal = execFileSync(systemctl, ["show", serviceName, "--property=NRestarts", "--value"], { encoding: "utf8" }).trim();
-                const currentRestarts = parseInt(restartsVal, 10) || 0;
-
-                if (currentRestarts > baselineRestarts) {
-                  throw new Error(`Service crashed during rollback start (restarts increased)`);
-                }
-
-                if (activeState === "active" && subState === "running") {
-                  isHealthy = true;
-                  break;
-                }
-                if (activeState === "failed") {
-                  throw new Error(`Service failed to start during rollback`);
-                }
-              } catch (err: any) {
-                throw new Error(`Service rollback acceptance check failed: ${err.message}`);
-              }
-            }
-            if (!isHealthy) {
-              throw new Error(`Service failed to stabilize within active/running state during rollback`);
-            }
-          }
+          await restartServiceWithAcceptanceGate(systemctl, serviceName, hasMutations);
         } catch (err: any) {
           console.error(`[relocate-health-db] Failed to restart service during rollback: ${err.message}`);
           if (hasMutations) {
@@ -606,6 +792,8 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
   };
 
   try {
+    checkLock();
+
     // Step 1: Check and Stop/Quiesce service
     if (!existsSync(systemctl)) {
       throw new Error(`systemctl binary not found at ${systemctl}`);
@@ -634,6 +822,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
 
       console.log(`[relocate-health-db] Stopping service ${serviceName}...`);
       try {
+        checkLock();
         ledgerData.steps.push({ name: "service-stopped", status: "pending" });
         writeLedger();
 
@@ -647,6 +836,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     }
 
     // Prove the unit is inactive
+    checkLock();
     try {
       const state = execFileSync(systemctl, ["is-active", serviceName], { encoding: "utf8" }).trim();
       const normalInactiveStates = ["inactive", "failed", "unknown"];
@@ -662,6 +852,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     }
 
     // Prove no database-owning processes remain
+    checkLock();
     const checkFileNotOpen = (filePath: string) => {
       const fuserBin = "/usr/bin/fuser";
       const lsofBin = "/usr/bin/lsof";
@@ -699,6 +890,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     mkdirSync(newDir, { recursive: true });
 
     // Step 2: Capture WAL-safe online backup of old database
+    checkLock();
     console.log(`[relocate-health-db] Backing up source database: ${resolvedOldPath} -> ${tempBackupPath}`);
     ledgerData.steps.push({ name: "backup-created", status: "pending" });
     writeLedger();
@@ -713,6 +905,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     }
 
     // Step 3: Validate integrity, foreign keys, schema, and installation provenance on the backup copy
+    checkLock();
     console.log(`[relocate-health-db] Validating backup copy: ${tempBackupPath}`);
     const backupDb = new Database(tempBackupPath, { fileMustExist: true });
     try {
@@ -770,6 +963,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
       }
 
       // Step 4: Update provenance path inside the backup database to point to the new location
+      checkLock();
       console.log(`[relocate-health-db] Updating database provenance path to: ${newPath}`);
       provenance.path = newPath;
       
@@ -785,6 +979,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     }
 
     // Step 5: Install database at new path with correct permissions
+    checkLock();
     console.log(`[relocate-health-db] Installing database at: ${resolvedNewPath}`);
     ensureNotSymlink(resolvedNewPath);
     
@@ -807,6 +1002,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     }
 
     // Step 6: Preserve old database for rollback
+    checkLock();
     console.log(`[relocate-health-db] Preserving old database as backup`);
     ensureNotSymlink(resolvedOldPath);
     
@@ -819,6 +1015,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     writeLedger();
 
     // Step 7: Update env file and rollout inventory configuration
+    checkLock();
     console.log(`[relocate-health-db] Updating environment file: ${resolvedEnvFilePath}`);
     
     ledgerData.steps.push({ name: "env-file-updated", status: "pending" });
@@ -835,6 +1032,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     ledgerData.steps[ledgerData.steps.length - 1].status = "completed";
     writeLedger();
 
+    checkLock();
     console.log(`[relocate-health-db] Updating rollout configuration inventory: ${resolvedRolloutConfigPath}`);
     
     ledgerData.steps.push({ name: "rollout-config-updated", status: "pending" });
@@ -855,62 +1053,29 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
 
     // Step 8: Restart service with Acceptance Gate
     if (serviceWasRunning && existsSync(systemctl)) {
-      // Record baseline NRestarts
-      let baselineRestarts = 0;
-      try {
-        const restartsVal = execFileSync(systemctl, ["show", serviceName, "--property=NRestarts", "--value"], { encoding: "utf8" }).trim();
-        baselineRestarts = parseInt(restartsVal, 10) || 0;
-      } catch (err) {
-        // ignore
-      }
-
+      checkLock();
       console.log(`[relocate-health-db] Starting service ${serviceName}...`);
       
       ledgerData.steps.push({ name: "service-started", status: "pending" });
       writeLedger();
 
-      execFileSync(systemctl, ["start", serviceName]);
+      await restartServiceWithAcceptanceGate(systemctl, serviceName, true);
       
       ledgerData.steps[ledgerData.steps.length - 1].status = "completed";
       writeLedger();
-
-      // Verify startup health (Acceptance Gate)
-      let attempts = 0;
-      const maxVerifyAttempts = 10;
-      let isHealthy = false;
-      while (attempts < maxVerifyAttempts) {
-        await new Promise((resolve) => setTimeout(resolve, 500));
-        attempts++;
-        try {
-          const activeState = execFileSync(systemctl, ["show", serviceName, "--property=ActiveState", "--value"], { encoding: "utf8" }).trim();
-          const subState = execFileSync(systemctl, ["show", serviceName, "--property=SubState", "--value"], { encoding: "utf8" }).trim();
-          const restartsVal = execFileSync(systemctl, ["show", serviceName, "--property=NRestarts", "--value"], { encoding: "utf8" }).trim();
-          const currentRestarts = parseInt(restartsVal, 10) || 0;
-
-          if (currentRestarts > baselineRestarts) {
-            throw new Error(`Service crashed and restarted (NRestarts increased from ${baselineRestarts} to ${currentRestarts})`);
-          }
-
-          if (activeState === "active" && subState === "running") {
-            isHealthy = true;
-            break;
-          }
-          if (activeState === "failed") {
-            throw new Error(`Service failed to start (ActiveState is failed)`);
-          }
-        } catch (err: any) {
-          throw new Error(`Service acceptance check failed: ${err.message}`);
-        }
-      }
-      if (!isHealthy) {
-        throw new Error(`Service failed to stabilize within active/running state`);
-      }
     }
 
     // Relocation succeeded completely: remove sentinel and ledger files
+    checkLock();
     rmSync(ledgerFile, { force: true });
     rmSync(sentinelFile, { force: true });
-    if (lockProcess) lockProcess.kill();
+    if (lockProcess) {
+      try {
+        lockProcess.kill();
+      } catch {
+        // ignore
+      }
+    }
     console.log("[relocate-health-db] Health database relocation completed successfully!");
   } catch (error) {
     if (lockProcess) {

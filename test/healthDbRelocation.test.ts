@@ -2,11 +2,28 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawn } from "node:child_process";
+import * as childProcess from "node:child_process";
 import Database from "better-sqlite3";
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { relocateHealthDb } from "../scripts/relocate-health-db.js";
 import { openDb } from "../src/db.js";
 import { CURRENT_SCHEMA_VERSION } from "../src/db/schema.js";
+
+let lastLockProcess: any = null;
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawn: (cmd: any, args: any, opts: any) => {
+      const child = actual.spawn(cmd, args, opts);
+      if (cmd === "/usr/bin/flock") {
+        lastLockProcess = child;
+      }
+      return child;
+    }
+  };
+});
 
 let testRoot: string;
 let resolvedOldPath: string;
@@ -53,9 +70,22 @@ exit 0
     writeFileSync(resolvedRolloutConfigPath, `project_dir=${testRoot}\ndatabase=data-health/health.sqlite\n`);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     delete process.env.AGENT_BRIDGE_ROLLOUT_TEST_ROOT;
-    rmSync(testRoot, { recursive: true, force: true });
+    
+    // Clean up running lockProcess to release flock immediately
+    if (lastLockProcess && lastLockProcess.exitCode === null && lastLockProcess.signalCode === null) {
+      lastLockProcess.kill();
+      await new Promise<void>((resolve) => {
+        lastLockProcess.once("exit", () => resolve());
+      });
+    }
+
+    try {
+      rmSync(testRoot, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
   });
 
   function seedDb(path: string, options: { userVersion?: number; role?: string; installationId?: string; pathOverride?: string } = {}) {
@@ -413,7 +443,7 @@ exit 0
 
     // Create sentinel file
     const sentinelFile = join(testRoot, "etc/agent-bridge/.health-relocation-in-progress");
-    writeFileSync(sentinelFile, "123456\n");
+    writeFileSync(sentinelFile, "123456\n", { mode: 0o600 });
 
     await expect(relocateHealthDb({
       oldPath,
@@ -590,13 +620,14 @@ exit 1
     const ledgerFile = join(testRoot, "etc/agent-bridge/.health-relocation-ledger.json");
     const sentinelFile = join(testRoot, "etc/agent-bridge/.health-relocation-in-progress");
 
-    writeFileSync(sentinelFile, "123456\n");
+    writeFileSync(sentinelFile, "123456\n", { mode: 0o600 });
     writeFileSync(ledgerFile, JSON.stringify({
       timestamp: new Date().toISOString(),
       expectedCommit: "",
       originalEnvFileContent: originalEnvContent,
       originalRolloutConfigContent: originalRolloutContent,
       serviceWasRunning: true,
+      serviceName,
       resolvedOldPath,
       resolvedNewPath,
       resolvedEnvFilePath,
@@ -608,7 +639,7 @@ exit 1
         { name: "database-installed", status: "completed" },
         { name: "old-database-renamed", status: "completed" }
       ]
-    }, null, 2));
+    }, null, 2), { mode: 0o600 });
 
     // Mock systemctl to see that start is called
     writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
@@ -658,13 +689,14 @@ fi
     const ledgerFile = join(testRoot, "etc/agent-bridge/.health-relocation-ledger.json");
     const sentinelFile = join(testRoot, "etc/agent-bridge/.health-relocation-in-progress");
 
-    writeFileSync(sentinelFile, "123456\n");
+    writeFileSync(sentinelFile, "123456\n", { mode: 0o600 });
     writeFileSync(ledgerFile, JSON.stringify({
       timestamp: new Date().toISOString(),
       expectedCommit: "",
       originalEnvFileContent: originalEnvContent,
       originalRolloutConfigContent: originalRolloutContent,
       serviceWasRunning: true,
+      serviceName,
       resolvedOldPath,
       resolvedNewPath,
       resolvedEnvFilePath,
@@ -673,7 +705,7 @@ fi
       steps: [
         { name: "service-stopped", status: "pending" }
       ]
-    }, null, 2));
+    }, null, 2), { mode: 0o600 });
 
     // Mock systemctl to fail on start to simulate restart failure
     writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
@@ -697,5 +729,151 @@ exit 0
     // The recovery should still succeed, and clear both sentinel and ledger!
     expect(existsSync(sentinelFile)).toBe(false);
     expect(existsSync(ledgerFile)).toBe(false);
+  });
+
+  it("fails when lock process terminates unexpectedly during execution", async () => {
+    seedDb(resolvedOldPath);
+
+    lastLockProcess = null;
+    // Start migration, but kill the lock process after 150ms
+    setTimeout(() => {
+      if (lastLockProcess) {
+        lastLockProcess.kill();
+      }
+    }, 150);
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+    })).rejects.toThrow(/Rollout lock was lost or flock process terminated unexpectedly/);
+  });
+
+  it("refuses to recover when ledger path or schema validation fails", async () => {
+    const ledgerFile = join(testRoot, "etc/agent-bridge/.health-relocation-ledger.json");
+    const sentinelFile = join(testRoot, "etc/agent-bridge/.health-relocation-in-progress");
+
+    writeFileSync(sentinelFile, "123456\n", { mode: 0o600 });
+    // Write an invalid ledger schema (missing fields)
+    writeFileSync(ledgerFile, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      expectedCommit: ""
+    }, null, 2), { mode: 0o600 });
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+      recover: true
+    })).rejects.toThrow(/Ledger validation failed/);
+
+    // Wait for the lock to release deterministically before calling again
+    if (lastLockProcess) {
+      lastLockProcess.kill("SIGKILL");
+      await new Promise<void>((resolve) => {
+        if (lastLockProcess.exitCode !== null || lastLockProcess.signalCode !== null) {
+          resolve();
+        } else {
+          lastLockProcess.once("exit", () => resolve());
+        }
+      });
+    }
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Write a ledger with path mismatch
+    writeFileSync(ledgerFile, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      expectedCommit: "",
+      originalEnvFileContent: "",
+      originalRolloutConfigContent: "",
+      serviceWasRunning: false,
+      serviceName,
+      resolvedOldPath: "/invalid/path",
+      resolvedNewPath,
+      resolvedEnvFilePath,
+      resolvedRolloutConfigPath,
+      tempBackupPath: join(testRoot, "runtime/health/.relocate-backup-test"),
+      steps: []
+    }, null, 2), { mode: 0o600 });
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+      recover: true
+    })).rejects.toThrow(/Ledger path mismatch/);
+  });
+
+  it("refuses to recover when sentinel or ledger permissions are not 0600", async () => {
+    const ledgerFile = join(testRoot, "etc/agent-bridge/.health-relocation-ledger.json");
+    const sentinelFile = join(testRoot, "etc/agent-bridge/.health-relocation-in-progress");
+
+    writeFileSync(sentinelFile, "123456\n", { mode: 0o644 }); // insecure permissions
+    writeFileSync(ledgerFile, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      expectedCommit: "",
+      originalEnvFileContent: "",
+      originalRolloutConfigContent: "",
+      serviceWasRunning: false,
+      serviceName,
+      resolvedOldPath,
+      resolvedNewPath,
+      resolvedEnvFilePath,
+      resolvedRolloutConfigPath,
+      tempBackupPath: join(testRoot, "runtime/health/.relocate-backup-test"),
+      steps: []
+    }, null, 2), { mode: 0o600 });
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+      recover: true
+    })).rejects.toThrow(/has insecure permissions: 644/);
+  });
+
+  it("authenticates and binds commit when running recovery", async () => {
+    const ledgerFile = join(testRoot, "etc/agent-bridge/.health-relocation-ledger.json");
+    const sentinelFile = join(testRoot, "etc/agent-bridge/.health-relocation-in-progress");
+
+    writeFileSync(sentinelFile, "123456\n", { mode: 0o600 });
+    writeFileSync(ledgerFile, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      expectedCommit: "",
+      originalEnvFileContent: "",
+      originalRolloutConfigContent: "",
+      serviceWasRunning: false,
+      serviceName,
+      resolvedOldPath,
+      resolvedNewPath,
+      resolvedEnvFilePath,
+      resolvedRolloutConfigPath,
+      tempBackupPath: join(testRoot, "runtime/health/.relocate-backup-test"),
+      steps: []
+    }, null, 2), { mode: 0o600 });
+
+    // Rerun recovery but supply a mismatching expectedCommit to trigger validation failure
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+      expectedCommit: "non-existent-commit-hash",
+      recover: true
+    })).rejects.toThrow(/Target commit mismatch/);
   });
 });

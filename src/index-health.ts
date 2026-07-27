@@ -23,6 +23,7 @@ import { sendTelegramMessage } from "./messageDelivery.js";
 import { shutdownCliProcesses } from "./cliSupervisor.js";
 import { autoUpdateClis } from "./health/autoRemediate.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
+import { resolveExecutionMode } from "./config.js";
 import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
 import type { BotKind } from "./types.js";
 import type { HealthPlugin } from "./health/types.js";
@@ -73,7 +74,7 @@ const cliBot = _healthCliParsed.bot;
 const cliBotConfig = {
   command: _healthCliParsed.command ?? defaultHealthCliCommand(cliBot),
   modelPreference: _healthCliParsed.modelPreference,
-  executionMode: (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") || "safe",
+  executionMode: resolveExecutionMode(cliBot, process.env),
 };
 
 const dbPath = process.env.HEALTH_DB_PATH || ".data-health/health.sqlite";
@@ -161,7 +162,7 @@ const engine = new BridgeEngine(
     executionKind: cliBot,
     botConfig: { command: cliBotConfig.command, modelPreference: cliBotConfig.modelPreference },
     allowedUserIds,
-    executionMode: (process.env.BRIDGE_EXECUTION_MODE as "safe" | "trusted") || "safe",
+    executionMode: resolveExecutionMode(cliBot, process.env),
     asyncEnabled: false,
     pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 1000),
     soulContext,

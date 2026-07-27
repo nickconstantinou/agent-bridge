@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, openSync, closeSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import Database from "better-sqlite3";
@@ -30,9 +30,17 @@ describe("Health check database relocation", () => {
     mkdirSync(join(testRoot, "etc/default"), { recursive: true });
     mkdirSync(join(testRoot, "etc/agent-bridge"), { recursive: true });
     mkdirSync(join(testRoot, "bin"), { recursive: true });
+    mkdirSync(join(testRoot, "run/agent-bridge"), { recursive: true });
+    mkdirSync(join(testRoot, "run/lock"), { recursive: true });
 
-    // Mock systemctl script
-    writeFileSync(join(testRoot, "bin/systemctl"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    // Mock systemctl script (default: inactive, exits 3 on is-active)
+    writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
+if [ "$1" = "is-active" ]; then
+  echo "inactive"
+  exit 3
+fi
+exit 0
+`, { mode: 0o755 });
 
     // Write dummy config files
     writeFileSync(resolvedEnvFilePath, "HEALTH_DB_PATH=data-health/health.sqlite\nBRIDGE_EXECUTION_MODE=trusted\n");
@@ -84,6 +92,7 @@ describe("Health check database relocation", () => {
       envFilePath,
       rolloutConfigPath,
       serviceName,
+      expectedInstallationId: "test-install-id-123",
     });
 
     // Check new database exists and is valid
@@ -118,6 +127,7 @@ describe("Health check database relocation", () => {
       envFilePath,
       rolloutConfigPath,
       serviceName,
+      expectedInstallationId: "test-install-id-123",
     })).rejects.toThrow(/Source database does not exist/);
 
     expect(existsSync(resolvedNewPath)).toBe(false);
@@ -138,6 +148,7 @@ describe("Health check database relocation", () => {
       envFilePath,
       rolloutConfigPath,
       serviceName,
+      expectedInstallationId: "test-install-id-123",
     })).rejects.toThrow(/Schema version is not current/);
 
     // Assert rollback: new path empty, configs untouched, old database still exists
@@ -160,6 +171,7 @@ describe("Health check database relocation", () => {
       envFilePath,
       rolloutConfigPath,
       serviceName,
+      expectedInstallationId: "test-install-id-123",
     })).rejects.toThrow(/Invalid database role in provenance/);
 
     // Assert rollback: new path empty, configs untouched, old database still exists
@@ -169,15 +181,79 @@ describe("Health check database relocation", () => {
     expect(readFileSync(resolvedRolloutConfigPath, "utf8")).toBe(originalRollout);
   });
 
-  it("rolls back correctly when destination folder write fails or copy is interrupted", async () => {
+  // REGRESSIONS:
+
+  it("exercises active service stop and confirms quiescence", async () => {
+    // Write systemctl mock that simulates an active service that can be stopped
+    writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
+if [ "$1" = "is-active" ]; then
+  if [ -f "${testRoot}/.service-started" ]; then
+    echo "active"
+    exit 0
+  elif [ -f "${testRoot}/.service-stopped" ]; then
+    echo "inactive"
+    exit 3
+  else
+    echo "active"
+    exit 0
+  fi
+elif [ "$1" = "stop" ]; then
+  touch "${testRoot}/.service-stopped"
+  rm -f "${testRoot}/.service-started"
+  exit 0
+elif [ "$1" = "start" ]; then
+  touch "${testRoot}/.service-started"
+  exit 0
+elif [ "$1" = "show" ]; then
+  if [ -f "${testRoot}/.service-started" ]; then
+    if echo "$*" | grep -q "ActiveState"; then
+      echo "active"
+    elif echo "$*" | grep -q "SubState"; then
+      echo "running"
+    elif echo "$*" | grep -q "NRestarts"; then
+      echo "0"
+    fi
+  else
+    if echo "$*" | grep -q "ActiveState"; then
+      echo "inactive"
+    elif echo "$*" | grep -q "SubState"; then
+      echo "dead"
+    elif echo "$*" | grep -q "NRestarts"; then
+      echo "0"
+    fi
+  fi
+  exit 0
+fi
+exit 0
+`, { mode: 0o755 });
+
     seedDb(resolvedOldPath);
 
-    // Make target directory invalid or occupied to trigger a rename/move failure
-    // We will do this by pre-creating a folder where the target file should be
-    mkdirSync(resolvedNewPath, { recursive: true });
+    await relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+    });
 
-    const originalEnv = readFileSync(resolvedEnvFilePath, "utf8");
-    const originalRollout = readFileSync(resolvedRolloutConfigPath, "utf8");
+    expect(existsSync(join(testRoot, ".service-stopped"))).toBe(true);
+    expect(existsSync(resolvedNewPath)).toBe(true);
+  });
+
+  it("fails and rolls back on stop failure", async () => {
+    writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
+if [ "$1" = "is-active" ]; then
+  echo "active"
+  exit 0
+elif [ "$1" = "stop" ]; then
+  echo "stop failed fatally" >&2
+  exit 1
+fi
+`, { mode: 0o755 });
+
+    seedDb(resolvedOldPath);
 
     await expect(relocateHealthDb({
       oldPath,
@@ -185,11 +261,159 @@ describe("Health check database relocation", () => {
       envFilePath,
       rolloutConfigPath,
       serviceName,
-    })).rejects.toThrow();
+      expectedInstallationId: "test-install-id-123",
+    })).rejects.toThrow(/Failed to stop service/);
 
-    // Verify rollback: configs restored, old database remains intact
+    expect(existsSync(resolvedNewPath)).toBe(false);
     expect(existsSync(resolvedOldPath)).toBe(true);
-    expect(readFileSync(resolvedEnvFilePath, "utf8")).toBe(originalEnv);
-    expect(readFileSync(resolvedRolloutConfigPath, "utf8")).toBe(originalRollout);
+  });
+
+  it("fails and rolls back on restart failure or failed acceptance gate", async () => {
+    writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
+if [ "$1" = "is-active" ]; then
+  if [ -f "${testRoot}/.service-started" ]; then
+    echo "active"
+    exit 0
+  elif [ -f "${testRoot}/.service-stopped" ]; then
+    echo "inactive"
+    exit 3
+  else
+    echo "active"
+    exit 0
+  fi
+elif [ "$1" = "stop" ]; then
+  touch "${testRoot}/.service-stopped"
+  rm -f "${testRoot}/.service-started"
+  exit 0
+elif [ "$1" = "start" ]; then
+  touch "${testRoot}/.service-started"
+  exit 0
+elif [ "$1" = "show" ]; then
+  if echo "$*" | grep -q "NRestarts"; then
+    if [ -f "${testRoot}/.service-started" ]; then
+      echo "5"
+    else
+      echo "0"
+    fi
+  elif echo "$*" | grep -q "ActiveState"; then
+    echo "active"
+  elif echo "$*" | grep -q "SubState"; then
+    echo "running"
+  fi
+  exit 0
+fi
+exit 0
+`, { mode: 0o755 });
+
+    seedDb(resolvedOldPath);
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+    })).rejects.toThrow(/Service crashed and restarted/);
+
+    expect(existsSync(resolvedNewPath)).toBe(false);
+    expect(existsSync(resolvedOldPath)).toBe(true);
+  });
+
+  it("detects concurrent writer holding database file open", async () => {
+    seedDb(resolvedOldPath);
+
+    // Keep database open using node:fs openSync
+    const fd = openSync(resolvedOldPath, "r+");
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+    })).rejects.toThrow(/is held open by an active process/);
+
+    closeSync(fd);
+    expect(existsSync(resolvedNewPath)).toBe(false);
+  });
+
+  it("fails when settings installation ID has identity mismatch", async () => {
+    seedDb(resolvedOldPath, { installationId: "wrong-identity" });
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "expected-identity-123",
+    })).rejects.toThrow(/Installation identity mismatch/);
+  });
+
+  it("fails when provenance installation ID doesn't match settings ID", async () => {
+    // Modify settings manually to create a mismatch between settings and provenance JSON
+    seedDb(resolvedOldPath, { installationId: "test-install-id-123" });
+    const raw = new Database(resolvedOldPath);
+    raw.prepare("UPDATE settings SET value = 'mismatched-id' WHERE key = 'agent_bridge_installation_id'").run();
+    raw.close();
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "mismatched-id",
+    })).rejects.toThrow(/Provenance installation identity mismatch/);
+  });
+
+  it("rejects symbolic links on source, destination or config files", async () => {
+    seedDb(resolvedOldPath);
+
+    // Make envFilePath a symlink
+    rmSync(resolvedEnvFilePath);
+    symlinkSync(resolvedOldPath, resolvedEnvFilePath);
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+    })).rejects.toThrow(/is a symbolic link, which is forbidden/);
+  });
+
+  it("fails when configuration files are missing", async () => {
+    seedDb(resolvedOldPath);
+    rmSync(resolvedEnvFilePath);
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+    })).rejects.toThrow(/Environment file does not exist/);
+  });
+
+  it("prevents execution if relocation sentinel is present (interrupted state)", async () => {
+    seedDb(resolvedOldPath);
+
+    // Create sentinel file
+    const sentinelFile = join(testRoot, "run/agent-bridge/.health-relocation-in-progress");
+    writeFileSync(sentinelFile, "123456\n");
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+    })).rejects.toThrow(/Relocation sentinel file exists/);
   });
 });

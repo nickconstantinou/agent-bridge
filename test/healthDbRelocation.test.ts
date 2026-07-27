@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, openSync, closeSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, openSync, closeSync, symlinkSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawn } from "node:child_process";
@@ -291,7 +291,9 @@ elif [ "$1" = "start" ]; then
   exit 0
 elif [ "$1" = "show" ]; then
   if echo "$*" | grep -q "NRestarts"; then
-    if [ -f "${testRoot}/.service-started" ]; then
+    if [ -f "${testRoot}/.rollback-active" ]; then
+      echo "0"
+    elif [ -f "${testRoot}/.service-started" ]; then
       echo "5"
     else
       echo "0"
@@ -405,7 +407,7 @@ exit 0
     seedDb(resolvedOldPath);
 
     // Create sentinel file
-    const sentinelFile = join(testRoot, "run/agent-bridge/.health-relocation-in-progress");
+    const sentinelFile = join(testRoot, "etc/agent-bridge/.health-relocation-in-progress");
     writeFileSync(sentinelFile, "123456\n");
 
     await expect(relocateHealthDb({
@@ -565,5 +567,79 @@ exit 1
     // It should have successfully relocated the database using the stale backup!
     expect(existsSync(resolvedNewPath)).toBe(true);
     expect(existsSync(staleBackupPath)).toBe(true); // it renamed stale backup to oldPath, then did the relocation which renamed it back to stale-backup!
+  });
+
+  it("reconciles and recovers using the ledger in recovery mode", async () => {
+    seedDb(resolvedOldPath);
+
+    // Save the original files content
+    const originalEnvContent = readFileSync(resolvedEnvFilePath, "utf8");
+    const originalRolloutContent = readFileSync(resolvedRolloutConfigPath, "utf8");
+
+    // Simulate an interrupted migration by writing a partial state
+    // Let's say we got up to "old-database-renamed"
+    seedDb(resolvedNewPath);
+    renameSync(resolvedOldPath, resolvedOldPath + ".stale-backup");
+
+    // Write a ledger file next to rollout.conf (resolved as testRoot/etc/agent-bridge/.health-relocation-ledger.json)
+    const ledgerFile = join(testRoot, "etc/agent-bridge/.health-relocation-ledger.json");
+    const sentinelFile = join(testRoot, "etc/agent-bridge/.health-relocation-in-progress");
+
+    writeFileSync(sentinelFile, "123456\n");
+    writeFileSync(ledgerFile, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      expectedCommit: "",
+      originalEnvFileContent: originalEnvContent,
+      originalRolloutConfigContent: originalRolloutContent,
+      serviceWasRunning: true,
+      resolvedOldPath,
+      resolvedNewPath,
+      resolvedEnvFilePath,
+      resolvedRolloutConfigPath,
+      tempBackupPath: join(testRoot, "runtime/health/.relocate-backup-test"),
+      steps: [
+        { name: "service-stopped", status: "completed" },
+        { name: "backup-created", status: "completed" },
+        { name: "database-installed", status: "completed" },
+        { name: "old-database-renamed", status: "completed" }
+      ]
+    }, null, 2));
+
+    // Mock systemctl to see that start is called
+    writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
+if [ "$1" = "is-active" ]; then
+  echo "inactive"
+  exit 3
+elif [ "$1" = "start" ]; then
+  exit 0
+elif [ "$1" = "show" ]; then
+  if echo "$*" | grep -q "ActiveState"; then
+    echo "active"
+  elif echo "$*" | grep -q "SubState"; then
+    echo "running"
+  elif echo "$*" | grep -q "NRestarts"; then
+    echo "0"
+  fi
+  exit 0
+fi
+`, { mode: 0o755 });
+
+    // Rerun relocation in recover mode
+    await relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+      recover: true
+    });
+
+    // Verify recovery restored original files and cleaned up new files
+    expect(existsSync(resolvedOldPath)).toBe(true);
+    expect(existsSync(resolvedNewPath)).toBe(false);
+    expect(existsSync(resolvedOldPath + ".stale-backup")).toBe(false);
+    expect(existsSync(sentinelFile)).toBe(false);
+    expect(existsSync(ledgerFile)).toBe(false);
   });
 });

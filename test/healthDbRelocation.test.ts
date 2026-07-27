@@ -624,6 +624,7 @@ exit 1
     writeFileSync(ledgerFile, JSON.stringify({
       timestamp: new Date().toISOString(),
       expectedCommit: "",
+      expectedInstallationId: "test-install-id-123",
       originalEnvFileContent: originalEnvContent,
       originalRolloutConfigContent: originalRolloutContent,
       serviceWasRunning: true,
@@ -693,6 +694,7 @@ fi
     writeFileSync(ledgerFile, JSON.stringify({
       timestamp: new Date().toISOString(),
       expectedCommit: "",
+      expectedInstallationId: "test-install-id-123",
       originalEnvFileContent: originalEnvContent,
       originalRolloutConfigContent: originalRolloutContent,
       serviceWasRunning: true,
@@ -790,6 +792,7 @@ exit 0
     writeFileSync(ledgerFile, JSON.stringify({
       timestamp: new Date().toISOString(),
       expectedCommit: "",
+      expectedInstallationId: "test-install-id-123",
       originalEnvFileContent: "",
       originalRolloutConfigContent: "",
       serviceWasRunning: false,
@@ -821,6 +824,7 @@ exit 0
     writeFileSync(ledgerFile, JSON.stringify({
       timestamp: new Date().toISOString(),
       expectedCommit: "",
+      expectedInstallationId: "test-install-id-123",
       originalEnvFileContent: "",
       originalRolloutConfigContent: "",
       serviceWasRunning: false,
@@ -852,6 +856,7 @@ exit 0
     writeFileSync(ledgerFile, JSON.stringify({
       timestamp: new Date().toISOString(),
       expectedCommit: "",
+      expectedInstallationId: "test-install-id-123",
       originalEnvFileContent: "",
       originalRolloutConfigContent: "",
       serviceWasRunning: false,
@@ -875,5 +880,20 @@ exit 0
       expectedCommit: "non-existent-commit-hash",
       recover: true
     })).rejects.toThrow(/Target commit mismatch/);
+  });
+
+  it("fails when sentinel exists but ledger is missing", async () => {
+    const sentinelFile = join(testRoot, "etc/agent-bridge/.health-relocation-in-progress");
+    writeFileSync(sentinelFile, "123456\n", { mode: 0o600 });
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+      recover: true
+    })).rejects.toThrow(/Sentinel file exists but ledger file is missing/);
   });
 });

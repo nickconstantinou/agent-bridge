@@ -28,6 +28,7 @@ interface RelocateOptions {
 interface LedgerData {
   timestamp: string;
   expectedCommit: string;
+  expectedInstallationId: string;
   originalEnvFileContent: string;
   originalRolloutConfigContent: string;
   serviceWasRunning: boolean;
@@ -103,12 +104,12 @@ async function performRecovery(
   resolvedOldPath: string,
   resolvedNewPath: string,
   resolvedEnvFilePath: string,
-  resolvedRolloutConfigPath: string
+  resolvedRolloutConfigPath: string,
+  finalExpectedCommit: string,
+  expectedInstallationId: string
 ) {
   if (!existsSync(ledgerFile)) {
-    rmSync(sentinelFile, { force: true });
-    console.log(`[relocate-health-db] No ledger found. Cleaned up sentinel.`);
-    return;
+    throw new Error(`Sentinel file exists but ledger file is missing at ${ledgerFile}. Inconsistent state, manual recovery required.`);
   }
 
   // Validate ownership and mode of sentinel and ledger files
@@ -140,6 +141,8 @@ async function performRecovery(
   if (
     !ledger ||
     typeof ledger !== "object" ||
+    typeof ledger.expectedCommit !== "string" ||
+    typeof ledger.expectedInstallationId !== "string" ||
     typeof ledger.resolvedOldPath !== "string" ||
     typeof ledger.resolvedNewPath !== "string" ||
     typeof ledger.resolvedEnvFilePath !== "string" ||
@@ -149,6 +152,14 @@ async function performRecovery(
     !Array.isArray(ledger.steps)
   ) {
     throw new Error("Ledger validation failed: missing or invalid fields in ledger schema");
+  }
+
+  // Bind to ledger.expectedCommit and interrupted installation identity
+  if (ledger.expectedCommit !== finalExpectedCommit) {
+    throw new Error(`Recovery expected commit mismatch: ledger expected commit is ${ledger.expectedCommit}, but current expected commit is ${finalExpectedCommit}`);
+  }
+  if (ledger.expectedInstallationId !== expectedInstallationId) {
+    throw new Error(`Recovery installation identity mismatch: ledger installation ID is ${ledger.expectedInstallationId}, but current expected installation ID is ${expectedInstallationId}`);
   }
 
   // Canonical Path Comparison
@@ -216,7 +227,10 @@ async function performRecovery(
   );
 
   // 1. Quiesce the service first (if running/started)
-  if (hasMutations && existsSync(systemctl)) {
+  if (hasMutations) {
+    if (!existsSync(systemctl)) {
+      throw new Error(`systemctl is unavailable at ${systemctl}, cannot prove quiescence for mutation recovery.`);
+    }
     let isActive = false;
     try {
       const stdout = execFileSync(systemctl, ["is-active", serviceName], { encoding: "utf8" }).trim();
@@ -331,8 +345,8 @@ async function performRecovery(
     }
   }
 
-  // 3. Restart original service state if it was running initially
-  if (ledger.serviceWasRunning && existsSync(systemctl)) {
+  // 3. Restart original service state if it was running initially, ONLY if restoration was successful
+  if (rollbackSuccess && ledger.serviceWasRunning && existsSync(systemctl)) {
     try {
       await restartServiceWithAcceptanceGate(systemctl, serviceName, hasMutations);
     } catch (err: any) {
@@ -554,7 +568,9 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
           resolvedOldPath, 
           resolvedNewPath, 
           resolvedEnvFilePath, 
-          resolvedRolloutConfigPath
+          resolvedRolloutConfigPath,
+          finalExpectedCommit,
+          expectedInstallationId
         );
       } finally {
         if (lockProcess) lockProcess.kill();
@@ -617,6 +633,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
   const ledgerData: LedgerData = {
     timestamp: new Date().toISOString(),
     expectedCommit: finalExpectedCommit,
+    expectedInstallationId: expectedInstallationId,
     originalEnvFileContent,
     originalRolloutConfigContent,
     serviceWasRunning,
@@ -669,7 +686,10 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
       )
     );
 
-    if (hasMutations && existsSync(systemctl)) {
+    if (hasMutations) {
+      if (!existsSync(systemctl)) {
+        throw new Error(`systemctl is unavailable at ${systemctl}, cannot prove quiescence for mutation rollback.`);
+      }
       // 1. Quiesce the service first to avoid mutating active databases!
       let isServiceActive = false;
       try {
@@ -764,12 +784,14 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
         }
       }
       if (step.name === "service-stopped" && serviceWasRunning && (step.status === "completed" || step.status === "pending") && existsSync(systemctl)) {
-        try {
-          await restartServiceWithAcceptanceGate(systemctl, serviceName, hasMutations);
-        } catch (err: any) {
-          console.error(`[relocate-health-db] Failed to restart service during rollback: ${err.message}`);
-          if (hasMutations) {
-            rollbackSuccess = false;
+        if (rollbackSuccess) {
+          try {
+            await restartServiceWithAcceptanceGate(systemctl, serviceName, hasMutations);
+          } catch (err: any) {
+            console.error(`[relocate-health-db] Failed to restart service during rollback: ${err.message}`);
+            if (hasMutations) {
+              rollbackSuccess = false;
+            }
           }
         }
       }
@@ -1078,6 +1100,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     }
     console.log("[relocate-health-db] Health database relocation completed successfully!");
   } catch (error) {
+    await rollback();
     if (lockProcess) {
       try {
         lockProcess.kill();
@@ -1085,7 +1108,6 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
         // ignore
       }
     }
-    await rollback();
     throw error;
   }
 }

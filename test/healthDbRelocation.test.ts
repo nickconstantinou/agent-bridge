@@ -8,7 +8,11 @@ import { relocateHealthDb } from "../scripts/relocate-health-db.js";
 import { openDb } from "../src/db.js";
 import { CURRENT_SCHEMA_VERSION } from "../src/db/schema.js";
 
-const testRoot = mkdtempSync(join(tmpdir(), "health-db-relocate-test-"));
+let testRoot: string;
+let resolvedOldPath: string;
+let resolvedNewPath: string;
+let resolvedEnvFilePath: string;
+let resolvedRolloutConfigPath: string;
 
 describe("Health check database relocation", () => {
   const oldPath = "data-health/health.sqlite";
@@ -17,12 +21,13 @@ describe("Health check database relocation", () => {
   const rolloutConfigPath = "etc/agent-bridge/rollout.conf";
   const serviceName = "agent-bridge-health.service";
 
-  const resolvedOldPath = join(testRoot, oldPath);
-  const resolvedNewPath = join(testRoot, newPath);
-  const resolvedEnvFilePath = join(testRoot, envFilePath);
-  const resolvedRolloutConfigPath = join(testRoot, rolloutConfigPath);
-
   beforeEach(() => {
+    testRoot = mkdtempSync(join(tmpdir(), "health-db-relocate-test-"));
+    resolvedOldPath = join(testRoot, oldPath);
+    resolvedNewPath = join(testRoot, newPath);
+    resolvedEnvFilePath = join(testRoot, envFilePath);
+    resolvedRolloutConfigPath = join(testRoot, rolloutConfigPath);
+
     // Reset test environment variable for the script
     process.env.AGENT_BRIDGE_ROLLOUT_TEST_ROOT = testRoot;
 
@@ -639,6 +644,57 @@ fi
     expect(existsSync(resolvedOldPath)).toBe(true);
     expect(existsSync(resolvedNewPath)).toBe(false);
     expect(existsSync(resolvedOldPath + ".stale-backup")).toBe(false);
+    expect(existsSync(sentinelFile)).toBe(false);
+    expect(existsSync(ledgerFile)).toBe(false);
+  });
+
+  it("regards rollback as successful and clears recovery records if service-stopped is pending but restart fails during rollback", async () => {
+    seedDb(resolvedOldPath);
+
+    const originalEnvContent = readFileSync(resolvedEnvFilePath, "utf8");
+    const originalRolloutContent = readFileSync(resolvedRolloutConfigPath, "utf8");
+
+    // Write a ledger file next to rollout.conf (resolved as testRoot/etc/agent-bridge/.health-relocation-ledger.json)
+    const ledgerFile = join(testRoot, "etc/agent-bridge/.health-relocation-ledger.json");
+    const sentinelFile = join(testRoot, "etc/agent-bridge/.health-relocation-in-progress");
+
+    writeFileSync(sentinelFile, "123456\n");
+    writeFileSync(ledgerFile, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      expectedCommit: "",
+      originalEnvFileContent: originalEnvContent,
+      originalRolloutConfigContent: originalRolloutContent,
+      serviceWasRunning: true,
+      resolvedOldPath,
+      resolvedNewPath,
+      resolvedEnvFilePath,
+      resolvedRolloutConfigPath,
+      tempBackupPath: join(testRoot, "runtime/health/.relocate-backup-test"),
+      steps: [
+        { name: "service-stopped", status: "pending" }
+      ]
+    }, null, 2));
+
+    // Mock systemctl to fail on start to simulate restart failure
+    writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
+if [ "$1" = "start" ]; then
+  exit 1
+fi
+exit 0
+`, { mode: 0o755 });
+
+    // Rerun relocation in recover mode
+    await relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+      recover: true
+    });
+
+    // The recovery should still succeed, and clear both sentinel and ledger!
     expect(existsSync(sentinelFile)).toBe(false);
     expect(existsSync(ledgerFile)).toBe(false);
   });

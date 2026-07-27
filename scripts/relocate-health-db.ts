@@ -59,6 +59,16 @@ async function performRecovery(ledgerFile: string, sentinelFile: string, systemc
   console.log(`[relocate-health-db] Reverting steps recorded in ledger...`);
   let rollbackSuccess = true;
 
+  const steps = ledger.steps || [];
+  const hasMutations = steps.some(s => 
+    (s.status === "completed" || s.status === "pending") && (
+      s.name === "database-installed" || 
+      s.name === "old-database-renamed" || 
+      s.name === "env-file-updated" || 
+      s.name === "rollout-config-updated"
+    )
+  );
+
   // 1. Quiesce the service first (if running/started)
   let isActive = false;
   try {
@@ -72,12 +82,13 @@ async function performRecovery(ledgerFile: string, sentinelFile: string, systemc
       execFileSync(systemctl, ["stop", serviceName]);
     } catch (err: any) {
       console.error(`Recovery error: failed to stop active service: ${err.message}`);
-      rollbackSuccess = false;
+      if (hasMutations) {
+        rollbackSuccess = false;
+      }
     }
   }
 
   // 2. Revert other steps in reverse order
-  const steps = ledger.steps || [];
   for (let i = steps.length - 1; i >= 0; i--) {
     const step = steps[i];
     
@@ -135,7 +146,9 @@ async function performRecovery(ledgerFile: string, sentinelFile: string, systemc
       execFileSync(systemctl, ["start", serviceName]);
     } catch (err: any) {
       console.error(`Recovery error: failed to restart original service state: ${err.message}`);
-      rollbackSuccess = false;
+      if (hasMutations) {
+        rollbackSuccess = false;
+      }
     }
   }
 
@@ -423,7 +436,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     }
 
     const hasMutations = stepsToRollback.some(s => 
-      s.status === "completed" && (
+      (s.status === "completed" || s.status === "pending") && (
         s.name === "database-installed" || 
         s.name === "old-database-renamed" || 
         s.name === "env-file-updated" || 
@@ -520,7 +533,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
           // ignore best effort
         }
       }
-      if (step.name === "service-stopped" && serviceWasRunning && step.status === "completed" && existsSync(systemctl)) {
+      if (step.name === "service-stopped" && serviceWasRunning && (step.status === "completed" || step.status === "pending") && existsSync(systemctl)) {
         try {
           console.log(`[relocate-health-db] Restarting service ${serviceName}...`);
           
@@ -535,39 +548,43 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
           execFileSync(systemctl, ["start", serviceName]);
 
           // Rollback Acceptance Gate
-          let attempts = 0;
-          const maxVerifyAttempts = 10;
-          let isHealthy = false;
-          while (attempts < maxVerifyAttempts) {
-            await new Promise((resolve) => setTimeout(resolve, 500));
-            attempts++;
-            try {
-              const activeState = execFileSync(systemctl, ["show", serviceName, "--property=ActiveState", "--value"], { encoding: "utf8" }).trim();
-              const subState = execFileSync(systemctl, ["show", serviceName, "--property=SubState", "--value"], { encoding: "utf8" }).trim();
-              const restartsVal = execFileSync(systemctl, ["show", serviceName, "--property=NRestarts", "--value"], { encoding: "utf8" }).trim();
-              const currentRestarts = parseInt(restartsVal, 10) || 0;
+          if (hasMutations) {
+            let attempts = 0;
+            const maxVerifyAttempts = 10;
+            let isHealthy = false;
+            while (attempts < maxVerifyAttempts) {
+              await new Promise((resolve) => setTimeout(resolve, 500));
+              attempts++;
+              try {
+                const activeState = execFileSync(systemctl, ["show", serviceName, "--property=ActiveState", "--value"], { encoding: "utf8" }).trim();
+                const subState = execFileSync(systemctl, ["show", serviceName, "--property=SubState", "--value"], { encoding: "utf8" }).trim();
+                const restartsVal = execFileSync(systemctl, ["show", serviceName, "--property=NRestarts", "--value"], { encoding: "utf8" }).trim();
+                const currentRestarts = parseInt(restartsVal, 10) || 0;
 
-              if (currentRestarts > baselineRestarts) {
-                throw new Error(`Service crashed during rollback start (restarts increased)`);
-              }
+                if (currentRestarts > baselineRestarts) {
+                  throw new Error(`Service crashed during rollback start (restarts increased)`);
+                }
 
-              if (activeState === "active" && subState === "running") {
-                isHealthy = true;
-                break;
+                if (activeState === "active" && subState === "running") {
+                  isHealthy = true;
+                  break;
+                }
+                if (activeState === "failed") {
+                  throw new Error(`Service failed to start during rollback`);
+                }
+              } catch (err: any) {
+                throw new Error(`Service rollback acceptance check failed: ${err.message}`);
               }
-              if (activeState === "failed") {
-                throw new Error(`Service failed to start during rollback`);
-              }
-            } catch (err: any) {
-              throw new Error(`Service rollback acceptance check failed: ${err.message}`);
             }
-          }
-          if (!isHealthy) {
-            throw new Error(`Service failed to stabilize within active/running state during rollback`);
+            if (!isHealthy) {
+              throw new Error(`Service failed to stabilize within active/running state during rollback`);
+            }
           }
         } catch (err: any) {
           console.error(`[relocate-health-db] Failed to restart service during rollback: ${err.message}`);
-          rollbackSuccess = false;
+          if (hasMutations) {
+            rollbackSuccess = false;
+          }
         }
       }
     }
@@ -896,8 +913,14 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     if (lockProcess) lockProcess.kill();
     console.log("[relocate-health-db] Health database relocation completed successfully!");
   } catch (error) {
+    if (lockProcess) {
+      try {
+        lockProcess.kill();
+      } catch {
+        // ignore
+      }
+    }
     await rollback();
-    if (lockProcess) lockProcess.kill();
     throw error;
   }
 }

@@ -54,7 +54,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     ? join(TEST_ROOT, "run/lock/agent-bridge-rollout.lock")
     : "/run/lock/agent-bridge-rollout.lock";
 
-  // Helper: ensure path has no forbidden symlinks
+  // Helper: ensure path has no forbidden symlinks in the path or any ancestor directories
   const ensureNotSymlink = (pathToCheck: string) => {
     try {
       if (existsSync(pathToCheck)) {
@@ -62,13 +62,21 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
         if (stat.isSymbolicLink()) {
           throw new Error(`Path ${pathToCheck} is a symbolic link, which is forbidden.`);
         }
-        const parent = dirname(pathToCheck);
+      }
+      // Check all parent ancestors
+      let current = pathToCheck;
+      while (true) {
+        const parent = dirname(current);
+        if (!parent || parent === current || parent === "/" || parent === ".") {
+          break;
+        }
         if (existsSync(parent)) {
-          const parentStat = lstatSync(parent);
-          if (parentStat.isSymbolicLink()) {
-            throw new Error(`Directory ${parent} is a symbolic link, which is forbidden.`);
+          const stat = lstatSync(parent);
+          if (stat.isSymbolicLink()) {
+            throw new Error(`Ancestor directory ${parent} is a symbolic link, which is forbidden.`);
           }
         }
+        current = parent;
       }
     } catch (err: any) {
       if (err.code !== 'ENOENT') throw err;
@@ -137,6 +145,15 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     if (!existsSync(authValidator)) {
       throw new Error(`Rollout authorization validator not found at ${authValidator}`);
     }
+
+    const finalAuthValidatorSha = options.authorizationValidatorSha256 || process.env.HEALTH_AUTHORIZATION_VALIDATOR_SHA256 || "";
+    if (finalAuthValidatorSha) {
+      const fileBytes = readFileSync(authValidator);
+      const sha = createHash("sha256").update(fileBytes).digest("hex");
+      if (sha !== finalAuthValidatorSha) {
+        throw new Error(`Authorization validator hash mismatch: expected ${finalAuthValidatorSha}, got ${sha}`);
+      }
+    }
     
     try {
       execFileSync(authValidator, ["--file", finalAuthFile, "--expected-commit", finalExpectedCommit]);
@@ -153,7 +170,12 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
 
   // Check if old database exists
   if (!existsSync(resolvedOldPath)) {
-    throw new Error(`Source database does not exist: ${resolvedOldPath}`);
+    if (existsSync(resolvedOldPath + ".stale-backup")) {
+      console.log(`[relocate-health-db] Source database missing but stale backup exists. Restoring stale backup to recover...`);
+      renameSync(resolvedOldPath + ".stale-backup", resolvedOldPath);
+    } else {
+      throw new Error(`Source database does not exist: ${resolvedOldPath}`);
+    }
   }
 
   // Check if destination database already exists

@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, openSync, closeSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { spawn } from "node:child_process";
 import Database from "better-sqlite3";
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { relocateHealthDb } from "../scripts/relocate-health-db.js";
@@ -415,5 +416,154 @@ exit 0
       serviceName,
       expectedInstallationId: "test-install-id-123",
     })).rejects.toThrow(/Relocation sentinel file exists/);
+  });
+
+  // NEW REGRESSIONS:
+
+  it("detects concurrent writer holding WAL sidecar file open", async () => {
+    seedDb(resolvedOldPath);
+    // Create a dummy -wal file
+    const walFile = resolvedOldPath + "-wal";
+    writeFileSync(walFile, "wal-content");
+
+    // Keep WAL file open using node:fs openSync
+    const fd = openSync(walFile, "r+");
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+    })).rejects.toThrow(/is held open by an active process/);
+
+    closeSync(fd);
+    rmSync(walFile);
+  });
+
+  it("fails when systemctl is-active returns an operational failure", async () => {
+    writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
+echo "systemd: bus connection failed" >&2
+exit 1
+`, { mode: 0o755 });
+
+    seedDb(resolvedOldPath);
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+    })).rejects.toThrow(/systemctl is-active failed operationally/);
+  });
+
+  it("fails when systemctl is absent", async () => {
+    seedDb(resolvedOldPath);
+    // Remove the mocked systemctl
+    rmSync(join(testRoot, "bin/systemctl"));
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+    })).rejects.toThrow(/systemctl binary not found/);
+  });
+
+  it("rejects symlinked destination ancestors", async () => {
+    seedDb(resolvedOldPath);
+
+    // Create a symlinked directory in the destination path
+    // resolvedNewPath is: testRoot/runtime/health/health.sqlite
+    // Let's make "testRoot/runtime/health" a symlink to another directory
+    const realDestDir = join(testRoot, "real-dest");
+    mkdirSync(realDestDir, { recursive: true });
+    
+    mkdirSync(join(testRoot, "runtime"), { recursive: true });
+    symlinkSync(realDestDir, join(testRoot, "runtime/health"));
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+    })).rejects.toThrow(/Ancestor directory .* is a symbolic link, which is forbidden/);
+  });
+
+  it("prevents execution if another rollout holds the lock", async () => {
+    seedDb(resolvedOldPath);
+
+    // Acquire the lock in a background process using flock
+    const lockFile = join(testRoot, "run/lock/agent-bridge-rollout.lock");
+    mkdirSync(dirname(lockFile), { recursive: true });
+    writeFileSync(lockFile, "");
+
+    // Spawn a background process that holds the lock
+    const flockProcess = spawn("/usr/bin/flock", ["--exclusive", lockFile, "sleep", "10"]);
+
+    // Give it a short moment to start and acquire the lock
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    try {
+      await expect(relocateHealthDb({
+        oldPath,
+        newPath,
+        envFilePath,
+        rolloutConfigPath,
+        serviceName,
+        expectedInstallationId: "test-install-id-123",
+      })).rejects.toThrow(/Another rollout is already active/);
+    } finally {
+      flockProcess.kill();
+    }
+  });
+
+  it("fails when authorization validator SHA-256 hash mismatch occurs", async () => {
+    seedDb(resolvedOldPath);
+
+    // Create a mock validator
+    const authValidator = join(testRoot, "bin/rollout-authorization-trusted");
+    writeFileSync(authValidator, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+    // The SHA of this mock validator is different from the expected pin
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+      authorizationFile: "some-auth-file",
+      authorizationValidatorSha256: "wrong-sha-hash",
+    })).rejects.toThrow(/Authorization validator hash mismatch/);
+  });
+
+  it("recovers from an existing .stale-backup if source database is missing", async () => {
+    // Seed the stale backup, but make the source database missing
+    const staleBackupPath = resolvedOldPath + ".stale-backup";
+    seedDb(staleBackupPath);
+
+    // Make sure old path does not exist
+    expect(existsSync(resolvedOldPath)).toBe(false);
+
+    await relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+    });
+
+    // It should have successfully relocated the database using the stale backup!
+    expect(existsSync(resolvedNewPath)).toBe(true);
+    expect(existsSync(staleBackupPath)).toBe(true); // it renamed stale backup to oldPath, then did the relocation which renamed it back to stale-backup!
   });
 });

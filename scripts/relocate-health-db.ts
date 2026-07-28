@@ -84,12 +84,16 @@ async function restartServiceWithAcceptanceGate(
 ): Promise<void> {
   console.log(`[relocate-health-db] Restarting service ${serviceName}...`);
   
-  let baselineRestarts = 0;
+  let baselineRestarts: number;
   try {
     const restartsVal = execFileSync(systemctl, ["show", serviceName, "--property=NRestarts", "--value"], { encoding: "utf8" }).trim();
-    baselineRestarts = parseInt(restartsVal, 10) || 0;
-  } catch {
-    // ignore
+    const parsed = parseInt(restartsVal, 10);
+    if (isNaN(parsed)) {
+      throw new Error(`NRestarts query returned non-numeric value: '${restartsVal}'`);
+    }
+    baselineRestarts = parsed;
+  } catch (err: any) {
+    throw new Error(`Service restart acceptance check failed: could not read baseline NRestarts: ${err.message}`);
   }
 
   execFileSync(systemctl, ["start", serviceName]);
@@ -105,8 +109,11 @@ async function restartServiceWithAcceptanceGate(
       try {
         const activeState = execFileSync(systemctl, ["show", serviceName, "--property=ActiveState", "--value"], { encoding: "utf8" }).trim();
         const subState = execFileSync(systemctl, ["show", serviceName, "--property=SubState", "--value"], { encoding: "utf8" }).trim();
-        const restartsVal = execFileSync(systemctl, ["show", serviceName, "--property=NRestarts", "--value"], { encoding: "utf8" }).trim();
-        const currentRestarts = parseInt(restartsVal, 10) || 0;
+        const restartsRaw = execFileSync(systemctl, ["show", serviceName, "--property=NRestarts", "--value"], { encoding: "utf8" }).trim();
+        const currentRestarts = parseInt(restartsRaw, 10);
+        if (isNaN(currentRestarts)) {
+          throw new Error(`NRestarts query returned non-numeric value: '${restartsRaw}'`);
+        }
 
         if (currentRestarts > baselineRestarts) {
           throw new Error(`Service crashed and restarted (restarts increased)`);
@@ -265,6 +272,7 @@ async function performRecovery(
 
   // 1. Quiesce the service first (if running/started)
   if (hasMutations) {
+    checkLock();
     if (!existsSync(systemctl)) {
       throw new Error(`systemctl is unavailable at ${systemctl}, cannot prove quiescence for mutation recovery.`);
     }
@@ -400,11 +408,18 @@ async function performRecovery(
 
   if (rollbackSuccess) {
     checkLock();
+
+    // Durable evidence deletion: fsync directory FIRST (so the removal is durable), then unlink
+    const evidenceDir = dirname(ledgerFile);
+    const dirFdPre = openSync(evidenceDir, "r");
+    fsyncSync(dirFdPre);
+    closeSync(dirFdPre);
+
     rmSync(ledgerFile, { force: true });
     rmSync(sentinelFile, { force: true });
 
-    // Durable recovery-record deletion: fsync containing directory
-    const dirFd = openSync(dirname(ledgerFile), "r");
+    // Second fsync after deletions to commit the directory entries
+    const dirFd = openSync(evidenceDir, "r");
     fsyncSync(dirFd);
     closeSync(dirFd);
 
@@ -738,6 +753,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
         throw new Error(`systemctl is unavailable at ${systemctl}, cannot prove quiescence for mutation rollback.`);
       }
       // 1. Quiesce the service first to avoid mutating active databases!
+      checkLock();
       let isServiceActive = false;
       try {
         const stdout = execFileSync(systemctl, ["is-active", serviceName], { encoding: "utf8" }).trim();

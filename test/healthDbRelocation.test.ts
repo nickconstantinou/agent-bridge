@@ -41,6 +41,11 @@ vi.mock("node:child_process", async (importOriginal) => {
       const child = actual.spawn(cmd, args, opts);
       if (cmd === "/usr/bin/flock") {
         lastLockProcess = child;
+        // Write the flock PID to a known tmpfile so shell mocks can kill exactly this process
+        const pidFile = `/tmp/agent-bridge-test-flock-pid-${process.pid}`;
+        child.on("spawn", () => {
+          try { actual.execFileSync("/usr/bin/env", ["sh", "-c", `echo ${child.pid} > ${pidFile}`]); } catch { /* ignore */ }
+        });
       }
       return child;
     }
@@ -79,7 +84,7 @@ describe("Health check database relocation", () => {
     mkdirSync(join(testRoot, "run/agent-bridge"), { recursive: true });
     mkdirSync(join(testRoot, "run/lock"), { recursive: true });
 
-    // Mock systemctl script (default: inactive, exits 3 on is-active, healthy show)
+    // Mock systemctl script (default: inactive, exits 3 on is-active, healthy show, NRestarts=0)
     writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
 if [ "$1" = "is-active" ]; then
   echo "inactive"
@@ -91,6 +96,9 @@ if [ "$1" = "show" ]; then
   fi
   if echo "$*" | grep -q "SubState"; then
     echo "running"
+  fi
+  if echo "$*" | grep -q "NRestarts"; then
+    echo "0"
   fi
   exit 0
 fi
@@ -1060,19 +1068,26 @@ exit 0
       ]
     }, null, 2), { mode: 0o600 });
 
-    // Mock systemctl to kill flock process immediately when it is queried, returning healthy show
+    // Mock systemctl to kill the test-specific flock PID when show is called, returning healthy state
+    const lockPidFile = `/tmp/agent-bridge-test-flock-pid-${process.pid}`;
     writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
 if [ "$1" = "is-active" ]; then
   echo "inactive"
   exit 3
 fi
 if [ "$1" = "show" ]; then
-  killall -9 flock
+  if [ -f "${lockPidFile}" ]; then
+    LOCK_PID=$(cat "${lockPidFile}" 2>/dev/null)
+    if [ -n "$LOCK_PID" ]; then kill -9 "$LOCK_PID" 2>/dev/null || true; fi
+  fi
   if echo "$*" | grep -q "ActiveState"; then
     echo "active"
   fi
   if echo "$*" | grep -q "SubState"; then
     echo "running"
+  fi
+  if echo "$*" | grep -q "NRestarts"; then
+    echo "0"
   fi
   exit 0
 fi
@@ -1120,14 +1135,18 @@ exit 0
       ]
     }, null, 2), { mode: 0o600 });
 
-    // Mock systemctl start to kill flock, returning healthy show
+    // Mock systemctl: kill the specific flock PID on start, then report healthy on show
+    const lockPidFile2 = `/tmp/agent-bridge-test-flock-pid-${process.pid}`;
     writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
 if [ "$1" = "is-active" ]; then
   echo "inactive"
   exit 3
 fi
 if [ "$1" = "start" ]; then
-  killall -9 flock
+  if [ -f "${lockPidFile2}" ]; then
+    LOCK_PID=$(cat "${lockPidFile2}" 2>/dev/null)
+    if [ -n "$LOCK_PID" ]; then kill -9 "$LOCK_PID" 2>/dev/null || true; fi
+  fi
 fi
 if [ "$1" = "show" ]; then
   if echo "$*" | grep -q "ActiveState"; then
@@ -1135,6 +1154,9 @@ if [ "$1" = "show" ]; then
   fi
   if echo "$*" | grep -q "SubState"; then
     echo "running"
+  fi
+  if echo "$*" | grep -q "NRestarts"; then
+    echo "0"
   fi
   exit 0
 fi

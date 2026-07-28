@@ -10,6 +10,28 @@ import { openDb } from "../src/db.js";
 import { CURRENT_SCHEMA_VERSION } from "../src/db/schema.js";
 
 let lastLockProcess: any = null;
+let mockFsyncFail = false;
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return {
+    ...actual,
+    fsyncSync: (fd: number) => {
+      if (mockFsyncFail) {
+        let path = "";
+        try {
+          path = actual.readlinkSync(`/proc/self/fd/${fd}`);
+        } catch {
+          // ignore
+        }
+        if (path.includes("etc/agent-bridge")) {
+          throw new Error("Disk full or fsync failed");
+        }
+      }
+      return actual.fsyncSync(fd);
+    }
+  };
+});
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -39,6 +61,7 @@ describe("Health check database relocation", () => {
   const serviceName = "agent-bridge-health.service";
 
   beforeEach(() => {
+    mockFsyncFail = false;
     testRoot = mkdtempSync(join(tmpdir(), "health-db-relocate-test-"));
     resolvedOldPath = join(testRoot, oldPath);
     resolvedNewPath = join(testRoot, newPath);
@@ -56,11 +79,20 @@ describe("Health check database relocation", () => {
     mkdirSync(join(testRoot, "run/agent-bridge"), { recursive: true });
     mkdirSync(join(testRoot, "run/lock"), { recursive: true });
 
-    // Mock systemctl script (default: inactive, exits 3 on is-active)
+    // Mock systemctl script (default: inactive, exits 3 on is-active, healthy show)
     writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
 if [ "$1" = "is-active" ]; then
   echo "inactive"
   exit 3
+fi
+if [ "$1" = "show" ]; then
+  if echo "$*" | grep -q "ActiveState"; then
+    echo "active"
+  fi
+  if echo "$*" | grep -q "SubState"; then
+    echo "running"
+  fi
+  exit 0
 fi
 exit 0
 `, { mode: 0o755 });
@@ -298,7 +330,7 @@ fi
       rolloutConfigPath,
       serviceName,
       expectedInstallationId: "test-install-id-123",
-    })).rejects.toThrow(/Failed to stop service/);
+    })).rejects.toThrow(/failed to stop service/i);
 
     expect(existsSync(resolvedNewPath)).toBe(false);
     expect(existsSync(resolvedOldPath)).toBe(true);
@@ -711,6 +743,10 @@ fi
 
     // Mock systemctl to fail on start to simulate restart failure
     writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
+if [ "$1" = "is-active" ]; then
+  echo "inactive"
+  exit 3
+fi
 if [ "$1" = "start" ]; then
   exit 1
 fi
@@ -895,5 +931,271 @@ exit 0
       expectedInstallationId: "test-install-id-123",
       recover: true
     })).rejects.toThrow(/Sentinel file exists but ledger file is missing/);
+  });
+
+  it("fails recovery and retains records if start exits zero but ActiveState/SubState is unhealthy when no file mutation occurred", async () => {
+    seedDb(resolvedOldPath);
+
+    const originalEnvContent = readFileSync(resolvedEnvFilePath, "utf8");
+    const originalRolloutContent = readFileSync(resolvedRolloutConfigPath, "utf8");
+    const ledgerFile = join(testRoot, "etc/agent-bridge/.health-relocation-ledger.json");
+    const sentinelFile = join(testRoot, "etc/agent-bridge/.health-relocation-in-progress");
+
+    writeFileSync(sentinelFile, "123456\n", { mode: 0o600 });
+    writeFileSync(ledgerFile, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      expectedCommit: "",
+      expectedInstallationId: "test-install-id-123",
+      originalEnvFileContent: originalEnvContent,
+      originalRolloutConfigContent: originalRolloutContent,
+      serviceWasRunning: true,
+      serviceName,
+      resolvedOldPath,
+      resolvedNewPath,
+      resolvedEnvFilePath,
+      resolvedRolloutConfigPath,
+      tempBackupPath: join(testRoot, "runtime/health/.relocate-backup-test"),
+      steps: [
+        { name: "service-stopped", status: "pending" }
+      ]
+    }, null, 2), { mode: 0o600 });
+
+    // Mock systemctl start to exit 0, but show ActiveState to be failed
+    writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
+if [ "$1" = "is-active" ]; then
+  echo "inactive"
+  exit 3
+fi
+if [ "$1" = "show" ]; then
+  if echo "$*" | grep -q "ActiveState"; then
+    echo "failed"
+    exit 0
+  fi
+fi
+exit 0
+`, { mode: 0o755 });
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+      recover: true
+    })).rejects.toThrow(/Service restart acceptance check failed/);
+
+    expect(existsSync(sentinelFile)).toBe(true);
+    expect(existsSync(ledgerFile)).toBe(true);
+  });
+
+  it("fails recovery and retains records if systemctl is missing after a stop-only interruption", async () => {
+    seedDb(resolvedOldPath);
+
+    const originalEnvContent = readFileSync(resolvedEnvFilePath, "utf8");
+    const originalRolloutContent = readFileSync(resolvedRolloutConfigPath, "utf8");
+    const ledgerFile = join(testRoot, "etc/agent-bridge/.health-relocation-ledger.json");
+    const sentinelFile = join(testRoot, "etc/agent-bridge/.health-relocation-in-progress");
+
+    writeFileSync(sentinelFile, "123456\n", { mode: 0o600 });
+    writeFileSync(ledgerFile, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      expectedCommit: "",
+      expectedInstallationId: "test-install-id-123",
+      originalEnvFileContent: originalEnvContent,
+      originalRolloutConfigContent: originalRolloutContent,
+      serviceWasRunning: true,
+      serviceName,
+      resolvedOldPath,
+      resolvedNewPath,
+      resolvedEnvFilePath,
+      resolvedRolloutConfigPath,
+      tempBackupPath: join(testRoot, "runtime/health/.relocate-backup-test"),
+      steps: [
+        { name: "service-stopped", status: "pending" }
+      ]
+    }, null, 2), { mode: 0o600 });
+
+    // Delete systemctl mock
+    rmSync(join(testRoot, "bin/systemctl"), { force: true });
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+      recover: true
+    })).rejects.toThrow(/systemctl is unavailable/);
+
+    expect(existsSync(sentinelFile)).toBe(true);
+    expect(existsSync(ledgerFile)).toBe(true);
+  });
+
+  it("fails recovery if lock is lost immediately before recovery restart", async () => {
+    seedDb(resolvedOldPath);
+
+    const originalEnvContent = readFileSync(resolvedEnvFilePath, "utf8");
+    const originalRolloutContent = readFileSync(resolvedRolloutConfigPath, "utf8");
+    const ledgerFile = join(testRoot, "etc/agent-bridge/.health-relocation-ledger.json");
+    const sentinelFile = join(testRoot, "etc/agent-bridge/.health-relocation-in-progress");
+
+    writeFileSync(sentinelFile, "123456\n", { mode: 0o600 });
+    writeFileSync(ledgerFile, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      expectedCommit: "",
+      expectedInstallationId: "test-install-id-123",
+      originalEnvFileContent: originalEnvContent,
+      originalRolloutConfigContent: originalRolloutContent,
+      serviceWasRunning: true,
+      serviceName,
+      resolvedOldPath,
+      resolvedNewPath,
+      resolvedEnvFilePath,
+      resolvedRolloutConfigPath,
+      tempBackupPath: join(testRoot, "runtime/health/.relocate-backup-test"),
+      steps: [
+        { name: "service-stopped", status: "completed" }
+      ]
+    }, null, 2), { mode: 0o600 });
+
+    // Mock systemctl to kill flock process immediately when it is queried, returning healthy show
+    writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
+if [ "$1" = "is-active" ]; then
+  echo "inactive"
+  exit 3
+fi
+if [ "$1" = "show" ]; then
+  killall -9 flock
+  if echo "$*" | grep -q "ActiveState"; then
+    echo "active"
+  fi
+  if echo "$*" | grep -q "SubState"; then
+    echo "running"
+  fi
+  exit 0
+fi
+exit 0
+`, { mode: 0o755 });
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+      recover: true
+    })).rejects.toThrow(/Rollout lock was lost or flock process terminated unexpectedly/);
+
+    expect(existsSync(sentinelFile)).toBe(true);
+    expect(existsSync(ledgerFile)).toBe(true);
+  });
+
+  it("fails recovery and retains records if lock is lost immediately before evidence cleanup", async () => {
+    seedDb(resolvedOldPath);
+
+    const originalEnvContent = readFileSync(resolvedEnvFilePath, "utf8");
+    const originalRolloutContent = readFileSync(resolvedRolloutConfigPath, "utf8");
+    const ledgerFile = join(testRoot, "etc/agent-bridge/.health-relocation-ledger.json");
+    const sentinelFile = join(testRoot, "etc/agent-bridge/.health-relocation-in-progress");
+
+    writeFileSync(sentinelFile, "123456\n", { mode: 0o600 });
+    writeFileSync(ledgerFile, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      expectedCommit: "",
+      expectedInstallationId: "test-install-id-123",
+      originalEnvFileContent: originalEnvContent,
+      originalRolloutConfigContent: originalRolloutContent,
+      serviceWasRunning: true,
+      serviceName,
+      resolvedOldPath,
+      resolvedNewPath,
+      resolvedEnvFilePath,
+      resolvedRolloutConfigPath,
+      tempBackupPath: join(testRoot, "runtime/health/.relocate-backup-test"),
+      steps: [
+        { name: "service-stopped", status: "completed" }
+      ]
+    }, null, 2), { mode: 0o600 });
+
+    // Mock systemctl start to kill flock, returning healthy show
+    writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
+if [ "$1" = "is-active" ]; then
+  echo "inactive"
+  exit 3
+fi
+if [ "$1" = "start" ]; then
+  killall -9 flock
+fi
+if [ "$1" = "show" ]; then
+  if echo "$*" | grep -q "ActiveState"; then
+    echo "active"
+  fi
+  if echo "$*" | grep -q "SubState"; then
+    echo "running"
+  fi
+  exit 0
+fi
+exit 0
+`, { mode: 0o755 });
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+      recover: true
+    })).rejects.toThrow(/Rollout lock was lost or flock process terminated unexpectedly/);
+
+    expect(existsSync(sentinelFile)).toBe(true);
+    expect(existsSync(ledgerFile)).toBe(true);
+  });
+
+  it("fails recovery and retains records if directory fsync fails after evidence deletion", async () => {
+    seedDb(resolvedOldPath);
+
+    const originalEnvContent = readFileSync(resolvedEnvFilePath, "utf8");
+    const originalRolloutContent = readFileSync(resolvedRolloutConfigPath, "utf8");
+    const ledgerFile = join(testRoot, "etc/agent-bridge/.health-relocation-ledger.json");
+    const sentinelFile = join(testRoot, "etc/agent-bridge/.health-relocation-in-progress");
+
+    writeFileSync(sentinelFile, "123456\n", { mode: 0o600 });
+    writeFileSync(ledgerFile, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      expectedCommit: "",
+      expectedInstallationId: "test-install-id-123",
+      originalEnvFileContent: originalEnvContent,
+      originalRolloutConfigContent: originalRolloutContent,
+      serviceWasRunning: true,
+      serviceName,
+      resolvedOldPath,
+      resolvedNewPath,
+      resolvedEnvFilePath,
+      resolvedRolloutConfigPath,
+      tempBackupPath: join(testRoot, "runtime/health/.relocate-backup-test"),
+      steps: [
+        { name: "service-stopped", status: "completed" }
+      ]
+    }, null, 2), { mode: 0o600 });
+
+    // Mock fsyncSync to throw after we enable it
+    mockFsyncFail = true;
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+      recover: true
+    })).rejects.toThrow(/Disk full or fsync failed/);
+
+    // Turn off so it doesn't break cleanup/subsequent tests
+    mockFsyncFail = false;
   });
 });

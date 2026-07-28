@@ -250,6 +250,7 @@ async function performRecovery(
 
   console.log(`[relocate-health-db] Reverting steps recorded in ledger...`);
   let rollbackSuccess = true;
+  let recoveryError: Error | null = null;
 
   const steps = ledger.steps || [];
   const hasMutations = steps.some(s => 
@@ -257,7 +258,8 @@ async function performRecovery(
       s.name === "database-installed" || 
       s.name === "old-database-renamed" || 
       s.name === "env-file-updated" || 
-      s.name === "rollout-config-updated"
+      s.name === "rollout-config-updated" ||
+      s.name === "service-stopped"
     )
   );
 
@@ -320,7 +322,7 @@ async function performRecovery(
     closeSync(fd);
     
     renameSync(tmpPath, targetPath);
-
+ 
     // durable directory fsync
     const dirFd = openSync(dirname(targetPath), "r");
     fsyncSync(dirFd);
@@ -338,6 +340,7 @@ async function performRecovery(
       } catch (err: any) {
         console.error(`Recovery error: failed to restore rollout config: ${err.message}`);
         rollbackSuccess = false;
+        recoveryError = err;
       }
     }
     if (step.name === "env-file-updated") {
@@ -346,6 +349,7 @@ async function performRecovery(
       } catch (err: any) {
         console.error(`Recovery error: failed to restore env file: ${err.message}`);
         rollbackSuccess = false;
+        recoveryError = err;
       }
     }
     if (step.name === "old-database-renamed") {
@@ -357,6 +361,7 @@ async function performRecovery(
       } catch (err: any) {
         console.error(`Recovery error: failed to restore old database: ${err.message}`);
         rollbackSuccess = false;
+        recoveryError = err;
       }
     }
     if (step.name === "database-installed") {
@@ -367,6 +372,7 @@ async function performRecovery(
       } catch (err: any) {
         console.error(`Recovery error: failed to clean up new database path: ${err.message}`);
         rollbackSuccess = false;
+        recoveryError = err;
       }
     }
     if (step.name === "backup-created") {
@@ -374,28 +380,38 @@ async function performRecovery(
         rmSync(ledger.tempBackupPath, { force: true });
         rmSync(ledger.tempBackupPath + "-wal", { force: true });
         rmSync(ledger.tempBackupPath + "-shm", { force: true });
-      } catch {
+      } catch (err: any) {
         // ignore best effort
       }
     }
   }
 
   // 3. Restart original service state if it was running initially, ONLY if restoration was successful
+  checkLock();
   if (rollbackSuccess && ledger.serviceWasRunning && existsSync(systemctl)) {
     try {
       await restartServiceWithAcceptanceGate(systemctl, serviceName, hasMutations);
     } catch (err: any) {
       console.error(`Recovery error: failed to restart original service state: ${err.message}`);
       rollbackSuccess = false;
+      recoveryError = err;
     }
   }
 
   if (rollbackSuccess) {
+    checkLock();
     rmSync(ledgerFile, { force: true });
     rmSync(sentinelFile, { force: true });
+
+    // Durable recovery-record deletion: fsync containing directory
+    const dirFd = openSync(dirname(ledgerFile), "r");
+    fsyncSync(dirFd);
+    closeSync(dirFd);
+
+    checkLock();
     console.log(`[relocate-health-db] Recovery completed successfully and system state restored!`);
   } else {
-    throw new Error("Recovery failed to restore complete original state. Manual inspection required.");
+    throw new Error(`Recovery failed to restore complete original state. Manual inspection required. Reason: ${recoveryError?.message || 'unknown'}`);
   }
 }
 
@@ -712,7 +728,8 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
         s.name === "database-installed" || 
         s.name === "old-database-renamed" || 
         s.name === "env-file-updated" || 
-        s.name === "rollout-config-updated"
+        s.name === "rollout-config-updated" ||
+        s.name === "service-stopped"
       )
     );
 
@@ -822,6 +839,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
       }
       if (step.name === "service-stopped" && serviceWasRunning && (step.status === "completed" || step.status === "pending") && existsSync(systemctl)) {
         if (rollbackSuccess) {
+          checkLock();
           try {
             await restartServiceWithAcceptanceGate(systemctl, serviceName, hasMutations);
           } catch (err: any) {
@@ -841,8 +859,16 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     }
 
     if (rollbackSuccess) {
+      checkLock();
       rmSync(ledgerFile, { force: true });
       rmSync(sentinelFile, { force: true });
+
+      // Durable recovery-record deletion: fsync containing directory
+      const dirFd = openSync(dirname(ledgerFile), "r");
+      fsyncSync(dirFd);
+      closeSync(dirFd);
+
+      checkLock();
     } else {
       throw new Error("Relocation failed, and rollback restoration failed to restore complete original state. Manual recovery is required.");
     }

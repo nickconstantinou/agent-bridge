@@ -372,33 +372,43 @@ describe("8. shutdown waits for all children; no leaks", () => {
 
 describe("9. Issue #133 lock holder/waiter stays in the same cancellation tree", () => {
   it("a runCli waiter blocked on the worktree lock is cancellable through the same abort path as runCliAsync", async () => {
-    const root = initRepository();
-    roots.push(root);
-    const holderStarted = join(root, ".holder-started");
-    const waiterStarted = join(root, ".waiter-started");
-    const waitScript = "require('node:fs').writeFileSync(process.argv[1], 'started'); setTimeout(() => {}, 10000)";
+    const prevLockMode = process.env.BRIDGE_WORKSPACE_LOCK_MODE;
+    process.env.BRIDGE_WORKSPACE_LOCK_MODE = "on";
+    try {
+      const root = initRepository();
+      roots.push(root);
+      const holderStarted = join(root, ".holder-started");
+      const waiterStarted = join(root, ".waiter-started");
+      const waitScript = "require('node:fs').writeFileSync(process.argv[1], 'started'); setTimeout(() => {}, 10000)";
 
-    const holder = runCliAsync(process.execPath, ["-e", waitScript, holderStarted], root, {
-      chatId: "lock-tree-holder",
-      killGraceMs: 25,
-    });
-    await waitForFile(holderStarted);
+      const holder = runCliAsync(process.execPath, ["-e", waitScript, holderStarted], root, {
+        chatId: "lock-tree-holder",
+        killGraceMs: 25,
+      });
+      await waitForFile(holderStarted);
 
-    // The waiter is a runCli (sync) invocation this time, proving both entry
-    // points share the identical registry + flock-wrapped cancellation path
-    // that the existing runCliAsync-only waiter tests already cover.
-    const waiter = runCli(process.execPath, ["-e", waitScript, waiterStarted], root, {
-      chatId: "lock-tree-waiter",
-      killGraceMs: 25,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 100));
+      // The waiter is a runCli (sync) invocation this time, proving both entry
+      // points share the identical registry + flock-wrapped cancellation path
+      // that the existing runCliAsync-only waiter tests already cover.
+      const waiter = runCli(process.execPath, ["-e", waitScript, waiterStarted], root, {
+        chatId: "lock-tree-waiter",
+        killGraceMs: 25,
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
-    await expect(abortCliProcessAndWait("lock-tree-waiter")).resolves.toBe(true);
-    await expect(waiter).resolves.toBe("");
-    expect(existsSync(waiterStarted)).toBe(false);
+      await expect(abortCliProcessAndWait("lock-tree-waiter")).resolves.toBe(true);
+      await expect(waiter).resolves.toBe("");
+      expect(existsSync(waiterStarted)).toBe(false);
 
-    await abortCliProcessAndWait("lock-tree-holder");
-    await holder;
+      await abortCliProcessAndWait("lock-tree-holder");
+      await holder;
+    } finally {
+      if (prevLockMode !== undefined) {
+        process.env.BRIDGE_WORKSPACE_LOCK_MODE = prevLockMode;
+      } else {
+        delete process.env.BRIDGE_WORKSPACE_LOCK_MODE;
+      }
+    }
   }, 8_000);
 });
 

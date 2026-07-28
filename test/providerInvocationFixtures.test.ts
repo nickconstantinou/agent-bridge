@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -134,6 +134,21 @@ describe("provider invocation fixtures — claude", () => {
 });
 
 describe("provider invocation fixtures — antigravity", () => {
+  let savedTimeout: string | undefined;
+
+  beforeEach(() => {
+    savedTimeout = process.env.ANTIGRAVITY_CLI_TIMEOUT_MS;
+    delete process.env.ANTIGRAVITY_CLI_TIMEOUT_MS;
+  });
+
+  afterEach(() => {
+    if (savedTimeout !== undefined) {
+      process.env.ANTIGRAVITY_CLI_TIMEOUT_MS = savedTimeout;
+    } else {
+      delete process.env.ANTIGRAVITY_CLI_TIMEOUT_MS;
+    }
+  });
+
   it("fresh session — exact arg order, no --conversation or disabled timeout flags", () => {
     const inv = buildCliInvocation({ bot: "antigravity", prompt: "hi", sessionId: null, command: "agy" });
     expect(inv.args[0]).toBe("--print");

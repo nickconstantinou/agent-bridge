@@ -1,6 +1,8 @@
 name: Apply PR 213 terminal-state correction
 
 on:
+  pull_request:
+    types: [synchronize]
   push:
     branches: [health-db-relocation]
 

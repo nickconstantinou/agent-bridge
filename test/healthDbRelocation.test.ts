@@ -1386,5 +1386,168 @@ exit 0
     expect(hasLedger).toBe(true);
     expect(hasSentinel).toBe(true);
   });
+
+  describe("leftover .removing-* evidence handling at startup", () => {
+    it("safely completes cleanup of valid .removing-* files on a subsequent invocation", async () => {
+      // 1. Setup a first run that fails at the final fsync
+      writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
+if [ "$1" = "is-active" ]; then
+  if [ -f "${testRoot}/.service-started" ]; then
+    echo "active"
+    exit 0
+  elif [ -f "${testRoot}/.service-stopped" ]; then
+    echo "inactive"
+    exit 3
+  else
+    echo "active"
+    exit 0
+  fi
+elif [ "$1" = "stop" ]; then
+  touch "${testRoot}/.service-stopped"
+  rm -f "${testRoot}/.service-started"
+  exit 0
+elif [ "$1" = "start" ]; then
+  touch "${testRoot}/.service-started"
+  exit 0
+elif [ "$1" = "show" ]; then
+  if echo "$*" | grep -q "NRestarts"; then
+    if [ -f "${testRoot}/.rollback-active" ]; then
+      echo "0"
+    elif [ -f "${testRoot}/.service-started" ]; then
+      echo "5"
+    else
+      echo "0"
+    fi
+  elif echo "$*" | grep -q "ActiveState"; then
+    echo "active"
+  elif echo "$*" | grep -q "SubState"; then
+    echo "running"
+  fi
+  exit 0
+fi
+exit 0
+`, { mode: 0o755 });
+
+      seedDb(resolvedOldPath);
+      triggerFsyncFailOnRename = true;
+
+      // First invocation fails rollback cleanup due to fsync failure
+      await expect(relocateHealthDb({
+        oldPath,
+        newPath,
+        envFilePath,
+        rolloutConfigPath,
+        serviceName,
+        expectedInstallationId: "test-install-id-123",
+      })).rejects.toThrow(/Disk full or fsync failed/);
+
+      // Verify .removing-* files exist on disk
+      const evidenceDir = join(testRoot, "etc/agent-bridge");
+      const files = readdirSync(evidenceDir);
+      const removingSentinel = files.find(f => f.startsWith(".health-relocation-in-progress.removing-"));
+      const removingLedger = files.find(f => f.startsWith(".health-relocation-ledger.json.removing-"));
+      expect(removingSentinel).toBeDefined();
+      expect(removingLedger).toBeDefined();
+
+      // Clear the fsync failures for the second invocation
+      triggerFsyncFailOnRename = false;
+      mockFsyncFail = false;
+
+      // 2. Start a second relocation invocation. It should detect, validate, and clean up the removing files.
+      // Since rollback succeeded, source database resolvedOldPath still exists, and resolvedNewPath does not.
+      // So a second relocation invocation should run from scratch and complete successfully when we mock systemctl start to succeed.
+      writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
+if [ "$1" = "is-active" ]; then
+  if [ -f "${testRoot}/.service-stopped" ]; then
+    echo "inactive"
+    exit 3
+  else
+    echo "active"
+    exit 0
+  fi
+elif [ "$1" = "stop" ]; then
+  touch "${testRoot}/.service-stopped"
+  exit 0
+elif [ "$1" = "start" ]; then
+  rm -f "${testRoot}/.service-stopped"
+  exit 0
+elif [ "$1" = "show" ]; then
+  if echo "$*" | grep -q "NRestarts"; then
+    echo "0"
+  elif echo "$*" | grep -q "ActiveState"; then
+    echo "active"
+  elif echo "$*" | grep -q "SubState"; then
+    echo "running"
+  fi
+  exit 0
+fi
+exit 0
+`, { mode: 0o755 });
+
+      await relocateHealthDb({
+        oldPath,
+        newPath,
+        envFilePath,
+        rolloutConfigPath,
+        serviceName,
+        expectedInstallationId: "test-install-id-123",
+      });
+
+      // Prove the removing files were successfully cleaned up
+      const filesAfter = readdirSync(evidenceDir);
+      const remainingSentinel = filesAfter.find(f => f.includes(".removing-"));
+      expect(remainingSentinel).toBeUndefined();
+    });
+
+    it("fails closed if the .removing-* evidence files fail validation (e.g. mismatched pairing or corrupted ledger)", async () => {
+      seedDb(resolvedOldPath);
+
+      // Manually write an orphaned or invalid .removing-* file
+      const configDir = join(testRoot, "etc/agent-bridge");
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(join(configDir, ".health-relocation-in-progress.removing-abc"), "123456\n", { mode: 0o600 });
+      // No corresponding ledger file exists!
+
+      // Start relocation invocation: it must fail closed and throw a pairing/validation error
+      await expect(relocateHealthDb({
+        oldPath,
+        newPath,
+        envFilePath,
+        rolloutConfigPath,
+        serviceName,
+        expectedInstallationId: "test-install-id-123",
+      })).rejects.toThrow(/incomplete or orphaned .removing-\* evidence files/);
+
+      // Clean up orphaned sentinel and create a paired but identity-mismatching ledger file
+      rmSync(join(configDir, ".health-relocation-in-progress.removing-abc"), { force: true });
+      
+      writeFileSync(join(configDir, ".health-relocation-in-progress.removing-xyz"), "123456\n", { mode: 0o600 });
+      writeFileSync(join(configDir, ".health-relocation-ledger.json.removing-xyz"), JSON.stringify({
+        timestamp: new Date().toISOString(),
+        expectedCommit: "wrong-commit-sha",
+        expectedInstallationId: "wrong-installation-id",
+        originalEnvFileContent: "",
+        originalRolloutConfigContent: "",
+        serviceWasRunning: false,
+        serviceName,
+        resolvedOldPath,
+        resolvedNewPath,
+        resolvedEnvFilePath,
+        resolvedRolloutConfigPath,
+        tempBackupPath: "foo",
+        steps: []
+      }), { mode: 0o600 });
+
+      // Start relocation: it must fail closed due to identity mismatch
+      await expect(relocateHealthDb({
+        oldPath,
+        newPath,
+        envFilePath,
+        rolloutConfigPath,
+        serviceName,
+        expectedInstallationId: "test-install-id-123",
+      })).rejects.toThrow(/installation ID mismatch/);
+    });
+  });
 });
 

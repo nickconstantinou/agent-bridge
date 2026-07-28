@@ -38,6 +38,7 @@ interface LedgerData {
   resolvedEnvFilePath: string;
   resolvedRolloutConfigPath: string;
   tempBackupPath: string;
+  terminalOutcome?: "relocation-success" | "original-state-restored";
   steps: {
     name: string;
     status: "pending" | "completed";
@@ -410,6 +411,9 @@ async function performRecovery(
   if (rollbackSuccess) {
     checkLock();
 
+    ledger.terminalOutcome = "original-state-restored";
+    safeWriteFile(ledgerFile, JSON.stringify(ledger, null, 2), 0o600);
+
     // Durable evidence deletion via rename-then-fsync-then-unlink:
     // 1. Rename both files to .removing names — originals immediately gone from the filesystem namespace.
     //    If this process crashes now, next startup finds no sentinel → won't re-enter recovery.
@@ -483,6 +487,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
   const configDir = dirname(resolvedRolloutConfigPath);
   const sentinelFile = join(configDir, ".health-relocation-in-progress");
   const ledgerFile = join(configDir, ".health-relocation-ledger.json");
+  const completionFile = join(configDir, ".health-relocation-complete.json");
 
   const lockFile = TEST_ROOT
     ? join(TEST_ROOT, "run/lock/agent-bridge-rollout.lock")
@@ -646,120 +651,188 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     throw new Error("Expected installation ID is required for verification (set AGENT_BRIDGE_INSTALLATION_ID)");
   }
 
-  // Check for leftover/incomplete .removing-* evidence from a previous run before accepting sentinel absence
-  const files = existsSync(configDir) ? readdirSync(configDir) : [];
-  const sentinelRemovingFiles = files.filter(f => f.startsWith(basename(sentinelFile) + ".removing-"));
-  const ledgerRemovingFiles = files.filter(f => f.startsWith(basename(ledgerFile) + ".removing-"));
+  // Reconcile durable terminal evidence before accepting sentinel absence.
+  // A permanent completion record makes successful relocation idempotent; rollback/recovery
+  // tombstones are retained until a new normal ledger exists to protect any cleanup retry.
+  type RemovingPair = { sentinel: string; ledger: string };
+  let pendingRestoredEvidence: RemovingPair | null = null;
 
-  const suffixes = new Set<string>();
-  for (const f of sentinelRemovingFiles) {
-    suffixes.add(f.slice((basename(sentinelFile) + ".removing-").length));
-  }
-  for (const f of ledgerRemovingFiles) {
-    suffixes.add(f.slice((basename(ledgerFile) + ".removing-").length));
-  }
-
-  if (suffixes.size > 0) {
-    console.log(`[relocate-health-db] Detected .removing-* evidence from a previous run.`);
-    for (const suffix of suffixes) {
-      const curSentinelRemoving = join(configDir, basename(sentinelFile) + ".removing-" + suffix);
-      const curLedgerRemoving = join(configDir, basename(ledgerFile) + ".removing-" + suffix);
-
-      // 1. Validate pairing (both files must exist for each suffix)
-      if (!existsSync(curSentinelRemoving) || !existsSync(curLedgerRemoving)) {
-        if (lockProcess) await killLockProcess(lockProcess);
-        throw new Error("Relocation failed closed: found incomplete or orphaned .removing-* evidence files. Manual recovery or explicit cleanup is required.");
-      }
-
-      // 2. Validate ownership and permissions (must be 0600, not a symlink)
-      const validateFile = (filePath: string) => {
-        const lstat = lstatSync(filePath);
-        if (lstat.isSymbolicLink()) {
-          throw new Error(`Insecure .removing-* file ${filePath} is a symbolic link.`);
-        }
-        const stat = statSync(filePath);
-        const mode = stat.mode & 0o777;
-        if (mode !== 0o600) {
-          throw new Error(`File ${filePath} has insecure permissions: ${mode.toString(8)} (expected 0600)`);
-        }
-        if (typeof process.getuid === "function") {
-          if (stat.uid !== process.getuid()) {
-            throw new Error(`File ${filePath} is not owned by the current process user.`);
-          }
-        }
-      };
-
-      try {
-        validateFile(curSentinelRemoving);
-        validateFile(curLedgerRemoving);
-      } catch (err: any) {
-        if (lockProcess) await killLockProcess(lockProcess);
-        throw new Error(`Relocation failed closed: .removing-* evidence validation failed: ${err.message}. Manual recovery required.`);
-      }
-
-      // 3. Read and validate ledger content and identity
-      const ledgerContent = readFileSync(curLedgerRemoving, "utf8");
-      let ledger: LedgerData;
-      try {
-        ledger = JSON.parse(ledgerContent);
-      } catch (err) {
-        if (lockProcess) await killLockProcess(lockProcess);
-        throw new Error(`Relocation failed closed: failed to parse ledger from .removing-* file: ${curLedgerRemoving}. Manual recovery required.`);
-      }
-
-      // Schema check on the ledger
-      if (
-        !ledger ||
-        typeof ledger !== "object" ||
-        typeof ledger.expectedCommit !== "string" ||
-        typeof ledger.expectedInstallationId !== "string" ||
-        typeof ledger.resolvedOldPath !== "string" ||
-        typeof ledger.resolvedNewPath !== "string" ||
-        typeof ledger.resolvedEnvFilePath !== "string" ||
-        typeof ledger.resolvedRolloutConfigPath !== "string" ||
-        typeof ledger.serviceName !== "string" ||
-        !Array.isArray(ledger.steps)
-      ) {
-        if (lockProcess) await killLockProcess(lockProcess);
-        throw new Error("Relocation failed closed: .removing-* ledger schema validation failed. Manual recovery required.");
-      }
-
-      // Validate ledger identity
-      if (finalExpectedCommit && ledger.expectedCommit !== finalExpectedCommit) {
-        if (lockProcess) await killLockProcess(lockProcess);
-        throw new Error(`Relocation failed closed: .removing-* ledger expected commit mismatch (expected ${finalExpectedCommit}, got ${ledger.expectedCommit}). Manual recovery required.`);
-      }
-      if (expectedInstallationId && ledger.expectedInstallationId !== expectedInstallationId) {
-        if (lockProcess) await killLockProcess(lockProcess);
-        throw new Error(`Relocation failed closed: .removing-* ledger installation ID mismatch (expected ${expectedInstallationId}, got ${ledger.expectedInstallationId}). Manual recovery required.`);
-      }
-      if (ledger.resolvedOldPath !== resolvedOldPath || ledger.resolvedNewPath !== resolvedNewPath) {
-        if (lockProcess) await killLockProcess(lockProcess);
-        throw new Error("Relocation failed closed: .removing-* ledger path mismatch. Manual recovery required.");
-      }
-      if (ledger.serviceName !== serviceName) {
-        if (lockProcess) await killLockProcess(lockProcess);
-        throw new Error("Relocation failed closed: .removing-* ledger service name mismatch. Manual recovery required.");
-      }
-
-      // 4. Complete cleanup safely
-      console.log(`[relocate-health-db] Completing cleanup for validated .removing-* pair (suffix: ${suffix})`);
-      rmSync(curSentinelRemoving, { force: true });
-      rmSync(curLedgerRemoving, { force: true });
-
-      const evidenceDir = dirname(sentinelFile);
-      const dirFdCommit = openSync(evidenceDir, "r");
-      try {
-        fsyncSync(dirFdCommit);
-      } finally {
-        closeSync(dirFdCommit);
-      }
+  const validateEvidenceFile = (filePath: string, label: string) => {
+    const lstat = lstatSync(filePath);
+    if (lstat.isSymbolicLink()) {
+      throw new Error(`Relocation failed closed: ${label} ${filePath} is a symbolic link. Manual recovery required.`);
     }
-    console.log(`[relocate-health-db] Safely completed cleanup of all .removing-* evidence files.`);
+    const stat = statSync(filePath);
+    const mode = stat.mode & 0o777;
+    if (mode !== 0o600) {
+      throw new Error(`Relocation failed closed: ${label} ${filePath} has mode ${mode.toString(8)} (expected 0600). Manual recovery required.`);
+    }
+    if (typeof process.getuid === "function" && stat.uid !== process.getuid()) {
+      throw new Error(`Relocation failed closed: ${label} ${filePath} is not owned by the current process user. Manual recovery required.`);
+    }
+  };
+
+  const readTerminalLedger = (filePath: string, label: string): LedgerData => {
+    validateEvidenceFile(filePath, label);
+    let ledger: LedgerData;
+    try {
+      ledger = JSON.parse(readFileSync(filePath, "utf8"));
+    } catch {
+      throw new Error(`Relocation failed closed: unable to parse ${label} ledger ${filePath}. Manual recovery required.`);
+    }
+    if (
+      !ledger ||
+      typeof ledger !== "object" ||
+      typeof ledger.expectedCommit !== "string" ||
+      typeof ledger.expectedInstallationId !== "string" ||
+      typeof ledger.originalEnvFileContent !== "string" ||
+      typeof ledger.originalRolloutConfigContent !== "string" ||
+      typeof ledger.resolvedOldPath !== "string" ||
+      typeof ledger.resolvedNewPath !== "string" ||
+      typeof ledger.resolvedEnvFilePath !== "string" ||
+      typeof ledger.resolvedRolloutConfigPath !== "string" ||
+      typeof ledger.serviceName !== "string" ||
+      !Array.isArray(ledger.steps)
+    ) {
+      throw new Error(`Relocation failed closed: ${label} ledger schema validation failed. Manual recovery required.`);
+    }
+    if (finalExpectedCommit && ledger.expectedCommit !== finalExpectedCommit) {
+      throw new Error(`Relocation failed closed: ${label} expected commit mismatch (expected ${finalExpectedCommit}, got ${ledger.expectedCommit}). Manual recovery required.`);
+    }
+    if (expectedInstallationId && ledger.expectedInstallationId !== expectedInstallationId) {
+      throw new Error(`Relocation failed closed: ${label} installation ID mismatch (expected ${expectedInstallationId}, got ${ledger.expectedInstallationId}). Manual recovery required.`);
+    }
+    if (
+      ledger.resolvedOldPath !== resolvedOldPath ||
+      ledger.resolvedNewPath !== resolvedNewPath ||
+      ledger.resolvedEnvFilePath !== resolvedEnvFilePath ||
+      ledger.resolvedRolloutConfigPath !== resolvedRolloutConfigPath
+    ) {
+      throw new Error(`Relocation failed closed: ${label} path identity mismatch. Manual recovery required.`);
+    }
+    if (ledger.serviceName !== serviceName) {
+      throw new Error(`Relocation failed closed: ${label} service name mismatch. Manual recovery required.`);
+    }
+    return ledger;
+  };
+
+  const validateTerminalState = (ledger: LedgerData, label: string) => {
+    const envContent = existsSync(resolvedEnvFilePath) ? readFileSync(resolvedEnvFilePath, "utf8") : null;
+    const rolloutContent = existsSync(resolvedRolloutConfigPath) ? readFileSync(resolvedRolloutConfigPath, "utf8") : null;
+    const staleBackup = resolvedOldPath + ".stale-backup";
+
+    if (ledger.terminalOutcome === "relocation-success") {
+      const successState =
+        existsSync(resolvedNewPath) &&
+        !existsSync(resolvedOldPath) &&
+        existsSync(staleBackup) &&
+        envContent !== null && envContent.includes(`HEALTH_DB_PATH=${newPath}`) &&
+        rolloutContent !== null && rolloutContent.includes(`database=${newPath}`);
+      if (!successState) {
+        throw new Error(`Relocation failed closed: ${label} declares relocation-success but live database/configuration state does not match. Manual recovery required.`);
+      }
+      return;
+    }
+
+    if (ledger.terminalOutcome === "original-state-restored") {
+      const restoredState =
+        existsSync(resolvedOldPath) &&
+        !existsSync(resolvedNewPath) &&
+        !existsSync(staleBackup) &&
+        envContent === ledger.originalEnvFileContent &&
+        rolloutContent === ledger.originalRolloutConfigContent;
+      if (!restoredState) {
+        throw new Error(`Relocation failed closed: ${label} declares original-state-restored but live database/configuration state does not match. Manual recovery required.`);
+      }
+      return;
+    }
+
+    throw new Error(`Relocation failed closed: ${label} has no recognised terminalOutcome. Manual recovery required.`);
+  };
+
+  const cleanupEvidence = (paths: string[], label: string) => {
+    try {
+      for (const path of paths) rmSync(path, { force: true });
+      const dirFd = openSync(configDir, "r");
+      try { fsyncSync(dirFd); } finally { closeSync(dirFd); }
+    } catch (err: any) {
+      console.error(`[relocate-health-db] Deferred ${label} cleanup: ${err.message}`);
+    }
+  };
+
+  try {
+  if (existsSync(completionFile)) {
+    const completedLedger = readTerminalLedger(completionFile, "completion record");
+    if (completedLedger.terminalOutcome !== "relocation-success") {
+      throw new Error("Relocation failed closed: completion record is not marked relocation-success. Manual recovery required.");
+    }
+    validateTerminalState(completedLedger, "completion record");
+    const residualFiles = existsSync(configDir)
+      ? readdirSync(configDir)
+          .filter((file) =>
+            file === basename(sentinelFile) ||
+            file === basename(ledgerFile) ||
+            file.startsWith(basename(sentinelFile) + ".removing-") ||
+            file.startsWith(basename(ledgerFile) + ".removing-")
+          )
+          .map((file) => join(configDir, file))
+      : [];
+    cleanupEvidence(residualFiles, "completed relocation evidence");
+    await killLockProcess(lockProcess);
+    console.log("[relocate-health-db] Relocation was already completed successfully; no new migration was started.");
+    return;
+  }
+
+  const files = existsSync(configDir) ? readdirSync(configDir) : [];
+  const sentinelPrefix = basename(sentinelFile) + ".removing-";
+  const ledgerPrefix = basename(ledgerFile) + ".removing-";
+  const sentinelRemovingFiles = files.filter((file) => file.startsWith(sentinelPrefix));
+  const ledgerRemovingFiles = files.filter((file) => file.startsWith(ledgerPrefix));
+  const suffixes = new Set<string>([
+    ...sentinelRemovingFiles.map((file) => file.slice(sentinelPrefix.length)),
+    ...ledgerRemovingFiles.map((file) => file.slice(ledgerPrefix.length)),
+  ]);
+
+  if (suffixes.size > 1) {
+    throw new Error("Relocation failed closed: multiple .removing-* evidence pairs were found. Manual recovery required.");
+  }
+
+  if (suffixes.size === 1) {
+    const suffix = [...suffixes][0];
+    const pair: RemovingPair = {
+      sentinel: join(configDir, sentinelPrefix + suffix),
+      ledger: join(configDir, ledgerPrefix + suffix),
+    };
+    if (!existsSync(pair.sentinel) || !existsSync(pair.ledger)) {
+      throw new Error("Relocation failed closed: found incomplete or orphaned .removing-* evidence files. Manual recovery required.");
+    }
+    validateEvidenceFile(pair.sentinel, ".removing-* sentinel");
+    const terminalLedger = readTerminalLedger(pair.ledger, ".removing-* evidence");
+    validateTerminalState(terminalLedger, ".removing-* evidence");
+
+    if (terminalLedger.terminalOutcome === "relocation-success") {
+      safeWriteFile(completionFile, JSON.stringify(terminalLedger, null, 2), 0o600);
+      cleanupEvidence([pair.sentinel, pair.ledger], "successful relocation tombstone");
+      await killLockProcess(lockProcess);
+      console.log("[relocate-health-db] Recovered a completed relocation from durable tombstone evidence; no new migration was started.");
+      return;
+    }
+
+    pendingRestoredEvidence = pair;
+    console.log("[relocate-health-db] Validated restored-state tombstone evidence; a fresh migration may proceed.");
+  }
+
+  } catch (err) {
+    await killLockProcess(lockProcess);
+    throw err;
   }
 
   // Check if sentinel exists, handle recovery after authorization validation
   const hasSentinel = existsSync(sentinelFile);
+  if (hasSentinel && pendingRestoredEvidence) {
+    cleanupEvidence([pendingRestoredEvidence.sentinel, pendingRestoredEvidence.ledger], "restored-state tombstone protected by normal evidence");
+    pendingRestoredEvidence = null;
+  }
   if (hasSentinel) {
     if (options.recover) {
       console.log(`[relocate-health-db] Recovery mode requested. Reconciling previous relocation attempt...`);
@@ -855,6 +928,10 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
     safeWriteFile(ledgerFile, JSON.stringify(ledgerData, null, 2), 0o600);
   };
   writeLedger();
+  if (pendingRestoredEvidence) {
+    cleanupEvidence([pendingRestoredEvidence.sentinel, pendingRestoredEvidence.ledger], "restored-state tombstone protected by new ledger");
+    pendingRestoredEvidence = null;
+  }
 
   const rollback = async () => {
     console.error("[relocate-health-db] Relocation failed. Initiating rollback...");
@@ -1020,6 +1097,12 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
 
     if (rollbackSuccess) {
       checkLock();
+
+      const rollbackTerminalLedger: LedgerData = existsSync(ledgerFile)
+        ? JSON.parse(readFileSync(ledgerFile, "utf8"))
+        : ledgerData;
+      rollbackTerminalLedger.terminalOutcome = "original-state-restored";
+      safeWriteFile(ledgerFile, JSON.stringify(rollbackTerminalLedger, null, 2), 0o600);
 
       // Durable evidence deletion via rename-then-fsync-then-unlink:
       // 1. Rename both files to .removing names — originals immediately absent from the namespace.
@@ -1299,20 +1382,26 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
       writeLedger();
     }
 
-    // Relocation succeeded completely: durable evidence removal via rename-then-fsync-then-unlink.
+    // Relocation succeeded completely. Persist a permanent, identity-bound completion
+    // record before attempting best-effort removal of transient ledger/sentinel evidence.
     checkLock();
-    const suffix = randomBytes(4).toString("hex");
-    const successLedgerRemoving = ledgerFile + `.removing-${suffix}`;
-    const successSentinelRemoving = sentinelFile + `.removing-${suffix}`;
-    renameSync(ledgerFile, successLedgerRemoving);
-    renameSync(sentinelFile, successSentinelRemoving);
-    const successEvidenceDir = dirname(ledgerFile);
-    const successDirFd = openSync(successEvidenceDir, "r");
-    try { fsyncSync(successDirFd); } finally { closeSync(successDirFd); }
-    try { rmSync(successLedgerRemoving, { force: true }); } catch { /* best-effort */ }
-    try { rmSync(successSentinelRemoving, { force: true }); } catch { /* best-effort */ }
-    const successDirFd2 = openSync(successEvidenceDir, "r");
-    try { fsyncSync(successDirFd2); } catch { /* best-effort */ } finally { try { closeSync(successDirFd2); } catch { /* ignore */ } }
+    ledgerData.terminalOutcome = "relocation-success";
+    writeLedger();
+    safeWriteFile(completionFile, JSON.stringify(ledgerData, null, 2), 0o600);
+
+    try {
+      const suffix = randomBytes(4).toString("hex");
+      const successLedgerRemoving = ledgerFile + `.removing-${suffix}`;
+      const successSentinelRemoving = sentinelFile + `.removing-${suffix}`;
+      renameSync(ledgerFile, successLedgerRemoving);
+      renameSync(sentinelFile, successSentinelRemoving);
+      const successDirFd = openSync(configDir, "r");
+      try { fsyncSync(successDirFd); } finally { closeSync(successDirFd); }
+      cleanupEvidence([successLedgerRemoving, successSentinelRemoving], "successful relocation transient evidence");
+    } catch (err: any) {
+      console.error(`[relocate-health-db] Completion is durable; transient evidence cleanup will be retried: ${err.message}`);
+    }
+
     await killLockProcess(lockProcess);
     console.log("[relocate-health-db] Health database relocation completed successfully!");
   } catch (error) {

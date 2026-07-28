@@ -74,6 +74,7 @@ describe("Health check database relocation", () => {
 
   beforeEach(() => {
     mockFsyncFail = false;
+    triggerFsyncFailOnRename = false;
     testRoot = mkdtempSync(join(tmpdir(), "health-db-relocate-test-"));
     resolvedOldPath = join(testRoot, oldPath);
     resolvedNewPath = join(testRoot, newPath);
@@ -1548,6 +1549,76 @@ exit 0
         expectedInstallationId: "test-install-id-123",
       })).rejects.toThrow(/installation ID mismatch/);
     });
+  });
+
+  it("does not start a second migration after successful-cleanup fsync failure", async () => {
+    seedDb(resolvedOldPath);
+    triggerFsyncFailOnRename = true;
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+    })).resolves.toBeUndefined();
+
+    triggerFsyncFailOnRename = false;
+    mockFsyncFail = false;
+
+    const completionFile = join(testRoot, "etc/agent-bridge/.health-relocation-complete.json");
+    expect(existsSync(completionFile)).toBe(true);
+    expect(existsSync(resolvedNewPath)).toBe(true);
+    expect(existsSync(resolvedOldPath)).toBe(false);
+    expect(existsSync(resolvedOldPath + ".stale-backup")).toBe(true);
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+    })).resolves.toBeUndefined();
+
+    expect(existsSync(resolvedNewPath)).toBe(true);
+    expect(existsSync(resolvedOldPath)).toBe(false);
+    expect(existsSync(resolvedOldPath + ".stale-backup")).toBe(true);
+  });
+
+  it("fails closed when a success completion record contradicts live state", async () => {
+    seedDb(resolvedOldPath);
+    const completionFile = join(testRoot, "etc/agent-bridge/.health-relocation-complete.json");
+    writeFileSync(completionFile, JSON.stringify({
+      timestamp: new Date().toISOString(),
+      expectedCommit: "",
+      expectedInstallationId: "test-install-id-123",
+      originalEnvFileContent: readFileSync(resolvedEnvFilePath, "utf8"),
+      originalRolloutConfigContent: readFileSync(resolvedRolloutConfigPath, "utf8"),
+      serviceWasRunning: false,
+      serviceName,
+      resolvedOldPath,
+      resolvedNewPath,
+      resolvedEnvFilePath,
+      resolvedRolloutConfigPath,
+      tempBackupPath: join(testRoot, "runtime/health/.relocate-backup-test"),
+      terminalOutcome: "relocation-success",
+      steps: [],
+    }, null, 2), { mode: 0o600 });
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+    })).rejects.toThrow(/declares relocation-success but live database\/configuration state does not match/);
+
+    expect(existsSync(resolvedOldPath)).toBe(true);
+    expect(existsSync(resolvedNewPath)).toBe(false);
+    expect(existsSync(join(testRoot, "etc/agent-bridge/.health-relocation-in-progress"))).toBe(false);
   });
 });
 

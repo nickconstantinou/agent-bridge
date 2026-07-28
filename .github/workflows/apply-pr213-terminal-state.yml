@@ -27,7 +27,9 @@ jobs:
           cache: npm
 
       - name: Apply terminal-state correction
-        run: node .github/agent-fixes/apply-pr213-terminal-state.mjs
+        run: |
+          node .github/agent-fixes/apply-pr213-terminal-state.mjs
+          node .github/agent-fixes/fix-pr213-lock-release.mjs
 
       - name: Install locked dependencies
         run: npm ci
@@ -55,8 +57,9 @@ jobs:
       - name: Commit correction
         run: |
           rm .github/agent-fixes/apply-pr213-terminal-state.mjs
+          rm .github/agent-fixes/fix-pr213-lock-release.mjs
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add scripts/relocate-health-db.ts test/healthDbRelocation.test.ts .github/agent-fixes/apply-pr213-terminal-state.mjs
+          git add scripts/relocate-health-db.ts test/healthDbRelocation.test.ts .github/agent-fixes/apply-pr213-terminal-state.mjs .github/agent-fixes/fix-pr213-lock-release.mjs
           git commit -m "fix: make health relocation terminal state explicit"
           git push origin HEAD:health-db-relocation

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, openSync, closeSync, symlinkSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, openSync, closeSync, symlinkSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { spawn } from "node:child_process";
@@ -11,6 +11,7 @@ import { CURRENT_SCHEMA_VERSION } from "../src/db/schema.js";
 
 let lastLockProcess: any = null;
 let mockFsyncFail = false;
+let triggerFsyncFailOnRename = false;
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -29,6 +30,12 @@ vi.mock("node:fs", async (importOriginal) => {
         }
       }
       return actual.fsyncSync(fd);
+    },
+    renameSync: (oldPath: string, newPath: string) => {
+      if (typeof newPath === "string" && newPath.includes(".removing-") && triggerFsyncFailOnRename) {
+        mockFsyncFail = true;
+      }
+      return actual.renameSync(oldPath, newPath);
     }
   };
 });
@@ -780,13 +787,31 @@ exit 0
   it("fails when lock process terminates unexpectedly during execution", async () => {
     seedDb(resolvedOldPath);
 
-    lastLockProcess = null;
-    // Start migration, but kill the lock process after 150ms
-    setTimeout(() => {
-      if (lastLockProcess) {
-        lastLockProcess.kill();
-      }
-    }, 150);
+    const lockPidFile = `/tmp/agent-bridge-test-flock-pid-${process.pid}`;
+    writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
+if [ "$1" = "is-active" ]; then
+  # Kill the flock process holding the lock
+  if [ -f "${lockPidFile}" ]; then
+    LOCK_PID=$(cat "${lockPidFile}" 2>/dev/null)
+    if [ -n "$LOCK_PID" ]; then kill -9 "$LOCK_PID" 2>/dev/null || true; fi
+  fi
+  echo "inactive"
+  exit 3
+fi
+if [ "$1" = "show" ]; then
+  if echo "$*" | grep -q "ActiveState"; then
+    echo "active"
+  fi
+  if echo "$*" | grep -q "SubState"; then
+    echo "running"
+  fi
+  if echo "$*" | grep -q "NRestarts"; then
+    echo "0"
+  fi
+  exit 0
+fi
+exit 0
+`, { mode: 0o755 });
 
     await expect(relocateHealthDb({
       oldPath,
@@ -1177,6 +1202,7 @@ exit 0
     expect(existsSync(ledgerFile)).toBe(true);
   });
 
+
   it("fails recovery and retains records if directory fsync fails after evidence deletion", async () => {
     seedDb(resolvedOldPath);
 
@@ -1217,7 +1243,148 @@ exit 0
       recover: true
     })).rejects.toThrow(/Disk full or fsync failed/);
 
-    // Turn off so it doesn't break cleanup/subsequent tests
     mockFsyncFail = false;
+
+    // After fsync failure: evidence must still be recoverable on disk.
+    // The rename-then-fsync approach atomically moves ledger/sentinel to .removing-* names before
+    // the fsync, so if fsync throws the originals may be renamed but evidence content is still on disk.
+    const evidenceDir = join(testRoot, "etc/agent-bridge");
+    const evidenceFiles = readdirSync(evidenceDir);
+    const hasLedger = evidenceFiles.some(f => f.includes(".health-relocation-ledger"));
+    const hasSentinel = evidenceFiles.some(f => f.includes(".health-relocation-in-progress"));
+    expect(hasLedger).toBe(true);
+    expect(hasSentinel).toBe(true);
+  });
+
+  it("rejects non-negative integer NRestarts values: empty, negative, partial-numeric, non-numeric", async () => {
+    // Seed a valid DB and ledger so recovery can reach the restart gate
+    seedDb(resolvedOldPath);
+    const originalEnvContent = readFileSync(resolvedEnvFilePath, "utf8");
+    const originalRolloutContent = readFileSync(resolvedRolloutConfigPath, "utf8");
+    const ledgerFile = join(testRoot, "etc/agent-bridge/.health-relocation-ledger.json");
+    const sentinelFile = join(testRoot, "etc/agent-bridge/.health-relocation-in-progress");
+
+    const invalidNRestartsValues = ["", "-1", "2garbage", "abc", "1.5"];
+
+    for (const badVal of invalidNRestartsValues) {
+      writeFileSync(sentinelFile, "123456\n", { mode: 0o600 });
+      writeFileSync(ledgerFile, JSON.stringify({
+        timestamp: new Date().toISOString(),
+        expectedCommit: "",
+        expectedInstallationId: "test-install-id-123",
+        originalEnvFileContent: originalEnvContent,
+        originalRolloutConfigContent: originalRolloutContent,
+        serviceWasRunning: true,
+        serviceName,
+        resolvedOldPath,
+        resolvedNewPath,
+        resolvedEnvFilePath,
+        resolvedRolloutConfigPath,
+        tempBackupPath: join(testRoot, "runtime/health/.relocate-backup-test"),
+        steps: [
+          { name: "service-stopped", status: "completed" }
+        ]
+      }, null, 2), { mode: 0o600 });
+
+      // Mock systemctl: return badVal for NRestarts, return valid healthy state otherwise
+      writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
+if [ "$1" = "is-active" ]; then
+  echo "inactive"
+  exit 3
+fi
+if [ "$1" = "show" ]; then
+  if echo "$*" | grep -q "ActiveState"; then
+    echo "active"
+  fi
+  if echo "$*" | grep -q "SubState"; then
+    echo "running"
+  fi
+  if echo "$*" | grep -q "NRestarts"; then
+    echo "${badVal}"
+  fi
+  exit 0
+fi
+if [ "$1" = "start" ]; then
+  exit 0
+fi
+exit 0
+`, { mode: 0o755 });
+
+      await expect(relocateHealthDb({
+        oldPath,
+        newPath,
+        envFilePath,
+        rolloutConfigPath,
+        serviceName,
+        expectedInstallationId: "test-install-id-123",
+        recover: true
+      })).rejects.toThrow(/NRestarts.*invalid value/);
+    }
+  });
+
+  it("fails inline rollback and retains records if directory fsync fails during cleanup", async () => {
+    // Mock systemctl so rollback restarts succeed
+    writeFileSync(join(testRoot, "bin/systemctl"), `#!/bin/sh
+if [ "$1" = "is-active" ]; then
+  if [ -f "${testRoot}/.service-started" ]; then
+    echo "active"
+    exit 0
+  elif [ -f "${testRoot}/.service-stopped" ]; then
+    echo "inactive"
+    exit 3
+  else
+    echo "active"
+    exit 0
+  fi
+elif [ "$1" = "stop" ]; then
+  touch "${testRoot}/.service-stopped"
+  rm -f "${testRoot}/.service-started"
+  exit 0
+elif [ "$1" = "start" ]; then
+  touch "${testRoot}/.service-started"
+  exit 0
+elif [ "$1" = "show" ]; then
+  if echo "$*" | grep -q "NRestarts"; then
+    if [ -f "${testRoot}/.rollback-active" ]; then
+      echo "0"
+    elif [ -f "${testRoot}/.service-started" ]; then
+      echo "5"
+    else
+      echo "0"
+    fi
+  elif echo "$*" | grep -q "ActiveState"; then
+    echo "active"
+  elif echo "$*" | grep -q "SubState"; then
+    echo "running"
+  fi
+  exit 0
+fi
+exit 0
+`, { mode: 0o755 });
+
+    seedDb(resolvedOldPath);
+
+    triggerFsyncFailOnRename = true;
+
+    await expect(relocateHealthDb({
+      oldPath,
+      newPath,
+      envFilePath,
+      rolloutConfigPath,
+      serviceName,
+      expectedInstallationId: "test-install-id-123",
+    })).rejects.toThrow(/Disk full or fsync failed/);
+
+    triggerFsyncFailOnRename = false;
+    mockFsyncFail = false;
+
+    // After fsync failure: evidence must still be recoverable on disk.
+    const evidenceDir = join(testRoot, "etc/agent-bridge");
+    const evidenceFiles = readdirSync(evidenceDir);
+    const hasLedger = evidenceFiles.some(f => f.includes(".health-relocation-ledger"));
+    const hasSentinel = evidenceFiles.some(f => f.includes(".health-relocation-in-progress"));
+    expect(hasLedger).toBe(true);
+    expect(hasSentinel).toBe(true);
   });
 });
+

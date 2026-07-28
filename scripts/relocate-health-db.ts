@@ -83,15 +83,19 @@ async function restartServiceWithAcceptanceGate(
   hasMutations: boolean
 ): Promise<void> {
   console.log(`[relocate-health-db] Restarting service ${serviceName}...`);
+
+  // Strict non-negative integer parser — rejects empty, negative, partial, non-numeric values
+  const parseNRestarts = (raw: string, site: string): number => {
+    if (!/^(0|[1-9][0-9]*)$/.test(raw)) {
+      throw new Error(`NRestarts ${site} returned invalid value (expected non-negative integer): '${raw}'`);
+    }
+    return parseInt(raw, 10);
+  };
   
   let baselineRestarts: number;
   try {
     const restartsVal = execFileSync(systemctl, ["show", serviceName, "--property=NRestarts", "--value"], { encoding: "utf8" }).trim();
-    const parsed = parseInt(restartsVal, 10);
-    if (isNaN(parsed)) {
-      throw new Error(`NRestarts query returned non-numeric value: '${restartsVal}'`);
-    }
-    baselineRestarts = parsed;
+    baselineRestarts = parseNRestarts(restartsVal, "baseline");
   } catch (err: any) {
     throw new Error(`Service restart acceptance check failed: could not read baseline NRestarts: ${err.message}`);
   }
@@ -110,10 +114,7 @@ async function restartServiceWithAcceptanceGate(
         const activeState = execFileSync(systemctl, ["show", serviceName, "--property=ActiveState", "--value"], { encoding: "utf8" }).trim();
         const subState = execFileSync(systemctl, ["show", serviceName, "--property=SubState", "--value"], { encoding: "utf8" }).trim();
         const restartsRaw = execFileSync(systemctl, ["show", serviceName, "--property=NRestarts", "--value"], { encoding: "utf8" }).trim();
-        const currentRestarts = parseInt(restartsRaw, 10);
-        if (isNaN(currentRestarts)) {
-          throw new Error(`NRestarts query returned non-numeric value: '${restartsRaw}'`);
-        }
+        const currentRestarts = parseNRestarts(restartsRaw, "post-start poll");
 
         if (currentRestarts > baselineRestarts) {
           throw new Error(`Service crashed and restarted (restarts increased)`);
@@ -409,24 +410,54 @@ async function performRecovery(
   if (rollbackSuccess) {
     checkLock();
 
-    // Durable evidence deletion: fsync directory FIRST (so the removal is durable), then unlink
+    // Durable evidence deletion via rename-then-fsync-then-unlink:
+    // 1. Rename both files to .removing names — originals immediately gone from the filesystem namespace.
+    //    If this process crashes now, next startup finds no sentinel → won't re-enter recovery.
+    const ledgerRemoving = ledgerFile + `.removing-${randomBytes(4).toString("hex")}`;
+    const sentinelRemoving = sentinelFile + `.removing-${randomBytes(4).toString("hex")}`;
+    renameSync(ledgerFile, ledgerRemoving);
+    renameSync(sentinelFile, sentinelRemoving);
+
+    // 2. fsync directory — commits that the original names are durably absent.
     const evidenceDir = dirname(ledgerFile);
-    const dirFdPre = openSync(evidenceDir, "r");
-    fsyncSync(dirFdPre);
-    closeSync(dirFdPre);
+    const dirFdCommit = openSync(evidenceDir, "r");
+    try {
+      fsyncSync(dirFdCommit);
+    } finally {
+      closeSync(dirFdCommit);
+    }
 
-    rmSync(ledgerFile, { force: true });
-    rmSync(sentinelFile, { force: true });
+    // 3. Unlink the renamed (now unreachable) files. Failures here are best-effort.
+    try { rmSync(ledgerRemoving, { force: true }); } catch { /* best-effort */ }
+    try { rmSync(sentinelRemoving, { force: true }); } catch { /* best-effort */ }
 
-    // Second fsync after deletions to commit the directory entries
-    const dirFd = openSync(evidenceDir, "r");
-    fsyncSync(dirFd);
-    closeSync(dirFd);
+    // 4. fsync directory again to commit the final unlinks.
+    const dirFdFinal = openSync(evidenceDir, "r");
+    try {
+      fsyncSync(dirFdFinal);
+    } catch { /* best-effort — originals are already renamed */ } finally {
+      try { closeSync(dirFdFinal); } catch { /* ignore */ }
+    }
 
     checkLock();
     console.log(`[relocate-health-db] Recovery completed successfully and system state restored!`);
   } else {
     throw new Error(`Recovery failed to restore complete original state. Manual inspection required. Reason: ${recoveryError?.message || 'unknown'}`);
+  }
+}
+
+async function killLockProcess(lockProcess: any): Promise<void> {
+  if (!lockProcess) return;
+  try {
+    lockProcess.kill();
+  } catch {
+    // ignore
+  }
+  if (lockProcess.exitCode === null && lockProcess.signalCode === null) {
+    await new Promise<void>((resolve) => {
+      lockProcess.once("exit", () => resolve());
+      setTimeout(resolve, 100);
+    });
   }
 }
 
@@ -634,7 +665,7 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
           checkLock
         );
       } finally {
-        if (lockProcess) lockProcess.kill();
+        await killLockProcess(lockProcess);
       }
       return;
     } else {
@@ -876,13 +907,34 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
 
     if (rollbackSuccess) {
       checkLock();
-      rmSync(ledgerFile, { force: true });
-      rmSync(sentinelFile, { force: true });
 
-      // Durable recovery-record deletion: fsync containing directory
-      const dirFd = openSync(dirname(ledgerFile), "r");
-      fsyncSync(dirFd);
-      closeSync(dirFd);
+      // Durable evidence deletion via rename-then-fsync-then-unlink:
+      // 1. Rename both files to .removing names — originals immediately absent from the namespace.
+      const rollbackLedgerRemoving = ledgerFile + `.removing-${randomBytes(4).toString("hex")}`;
+      const rollbackSentinelRemoving = sentinelFile + `.removing-${randomBytes(4).toString("hex")}`;
+      renameSync(ledgerFile, rollbackLedgerRemoving);
+      renameSync(sentinelFile, rollbackSentinelRemoving);
+
+      // 2. fsync directory — durably commits that the original names are gone.
+      const rollbackEvidenceDir = dirname(ledgerFile);
+      const rollbackDirFdCommit = openSync(rollbackEvidenceDir, "r");
+      try {
+        fsyncSync(rollbackDirFdCommit);
+      } finally {
+        closeSync(rollbackDirFdCommit);
+      }
+
+      // 3. Unlink renamed files (best-effort).
+      try { rmSync(rollbackLedgerRemoving, { force: true }); } catch { /* best-effort */ }
+      try { rmSync(rollbackSentinelRemoving, { force: true }); } catch { /* best-effort */ }
+
+      // 4. Final fsync (best-effort).
+      const rollbackDirFdFinal = openSync(rollbackEvidenceDir, "r");
+      try {
+        fsyncSync(rollbackDirFdFinal);
+      } catch { /* best-effort */ } finally {
+        try { closeSync(rollbackDirFdFinal); } catch { /* ignore */ }
+      }
 
       checkLock();
     } else {
@@ -1133,29 +1185,26 @@ export async function relocateHealthDb(options: RelocateOptions): Promise<void> 
       writeLedger();
     }
 
-    // Relocation succeeded completely: remove sentinel and ledger files
+    // Relocation succeeded completely: durable evidence removal via rename-then-fsync-then-unlink.
     checkLock();
-    rmSync(ledgerFile, { force: true });
-    rmSync(sentinelFile, { force: true });
-    if (lockProcess) {
-      try {
-        lockProcess.kill();
-      } catch {
-        // ignore
-      }
-    }
+    const successLedgerRemoving = ledgerFile + `.removing-${randomBytes(4).toString("hex")}`;
+    const successSentinelRemoving = sentinelFile + `.removing-${randomBytes(4).toString("hex")}`;
+    renameSync(ledgerFile, successLedgerRemoving);
+    renameSync(sentinelFile, successSentinelRemoving);
+    const successEvidenceDir = dirname(ledgerFile);
+    const successDirFd = openSync(successEvidenceDir, "r");
+    try { fsyncSync(successDirFd); } finally { closeSync(successDirFd); }
+    try { rmSync(successLedgerRemoving, { force: true }); } catch { /* best-effort */ }
+    try { rmSync(successSentinelRemoving, { force: true }); } catch { /* best-effort */ }
+    const successDirFd2 = openSync(successEvidenceDir, "r");
+    try { fsyncSync(successDirFd2); } catch { /* best-effort */ } finally { try { closeSync(successDirFd2); } catch { /* ignore */ } }
+    await killLockProcess(lockProcess);
     console.log("[relocate-health-db] Health database relocation completed successfully!");
   } catch (error) {
     try {
       await rollback();
     } finally {
-      if (lockProcess) {
-        try {
-          lockProcess.kill();
-        } catch {
-          // ignore
-        }
-      }
+      await killLockProcess(lockProcess);
     }
     throw error;
   }

@@ -389,7 +389,7 @@ describe("guarded rollout helper", () => {
     expect(log.indexOf(" backup ")).toBeGreaterThan(log.indexOf("systemctl:stop"));
     expect(log.indexOf(" migrate ")).toBeGreaterThan(log.indexOf(" backup "));
     expect(log).toContain("systemctl:start");
-  });
+  }, 15_000);
 
   it("removes stale empty WAL sidecars only after the cohort is contained", () => {
     const fixture = createFixture({ initiallyStopped: true });

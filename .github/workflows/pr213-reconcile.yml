@@ -1,0 +1,476 @@
+name: Reconcile PR 213
+
+on:
+  push:
+    branches: [agent/pr213-reconcile-9c4fa220]
+
+permissions:
+  contents: write
+
+jobs:
+  reconcile:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/pr213-reconcile-9c4fa220
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+
+      - name: Reconcile accepted PR changes onto current main
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          old=9c4fa2206249a541dba827dc96313629d9db62a8
+          for path in \
+            .env.health.example \
+            docs/health-bolt-architecture.md \
+            docs/roadmap/issue-135-phase4c-migration-ownership.md \
+            scripts/relocate-health-db.ts \
+            src/health/suggest.ts \
+            src/index-health.ts \
+            test/cliSupervisorMatrix.test.ts \
+            test/healthDbRelocation.test.ts \
+            test/providerInvocationFixtures.test.ts
+          do
+            git show "$old:$path" > "$path"
+          done
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          old_path = "/home/content-crawler/agent-bridge/.data-health/health.sqlite"
+          new_path = "/home/content-crawler/runtime/agent-bridge/health/health.sqlite"
+
+          rollout = Path("systemd/agent-bridge-rollout.conf.example")
+          text = rollout.read_text()
+          if old_path not in text:
+              raise SystemExit("current-main rollout inventory no longer contains the legacy health path")
+          rollout.write_text(text.replace(f"database={old_path}", f"database={new_path}", 1))
+
+          workflow = Path(".github/workflows/release-artifact.yml")
+          text = workflow.read_text()
+          needle = "scripts/release-stage.py scripts/rollout-restore.py"
+          replacement = needle + " scripts/relocate-health-db.ts"
+          if needle not in text:
+              raise SystemExit("release artifact script list changed unexpectedly")
+          workflow.write_text(text.replace(needle, replacement, 1))
+
+          release_test = Path("test/releaseArtifact.test.ts")
+          text = release_test.read_text()
+          needle = "expect(workflow).toContain('scripts/upgrade.sh');"
+          replacement = needle + "\n    expect(workflow).toContain('scripts/relocate-health-db.ts');"
+          if needle not in text:
+              raise SystemExit("release artifact test anchor missing")
+          text = text.replace(needle, replacement, 1)
+          needle = 'for (const entrypoint of [...REQUIRED_ENTRYPOINTS, "scripts/rollout-db.ts", "scripts/rollout-db-impl.ts"]) {'
+          replacement = 'for (const entrypoint of [...REQUIRED_ENTRYPOINTS, "scripts/rollout-db.ts", "scripts/rollout-db-impl.ts", "scripts/relocate-health-db.ts"]) {'
+          if needle not in text:
+              raise SystemExit("release artifact entrypoint anchor missing")
+          release_test.write_text(text.replace(needle, replacement, 1))
+
+          doc = Path("docs/RELEASE-ARTIFACT-STAGING.md")
+          text = doc.read_text()
+          section = '''\n\n## Health database relocation helper\n\nThe immutable release contains `scripts/relocate-health-db.ts`; it is hashed by the release manifest and must be invoked from the exact staged release. The canonical commit-bound entrypoint is:\n\n```bash\n"$RELEASE_DIR/node_modules/.bin/tsx" \\\n  "$RELEASE_DIR/scripts/relocate-health-db.ts" \\\n  --expected-commit "$EXPECTED_COMMIT" \\\n  --expected-installation-id "$AGENT_BRIDGE_INSTALLATION_ID" \\\n  --authorization-file "$HEALTH_AUTHORIZATION_FILE" \\\n  --authorization-validator-sha256 "$HEALTH_AUTHORIZATION_VALIDATOR_SHA256"\n```\n\nThe release directory, manifest entry and SHA-256 must be independently verified before invocation. This helper is not an implicit deployment step: merge, staging and production execution remain separately authorised actions.\n'''
+          if "## Health database relocation helper" not in text:
+              doc.write_text(text.rstrip() + section)
+
+          source = Path("scripts/relocate-health-db.ts")
+          text = source.read_text()
+          text = text.replace('import { dirname, join, basename } from "node:path";\n', 'import { dirname, join, basename } from "node:path";\nimport { fileURLToPath } from "node:url";\n', 1)
+
+          anchor = '  const expectedInstallationId = options.expectedInstallationId || process.env.AGENT_BRIDGE_INSTALLATION_ID || "";\n'
+          helpers = r'''
+  const parseHealthEnvPath = (content: string, label: string): string => {
+    const values: string[] = [];
+    for (const rawLine of content.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) continue;
+      const match = /^HEALTH_DB_PATH=([^\s#]+)$/.exec(line);
+      if (match) {
+        values.push(match[1]);
+        continue;
+      }
+      if (/^HEALTH_DB_PATH\b/.test(line)) {
+        throw new Error(`${label} contains a malformed HEALTH_DB_PATH assignment`);
+      }
+    }
+    if (values.length !== 1) {
+      throw new Error(`${label} must contain exactly one active HEALTH_DB_PATH assignment; found ${values.length}`);
+    }
+    return values[0];
+  };
+
+  const validateRolloutInventory = (content: string, label: string) => {
+    let oldCount = 0;
+    let newCount = 0;
+    for (const rawLine of content.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) continue;
+      if (/^database\b/.test(line) && !/^database=[^\s#]+$/.test(line)) {
+        throw new Error(`${label} contains a malformed database inventory entry`);
+      }
+      if (line === `database=${oldPath}`) oldCount++;
+      if (line === `database=${newPath}`) newCount++;
+    }
+    if (newCount !== 1 || oldCount !== 0) {
+      throw new Error(`${label} must contain the new health database exactly once and the old path zero times (new=${newCount}, old=${oldCount})`);
+    }
+  };
+
+  const replaceHealthEnvPath = (content: string): string => {
+    let count = 0;
+    const lines = content.split(/\r?\n/).map((rawLine) => {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) return rawLine;
+      if (/^HEALTH_DB_PATH=/.test(line)) {
+        if (!/^HEALTH_DB_PATH=[^\s#]+$/.test(line)) {
+          throw new Error("Environment file contains a malformed HEALTH_DB_PATH assignment");
+        }
+        count++;
+        return `HEALTH_DB_PATH=${newPath}`;
+      }
+      if (/^HEALTH_DB_PATH\b/.test(line)) {
+        throw new Error("Environment file contains a malformed HEALTH_DB_PATH assignment");
+      }
+      return rawLine;
+    });
+    if (count > 1) throw new Error(`Environment file contains duplicate HEALTH_DB_PATH assignments: ${count}`);
+    if (count === 0) lines.push(`HEALTH_DB_PATH=${newPath}`);
+    const updated = lines.join("\n");
+    if (parseHealthEnvPath(updated, "updated environment file") !== newPath) {
+      throw new Error("Updated environment file did not resolve to the new health database path");
+    }
+    return updated;
+  };
+
+  const replaceRolloutHealthPath = (content: string): string => {
+    const lines = content.split(/\r?\n/);
+    let oldCount = 0;
+    let newCount = 0;
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line || line.startsWith("#")) continue;
+      if (/^database\b/.test(line) && !/^database=[^\s#]+$/.test(line)) {
+        throw new Error("Rollout configuration contains a malformed database inventory entry");
+      }
+      if (line === `database=${oldPath}`) oldCount++;
+      if (line === `database=${newPath}`) newCount++;
+    }
+    if (oldCount === 1 && newCount === 0) {
+      const updated = lines.map((rawLine) => rawLine.trim() === `database=${oldPath}` ? `database=${newPath}` : rawLine).join("\n");
+      validateRolloutInventory(updated, "updated rollout configuration");
+      return updated;
+    }
+    if (oldCount === 0 && newCount === 1) {
+      validateRolloutInventory(content, "rollout configuration");
+      return content;
+    }
+    throw new Error(`Rollout configuration has ambiguous health database inventory (new=${newCount}, old=${oldCount})`);
+  };
+'''
+          if anchor not in text:
+              raise SystemExit("expectedInstallationId anchor missing")
+          text = text.replace(anchor, helpers + "\n" + anchor, 1)
+
+          old_success = '''      const successState =
+        existsSync(resolvedNewPath) &&
+        !existsSync(resolvedOldPath) &&
+        existsSync(staleBackup) &&
+        envContent !== null && envContent.includes(`HEALTH_DB_PATH=${newPath}`) &&
+        rolloutContent !== null && rolloutContent.includes(`database=${newPath}`);
+      if (!successState) {
+        throw new Error(`Relocation failed closed: ${label} declares relocation-success but live database/configuration state does not match. Manual recovery required.`);
+      }
+'''
+          new_success = '''      const successState =
+        existsSync(resolvedNewPath) &&
+        !existsSync(resolvedOldPath) &&
+        existsSync(staleBackup) &&
+        envContent !== null &&
+        rolloutContent !== null;
+      try {
+        if (!successState) throw new Error("database paths do not match the completed relocation");
+        if (parseHealthEnvPath(envContent!, `${label} environment`) !== newPath) {
+          throw new Error("effective HEALTH_DB_PATH is not the new path");
+        }
+        validateRolloutInventory(rolloutContent!, `${label} rollout inventory`);
+      } catch (err: any) {
+        throw new Error(`Relocation failed closed: ${label} declares relocation-success but live database/configuration state does not match: ${err.message}. Manual recovery required.`);
+      }
+'''
+          if old_success not in text:
+              raise SystemExit("terminal success validation anchor missing")
+          text = text.replace(old_success, new_success, 1)
+
+          safe_anchor = '''  // 1. Rollout Lock: spawn flock to hold lock for entire process execution
+'''
+          runtime_helpers = r'''
+  type RuntimeIdentity = { user: string | null; uid: number; gid: number; useRunuser: boolean };
+  const idBin = TEST_ROOT ? join(TEST_ROOT, "bin/id") : "/usr/bin/id";
+  const chownBin = TEST_ROOT ? join(TEST_ROOT, "bin/chown") : "/usr/bin/chown";
+  const runuserBin = TEST_ROOT ? join(TEST_ROOT, "bin/runuser") : "/usr/sbin/runuser";
+  const scriptRoot = dirname(dirname(fileURLToPath(import.meta.url)));
+
+  const parseIdentityNumber = (raw: string, label: string): number => {
+    const value = raw.trim();
+    if (!/^(0|[1-9][0-9]*)$/.test(value)) throw new Error(`${label} returned invalid numeric identity: '${value}'`);
+    return Number(value);
+  };
+
+  const resolveRuntimeIdentity = (): RuntimeIdentity => {
+    const currentUid = process.getuid?.();
+    const currentGid = process.getgid?.();
+    if (currentUid === undefined || currentGid === undefined) throw new Error("Runtime ownership verification requires POSIX uid/gid support");
+    if (!options.runtimeUser) return { user: null, uid: currentUid, gid: currentGid, useRunuser: false };
+    if (!existsSync(idBin)) throw new Error(`Runtime identity tool is unavailable at ${idBin}`);
+    const uid = parseIdentityNumber(execFileSync(idBin, ["-u", options.runtimeUser], { encoding: "utf8" }), "id -u");
+    const gid = parseIdentityNumber(execFileSync(idBin, ["-g", options.runtimeUser], { encoding: "utf8" }), "id -g");
+    if (!TEST_ROOT && currentUid !== 0 && currentUid !== uid) {
+      throw new Error(`Relocation must run as root or as runtime user ${options.runtimeUser}`);
+    }
+    return { user: options.runtimeUser, uid, gid, useRunuser: TEST_ROOT || currentUid === 0 };
+  };
+
+  const ensureDestinationDirectory = (): RuntimeIdentity => {
+    const identity = resolveRuntimeIdentity();
+    ensureNotSymlink(newDir);
+    if (!existsSync(newDir)) {
+      mkdirSync(newDir, { recursive: true, mode: 0o755 });
+      chmodSync(newDir, 0o700);
+      if (identity.user && identity.useRunuser) {
+        if (!existsSync(chownBin)) throw new Error(`chown is unavailable at ${chownBin}`);
+        execFileSync(chownBin, [`${identity.uid}:${identity.gid}`, newDir]);
+      }
+    }
+    const stat = lstatSync(newDir);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Destination directory ${newDir} is not a real directory`);
+    const mode = stat.mode & 0o777;
+    if (mode !== 0o700) throw new Error(`Destination directory ${newDir} has mode ${mode.toString(8)} (expected 0700)`);
+    if (stat.uid !== identity.uid || stat.gid !== identity.gid) {
+      throw new Error(`Destination directory ${newDir} owner mismatch: expected ${identity.uid}:${identity.gid}, got ${stat.uid}:${stat.gid}`);
+    }
+    return identity;
+  };
+
+  const probeRuntimeDatabaseAccess = (identity: RuntimeIdentity) => {
+    const probe = `
+      import { existsSync } from "node:fs";
+      import Database from "better-sqlite3";
+      const dbPath = process.argv[1];
+      const db = new Database(dbPath, { fileMustExist: true });
+      try {
+        const journalMode = String(db.pragma("journal_mode = WAL", { simple: true })).toLowerCase();
+        if (journalMode !== "wal") throw new Error("journal_mode did not enter WAL");
+        db.exec("BEGIN IMMEDIATE; CREATE TABLE __agent_bridge_runtime_access_probe (id INTEGER);");
+        if (!existsSync(dbPath + "-wal") || !existsSync(dbPath + "-shm")) {
+          throw new Error("runtime user could not create SQLite WAL/SHM sidecars");
+        }
+        db.exec("ROLLBACK");
+      } finally {
+        db.close();
+      }
+    `;
+    const nodeArgs = [process.execPath, "--input-type=module", "-e", probe, resolvedNewPath];
+    try {
+      if (identity.useRunuser) {
+        if (!identity.user) throw new Error("runtime user is required for runuser probe");
+        if (!existsSync(runuserBin)) throw new Error(`runuser is unavailable at ${runuserBin}`);
+        execFileSync(runuserBin, ["-u", identity.user, "--", ...nodeArgs], { cwd: scriptRoot, encoding: "utf8" });
+      } else {
+        execFileSync(nodeArgs[0], nodeArgs.slice(1), { cwd: scriptRoot, encoding: "utf8" });
+      }
+    } catch (err: any) {
+      throw new Error(`Runtime-user database access probe failed: ${err.message}`);
+    }
+  };
+
+'''
+          if safe_anchor not in text:
+              raise SystemExit("rollout lock anchor missing")
+          text = text.replace(safe_anchor, runtime_helpers + safe_anchor, 1)
+
+          text = text.replace('''    // Ensure target directory exists
+    mkdirSync(newDir, { recursive: true });
+''', '''    // Ensure the target directory has exact runtime ownership and restrictive permissions.
+    const runtimeIdentity = ensureDestinationDirectory();
+''', 1)
+
+          install_anchor = '''    chmodSync(resolvedNewPath, 0o600);
+
+    if (!TEST_ROOT && process.getuid?.() === 0 && options.runtimeUser) {
+      try {
+        execFileSync("/usr/bin/chown", [options.runtimeUser, resolvedNewPath]);
+      } catch (err: any) {
+        throw new Error(`Failed to set ownership to ${options.runtimeUser}: ${err.message}`);
+      }
+    }
+
+    // Step 6: Preserve old database for rollback
+'''
+          install_replacement = '''    chmodSync(resolvedNewPath, 0o600);
+
+    if (runtimeIdentity.user && runtimeIdentity.useRunuser) {
+      try {
+        execFileSync(chownBin, [`${runtimeIdentity.uid}:${runtimeIdentity.gid}`, resolvedNewPath]);
+      } catch (err: any) {
+        throw new Error(`Failed to set database ownership to ${runtimeIdentity.uid}:${runtimeIdentity.gid}: ${err.message}`);
+      }
+    }
+    const installedStat = statSync(resolvedNewPath);
+    if ((installedStat.mode & 0o777) !== 0o600 || installedStat.uid !== runtimeIdentity.uid || installedStat.gid !== runtimeIdentity.gid) {
+      throw new Error(`Installed database ownership/mode verification failed for ${resolvedNewPath}`);
+    }
+
+    ledgerData.steps.push({ name: "runtime-access-verified", status: "pending" });
+    writeLedger();
+    probeRuntimeDatabaseAccess(runtimeIdentity);
+    ledgerData.steps[ledgerData.steps.length - 1].status = "completed";
+    writeLedger();
+
+    // Step 6: Preserve old database for rollback
+'''
+          if install_anchor not in text:
+              raise SystemExit("installed database ownership anchor missing")
+          text = text.replace(install_anchor, install_replacement, 1)
+
+          env_anchor = '''    let updatedEnv = originalEnvFileContent;
+    if (updatedEnv.includes("HEALTH_DB_PATH=")) {
+      updatedEnv = updatedEnv.replace(/^HEALTH_DB_PATH=.*$/m, `HEALTH_DB_PATH=${newPath}`);
+    } else {
+      updatedEnv += `\nHEALTH_DB_PATH=${newPath}\n`;
+    }
+'''
+          if env_anchor not in text:
+              raise SystemExit("environment update anchor missing")
+          text = text.replace(env_anchor, '''    const updatedEnv = replaceHealthEnvPath(originalEnvFileContent);
+''', 1)
+
+          rollout_anchor = '''    let updatedRollout = originalRolloutConfigContent;
+    const oldConfigDbLine = `database=${oldPath}`;
+    const newConfigDbLine = `database=${newPath}`;
+    if (updatedRollout.includes(oldConfigDbLine)) {
+      updatedRollout = updatedRollout.replace(new RegExp(oldConfigDbLine, "g"), newConfigDbLine);
+    } else if (!updatedRollout.includes(newConfigDbLine)) {
+      updatedRollout += `\n${newConfigDbLine}\n`;
+    }
+'''
+          if rollout_anchor not in text:
+              raise SystemExit("rollout update anchor missing")
+          text = text.replace(rollout_anchor, '''    const updatedRollout = replaceRolloutHealthPath(originalRolloutConfigContent);
+''', 1)
+          source.write_text(text)
+
+          tests = Path("test/healthDbRelocation.test.ts")
+          text = tests.read_text()
+          setup_anchor = '''    // Write dummy config files
+'''
+          setup = r'''    writeFileSync(join(testRoot, "bin/id"), `#!/bin/sh
+if [ "$1" = "-u" ]; then /usr/bin/id -u; exit 0; fi
+if [ "$1" = "-g" ]; then /usr/bin/id -g; exit 0; fi
+exit 1
+`, { mode: 0o755 });
+    writeFileSync(join(testRoot, "bin/chown"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    writeFileSync(join(testRoot, "bin/runuser"), `#!/bin/sh
+while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
+[ "$1" = "--" ] && shift
+exec "$@"
+`, { mode: 0o755 });
+
+'''
+          if setup_anchor not in text:
+              raise SystemExit("test setup anchor missing")
+          text = text.replace(setup_anchor, setup + setup_anchor, 1)
+
+          closing = '\n});\n'
+          if not text.endswith(closing):
+              raise SystemExit("unexpected test file ending")
+          additions = r'''
+
+  it("creates a 0700 runtime-owned destination and probes WAL/SHM access while the service is initially inactive", async () => {
+    seedDb(resolvedOldPath);
+    const runuserLog = join(testRoot, ".runuser-probe");
+    writeFileSync(join(testRoot, "bin/runuser"), `#!/bin/sh
+echo "$*" > "${runuserLog}"
+while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done
+[ "$1" = "--" ] && shift
+exec "$@"
+`, { mode: 0o755 });
+
+    await relocateHealthDb({ oldPath, newPath, envFilePath, rolloutConfigPath, serviceName, runtimeUser: "runtime-test-user", expectedInstallationId: "test-install-id-123" });
+
+    const stat = (await import("node:fs")).statSync(dirname(resolvedNewPath));
+    expect(stat.mode & 0o777).toBe(0o700);
+    expect(readFileSync(runuserLog, "utf8")).toContain("runtime-test-user");
+    expect(existsSync(resolvedNewPath)).toBe(true);
+  });
+
+  it("fails closed on an existing destination directory with incorrect mode", async () => {
+    seedDb(resolvedOldPath);
+    mkdirSync(dirname(resolvedNewPath), { recursive: true, mode: 0o755 });
+    await expect(relocateHealthDb({ oldPath, newPath, envFilePath, rolloutConfigPath, serviceName, expectedInstallationId: "test-install-id-123" }))
+      .rejects.toThrow(/Destination directory .* mode .*expected 0700/);
+    expect(existsSync(resolvedOldPath)).toBe(true);
+    expect(existsSync(resolvedNewPath)).toBe(false);
+  });
+
+  it("rolls back when the runtime-user database access probe fails", async () => {
+    seedDb(resolvedOldPath);
+    writeFileSync(join(testRoot, "bin/runuser"), "#!/bin/sh\nexit 9\n", { mode: 0o755 });
+    await expect(relocateHealthDb({ oldPath, newPath, envFilePath, rolloutConfigPath, serviceName, runtimeUser: "runtime-test-user", expectedInstallationId: "test-install-id-123" }))
+      .rejects.toThrow(/Runtime-user database access probe failed/);
+    expect(existsSync(resolvedOldPath)).toBe(true);
+    expect(existsSync(resolvedNewPath)).toBe(false);
+  });
+
+  it.each([
+    ["commented-only environment assignment", (env: string, rollout: string) => [env.replace(/^HEALTH_DB_PATH=.*$/m, `# HEALTH_DB_PATH=${newPath}`), rollout]],
+    ["duplicate environment assignment", (env: string, rollout: string) => [`${env}\nHEALTH_DB_PATH=${newPath}\n`, rollout]],
+    ["mixed old and new rollout inventory", (env: string, rollout: string) => [env, `${rollout}\ndatabase=${oldPath}\n`]],
+    ["malformed environment assignment", (env: string, rollout: string) => [env.replace(/^HEALTH_DB_PATH=.*$/m, "HEALTH_DB_PATH malformed"), rollout]],
+  ])("fails closed when a completion record sees %s", async (_label, mutate) => {
+    seedDb(resolvedOldPath);
+    await relocateHealthDb({ oldPath, newPath, envFilePath, rolloutConfigPath, serviceName, expectedInstallationId: "test-install-id-123" });
+    const [env, rollout] = mutate(readFileSync(resolvedEnvFilePath, "utf8"), readFileSync(resolvedRolloutConfigPath, "utf8"));
+    writeFileSync(resolvedEnvFilePath, env);
+    writeFileSync(resolvedRolloutConfigPath, rollout);
+    await expect(relocateHealthDb({ oldPath, newPath, envFilePath, rolloutConfigPath, serviceName, expectedInstallationId: "test-install-id-123" }))
+      .rejects.toThrow(/declares relocation-success but live database\/configuration state does not match/);
+    expect(existsSync(resolvedNewPath)).toBe(true);
+  });
+'''
+          tests.write_text(text[:-len(closing)] + additions + closing)
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Focused validation
+        run: npx vitest run test/healthDbRelocation.test.ts test/rolloutHelper.test.ts test/releaseArtifact.test.ts test/cliSupervisorMatrix.test.ts test/providerInvocationFixtures.test.ts
+
+      - name: Full test suite
+        run: npm test
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Architecture lint
+        run: bash scripts/arch-lint.sh src
+
+      - name: Diff validation
+        run: git diff --check
+
+      - name: Commit reconciled branch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .
+          git commit -m "fix: reconcile health database relocation"
+          git push origin HEAD:agent/pr213-reconcile-9c4fa220

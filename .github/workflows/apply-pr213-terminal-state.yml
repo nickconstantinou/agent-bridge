@@ -33,7 +33,18 @@ jobs:
         run: npm ci
 
       - name: Run relocation tests
-        run: npx vitest run test/healthDbRelocation.test.ts
+        shell: bash
+        run: |
+          set -o pipefail
+          npx vitest run test/healthDbRelocation.test.ts 2>&1 | tee pr213-terminal-state-tests.log
+
+      - name: Upload validation log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr213-terminal-state-tests-${{ github.sha }}
+          if-no-files-found: warn
+          path: pr213-terminal-state-tests.log
 
       - name: Typecheck
         run: npm run typecheck

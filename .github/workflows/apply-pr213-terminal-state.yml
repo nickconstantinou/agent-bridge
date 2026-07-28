@@ -1,0 +1,49 @@
+name: Apply PR 213 terminal-state correction
+
+on:
+  push:
+    branches: [health-db-relocation]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch head
+        uses: actions/checkout@v4
+        with:
+          ref: health-db-relocation
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.15.0
+          cache: npm
+
+      - name: Apply terminal-state correction
+        run: node .github/agent-fixes/apply-pr213-terminal-state.mjs
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run relocation tests
+        run: npx vitest run test/healthDbRelocation.test.ts
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Validate diff
+        run: git diff --check
+
+      - name: Commit correction
+        run: |
+          rm .github/agent-fixes/apply-pr213-terminal-state.mjs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/relocate-health-db.ts test/healthDbRelocation.test.ts .github/agent-fixes/apply-pr213-terminal-state.mjs
+          git commit -m "fix: make health relocation terminal state explicit"
+          git push origin HEAD:health-db-relocation

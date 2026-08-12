@@ -4,9 +4,10 @@ import { dropLegacyPromptOverrides } from "./dropLegacyPromptOverridesMigration.
 import { applyRoleAssignmentsMigration } from "./roleAssignmentsMigration.js";
 import { applyReconciliationAuditMigration } from "./reconciliationAuditMigration.js";
 import { applyMemoryResolutionMigration } from "./memoryResolutionMigration.js";
+import { applyEventReceiptsMigration } from "./eventReceiptsMigration.js";
 
 /** The schema version reached after the complete registered migration plan. */
-export const CURRENT_SCHEMA_VERSION = 5;
+export const CURRENT_SCHEMA_VERSION = 6;
 
 export interface Migration {
   version: number;
@@ -127,6 +128,8 @@ export function applyMigrations(
  * Version 4 adds schema-owned reconciliation evidence for Issue #193.
  * Version 5 adds memory resolution (Issue #304) and repairs the
  * project_memories_fts triggers' invalid delete-command syntax.
+ * Version 6 adds the event_receipts table (Issue #351): a durable receipt
+ * boundary for bounded authenticated health/operations ingress events.
  * Each step is transactional and user_version remains authoritative.
  */
 const DEFAULT_MIGRATIONS: readonly Migration[] = [
@@ -135,4 +138,5 @@ const DEFAULT_MIGRATIONS: readonly Migration[] = [
   { version: 3, name: "add-dormant-role-assignments", up: applyRoleAssignmentsMigration },
   { version: 4, name: "add-reconciliation-audit", up: applyReconciliationAuditMigration },
   { version: 5, name: "add-memory-resolution", up: applyMemoryResolutionMigration },
+  { version: 6, name: "add-event-receipts", up: applyEventReceiptsMigration },
 ];

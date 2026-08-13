@@ -178,6 +178,15 @@ function resumeDurablePendingHealthEvents(): void {
   }
 }
 
+function collectDurablePendingHealthRunIds(): Set<string> {
+  const runIds = new Set<string>();
+  for (const receipt of eventReceiptRepository.listByStatuses(["run_created"])) {
+    if (!receipt.run_id || bridgeDb.getSetting(healthEventExecutionStartedKey(receipt.id))) continue;
+    runIds.add(receipt.run_id);
+  }
+  return runIds;
+}
+
 async function reconcileInterruptedHealthEvent(receiptId: number): Promise<void> {
   for (;;) {
     const receipt = bridgeDb.getEventReceipt(receiptId);
@@ -331,6 +340,7 @@ if (shouldHealthServicePoll(process.env)) {
   }).catch((err) => console.warn(`[health-bot] setMyCommands failed`, err));
 }
 
+const pendingHealthRunIds = healthEnabled ? collectDurablePendingHealthRunIds() : new Set<string>();
 if (healthEnabled) {
   // Recover continuation checkpoints first so their reacquired lane protects
   // the owning Run from generic orphan reconciliation. Then restart receipts
@@ -343,7 +353,9 @@ if (healthEnabled) {
 await bridgeDb.reconcileOrphanedRuns({
   minAgeMs: Number(process.env.ORPHAN_RECONCILIATION_MIN_AGE_MS || 60_000),
   processState: (run) => getExecutionProcessState(run.run_id),
-  containmentState: (_run, state) => state === "absent" ? "proven" : "ambiguous",
+  containmentState: (run, state) => pendingHealthRunIds.has(run.run_id)
+    ? "ambiguous"
+    : state === "absent" ? "proven" : "ambiguous",
   onReconciled: (run) => console.warn(`[health-bot] reconciled orphaned run ${run.run_id}`),
 });
 

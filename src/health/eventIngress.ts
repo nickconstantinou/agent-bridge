@@ -12,7 +12,7 @@
  * Architecture (per the corrected #351 issue body):
  *   external health event
  *     -> authenticated/idempotent durable receipt   (acceptHealthOpsEvent)
- *     -> ordinary owning Run                         (bridge_runs, linked here)
+ *     -> ordinary owning Run                         (bridge_runs)
  *     -> main agent + AGENTS.md + Skill + tools       (executeHealthOpsRun)
  *     -> terminal Run/result                          (BridgeEngine.executeSurfaceNeutralTurn + EventStore)
  *     -> receipt correlation                          (reconcileEventReceiptResult)
@@ -28,8 +28,7 @@
  * The wrapper requires a numeric sentinel chat id, a synthetic chat key, an
  * execution-lane handle, and the existing BridgeEvent collector. Those are
  * data needed by the provider runtime and EventStore. They do not create a
- * Telegram delivery or conversation session. The Run was already created by
- * acceptHealthOpsEvent, so this module only seeds EventStore with that Run.
+ * Telegram delivery or conversation session.
  *
  * NEIGHBORS: src/db.ts, src/repositories/eventReceiptRepository.ts,
  * src/engine.ts, src/events/store.ts, src/health/scheduler.ts
@@ -51,6 +50,15 @@ export const HEALTH_OPS_EVENT_KIND_RED = "plugin_status_red" as const;
 export const HEALTH_RUN_SURFACE = "health" as const;
 export const HEALTH_RUN_CHAT_KEY = "health:ops" as const;
 export const HEALTH_RUN_AUTHORITY_SCOPE = "health:report-only" as const;
+
+const HEALTH_EVENT_EXECUTION_STARTED_PREFIX = "health_event_execution_started:";
+
+/** Durable marker that distinguishes a Run that had actually entered provider
+ * execution from one that merely existed while waiting for the single health
+ * lane. A process crash leaves this marker behind; normal completion clears it. */
+export function healthEventExecutionStartedKey(receiptId: number): string {
+  return `${HEALTH_EVENT_EXECUTION_STARTED_PREFIX}${receiptId}`;
+}
 
 const MAX_PAYLOAD_BYTES = 4096;
 const REDACT_KEY_PATTERN = /token|secret|password|passwd|key|authorization|credential|prompt/i;
@@ -201,10 +209,9 @@ function ensureLinkedRun(
  * "durably create and correlate the Run" from "execute it" is what makes
  * the restart-safety window precise: a crash before this function returns
  * leaves either no receipt at all (nothing to replay) or a receipt with
- * run_id null (received) that the next call safely links; a crash during
- * execution instead leaves a genuinely 'running' Run, which the existing
- * generic orphan-run reconciliation (src/db.ts reconcileOrphanedRuns) is
- * already responsible for resolving.
+ * run_id null (received) that startup/replay can safely link; a crash during
+ * execution instead leaves a genuinely 'running' Run, which startup resolves
+ * without replaying provider work blindly.
  */
 export function acceptHealthOpsEvent(
   db: BridgeDb,
@@ -290,16 +297,11 @@ export interface ExecuteHealthOpsRunOptions {
 }
 
 /**
- * Executes the Run an already-accepted event was correlated to, by calling
- * the engine's surface-neutral provider-turn wrapper. The wrapper uses the
- * same provider-turn execution owner ordinary async turns use. This function's own responsibilities are
- * narrow: resolve the receipt -> Run linkage, acquire the dedicated
- * execution lane (fencing two event-originated turns from ever running
- * concurrently), build the bounded/non-prescriptive prompt, and wire a
- * BridgeEvent collector (EventStore) seeded with the already-created Run so
- * executePromptAsync's normal run.started/run.completed/run.failed
- * telemetry persists straight onto that Run — the same terminalization path
- * ordinary turns already rely on, not a reimplementation of it.
+ * Executes the Run correlated to an already-accepted event by calling the
+ * engine's surface-neutral provider-turn wrapper. A `received` receipt may be
+ * linked here during startup replay; a lane-busy attempt does not mark the
+ * Run as execution-started, so restart can distinguish safe retry from an
+ * interrupted provider attempt.
  */
 export async function executeHealthOpsRun(
   db: BridgeDb,
@@ -308,21 +310,25 @@ export async function executeHealthOpsRun(
   options: ExecuteHealthOpsRunOptions = {},
 ): Promise<{ runId: string; status: "done" | "failed" }> {
   const receipt = db.getEventReceipt(receiptId);
-  if (!receipt || !receipt.run_id) {
-    throw new Error(`event receipt ${receiptId} has no linked Run to execute`);
+  if (!receipt) throw new Error(`event receipt ${receiptId} does not exist`);
+
+  if (receipt.status === "completed" || receipt.status === "failed" || receipt.status === "cancelled") {
+    if (!receipt.run_id) throw new Error(`terminal event receipt ${receiptId} has no linked Run`);
+    const terminalRun = db.getRun(receipt.run_id);
+    db.setSetting(healthEventExecutionStartedKey(receiptId), null);
+    return { runId: receipt.run_id, status: terminalRun?.status === "done" ? "done" : "failed" };
   }
-  const runId = receipt.run_id;
+
   const bot = options.bot ?? "claude";
   const report = parsePersistedHealthReport(receipt.payload_json);
-
   const laneHandle: ExecutionLaneHandle | null = db.acquireLock(HEALTH_RUN_SURFACE, HEALTH_RUN_CHAT_KEY);
   if (!laneHandle) throw new HealthOpsRunLaneUnavailableError();
 
+  let runId: string | null = receipt.run_id;
   try {
-    // Seeded with the existing runId so EventStore recognizes the Run
-    // already exists (see its constructor) and never re-inserts it — it
-    // only needs to persist the terminal transition from the provider owner
-    // reports via `collect`.
+    runId = ensureLinkedRun(db, receiptId, { bot });
+    db.setSetting(healthEventExecutionStartedKey(receiptId), runId);
+
     const eventStore = new EventStore(db, runId);
     const collect = (e: BridgeEvent) => {
       if (e.type === "run.completed") eventStore.queueCompleted(e);
@@ -350,23 +356,17 @@ export async function executeHealthOpsRun(
         finalize: () => eventStore.finalize(),
       });
     } finally {
-      // Flushes the deferred run.completed persistence queued above (see
-      // EventStore.finalize()). Safe to call even when executePromptAsync
-      // threw before ever queuing one.
       eventStore.finalize();
     }
   } catch (err) {
-    // The provider owner can throw via a code path that never emitted a
-    // run.failed BridgeEvent (e.g. a thrown ExecutionLockLostError before
-    // any provider invocation). The CAS-guarded updateRunFailed (see
-    // runRepository.ts) makes this a safe, idempotent fallback rather than
-    // a duplicate/competing terminal writer: if run.failed already applied,
-    // this is a no-op.
+    if (!runId) throw err;
     db.updateRunFailed(runId, (err as Error).message);
   } finally {
+    db.setSetting(healthEventExecutionStartedKey(receiptId), null);
     db.unlock(laneHandle);
   }
 
+  if (!runId) throw new Error(`event receipt ${receiptId} could not create an owning Run`);
   const run = db.getRun(runId);
   return { runId, status: run?.status === "done" ? "done" : "failed" };
 }

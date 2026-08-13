@@ -30,4 +30,10 @@ describe("health event production wiring", () => {
     expect(source).not.toContain("lastReportStatus");
     expect(source).toContain('listByStatuses(["received", "run_created"])');
   });
+
+  it("keeps known pending event Runs out of generic orphan reconciliation", () => {
+    const source = readFileSync(new URL("../src/index-health.ts", import.meta.url), "utf8");
+    expect(source).toContain("collectDurablePendingHealthRunIds()");
+    expect(source).toContain("pendingHealthRunIds.has(run.run_id)");
+  });
 });

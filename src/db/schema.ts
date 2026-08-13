@@ -129,7 +129,9 @@ export function applyMigrations(
  * Version 5 adds memory resolution (Issue #304) and repairs the
  * project_memories_fts triggers' invalid delete-command syntax.
  * Version 6 adds the event_receipts table (Issue #351): a durable receipt
- * boundary for bounded authenticated health/operations ingress events.
+ * boundary for bounded authenticated health/operations ingress events,
+ * correlated to an ordinary owning bridge_runs row rather than a
+ * work_item/work_job.
  * Each step is transactional and user_version remains authoritative.
  */
 const DEFAULT_MIGRATIONS: readonly Migration[] = [

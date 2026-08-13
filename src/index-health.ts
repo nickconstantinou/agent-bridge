@@ -29,17 +29,19 @@ import { formatQualificationSummary } from "./providers/qualificationStatus.js";
 import { resolveTimeoutsForKind } from "./timeouts.js";
 import { defaultSoulPath, loadSoulContext, normalizeSoulMode } from "./soul.js";
 import type { BotKind } from "./types.js";
-import type { HealthPlugin, HealthReport } from "./health/types.js";
+import type { HealthPlugin } from "./health/types.js";
+import { EventReceiptRepository } from "./repositories/eventReceiptRepository.js";
+import { ContinuationRepository } from "./repositories/continuationRepository.js";
 import {
   acceptHealthOpsEvent,
   executeHealthOpsRun,
   reconcileEventReceiptResult,
+  healthEventExecutionStartedKey,
   HealthOpsRunLaneUnavailableError,
 } from "./health/eventIngress.js";
 
 // ── Config ──────────────────────────────────────────────────────────────────
 dotenv.config({ path: process.env.BRIDGE_ENV_FILE || ".env", override: false });
-
 
 const healthBotMode = parseHealthBotMode(process.env);
 const token = resolveHealthTelegramToken(process.env);
@@ -93,13 +95,10 @@ const bridgeDb = openProductionDb(dbPath, {
   requireInstallationIdentity: process.env.NODE_ENV === "production" && Boolean(process.env.AGENT_BRIDGE_INSTALLATION_ID?.trim()),
   databaseRole: "health",
 });
-await bridgeDb.reconcileOrphanedRuns({
-  minAgeMs: Number(process.env.ORPHAN_RECONCILIATION_MIN_AGE_MS || 60_000),
-  processState: (run) => getExecutionProcessState(run.run_id),
-  containmentState: (_run, state) => state === "absent" ? "proven" : "ambiguous",
-  onReconciled: (run) => console.warn(`[health-bot] reconciled orphaned run ${run.run_id}`),
-});
 const rawDb = bridgeDb.raw;
+const eventReceiptRepository = new EventReceiptRepository(rawDb);
+const continuationRepository = new ContinuationRepository(rawDb);
+const healthReportStore = new HealthReportStore(rawDb);
 const client = new TelegramClient(token, fetch, resolveTimeoutsForKind(cliBot).fetchTimeoutMs);
 
 const soulContext = loadSoulContext({
@@ -145,7 +144,6 @@ if (process.env.HEALTH_CONTENT_CRAWLER_ENABLED === "1") {
 
 // ── Scheduler ────────────────────────────────────────────────────────────────
 let engine: BridgeEngine;
-const lastReportStatus = new Map<string, HealthReport["status"]>();
 const activeHealthEventRuns = new Set<number>();
 
 const waitForHealthLane = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -165,13 +163,52 @@ async function executeAcceptedHealthEvent(receiptId: number): Promise<void> {
           reconcileEventReceiptResult(bridgeDb, receiptId);
           return;
         }
-        // A receipt already owns a Run. Keep it runnable until the single
-        // health lane is free, then execute that same Run.
         await waitForHealthLane(1000);
       }
     }
   } finally {
     activeHealthEventRuns.delete(receiptId);
+  }
+}
+
+function resumeDurablePendingHealthEvents(): void {
+  for (const receipt of eventReceiptRepository.listByStatuses(["received", "run_created"])) {
+    if (bridgeDb.getSetting(healthEventExecutionStartedKey(receipt.id))) continue;
+    void executeAcceptedHealthEvent(receipt.id);
+  }
+}
+
+async function reconcileInterruptedHealthEvent(receiptId: number): Promise<void> {
+  for (;;) {
+    const receipt = bridgeDb.getEventReceipt(receiptId);
+    if (!receipt || receipt.status !== "run_created" || !receipt.run_id) {
+      bridgeDb.setSetting(healthEventExecutionStartedKey(receiptId), null);
+      return;
+    }
+    const run = bridgeDb.getRun(receipt.run_id);
+    if (!run || run.status !== "running") {
+      reconcileEventReceiptResult(bridgeDb, receiptId);
+      bridgeDb.setSetting(healthEventExecutionStartedKey(receiptId), null);
+      return;
+    }
+
+    const continuation = continuationRepository.get(receipt.run_id);
+    const continuationActive = continuation
+      && (continuation.state === "waiting" || continuation.state === "runnable" || continuation.state === "running" || continuation.state === "ambiguous");
+    if (!continuationActive && getExecutionProcessState(receipt.run_id) === "absent") {
+      bridgeDb.updateRunFailed(receipt.run_id, "Process interrupted by health service restart");
+      reconcileEventReceiptResult(bridgeDb, receiptId);
+      bridgeDb.setSetting(healthEventExecutionStartedKey(receiptId), null);
+      return;
+    }
+    await waitForHealthLane(1000);
+  }
+}
+
+function reconcileDurableStartedHealthEvents(): void {
+  for (const receipt of eventReceiptRepository.listByStatuses(["run_created"])) {
+    if (!bridgeDb.getSetting(healthEventExecutionStartedKey(receipt.id))) continue;
+    void reconcileInterruptedHealthEvent(receipt.id);
   }
 }
 
@@ -188,10 +225,10 @@ const scheduler = new HealthScheduler({
     }
   },
   onRawReport: async (report) => {
+    const previousStatus = healthReportStore.getReport(report.pluginName)?.status ?? null;
     await healthBot.handleReport(report);
     const eventToken = process.env.HEALTH_EVENT_TOKEN;
-    const crossedIntoRed = report.status === "red" && lastReportStatus.get(report.pluginName) !== "red";
-    lastReportStatus.set(report.pluginName, report.status);
+    const crossedIntoRed = report.status === "red" && previousStatus !== "red";
     if (eventToken && crossedIntoRed) {
       try {
         const eventId = `health:${report.pluginName}:${report.timestamp}`;
@@ -248,7 +285,7 @@ engine = new BridgeEngine(
           const { HealthContextStore } = await import("./health/context.js");
           const store = new HealthContextStore(rawDb);
           const context = store.getContext();
-          const aggregate = new HealthReportStore(rawDb).getAggregate({
+          const aggregate = healthReportStore.getAggregate({
             activePluginNames: plugins.map((plugin) => plugin.name),
             freshnessSeconds: cadenceSeconds * 2,
           });
@@ -295,7 +332,26 @@ if (shouldHealthServicePoll(process.env)) {
 }
 
 if (healthEnabled) {
+  // Recover continuation checkpoints first so their reacquired lane protects
+  // the owning Run from generic orphan reconciliation. Then restart receipts
+  // that never entered provider execution; these are safe to replay because
+  // their durable execution-start marker is absent.
   await engine.recoverContinuations();
+  resumeDurablePendingHealthEvents();
+}
+
+await bridgeDb.reconcileOrphanedRuns({
+  minAgeMs: Number(process.env.ORPHAN_RECONCILIATION_MIN_AGE_MS || 60_000),
+  processState: (run) => getExecutionProcessState(run.run_id),
+  containmentState: (_run, state) => state === "absent" ? "proven" : "ambiguous",
+  onReconciled: (run) => console.warn(`[health-bot] reconciled orphaned run ${run.run_id}`),
+});
+
+if (healthEnabled) {
+  // Runs that had entered provider execution are never blindly replayed.
+  // Continuations resume through BridgeEngine; interrupted initial attempts
+  // are terminalized once their old process is proven absent.
+  reconcileDurableStartedHealthEvents();
   scheduler.start();
   for (const plugin of plugins) {
     plugin.check().then(report => healthBot.handleReport(report)).catch((err: unknown) =>

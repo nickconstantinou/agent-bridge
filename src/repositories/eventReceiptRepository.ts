@@ -47,6 +47,14 @@ export class EventReceiptRepository {
     ).get(idempotencyKey) as EventReceipt | undefined) ?? null;
   }
 
+  listByStatuses(statuses: string[]): EventReceipt[] {
+    if (!statuses.length) return [];
+    const placeholders = statuses.map(() => "?").join(", ");
+    return this.db.prepare(
+      `SELECT * FROM event_receipts WHERE status IN (${placeholders}) ORDER BY id`
+    ).all(...statuses) as EventReceipt[];
+  }
+
   /**
    * Compare-and-swapped on status = 'received' so a racing linker (e.g. two
    * processes both replaying the same interrupted event) can only ever link

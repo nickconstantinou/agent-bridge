@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { InteractiveAttachment, InteractiveTurnInput } from "./interactiveIngress.js";
 
+// Provisional safety ceilings for the unbound seam. The Farstax droplet spike
+// owns the final runtime defaults before voice dispatch is enabled.
 export const DEFAULT_VOICE_TEMP_ROOT = join(tmpdir(), "agent-bridge-voice");
 export const DEFAULT_MAX_AUDIO_BYTES = 20 * 1024 * 1024;
 export const DEFAULT_MAX_AUDIO_DURATION_SECONDS = 5 * 60;
@@ -132,8 +134,8 @@ export async function prepareVoiceTurn(
       signal: options.signal,
     });
 
-    // This is the pre-dispatch cancellation fence. A late STT completion after
-    // cancellation cannot be converted into a provider Run by this seam.
+    // Final cancellation check inside preparation. Production runtime binding
+    // must still atomically claim the STT -> Run handoff before provider start.
     if (cancellationRequested(options.signal)) return { kind: "cancelled" };
     const transcript = result.text.trim();
     if (!transcript) throw new Error("Voice transcription returned no text.");

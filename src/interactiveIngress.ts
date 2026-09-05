@@ -105,7 +105,9 @@ export function discordAudioAttachments(data: any): InteractiveAttachment[] {
     const fileId = String(attachment?.id ?? "");
     const rawName = String(attachment?.filename ?? "");
     const mimeType = typeof attachment?.content_type === "string" ? attachment.content_type : undefined;
-    if (!fileId || (!mimeType?.toLowerCase().startsWith("audio/") && !looksLikeAudioFile(rawName))) return [];
+    if (!fileId) return [];
+    const audioType = mimeType ? mimeType.toLowerCase().startsWith("audio/") : looksLikeAudioFile(rawName);
+    if (!audioType) return [];
     const fallbackName = `audio_${fileId}`;
     const fileName = safeAttachmentName(rawName, fallbackName);
     const fileSize = Number.isSafeInteger(attachment?.size) && attachment.size >= 0 ? attachment.size as number : undefined;

@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import type { InteractiveAttachment, InteractiveTurnInput } from "./interactiveIngress.js";
@@ -72,6 +72,7 @@ function isPathInside(parent: string, candidate: string): boolean {
 
 async function createVoiceOperationDir(root: string): Promise<string> {
   await mkdir(root, { recursive: true, mode: 0o700 });
+  await chmod(root, 0o700);
   const operationDir = await mkdtemp(join(root, "voice-"));
   await chmod(operationDir, 0o700);
   return operationDir;
@@ -121,8 +122,8 @@ export async function prepareVoiceTurn(
     if (cancellationRequested(options.signal)) return { kind: "cancelled" };
     if (!isPathInside(operationDir, filePath)) throw new Error("Voice media stager returned a path outside its operation directory.");
 
-    const staged = await stat(filePath);
-    if (!staged.isFile()) throw new Error("Staged voice media is not a regular file.");
+    const staged = await lstat(filePath);
+    if (staged.isSymbolicLink() || !staged.isFile()) throw new Error("Staged voice media is not a regular file.");
     if (staged.size > maxAudioBytes) throw new Error(`Audio exceeds the ${maxAudioBytes}-byte processing limit.`);
 
     const result = await options.transcriber.transcribe({
@@ -151,7 +152,7 @@ export async function prepareVoiceTurn(
     }
     return { kind: "failed", error: asError(error) };
   } finally {
-    if (operationDir) await rm(operationDir, { recursive: true, force: true }).catch(() => {});
+    if (operationDir) await rm(operationDir, { recursive: true, force: true });
   }
 }
 

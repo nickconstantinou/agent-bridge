@@ -78,7 +78,7 @@ describe("surface-neutral interactive ingress", () => {
     expect(DISCORD_SURFACE_CAPABILITIES).toMatchObject({ maxMessageLength: 1990, editMessages: true, deleteMessages: false, previewStreaming: false, threads: false, formatting: "discord-markdown" });
     const client = new DiscordClient({ token: "tok", applicationId: "app", onUpdate: vi.fn() }, vi.fn() as any);
     expect(client.capabilities.polling).toBe(false);
-    expect(client.capabilities.remoteFileDownload).toBe(false;
+    expect(client.capabilities.remoteFileDownload).toBe(false);
     expect((client as any).getUpdates).toBeUndefined();
     expect((client as any).getFilePath).toBeUndefined();
     expect((client as any).downloadFile).toBeUndefined();

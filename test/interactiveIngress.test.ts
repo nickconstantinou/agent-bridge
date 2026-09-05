@@ -64,6 +64,64 @@ describe("surface-neutral interactive ingress", () => {
     });
   });
 
+  it("preserves Telegram voice metadata, caption and topic on the neutral turn", () => {
+    const turn = adaptTelegramUpdate({
+      update_id: 8,
+      message: {
+        message_id: 9,
+        chat: { id: -100123, type: "supergroup" },
+        from: { id: 42, first_name: "owner" },
+        message_thread_id: 99,
+        caption: "Please review this",
+        voice: { file_id: "voice-file", file_unique_id: "voice-unique", duration: 18, mime_type: "audio/ogg", file_size: 12345 },
+      },
+    } as any, "telegram:interactive", "-100123:99");
+
+    expect(turn).toMatchObject({
+      text: "Please review this",
+      threadId: "99",
+      attachments: [{
+        kind: "audio",
+        fileId: "voice-file",
+        fileName: "voice_voice-file.ogg",
+        mimeType: "audio/ogg",
+        fileSize: 12345,
+        durationSeconds: 18,
+      }],
+    });
+  });
+
+  it("accepts Discord audio-only messages and preserves attachment download metadata", () => {
+    const turn = adaptDiscordMessage({
+      id: "123456789012345678",
+      channel_id: "223456789012345678",
+      guild_id: "323456789012345678",
+      author: { id: "423456789012345678", username: "owner" },
+      content: "",
+      attachments: [{
+        id: "523456789012345678",
+        filename: "note.ogg",
+        content_type: "audio/ogg",
+        size: 23456,
+        url: "https://cdn.discordapp.com/attachments/1/2/note.ogg",
+        duration_secs: 12.5,
+      }],
+    }, "discord:interactive");
+
+    expect(turn).toMatchObject({
+      text: "",
+      attachments: [{
+        kind: "audio",
+        fileId: "523456789012345678",
+        fileName: "note.ogg",
+        mimeType: "audio/ogg",
+        fileSize: 23456,
+        remoteUrl: "https://cdn.discordapp.com/attachments/1/2/note.ogg",
+        durationSeconds: 12.5,
+      }],
+    });
+  });
+
   it("builds scheduled Telegram and Discord occurrences as the same neutral shape", () => {
     const telegram = buildScheduledInteractiveTurn(routine(), "2026-08-31T07:00:00.000Z", "123");
     expect(telegram).toMatchObject({ chatKey: "-100:42", actorId: "123", threadId: "42", delivery: { chatId: -100 } });
